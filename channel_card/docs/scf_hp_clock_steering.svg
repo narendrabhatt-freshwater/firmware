@@ -1,0 +1,93 @@
+<svg viewBox="0 0 860 480" width="860" height="480" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="860" height="480" fill="#ffffff"/>
+
+  <!-- sources -->
+  <rect x="20" y="70" width="120" height="40" rx="6" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="80" y="87" text-anchor="middle" font-size="13" font-weight="bold" fill="#111">PC6</text>
+  <text x="80" y="102" text-anchor="middle" font-size="10" fill="#555">PWM clock (scf/duty)</text>
+
+  <rect x="20" y="330" width="120" height="40" rx="6" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="80" y="347" text-anchor="middle" font-size="13" font-weight="bold" fill="#111">HP_CTL</text>
+  <text x="80" y="362" text-anchor="middle" font-size="10" fill="#555">mode bit (sw hp_ctl, HIGH = HP)</text>
+
+  <!-- clock trunk (blue) -->
+  <g stroke="#2563eb" stroke-width="2.5" fill="none">
+    <line x1="140" y1="90" x2="470" y2="90"/>
+    <line x1="200" y1="90" x2="200" y2="196"/>
+    <line x1="200" y1="196" x2="290" y2="196"/>
+    <line x1="200" y1="196" x2="200" y2="396"/>
+    <line x1="200" y1="396" x2="290" y2="396"/>
+    <line x1="346" y1="210" x2="400" y2="210"/>
+    <line x1="355.5" y1="410" x2="640" y2="410"/>
+    <line x1="600" y1="90" x2="640" y2="90"/>
+    <line x1="530" y1="210" x2="640" y2="210"/>
+  </g>
+  <circle cx="200" cy="90" r="4" fill="#2563eb"/>
+  <circle cx="200" cy="196" r="4" fill="#2563eb"/>
+
+  <!-- HP_CTL routing (orange) -->
+  <g stroke="#ea580c" stroke-width="2.5" fill="none">
+    <line x1="140" y1="350" x2="176" y2="350"/>
+    <line x1="213.5" y1="350" x2="248" y2="350"/>
+    <line x1="248" y1="350" x2="248" y2="224"/>
+    <line x1="248" y1="224" x2="290" y2="224"/>
+    <line x1="158" y1="350" x2="158" y2="424"/>
+    <line x1="158" y1="424" x2="290" y2="424"/>
+  </g>
+  <circle cx="158" cy="350" r="4" fill="#ea580c"/>
+  <text x="258" y="292" font-size="10" fill="#ea580c">/HP</text>
+  <text x="228" y="418" font-size="10" fill="#ea580c">HP</text>
+
+  <!-- inverter 1G04 -->
+  <path d="M 176 336 L 176 364 L 204 350 Z" fill="#f1f5f9" stroke="#111" stroke-width="1.5"/>
+  <circle cx="209" cy="350" r="4.5" fill="#f1f5f9" stroke="#111" stroke-width="1.5"/>
+  <text x="188" y="330" text-anchor="middle" font-size="10" fill="#555">1G04</text>
+
+  <!-- AND gate 1G08 -->
+  <path d="M 290 182 L 318 182 A 28 28 0 0 1 318 238 L 290 238 Z" fill="#f1f5f9" stroke="#111" stroke-width="1.5"/>
+  <text x="308" y="214" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">1G08</text>
+  <text x="308" y="172" text-anchor="middle" font-size="10" fill="#555">AND</text>
+
+  <!-- NAND gate 1G00 -->
+  <path d="M 290 382 L 318 382 A 28 28 0 0 1 318 438 L 290 438 Z" fill="#f1f5f9" stroke="#111" stroke-width="1.5"/>
+  <circle cx="351" cy="410" r="4.5" fill="#f1f5f9" stroke="#111" stroke-width="1.5"/>
+  <text x="308" y="414" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">1G00</text>
+  <text x="308" y="372" text-anchor="middle" font-size="10" fill="#555">NAND</text>
+  <text x="495" y="400" text-anchor="middle" font-size="10" fill="#555">3.3 V logic — drives DG441 directly</text>
+
+  <!-- shifter A -->
+  <rect x="470" y="68" width="130" height="44" rx="6" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="535" y="86" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">BJT shifter A</text>
+  <text x="535" y="101" text-anchor="middle" font-size="10" fill="#555">3.3 V &#8594; &#177;5 V &#183; ungated</text>
+
+  <!-- shifter B -->
+  <rect x="400" y="188" width="130" height="44" rx="6" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="465" y="206" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">BJT shifter B</text>
+  <text x="465" y="221" text-anchor="middle" font-size="10" fill="#555">3.3 V &#8594; &#177;5 V &#183; gated</text>
+
+  <!-- destinations -->
+  <rect x="640" y="62" width="200" height="52" rx="6" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="740" y="83" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">2nd-stage 4066 pair</text>
+  <text x="740" y="99" text-anchor="middle" font-size="10" fill="#555">chops whenever clock runs</text>
+
+  <rect x="640" y="184" width="200" height="52" rx="6" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="740" y="205" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">FIRST 4066 — SW1</text>
+  <text x="740" y="221" text-anchor="middle" font-size="10" fill="#555">chops only when HP_CTL = LOW</text>
+
+  <rect x="640" y="384" width="200" height="52" rx="6" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="740" y="405" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">DG441 U1015D — HP</text>
+  <text x="740" y="421" text-anchor="middle" font-size="10" fill="#555">chops (inverted) when HP_CTL = HIGH</text>
+
+  <!-- state table -->
+  <rect x="470" y="270" width="370" height="86" rx="6" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="486" y="291" font-size="11" font-weight="bold" fill="#111">States</text>
+  <text x="486" y="310" font-size="10.5" fill="#333">scf 0 &#8594; everything off (PC6 parked low)</text>
+  <text x="486" y="326" font-size="10.5" fill="#333">scf N + hp_ctl off &#8594; SW1 + 2nd stage chop, HP off</text>
+  <text x="486" y="342" font-size="10.5" fill="#333">scf N + hp_ctl on &#8594; HP chops, SW1 off, 2nd stage chops</text>
+
+  <!-- legend -->
+  <line x1="20" y1="452" x2="48" y2="452" stroke="#2563eb" stroke-width="2.5"/>
+  <text x="54" y="456" font-size="10" fill="#555">clock path</text>
+  <line x1="130" y1="452" x2="158" y2="452" stroke="#ea580c" stroke-width="2.5"/>
+  <text x="164" y="456" font-size="10" fill="#555">static mode signal</text>
+</svg>

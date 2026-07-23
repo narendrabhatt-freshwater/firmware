@@ -1,0 +1,108 @@
+<svg viewBox="0 0 900 540" width="900" height="540" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="900" height="540" fill="#ffffff"/>
+  <text x="20" y="26" font-size="14" font-weight="bold" fill="#111">SCF / HP clock steering — v2 (PNP-shifter corrected)</text>
+
+  <!-- sources -->
+  <rect x="20" y="60" width="120" height="40" rx="6" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="80" y="77" text-anchor="middle" font-size="13" font-weight="bold" fill="#111">PC6</text>
+  <text x="80" y="92" text-anchor="middle" font-size="10" fill="#555">PWM clock (scf/duty)</text>
+
+  <rect x="20" y="330" width="120" height="40" rx="6" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="80" y="347" text-anchor="middle" font-size="13" font-weight="bold" fill="#111">HP_CTL</text>
+  <text x="80" y="362" text-anchor="middle" font-size="10" fill="#555">HIGH = HP mode (sw hp_ctl on)</text>
+
+  <!-- clock lines -->
+  <g stroke="#2563eb" stroke-width="2.5" fill="none">
+    <line x1="140" y1="80" x2="330" y2="80"/>
+    <line x1="200" y1="80" x2="200" y2="196"/>
+    <line x1="200" y1="196" x2="250" y2="196"/>
+    <line x1="200" y1="196" x2="200" y2="430"/>
+    <line x1="200" y1="430" x2="250" y2="430"/>
+    <line x1="390" y1="80" x2="470" y2="80"/>
+    <line x1="306" y1="210" x2="330" y2="210"/>
+    <line x1="390" y1="210" x2="470" y2="210"/>
+    <line x1="600" y1="80" x2="660" y2="80"/>
+    <line x1="600" y1="210" x2="660" y2="210"/>
+    <line x1="322" y1="444" x2="660" y2="444"/>
+  </g>
+  <circle cx="200" cy="80" r="4" fill="#2563eb"/>
+  <circle cx="200" cy="196" r="4" fill="#2563eb"/>
+
+  <!-- HP_CTL lines -->
+  <g stroke="#ea580c" stroke-width="2.5" fill="none">
+    <line x1="140" y1="350" x2="162" y2="350"/>
+    <line x1="162" y1="350" x2="162" y2="300"/>
+    <line x1="162" y1="300" x2="176" y2="300"/>
+    <line x1="213.5" y1="300" x2="232" y2="300"/>
+    <line x1="232" y1="300" x2="232" y2="224"/>
+    <line x1="232" y1="224" x2="250" y2="224"/>
+    <line x1="162" y1="350" x2="162" y2="458"/>
+    <line x1="162" y1="458" x2="250" y2="458"/>
+  </g>
+  <circle cx="162" cy="350" r="4" fill="#ea580c"/>
+  <text x="236" y="268" font-size="10" fill="#ea580c">/HP</text>
+  <text x="200" y="452" font-size="10" fill="#ea580c">HP</text>
+
+  <!-- 1G04 inverter -->
+  <path d="M 176 288 L 176 312 L 202 300 Z" fill="#f1f5f9" stroke="#111" stroke-width="1.5"/>
+  <circle cx="207" cy="300" r="4" fill="#f1f5f9" stroke="#111" stroke-width="1.5"/>
+  <text x="188" y="282" text-anchor="middle" font-size="10" fill="#555">1G04</text>
+
+  <!-- 1G08 AND -->
+  <path d="M 250 182 L 278 182 A 28 28 0 0 1 278 238 L 250 238 Z" fill="#f1f5f9" stroke="#111" stroke-width="1.5"/>
+  <text x="268" y="214" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">1G08</text>
+  <text x="268" y="172" text-anchor="middle" font-size="10" fill="#555">AND</text>
+
+  <!-- 1G00 NAND -->
+  <path d="M 250 416 L 278 416 A 28 28 0 0 1 278 472 L 250 472 Z" fill="#f1f5f9" stroke="#111" stroke-width="1.5"/>
+  <circle cx="317" cy="444" r="4.5" fill="#f1f5f9" stroke="#111" stroke-width="1.5"/>
+  <text x="268" y="448" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">1G00</text>
+  <text x="268" y="406" text-anchor="middle" font-size="10" fill="#555">NAND</text>
+  <text x="470" y="436" text-anchor="middle" font-size="10" fill="#555">3.3 V direct to DG441 (unchanged)</text>
+
+  <!-- NEW: NPN inverter A -->
+  <rect x="330" y="58" width="60" height="44" rx="6" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+  <text x="360" y="76" text-anchor="middle" font-size="11" font-weight="bold" fill="#92400e">Q_A</text>
+  <text x="360" y="92" text-anchor="middle" font-size="9" fill="#92400e">NPN inv (NEW)</text>
+
+  <!-- NEW: NPN inverter B -->
+  <rect x="330" y="188" width="60" height="44" rx="6" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+  <text x="360" y="206" text-anchor="middle" font-size="11" font-weight="bold" fill="#92400e">Q_B</text>
+  <text x="360" y="222" text-anchor="middle" font-size="9" fill="#92400e">NPN inv (NEW)</text>
+
+  <!-- shifters -->
+  <rect x="470" y="58" width="130" height="44" rx="6" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="535" y="76" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">PNP shifter A</text>
+  <text x="535" y="92" text-anchor="middle" font-size="10" fill="#555">1k to +5 / 3k input</text>
+
+  <rect x="470" y="188" width="130" height="44" rx="6" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="535" y="206" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">PNP shifter B</text>
+  <text x="535" y="222" text-anchor="middle" font-size="10" fill="#555">1k to +5 / 3k input</text>
+
+  <!-- destinations -->
+  <rect x="660" y="54" width="220" height="52" rx="6" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="770" y="75" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">2nd-stage 4066 pair</text>
+  <text x="770" y="91" text-anchor="middle" font-size="10" fill="#555">ON when PC6 HIGH (in phase w/ SW1)</text>
+
+  <rect x="660" y="184" width="220" height="52" rx="6" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="770" y="205" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">FIRST 4066 — SW1</text>
+  <text x="770" y="221" text-anchor="middle" font-size="10" fill="#555">chops in filter mode, -5 in HP mode</text>
+
+  <rect x="660" y="418" width="220" height="52" rx="6" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="770" y="439" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">DG441 U1015D — HP</text>
+  <text x="770" y="455" text-anchor="middle" font-size="10" fill="#555">ON when PC6 HIGH, only in HP mode</text>
+
+  <!-- NPN detail -->
+  <rect x="430" y="272" width="450" height="120" rx="6" fill="#fffbeb" stroke="#d97706"/>
+  <text x="446" y="292" font-size="11" font-weight="bold" fill="#92400e">NEW part detail (Q_A and Q_B identical, e.g. 2N3904):</text>
+  <text x="446" y="310" font-size="10.5" fill="#333">base &#8592; 10k &#8592; logic (Q_A: PC6 &#183; Q_B: 1G08 output)</text>
+  <text x="446" y="326" font-size="10.5" fill="#333">emitter &#8594; GND</text>
+  <text x="446" y="342" font-size="10.5" fill="#333">collector &#8594; shifter 3k input directly (open collector,</text>
+  <text x="446" y="358" font-size="10.5" fill="#333">NO pull-up: the shifter's 1k-to-+5 pulls it to ~5 V = solid OFF)</text>
+  <text x="446" y="378" font-size="10.5" fill="#92400e">Remove the old direct wires: PC6&#8594;shifterA and 1G08&#8594;shifterB.</text>
+
+  <!-- states -->
+  <rect x="20" y="480" width="860" height="48" rx="6" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="36" y="498" font-size="10.5" fill="#333">scf 0 &#8594; PC6 parked LOW &#8594; Q_A/Q_B off &#8594; shifter inputs float to +5 &#8594; SW1 + 2nd stage at -5 (OFF); 1G00 out HIGH &#8594; DG441 OFF. Everything truly off.</text>
+  <text x="36" y="516" font-size="10.5" fill="#333">Filter mode (hp_ctl off, pin LOW): SW1 + 2nd stage chop in phase, ON during PC6-high (duty reads true). HP mode (pin HIGH): SW1 -5, DG441 chops in phase.</text>
+</svg>
