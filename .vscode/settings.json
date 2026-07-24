@@ -1,0 +1,14 @@
+# Freshwater — put `fw` on PATH when this workspace is open.
+# New integrated terminals pick this up automatically.
+
+{
+  "terminal.integrated.env.osx": {
+    "PATH": "${workspaceFolder}:${env:PATH}"
+  },
+  "terminal.integrated.env.linux": {
+    "PATH": "${workspaceFolder}:${env:PATH}"
+  },
+  "terminal.integrated.env.windows": {
+    "PATH": "${workspaceFolder};${env:PATH}"
+  }
+}
