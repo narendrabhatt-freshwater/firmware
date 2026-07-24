@@ -1,0 +1,107 @@
+#compdef fw
+# Freshwater CLI completion — loaded by scripts/env.sh
+
+_fw() {
+  local -a cmds cards flash_opts serial_opts list_kinds
+  local context state state_descr line
+  typeset -A opt_args
+
+  cmds=(
+    'build:Build firmware (cmake)'
+    'flash:Flash via CubeProgrammer / dfu-util'
+    'list:List DFU / ST-Link / CDC devices'
+    'console:Interactive USB CDC console'
+    'log:Follow CDC output'
+    'send:Send one console command'
+    'clean:Remove build directories'
+    'status:Show toolchain and artifacts'
+    'help:Show help'
+  )
+
+  cards_all=(channel effect all)
+  cards_one=(channel effect)
+  list_kinds=(usb stlink uart all)
+
+  flash_opts=(
+    '--debug[Debug preset]'
+    '--release[Release preset]'
+    '--tool[Flasher backend]:tool:(cube dfu auto)'
+    '--port[Cube USB port or CDC path]:port:_fw_ports'
+    '-p[Cube USB port or CDC path]:port:_fw_ports'
+    '--sn[DFU serial number]:serial:'
+    '--select[Prompt for USB port]'
+    '--erase[Full chip erase]'
+    '--no-verify[Skip verify]'
+    '--no-start[Skip run-after-write]'
+    '--baud[Serial baud (CDC ignores)]:baud:(115200 9600)'
+  )
+
+  serial_opts=(
+    '--port[CDC device path]:port:_fw_serial_ports'
+    '-p[CDC device path]:port:_fw_serial_ports'
+    '--baud[Baud rate]:baud:(115200 9600)'
+  )
+
+  _arguments -C \
+    '1:command:->cmd' \
+    '*::arg:->args'
+
+  case $state in
+    cmd)
+      _describe -t commands 'fw command' cmds
+      ;;
+    args)
+      case ${words[1]} in
+        build|clean)
+          _arguments \
+            '1:card:(channel effect all)' \
+            '--debug[Debug preset]' \
+            '--release[Release preset]'
+          ;;
+        flash)
+          _arguments \
+            '1:card:(channel effect)' \
+            "${flash_opts[@]}"
+          ;;
+        list|ls|devices)
+          _arguments '1:kind:(usb stlink uart all)'
+          ;;
+        console|shell|repl|log|logs|follow|tail)
+          _arguments \
+            '1:card:(channel effect)' \
+            "${serial_opts[@]}"
+          ;;
+        send|cmd)
+          _arguments \
+            '1:card:(channel effect)' \
+            '2:command:(help status sw led)' \
+            "${serial_opts[@]}"
+          ;;
+        status|info|help)
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_fw_serial_ports() {
+  local -a ports
+  ports=(/dev/cu.usbmodem*(N) /dev/tty.usbmodem*(N) /dev/ttyACM*(N))
+  if (( ${#ports} )); then
+    _wanted serial-ports expl 'CDC port' compadd -a ports
+  else
+    _message 'no CDC ports found'
+  fi
+}
+
+_fw_ports() {
+  # Complete either USB1.. or serial device paths
+  local -a usbports
+  usbports=(USB1 USB2 USB3)
+  _alternative \
+    'usb:Cube USB port:compadd -a usbports' \
+    'serial:CDC port:_fw_serial_ports'
+}
+
+# Register when sourced (env.sh) or via fpath/compinit
+compdef _fw fw 2>/dev/null || true

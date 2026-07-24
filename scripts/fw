@@ -1,0 +1,1067 @@
+#!/usr/bin/env bash
+#
+# fw — Freshwater CMI firmware CLI
+#
+# Usage:
+#   fw <command> [args]
+#
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PRESET="${FW_PRESET:-Debug}"
+FLASH_TOOL="${FW_FLASH_TOOL:-cube}"   # cube | dfu | auto
+DFU_VID="0483"
+DFU_PID="df11"
+DFU_ADDR="0x08000000"
+DFU_WAIT_SECS="${FW_DFU_WAIT:-30}"
+
+# Flash options (cube)
+FLASH_PORT="${FW_FLASH_PORT:-}"       # e.g. USB1 — empty = auto/select
+FLASH_SN="${FW_FLASH_SN:-}"
+FLASH_SELECT=0
+FLASH_ERASE=0
+FLASH_VERIFY=1
+FLASH_START=1
+
+# Serial console / log
+SERIAL_PORT="${FW_SERIAL_PORT:-}"     # e.g. /dev/cu.usbmodemCHCARD_0013
+SERIAL_BAUD="${FW_SERIAL_BAUD:-115200}"
+SEND_WAIT_SECS="${FW_SEND_WAIT:-1.5}"
+
+# Running firmware USB IDs (placeholders — see USB_APP/usb_descriptors.c)
+CHANNEL_VID_PID="cafe:4013"
+EFFECT_VID_PID="cafe:4015"
+
+# Print one line; leading \r resets column (fixes staircase when terminal
+# treats LF as "line feed only" without carriage return).
+out()  { printf '\r%s\n' "$*"; }
+outn() { printf '\r%s\n' ""; }
+die()  { printf '\rerror: %s\n' "$*" >&2; exit 1; }
+info() { out "  $*"; }
+ok()   { out "  ok    $*"; }
+warn() { printf '\r  warn  %s\n' "$*" >&2; }
+hdr()  { outn; out "$1"; }
+row()  { printf '\r  %-10s %s\n' "$1" "$2"; }
+
+strip_ansi() {
+  # shellcheck disable=SC2001
+  sed $'s/\x1b\\[[0-9;]*[a-zA-Z]//g' | sed $'s/\r//g'
+}
+
+relpath() {
+  local p="$1"
+  if [[ "$p" == "$ROOT"/* ]]; then
+    echo "${p#"$ROOT"/}"
+  else
+    echo "$p"
+  fi
+}
+
+human_bytes() {
+  local n="$1"
+  if [[ "$n" -ge 1048576 ]]; then
+    awk -v n="$n" 'BEGIN { printf "%.1fM", n/1048576 }'
+  elif [[ "$n" -ge 1024 ]]; then
+    awk -v n="$n" 'BEGIN { printf "%.1fK", n/1024 }'
+  else
+    echo "${n}B"
+  fi
+}
+
+usage() {
+  local lines=(
+    "fw - Freshwater CMI firmware CLI"
+    ""
+    "Usage"
+    "  fw build    [channel|effect|all] [--debug|--release]"
+    "  fw flash    [channel|effect] [options]"
+    "  fw list     [usb|stlink|uart|all]"
+    "  fw console  [channel|effect] [--port PATH]"
+    "  fw log      [channel|effect] [--port PATH]"
+    "  fw send     [channel|effect] <command...> [--port PATH]"
+    "  fw clean    [channel|effect|all]"
+    "  fw status"
+    "  fw help"
+    ""
+    "Flash options"
+    "  --debug | --release     preset (default Debug)"
+    "  --tool cube|dfu|auto    flasher (default cube)"
+    "  --port USB1 | -p 1      Cube USB port (auto if one device)"
+    "  --sn <serial>           DFU serial"
+    "  --select                prompt for USB port"
+    "  --erase                 full chip erase"
+    "  --no-verify             skip verify"
+    "  --no-start              skip run-after-write"
+    ""
+    "Serial / logs"
+    "  fw console channel      interactive USB CDC console (Ctrl-A K to quit screen)"
+    "  fw log effect           follow CDC output (Ctrl-C to stop)"
+    "  fw send channel help    send one command, print reply"
+    "  fw send channel status"
+    ""
+    "Cards"
+    "  channel    channel_MCU   STM32H725   /dev/cu.usbmodemCHCARD*"
+    "  effect     effect_card   STM32H743   /dev/cu.usbmodemEFCARD*"
+    ""
+    "Flash flow"
+    "  1. BOOT toggle UP, press reset"
+    "  2. fw flash channel"
+    "  3. BOOT toggle DOWN, press reset"
+    ""
+    "Examples"
+    "  fw list"
+    "  fw console channel"
+    "  fw log effect"
+    "  fw send channel help"
+    "  fw flash channel --port USB1"
+    "  fw build all --release"
+  )
+  local line
+  for line in "${lines[@]}"; do
+    out "$line"
+  done
+}
+
+# ── card metadata ────────────────────────────────────────────────────────────
+
+card_dir() {
+  case "$1" in
+    channel|c) echo "$ROOT/channel_card" ;;
+    effect|e)  echo "$ROOT/effect_card" ;;
+    *) die "unknown card: $1 (use channel|effect|all)" ;;
+  esac
+}
+
+card_target() {
+  case "$1" in
+    channel|c) echo "channel_MCU" ;;
+    effect|e)  echo "effect_card" ;;
+    *) die "unknown card: $1" ;;
+  esac
+}
+
+normalize_card() {
+  case "$1" in
+    channel|c|chan) echo "channel" ;;
+    effect|e|fx)    echo "effect" ;;
+    all|both)       echo "all" ;;
+    *) die "unknown card: $1 (use channel|effect|all)" ;;
+  esac
+}
+
+artifact() {
+  local card="$1" ext="$2"
+  echo "$(card_dir "$card")/build/$PRESET/$(card_target "$card").${ext}"
+}
+
+# ── toolchain ────────────────────────────────────────────────────────────────
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "'$1' not found on PATH"
+}
+
+resolve_cube_cli() {
+  if command -v STM32_Programmer_CLI >/dev/null 2>&1; then
+    command -v STM32_Programmer_CLI
+    return 0
+  fi
+  local candidate path
+  for candidate in \
+    /opt/ST/STM32CubeCLT_*/STM32CubeProgrammer/bin/STM32_Programmer_CLI \
+    /Applications/STMicroelectronics/STM32Cube/STM32CubeProgrammer/STM32CubeProgrammer.app/Contents/MacOs/bin/STM32_Programmer_CLI
+  do
+    for path in $candidate; do
+      if [[ -x "$path" ]]; then
+        echo "$path"
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
+cube_cli() {
+  local cube
+  cube="$(resolve_cube_cli)" || die "STM32_Programmer_CLI not found (install STM32CubeCLT / CubeProgrammer)"
+  echo "$cube"
+}
+
+# ── build / clean ────────────────────────────────────────────────────────────
+
+cmd_build_one() {
+  local card="$1" dir
+  dir="$(card_dir "$card")"
+  need_cmd cmake
+  need_cmd ninja
+  need_cmd arm-none-eabi-gcc
+  need_cmd arm-none-eabi-objcopy
+
+  info "build $card ($PRESET)"
+  (
+    cd "$dir"
+    cmake --preset "$PRESET"
+    cmake --build "build/$PRESET"
+  )
+  ok "$(relpath "$(artifact "$card" elf)")"
+}
+
+cmd_build() {
+  local card
+  card="$(normalize_card "${1:-all}")"
+  shift || true
+  parse_flags "$@"
+
+  if [[ "$card" == "all" ]]; then
+    cmd_build_one channel
+    cmd_build_one effect
+  else
+    cmd_build_one "$card"
+  fi
+}
+
+cmd_clean_one() {
+  local card="$1" dir
+  dir="$(card_dir "$card")"
+  if [[ -d "$dir/build" ]]; then
+    info "Removing $dir/build"
+    rm -rf "$dir/build"
+    ok "cleaned $card"
+  else
+    info "$card: nothing to clean"
+  fi
+}
+
+cmd_clean() {
+  local card
+  card="$(normalize_card "${1:-all}")"
+  if [[ "$card" == "all" ]]; then
+    cmd_clean_one channel
+    cmd_clean_one effect
+  else
+    cmd_clean_one "$card"
+  fi
+}
+
+# ── cube USB discovery ───────────────────────────────────────────────────────
+
+cube_list_raw() {
+  local kind="${1:-usb}"   # usb | stlink | uart | (empty=all)
+  local cube
+  cube="$(cube_cli)"
+  if [[ -n "$kind" && "$kind" != "all" ]]; then
+    "$cube" -l "$kind" 2>&1 | strip_ansi || true
+  else
+    "$cube" -l 2>&1 | strip_ansi || true
+  fi
+}
+
+# Print USB DFU devices; populates parallel arrays USB_PORTS / USB_SNS / USB_PIDS
+# Returns count via USB_COUNT
+discover_cube_usb() {
+  USB_PORTS=()
+  USB_SNS=()
+  USB_PIDS=()
+  USB_COUNT=0
+
+  local out line port sn pid idx
+  out="$(cube_list_raw usb)"
+
+  # Parse blocks. Cube prints something like:
+  #   Device Index           : 0
+  #   USB Port Index / USB#  : often implied as USB1, USB2...
+  #   Product ID             : 0xDF11
+  #   Serial number          : XXX
+  #
+  # Port naming used by -c is USB1, USB2, … in connection order.
+  port=""
+  sn=""
+  pid=""
+  idx=""
+
+  flush_device() {
+    if [[ -n "${idx}" || -n "${sn}" || -n "${pid}" ]]; then
+      local p="${port}"
+      if [[ -z "$p" ]]; then
+        # Device Index is 0-based; Cube connect port is USB(N) 1-based
+        if [[ -n "$idx" ]]; then
+          p="USB$((idx + 1))"
+        else
+          p="USB$((USB_COUNT + 1))"
+        fi
+      fi
+      # Normalize USB1 / usb1 / 1 → USB1
+      p="$(normalize_usb_port "$p")"
+      USB_PORTS+=("$p")
+      USB_SNS+=("${sn:-}")
+      USB_PIDS+=("${pid:-}")
+      USB_COUNT=$((USB_COUNT + 1))
+    fi
+    port=""; sn=""; pid=""; idx=""
+  }
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -z "$line" ]] && continue
+
+    if echo "$line" | grep -qiE 'No STM32 device in DFU|No DFU'; then
+      USB_PORTS=(); USB_SNS=(); USB_PIDS=(); USB_COUNT=0
+      return 0
+    fi
+
+    # New device boundary
+    if echo "$line" | grep -qiE '^Device Index|^=====|^DFU device'; then
+      if [[ -n "$idx" || -n "$sn" || -n "$pid" ]]; then
+        flush_device
+      fi
+    fi
+
+    if [[ "$line" =~ [Dd]evice[[:space:]]*[Ii]ndex[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
+      idx="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ [Uu][Ss][Bb][[:space:]]*[Pp]ort[[:space:]]*[Ii]ndex[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
+      port="USB${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ (^|[[:space:]])(USB[0-9]+)($|[[:space:]]) ]]; then
+      # bare USB1 token on a line
+      port="${BASH_REMATCH[2]}"
+    elif [[ "$line" =~ [Pp]roduct[[:space:]]*[Ii][Dd][[:space:]]*:[[:space:]]*(0x)?([0-9A-Fa-f]+) ]]; then
+      pid="0x${BASH_REMATCH[2]}"
+    elif [[ "$line" =~ [Ss]erial[[:space:]]*[Nn]umber[[:space:]]*:[[:space:]]*(.+) ]]; then
+      sn="${BASH_REMATCH[1]}"
+      sn="${sn#"${sn%%[![:space:]]*}"}"
+    elif [[ "$line" =~ ^Port:[[:space:]]*(USB[0-9]+) ]]; then
+      port="${BASH_REMATCH[1]}"
+    fi
+  done <<< "$out"
+
+  flush_device
+
+  # Fallback: if Cube only said devices exist but we parsed none, try counting
+  # "Device Index" occurrences and synthesize USB1..N
+  if [[ "$USB_COUNT" -eq 0 ]]; then
+    local n
+    n="$(echo "$out" | grep -ciE 'Device Index' || true)"
+    if [[ "$n" -gt 0 ]]; then
+      local i
+      for ((i = 1; i <= n; i++)); do
+        USB_PORTS+=("USB$i")
+        USB_SNS+=("")
+        USB_PIDS+=("")
+      done
+      USB_COUNT=$n
+    fi
+  fi
+}
+
+normalize_usb_port() {
+  local p="$1"
+  p="$(echo "$p" | tr '[:lower:]' '[:upper:]')"
+  if [[ "$p" =~ ^[0-9]+$ ]]; then
+    echo "USB$p"
+  elif [[ "$p" =~ ^USB[0-9]+$ ]]; then
+    echo "$p"
+  else
+    # allow raw paths / other port names through
+    echo "$1"
+  fi
+}
+
+print_usb_table() {
+  local to_stderr="${1:-}"
+  local i
+  _emit() {
+    if [[ -n "$to_stderr" ]]; then
+      printf '\r%s\n' "$*" >&2
+    else
+      out "$*"
+    fi
+  }
+  _row() {
+    if [[ -n "$to_stderr" ]]; then
+      printf '\r  %-7s %-19s %s\n' "$1" "$2" "$3" >&2
+    else
+      printf '\r  %-7s %-19s %s\n' "$1" "$2" "$3"
+    fi
+  }
+  if [[ "$USB_COUNT" -eq 0 ]]; then
+    _emit "  (none)"
+    return
+  fi
+  _emit "  port    sn                  pid"
+  for ((i = 0; i < USB_COUNT; i++)); do
+    _row "${USB_PORTS[$i]}" "${USB_SNS[$i]:--}" "${USB_PIDS[$i]:--}"
+  done
+}
+
+# Prints ONLY the chosen port name on stdout (UI on stderr).
+select_usb_port() {
+  discover_cube_usb
+
+  if [[ -n "$FLASH_PORT" ]]; then
+    normalize_usb_port "$FLASH_PORT"
+    return 0
+  fi
+
+  if [[ -n "$FLASH_SN" && "$USB_COUNT" -gt 0 ]]; then
+    local i
+    for ((i = 0; i < USB_COUNT; i++)); do
+      if [[ "${USB_SNS[$i]}" == "$FLASH_SN" ]]; then
+        echo "${USB_PORTS[$i]}"
+        return 0
+      fi
+    done
+    warn "serial $FLASH_SN not listed — connecting with sn= anyway"
+    echo "USB1"
+    return 0
+  fi
+
+  if [[ "$USB_COUNT" -eq 0 ]]; then
+    die "no DFU USB device found"
+  fi
+
+  if [[ "$USB_COUNT" -eq 1 && "$FLASH_SELECT" -eq 0 ]]; then
+    printf '\r  ok    using %s\n' "${USB_PORTS[0]}" >&2
+    echo "${USB_PORTS[0]}"
+    return 0
+  fi
+
+  printf '\rAvailable DFU USB ports:\n' >&2
+  print_usb_table stderr
+  local choice
+  if [[ ! -t 0 ]]; then
+    die "multiple USB ports — pass --port USB1 (or --select)"
+  fi
+  printf '\rSelect port [1-%d]: ' "$USB_COUNT" >&2
+  read -r choice
+  [[ "$choice" =~ ^[0-9]+$ ]] || die "invalid selection"
+  (( choice >= 1 && choice <= USB_COUNT )) || die "selection out of range"
+  echo "${USB_PORTS[$((choice - 1))]}"
+}
+
+dfu_present_dfuutil() {
+  command -v dfu-util >/dev/null 2>&1 || return 1
+  dfu-util -l 2>/dev/null | grep -qi "${DFU_VID}:${DFU_PID}"
+}
+
+dfu_present_cube() {
+  resolve_cube_cli >/dev/null 2>&1 || return 1
+  discover_cube_usb
+  [[ "$USB_COUNT" -gt 0 ]]
+}
+
+dfu_present() {
+  if [[ "$FLASH_TOOL" == "dfu" ]]; then
+    dfu_present_dfuutil
+  else
+    dfu_present_cube || dfu_present_dfuutil
+  fi
+}
+
+wait_for_dfu() {
+  local timeout="$1"
+  local start end
+  start="$(date +%s)"
+  info "waiting up to ${timeout}s for DFU device"
+  info "(BOOT toggle UP, then press reset)"
+  while true; do
+    if dfu_present; then
+      ok "DFU device found"
+      return 0
+    fi
+    end="$(date +%s)"
+    if (( end - start >= timeout )); then
+      break
+    fi
+    sleep 0.5
+  done
+  die "DFU device not found after ${timeout}s"
+}
+
+# ── list / status ────────────────────────────────────────────────────────────
+
+summarize_cube_probe() {
+  # Compact one-liner status from raw Cube list output (no banners).
+  local kind="$1"
+  local out st
+  out="$(cube_list_raw "$kind")"
+  case "$kind" in
+    usb)
+      if echo "$out" | grep -qiE 'No STM32 device in DFU|No DFU'; then
+        row "dfu" "none"
+      else
+        discover_cube_usb
+        row "dfu" "$USB_COUNT device(s)"
+      fi
+      ;;
+    stlink)
+      if echo "$out" | grep -qiE 'No ST-Link'; then
+        row "stlink" "none"
+      else
+        st="$(echo "$out" | grep -iE 'SN|Serial|ST-LINK' | head -3 | tr '\n' '; ')"
+        row "stlink" "${st:-present}"
+      fi
+      ;;
+    uart)
+      # Only show likely MCU serial ports, not Bluetooth / debug-console noise
+      local ports=()
+      shopt -s nullglob
+      ports=(/dev/cu.usbmodem* /dev/tty.usbmodem* /dev/ttyACM* /dev/serial/by-id/*)
+      shopt -u nullglob
+      if [[ ${#ports[@]} -eq 0 ]]; then
+        row "uart" "none"
+      else
+        local p
+        for p in "${ports[@]}"; do
+          row "uart" "$p"
+        done
+      fi
+      ;;
+  esac
+}
+
+cmd_list() {
+  local kind="${1:-all}"
+  case "$kind" in
+    usb|dfu) kind="usb" ;;
+    stlink|st-link|swd) kind="stlink" ;;
+    uart|serial) kind="uart" ;;
+    all|"") kind="all" ;;
+    *) die "usage: fw list [usb|stlink|uart|all]" ;;
+  esac
+
+  hdr "Devices"
+
+  if ! resolve_cube_cli >/dev/null 2>&1; then
+    warn "STM32_Programmer_CLI not found"
+  else
+    if [[ "$kind" == "all" ]]; then
+      summarize_cube_probe usb
+      summarize_cube_probe stlink
+      summarize_cube_probe uart
+    else
+      summarize_cube_probe "$kind"
+    fi
+  fi
+
+  if [[ "$kind" == "usb" || "$kind" == "all" ]]; then
+    outn
+    out "DFU ports (Cube)"
+    discover_cube_usb
+    print_usb_table
+    if [[ "$USB_COUNT" -eq 0 ]]; then
+      info "tip: BOOT UP -> reset, then: fw list usb"
+    else
+      ok "ready to flash"
+    fi
+
+    outn
+    out "Running firmware"
+    local found=0
+    if command -v system_profiler >/dev/null 2>&1; then
+      local usb
+      usb="$(system_profiler SPUSBDataType 2>/dev/null || true)"
+      if echo "$usb" | grep -qiE 'Product ID: 0x4013'; then
+        row "channel" "$CHANNEL_VID_PID"
+        found=1
+      fi
+      if echo "$usb" | grep -qiE 'Product ID: 0x4015'; then
+        row "effect" "$EFFECT_VID_PID"
+        found=1
+      fi
+      if echo "$usb" | grep -qi 'STM32 BOOTLOADER'; then
+        row "bootloader" "STM32 DFU"
+        found=1
+      fi
+    fi
+    [[ "$found" -eq 0 ]] && row "-" "(none)"
+
+    if command -v dfu-util >/dev/null 2>&1; then
+      outn
+      out "dfu-util"
+      local dlines
+      dlines="$(dfu-util -l 2>/dev/null | strip_ansi | grep -iE 'Found|0483|df11|\[0\]' || true)"
+      if [[ -n "$dlines" ]]; then
+        while IFS= read -r line; do
+          [[ -n "$line" ]] && info "$line"
+        done <<< "$dlines"
+      else
+        row "-" "(none)"
+      fi
+    fi
+
+    cmd_ports
+  fi
+}
+
+cmd_status() {
+  hdr "Config"
+  row "root" "$ROOT"
+  row "preset" "$PRESET"
+  row "tool" "$FLASH_TOOL"
+  [[ -n "$FLASH_PORT" ]] && row "port" "$FLASH_PORT"
+  [[ -n "$FLASH_SN" ]] && row "sn" "$FLASH_SN"
+
+  outn
+  out "Toolchain"
+  local c path
+  for c in cmake ninja arm-none-eabi-gcc arm-none-eabi-objcopy dfu-util; do
+    if path="$(command -v "$c" 2>/dev/null)"; then
+      printf '\r  %-22s ok    %s\n' "$c" "$path"
+    else
+      printf '\r  %-22s miss\n' "$c"
+    fi
+  done
+  if path="$(resolve_cube_cli)"; then
+    printf '\r  %-22s ok    %s\n' "STM32_Programmer_CLI" "$path"
+  else
+    printf '\r  %-22s miss\n' "STM32_Programmer_CLI"
+  fi
+
+  outn
+  out "Artifacts ($PRESET)"
+  local card elf hex bin sz
+  for card in channel effect; do
+    elf="$(artifact "$card" elf)"
+    hex="$(artifact "$card" hex)"
+    bin="$(artifact "$card" bin)"
+    if [[ -f "$elf" ]]; then
+      sz="$(wc -c <"$elf" | tr -d ' ')"
+      printf '\r  %-8s %-4s %s (%s)\n' "$card" "elf" "$(relpath "$elf")" "$(human_bytes "$sz")"
+      [[ -f "$hex" ]] && printf '\r  %-8s %-4s %s\n' "" "hex" "$(relpath "$hex")"
+      [[ -f "$bin" ]] && printf '\r  %-8s %-4s %s\n' "" "bin" "$(relpath "$bin")"
+    else
+      printf '\r  %-8s %s\n' "$card" "(not built — fw build $card)"
+    fi
+  done
+}
+
+# ── flash ────────────────────────────────────────────────────────────────────
+
+flash_dfu() {
+  local bin="$1"
+  need_cmd dfu-util
+  [[ -f "$bin" ]] || die "missing firmware: $bin (build first)"
+  wait_for_dfu "$DFU_WAIT_SECS"
+  info "flashing via dfu-util"
+  row "file" "$(relpath "$bin")"
+  set +e
+  dfu-util -a 0 -d "${DFU_VID}:${DFU_PID}" -s "${DFU_ADDR}:leave" -D "$bin"
+  local rc=$?
+  set -e
+  if [[ $rc -eq 0 || $rc -eq 74 ]]; then
+    ok "flash complete (dfu-util exit $rc)"
+  else
+    die "dfu-util failed with exit $rc"
+  fi
+}
+
+flash_cube() {
+  local hex="$1"
+  local cube port
+  cube="$(cube_cli)"
+  [[ -f "$hex" ]] || die "missing firmware: $hex (build first)"
+
+  wait_for_dfu "$DFU_WAIT_SECS"
+
+  port="$(select_usb_port)"
+  port="$(normalize_usb_port "$port")"
+
+  local connect=( -c "port=${port}" )
+  [[ -n "$FLASH_SN" ]] && connect+=( "sn=${FLASH_SN}" )
+
+  local args=( "${connect[@]}" )
+  if [[ "$FLASH_ERASE" -eq 1 ]]; then
+    args+=( -e all )
+  fi
+  args+=( -w "$hex" )
+  [[ "$FLASH_VERIFY" -eq 1 ]] && args+=( -v )
+  [[ "$FLASH_START" -eq 1 ]] && args+=( -s )
+
+  info "flashing via CubeProgrammer"
+  row "port" "$port"
+  row "file" "$(relpath "$hex")"
+  "$cube" "${args[@]}"
+  ok "flash complete"
+}
+
+pick_flash_tool() {
+  case "$FLASH_TOOL" in
+    dfu)  echo "dfu" ;;
+    cube) echo "cube" ;;
+    auto)
+      if resolve_cube_cli >/dev/null 2>&1; then
+        echo "cube"
+      elif command -v dfu-util >/dev/null 2>&1; then
+        echo "dfu"
+      else
+        die "no flash tool found (install STM32CubeProgrammer or dfu-util)"
+      fi
+      ;;
+    *) die "unknown flash tool: $FLASH_TOOL (cube|dfu|auto)" ;;
+  esac
+}
+
+cmd_flash() {
+  local card
+  [[ $# -ge 1 ]] || die "usage: fw flash <channel|effect> [options]"
+  card="$(normalize_card "$1")"
+  [[ "$card" != "all" ]] || die "flash one card at a time (channel|effect)"
+  shift
+  parse_flags "$@"
+
+  local tool
+  tool="$(pick_flash_tool)"
+  # Ensure wait/list logic matches chosen tool
+  FLASH_TOOL="$tool"
+
+  local elf
+  elf="$(artifact "$card" elf)"
+  if [[ ! -f "$elf" ]]; then
+    warn "No $PRESET build for $card — building first"
+    cmd_build_one "$card"
+  fi
+
+  [[ -n "$FLASH_PORT" ]] && FLASH_PORT="$(normalize_usb_port "$FLASH_PORT")"
+
+  hdr "Flash"
+  row "card"   "$card"
+  row "preset" "$PRESET"
+  row "tool"   "$tool"
+  [[ -n "$FLASH_PORT" ]] && row "port" "$FLASH_PORT"
+  [[ -n "$FLASH_SN" ]] && row "sn" "$FLASH_SN"
+  [[ "$FLASH_ERASE" -eq 1 ]] && row "erase" "all"
+  [[ "$FLASH_VERIFY" -eq 0 ]] && row "verify" "off"
+  [[ "$FLASH_START" -eq 0 ]] && row "start" "off"
+  outn
+  info "1. BOOT toggle UP"
+  info "2. press reset"
+  outn
+
+  case "$tool" in
+    dfu)  flash_dfu  "$(artifact "$card" bin)" ;;
+    cube) flash_cube "$(artifact "$card" hex)" ;;
+  esac
+
+  outn
+  out "Next"
+  info "BOOT toggle DOWN, then press reset"
+}
+
+# ── serial console / logs ────────────────────────────────────────────────────
+
+list_cdc_ports() {
+  local ports=()
+  shopt -s nullglob
+  ports=(/dev/cu.usbmodem* /dev/tty.usbmodem* /dev/ttyACM*)
+  shopt -u nullglob
+  printf '%s\n' "${ports[@]+"${ports[@]}"}"
+}
+
+# Resolve USB CDC path for a card. Prefers cu.* over tty.* on macOS.
+resolve_serial_port() {
+  local card="$1"
+  if [[ -n "$SERIAL_PORT" ]]; then
+    [[ -e "$SERIAL_PORT" ]] || die "serial port not found: $SERIAL_PORT"
+    echo "$SERIAL_PORT"
+    return 0
+  fi
+
+  local ports=()
+  local p
+  while IFS= read -r p; do
+    [[ -n "$p" ]] && ports+=("$p")
+  done < <(list_cdc_ports)
+
+  local matches=()
+  local pat=
+  case "$card" in
+    channel) pat='CHCARD|chcard|Cafe.*4013|cafe.*4013' ;;
+    effect)  pat='EFCARD|efcard|Cafe.*4015|cafe.*4015' ;;
+    *) die "serial needs channel|effect" ;;
+  esac
+
+  for p in "${ports[@]+"${ports[@]}"}"; do
+    # Prefer callout devices on macOS
+    [[ "$p" == /dev/tty.* ]] && continue
+    if echo "$p" | grep -qiE "$pat"; then
+      matches+=("$p")
+    fi
+  done
+
+  # Fallback: also consider tty.* if no cu.* matched
+  if [[ ${#matches[@]} -eq 0 ]]; then
+    for p in "${ports[@]+"${ports[@]}"}"; do
+      if echo "$p" | grep -qiE "$pat"; then
+        matches+=("$p")
+      fi
+    done
+  fi
+
+  if [[ ${#matches[@]} -eq 0 ]]; then
+    printf '\rNo CDC port found for %s\n' "$card" >&2
+    printf '\r\n' >&2
+    printf '\rAvailable USB serial ports:\n' >&2
+    if [[ ${#ports[@]} -eq 0 ]]; then
+      printf '\r  (none — is the board plugged in and running firmware?)\n' >&2
+    else
+      for p in "${ports[@]}"; do
+        printf '\r  %s\n' "$p" >&2
+      done
+    fi
+    die "pass --port /dev/cu.usbmodem… or plug in the $card"
+  fi
+
+  if [[ ${#matches[@]} -gt 1 ]]; then
+    warn "multiple $card ports — using ${matches[0]}"
+    for p in "${matches[@]}"; do
+      printf '\r  %s\n' "$p" >&2
+    done
+  fi
+  echo "${matches[0]}"
+}
+
+configure_serial() {
+  local port="$1"
+  # CDC ignores baud; still set a sane line discipline.
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    stty -f "$port" "$SERIAL_BAUD" raw -echo -echoe -echok 2>/dev/null \
+      || stty -f "$port" "$SERIAL_BAUD" 2>/dev/null \
+      || true
+  else
+    stty -F "$port" "$SERIAL_BAUD" raw -echo -echoe -echok 2>/dev/null \
+      || stty -F "$port" "$SERIAL_BAUD" 2>/dev/null \
+      || true
+  fi
+}
+
+cmd_console() {
+  local card port
+  [[ $# -ge 1 ]] || die "usage: fw console <channel|effect> [--port PATH]"
+  card="$(normalize_card "$1")"
+  [[ "$card" != "all" ]] || die "console one card at a time"
+  shift
+  parse_flags "$@"
+
+  port="$(resolve_serial_port "$card")"
+  hdr "Console"
+  row "card" "$card"
+  row "port" "$port"
+  row "baud" "$SERIAL_BAUD (CDC — any)"
+  outn
+  info "type help  |  quit: Ctrl-A then K (screen)  or  Ctrl-C"
+  outn
+
+  if command -v tio >/dev/null 2>&1; then
+    exec tio -b "$SERIAL_BAUD" "$port"
+  elif command -v picocom >/dev/null 2>&1; then
+    exec picocom -b "$SERIAL_BAUD" --imap lfcrlf "$port"
+  elif command -v screen >/dev/null 2>&1; then
+    exec screen "$port" "$SERIAL_BAUD"
+  else
+    die "need tio, picocom, or screen for interactive console"
+  fi
+}
+
+cmd_log() {
+  local card port
+  [[ $# -ge 1 ]] || die "usage: fw log <channel|effect> [--port PATH]"
+  card="$(normalize_card "$1")"
+  [[ "$card" != "all" ]] || die "log one card at a time"
+  shift
+  parse_flags "$@"
+
+  port="$(resolve_serial_port "$card")"
+  hdr "Log"
+  row "card" "$card"
+  row "port" "$port"
+  outn
+  info "following CDC output — Ctrl-C to stop"
+  outn
+
+  configure_serial "$port"
+  # Read-only follow. cat is enough for USB CDC.
+  exec cat "$port"
+}
+
+cmd_send() {
+  local card port cmd
+  [[ $# -ge 2 ]] || die "usage: fw send <channel|effect> <command...> [--port PATH]"
+  card="$(normalize_card "$1")"
+  [[ "$card" != "all" ]] || die "send one card at a time"
+  shift
+
+  # Split trailing flags from the command words.
+  local words=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --port|--port=*|-p|--baud|--baud=*)
+        # Let parse_flags handle from here together with leftovers — collect first
+        break
+        ;;
+      --*)
+        break
+        ;;
+      *)
+        words+=("$1"); shift
+        ;;
+    esac
+  done
+  parse_flags "$@"
+  [[ ${#words[@]} -ge 1 ]] || die "missing command (e.g. fw send channel help)"
+  cmd="${words[*]}"
+
+  port="$(resolve_serial_port "$card")"
+  hdr "Send"
+  row "card" "$card"
+  row "port" "$port"
+  row "cmd"  "$cmd"
+  outn
+
+  python3 - "$port" "$cmd" "$SEND_WAIT_SECS" <<'PY'
+import sys, time, os, select
+
+port, cmd, wait_s = sys.argv[1], sys.argv[2], float(sys.argv[3])
+# Open RW without becoming controlling TTY
+fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+try:
+    # Drain any pending input
+    time.sleep(0.05)
+    while True:
+        r, _, _ = select.select([fd], [], [], 0)
+        if not r:
+            break
+        os.read(fd, 4096)
+    payload = (cmd.rstrip("\r\n") + "\r\n").encode()
+    os.write(fd, payload)
+    end = time.time() + wait_s
+    buf = bytearray()
+    while time.time() < end:
+        timeout = max(0.0, end - time.time())
+        r, _, _ = select.select([fd], [], [], min(0.2, timeout))
+        if r:
+            try:
+                chunk = os.read(fd, 4096)
+            except BlockingIOError:
+                chunk = b""
+            if chunk:
+                buf.extend(chunk)
+                # Keep reading a little after last data
+                end = max(end, time.time() + 0.25)
+    text = buf.decode("utf-8", errors="replace")
+    # Normalize CR-only lines for display
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    sys.stdout.write(text)
+    if text and not text.endswith("\n"):
+        sys.stdout.write("\n")
+finally:
+    os.close(fd)
+PY
+}
+
+cmd_ports() {
+  # Friendly CDC listing for list / status.
+  hdr "CDC serial"
+  local p found=0
+  while IFS= read -r p; do
+    [[ -z "$p" ]] && continue
+    [[ "$p" == /dev/tty.* ]] && continue
+    found=1
+    local label="?"
+    echo "$p" | grep -qiE 'CHCARD' && label="channel"
+    echo "$p" | grep -qiE 'EFCARD' && label="effect"
+    printf '\r  %-8s %s\n' "$label" "$p"
+  done < <(list_cdc_ports)
+  [[ "$found" -eq 0 ]] && row "-" "(none)"
+}
+
+# ── flag parsing ─────────────────────────────────────────────────────────────
+
+parse_flags() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --debug)   PRESET="Debug" ;;
+      --release) PRESET="Release" ;;
+      --tool)
+        [[ $# -ge 2 ]] || die "--tool needs cube|dfu|auto"
+        FLASH_TOOL="$2"; shift
+        ;;
+      --tool=*)
+        FLASH_TOOL="${1#--tool=}"
+        ;;
+      --port|-p)
+        [[ $# -ge 2 ]] || die "--port needs a value"
+        _set_port_arg "$2"; shift
+        ;;
+      --port=*)
+        _set_port_arg "${1#--port=}"
+        ;;
+      --baud)
+        [[ $# -ge 2 ]] || die "--baud needs a value"
+        SERIAL_BAUD="$2"; shift
+        ;;
+      --baud=*)
+        SERIAL_BAUD="${1#--baud=}"
+        ;;
+      --sn)
+        [[ $# -ge 2 ]] || die "--sn needs a serial number"
+        FLASH_SN="$2"; shift
+        ;;
+      --sn=*)
+        FLASH_SN="${1#--sn=}"
+        ;;
+      --select)     FLASH_SELECT=1 ;;
+      --erase)      FLASH_ERASE=1 ;;
+      --no-verify)  FLASH_VERIFY=0 ;;
+      --no-start)   FLASH_START=0 ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown option: $1"
+        ;;
+    esac
+    shift
+  done
+}
+
+# --port USB1  → flash DFU port
+# --port /dev/cu.usbmodem… → serial CDC port
+_set_port_arg() {
+  local v="$1"
+  if [[ "$v" == /dev/* || "$v" == cu.* || "$v" == tty.* ]]; then
+    [[ "$v" == cu.* || "$v" == tty.* ]] && v="/dev/$v"
+    SERIAL_PORT="$v"
+  else
+    FLASH_PORT="$v"
+  fi
+}
+
+# ── main ─────────────────────────────────────────────────────────────────────
+
+main() {
+  # Avoid staircase output when the TTY maps LF without CR.
+  if [[ -t 1 ]]; then
+    stty onlcr 2>/dev/null || true
+  fi
+
+  local cmd="${1:-help}"
+  shift || true
+
+  case "$cmd" in
+    build)  cmd_build "$@" ;;
+    flash)  cmd_flash "$@" ;;
+    list|ls|devices) cmd_list "$@" ;;
+    console|shell|repl) cmd_console "$@" ;;
+    log|logs|follow|tail) cmd_log "$@" ;;
+    send|cmd) cmd_send "$@" ;;
+    clean)  cmd_clean "$@" ;;
+    status|info) cmd_status "$@" ;;
+    help|-h|--help) usage ;;
+    *)
+      usage
+      die "unknown command: $cmd"
+      ;;
+  esac
+}
+
+main "$@"
