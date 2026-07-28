@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <thread>
 
 namespace rs485 {
 
@@ -35,6 +37,70 @@ std::string ToLower(const std::string &s) {
   std::transform(out.begin(), out.end(), out.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return out;
+}
+
+void SleepMs(uint32_t ms) {
+  if (ms == 0)
+    return;
+  std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
+
+bool IsConsoleTextByte(unsigned char c) {
+  return c == '\r' || c == '\n' || c == '\t' || (c >= 0x20 && c < 0x7f);
+}
+
+/** Card replies always start with RS485_TAG ("[C] " / "[E] "). Effect's
+ * keystroke echo of our own "c:help\\r\\n" has no tag — keep everything
+ * from the first tag onward so echo/noise before it is ignored. */
+std::string ExtractTaggedReply(const std::string &raw) {
+  size_t c = raw.find("[C]");
+  size_t e = raw.find("[E]");
+  size_t at = std::string::npos;
+  if (c != std::string::npos)
+    at = c;
+  if (e != std::string::npos && (at == std::string::npos || e < at))
+    at = e;
+  if (at == std::string::npos)
+    return {};
+
+  std::string out = raw.substr(at);
+  /* Trailing framing junk after a clean CRLF-terminated reply is common
+   * on this bus; trim so PrintReply doesn't treat a good [C]/[E] line as
+   * garbage. */
+  while (!out.empty() &&
+         !IsConsoleTextByte(static_cast<unsigned char>(out.back()))) {
+    out.pop_back();
+  }
+  return out;
+}
+
+/** After each TX byte, wait until the RX line goes quiet. The Effect Card
+ * echoes every keystroke; if we send the next byte while that echo is
+ * still on the wire we collide (PC DE isn't on the MCU RS485_CTL net, so
+ * firmware WaitBusFree can't see us). screen avoids this by typing slowly. */
+void DrainEcho(SerialPort &port, uint32_t overall_ms) {
+  using clock = std::chrono::steady_clock;
+  const auto deadline =
+      clock::now() + std::chrono::milliseconds(overall_ms);
+  uint8_t trash[64];
+
+  /* First wait briefly for at least one echoed byte (or timeout). */
+  while (clock::now() < deadline) {
+    auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - clock::now())
+                    .count();
+    if (left <= 0)
+      return;
+    uint32_t slice = static_cast<uint32_t>(std::min<int64_t>(left, 5));
+    if (port.ReadTimeout(trash, sizeof(trash), slice) > 0)
+      break;
+  }
+
+  /* Then keep reading until a short quiet gap (echo burst finished). */
+  while (clock::now() < deadline) {
+    if (port.ReadTimeout(trash, sizeof(trash), 3) == 0)
+      return;
+  }
 }
 } // namespace
 
@@ -70,18 +136,46 @@ ExchangeResult RS485Link::Send(Target target, const std::string &command_in) {
    * target is "channel" must still reach only the Effect Card). */
   bool explicit_prefix = command.size() >= 2 && command[1] == ':';
   std::string line = explicit_prefix ? command : (TargetPrefix(target) + command);
-  std::string wire = line + "\r\n";
+  /* Terminate with a single CR — matching what screen/most terminals send
+   * on Enter. Firmware Console_Poll() treats BOTH '\\r' and '\\n' as end-
+   * of-line and runs the command; sending "\\r\\n" therefore executes twice
+   * (second time on an empty buffer). The first reply (especially a long
+   * `help` menu) is still on the wire when the LF arrives, so we collide
+   * with ourselves and often see "no reply". */
+  std::string wire = line + "\r";
 
   ExchangeResult result;
   for (int attempt = 0; attempt <= opts_.retries; attempt++) {
-    if (port_.ManualRtsControl())
-      port_.SetRts(true);
-    bool ok = port_.Write(reinterpret_cast<const uint8_t *>(wire.data()), wire.size());
-    if (port_.ManualRtsControl())
-      port_.SetRts(false);
-    if (!ok) {
-      return result; /* hard I/O error — got_reply stays false */
+    port_.FlushInput();
+
+    const auto *bytes = reinterpret_cast<const uint8_t *>(wire.data());
+    bool ok = true;
+    for (size_t i = 0; i < wire.size(); i++) {
+      if (port_.ManualRtsControl())
+        port_.SetRts(true);
+      ok = port_.Write(bytes + i, 1);
+      if (port_.ManualRtsControl())
+        port_.SetRts(false);
+      if (!ok)
+        break;
+
+      SleepMs(1);
+      const bool last_byte = (i + 1 == wire.size());
+      if (!last_byte) {
+        /* Wait out Effect's echo of this keystroke before the next TX
+         * byte. Do NOT drain after the final CR — Channel's reply starts
+         * ~3 ms later and DrainEcho would eat it. */
+        DrainEcho(port_, opts_.inter_byte_ms);
+      }
     }
+    if (!ok) {
+      return result;
+    }
+
+    /* Enter: Effect echoes "\r\n"; Channel holds ~3 ms then replies.
+     * Do not TX a trailing LF — that would re-trigger Console_Poll while
+     * the reply to CR is still being transmitted. */
+    SleepMs(5);
 
     std::string reply = ReadReply();
     if (!reply.empty()) {
@@ -89,30 +183,46 @@ ExchangeResult RS485Link::Send(Target target, const std::string &command_in) {
       result.reply = std::move(reply);
       return result;
     }
-    /* Nothing came back within the window — could be a busy bus (someone
-     * else mid-transmission) rather than "no card out there"; retry. */
   }
   return result;
 }
 
 std::string RS485Link::ReadReply() {
+  using clock = std::chrono::steady_clock;
+  const auto deadline =
+      clock::now() + std::chrono::milliseconds(opts_.reply_timeout_ms);
+
   uint8_t buf[512];
-  std::string out;
+  std::string raw;
 
-  size_t n = port_.ReadTimeout(buf, sizeof(buf), opts_.reply_timeout_ms);
-  if (n == 0)
-    return out; /* nothing arrived in the initial window */
-  out.append(reinterpret_cast<char *>(buf), n);
-
-  /* Keep draining while bytes keep arriving — multi-line replies like
-   * `status` span several RS485_Reply() calls in quick succession. */
-  while (true) {
-    size_t more = port_.ReadTimeout(buf, sizeof(buf), opts_.idle_gap_ms);
-    if (more == 0)
+  while (clock::now() < deadline) {
+    auto left_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       deadline - clock::now())
+                       .count();
+    if (left_ms <= 0)
       break;
-    out.append(reinterpret_cast<char *>(buf), more);
+    uint32_t slice =
+        static_cast<uint32_t>(std::min<int64_t>(left_ms, 50));
+
+    size_t n = port_.ReadTimeout(buf, sizeof(buf), slice);
+    if (n == 0)
+      continue;
+
+    raw.append(reinterpret_cast<char *>(buf), n);
+
+    if (ExtractTaggedReply(raw).empty())
+      continue;
+
+    while (true) {
+      size_t more = port_.ReadTimeout(buf, sizeof(buf), opts_.idle_gap_ms);
+      if (more == 0)
+        break;
+      raw.append(reinterpret_cast<char *>(buf), more);
+    }
+    return ExtractTaggedReply(raw);
   }
-  return out;
+
+  return ExtractTaggedReply(raw);
 }
 
 } // namespace rs485

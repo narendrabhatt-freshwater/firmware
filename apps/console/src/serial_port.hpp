@@ -48,6 +48,11 @@ public:
    * see rs485_link's retry policy). */
   size_t ReadTimeout(uint8_t *buf, size_t max_len, uint32_t timeout_ms);
 
+  /** Discard any bytes already sitting in the OS/driver RX buffer (idle
+   * noise, leftover TX-echo, turnaround glitches). Call before each
+   * transmit so ReadReply() only sees post-TX traffic. */
+  void FlushInput();
+
   /** Some USB-RS485 dongles lack auto-direction and need RTS driven high
    * only while transmitting. Off by default (matches ADAM-4520 and most
    * modern auto-direction dongles, which need no RTS handling at all). */

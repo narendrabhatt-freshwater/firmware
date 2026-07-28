@@ -151,6 +151,12 @@ size_t SerialPort::ReadTimeout(uint8_t *buf, size_t max_len,
   return static_cast<size_t>(read);
 }
 
+void SerialPort::FlushInput() {
+  if (!is_open_)
+    return;
+  PurgeComm(impl_->handle, PURGE_RXCLEAR);
+}
+
 void SerialPort::SetRts(bool asserted) {
   if (!is_open_ || !manual_rts_)
     return;

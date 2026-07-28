@@ -19,7 +19,10 @@
 #include <string>
 #include <vector>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <termios.h>
 #include <unistd.h>
 #endif
 
@@ -46,7 +49,7 @@ void PrintUsage() {
       "  --port PATH        Serial device for the RS485 adapter (required unless --list)\n"
       "  --baud N            Baud rate (default 115200, matches both cards' UART5/UART4)\n"
       "  --target TARGET     Default target for the REPL: channel|effect|all (default all)\n"
-      "  --timeout-ms N      Per-attempt reply wait, ms (default 300)\n"
+      "  --timeout-ms N      Per-attempt reply wait, ms (default 500)\n"
       "  --retries N         Extra send attempts if no reply arrives (default 2)\n"
       "  --manual-rts        Toggle RTS around each transmit (only for USB-RS485\n"
       "                      dongles without auto-direction; most don't need this)\n"
@@ -66,7 +69,7 @@ struct Options {
   std::string port;
   uint32_t baud = 115200;
   Target target = Target::All;
-  uint32_t timeout_ms = 300;
+  uint32_t timeout_ms = 500;
   int retries = 2;
   bool manual_rts = false;
   bool list = false;
@@ -129,8 +132,41 @@ bool ParseArgs(int argc, char **argv, Options &opts, std::string &err) {
   return true;
 }
 
-/** Prints a reply, colorizing the [C]/[E] card tag when stdout is a TTY. */
+/** True if `s` is mostly console text (printable ASCII + CR/LF/TAB).
+ * A single high-bit framing/noise byte must not be treated as a real
+ * card reply — those print as the Unicode replacement glyph and hide
+ * the real problem. */
+bool LooksLikeTextReply(const std::string &s) {
+  if (s.empty())
+    return false;
+  size_t printable = 0;
+  for (unsigned char c : s) {
+    if (c == '\r' || c == '\n' || c == '\t' || (c >= 0x20 && c < 0x7f))
+      printable++;
+  }
+  return printable * 4 >= s.size() * 3; /* >= 75% printable */
+}
+
+void PrintHexDump(const std::string &raw) {
+  std::cerr << "(rx noise/garbage, " << raw.size()
+            << " byte(s) — not a card reply; check A/B polarity, GND, "
+               "termination)\n  hex:";
+  for (unsigned char c : raw) {
+    char buf[8];
+    std::snprintf(buf, sizeof(buf), " %02x", c);
+    std::cerr << buf;
+  }
+  std::cerr << "\n";
+}
+
+/** Prints a reply, colorizing the [C]/[E] card tag when stdout is a TTY.
+ * Non-text bytes (bus noise) get a hex dump on stderr instead of a
+ * replacement glyph. */
 void PrintReply(const std::string &reply) {
+  if (!LooksLikeTextReply(reply)) {
+    PrintHexDump(reply);
+    return;
+  }
 #if defined(_WIN32)
   std::cout << reply;
 #else
@@ -164,8 +200,72 @@ int RunSendOnce(RS485Link &link, Target target, const std::string &command) {
   return 0;
 }
 
+/** Put the keyboard TTY into cooked line-edit mode for the REPL (Enter
+ * submits, Backspace deletes) and restore whatever it was on exit.
+ *
+ * getline() relies on the OS line discipline — if something left the
+ * session in raw mode (or echo-without-ICANON), Enter/Backspace print as
+ * literal ^M/^H instead of submitting/erasing. The RS485 serial port's
+ * own termios is separate; this only touches stdin when it is a TTY. */
+class TtyCookedGuard {
+public:
+  TtyCookedGuard() {
+#if defined(_WIN32)
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    if (h == INVALID_HANDLE_VALUE || h == nullptr)
+      return;
+    if (!GetConsoleMode(h, &saved_))
+      return;
+    handle_ = h;
+    DWORD mode = saved_ | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT |
+                 ENABLE_PROCESSED_INPUT;
+    SetConsoleMode(handle_, mode);
+    active_ = true;
+#else
+    if (!isatty(STDIN_FILENO))
+      return;
+    if (tcgetattr(STDIN_FILENO, &saved_) != 0)
+      return;
+    struct termios cooked = saved_;
+    cooked.c_lflag |= static_cast<tcflag_t>(ICANON | ECHO | ECHOE | ECHOK | ISIG);
+    cooked.c_iflag |= static_cast<tcflag_t>(ICRNL);
+    cooked.c_oflag |= static_cast<tcflag_t>(OPOST);
+    /* Prefer the usual erase/kill so Backspace deletes instead of
+     * printing ^H — leave VERASE alone if the session already set one. */
+    if (cooked.c_cc[VERASE] == 0 || cooked.c_cc[VERASE] == _POSIX_VDISABLE)
+      cooked.c_cc[VERASE] = 0177; /* DEL — common macOS/Terminal default */
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &cooked) == 0)
+      active_ = true;
+#endif
+  }
+
+  ~TtyCookedGuard() {
+    if (!active_)
+      return;
+#if defined(_WIN32)
+    SetConsoleMode(handle_, saved_);
+#else
+    tcsetattr(STDIN_FILENO, TCSANOW, &saved_);
+#endif
+  }
+
+  TtyCookedGuard(const TtyCookedGuard &) = delete;
+  TtyCookedGuard &operator=(const TtyCookedGuard &) = delete;
+
+private:
+  bool active_ = false;
+#if defined(_WIN32)
+  HANDLE handle_ = nullptr;
+  DWORD saved_ = 0;
+#else
+  struct termios saved_{};
+#endif
+};
+
 int RunRepl(RS485Link &link, Target default_target, const std::string &port,
             uint32_t baud) {
+  TtyCookedGuard tty; /* Enter submits, Backspace deletes — see class note */
+
   std::cout << "rs485_console — connected " << port << " @ " << baud
             << " 8N1, target: " << TargetName(default_target) << "\n"
             << "type a command and press Enter (your terminal echoes as you "
