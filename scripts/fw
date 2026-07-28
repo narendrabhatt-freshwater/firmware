@@ -1037,6 +1037,10 @@ list_rs485_ports() {
       [[ -n "$p" ]] && row "port" "$p"
     done <<< "$out"
   fi
+  # A 'while read' loop's own exit status is the final (failing) read at
+  # EOF — without this, that nonzero status becomes list_rs485_ports's
+  # return value, and set -e kills the whole script on a bare call to it.
+  return 0
 }
 
 # Parses the rs485-specific flags this subcommand adds on top of the
@@ -1070,17 +1074,38 @@ parse_rs485_flags() {
     esac
     shift
   done
+  # The while-loop's own exit status is the final (false) '$# -gt 0' test
+  # — without this, a bare call to parse_rs485_flags would look like a
+  # failure to set -e even though every flag parsed fine.
+  return 0
 }
 
-# Builds the rs485_console argv common to REPL/send: --port/--baud plus
-# whichever of --manual-rts/--timeout-ms/--retries were set.
-rs485_common_args() {
+# Validates --port and fills the CALLER's 'common' array (must already be
+# declared, e.g. 'local common') with the rs485_console flags shared by
+# REPL/send: --port/--baud plus whichever of --manual-rts/--timeout-ms/
+# --retries were set.
+#
+# Deliberately a plain function call, not '< <(...)' / '$(...)': bash's
+# 'die' just calls exit, and exit inside a command-substitution/process-
+# substitution subshell only kills that subshell — the missing-port error
+# would print but the script would barrel on with an empty 'common' array.
+# ('exit' misbehaving like that inside $(...) is why the earlier version of
+# this function silently produced no args on a missing --port instead of
+# actually stopping.) A normal function call shares the caller's shell, so
+# 'die' here really exits the script.
+require_rs485_common_args() {
   [[ -n "$RS485_PORT" ]] || die "fw rs485 needs --port PATH (see: fw rs485 list)"
-  local args=( --port "$RS485_PORT" --baud "$RS485_BAUD" )
-  [[ "$RS485_MANUAL_RTS" -eq 1 ]] && args+=( --manual-rts )
-  [[ -n "$RS485_TIMEOUT_MS" ]] && args+=( --timeout-ms "$RS485_TIMEOUT_MS" )
-  [[ -n "$RS485_RETRIES" ]] && args+=( --retries "$RS485_RETRIES" )
-  printf '%s\n' "${args[@]}"
+  common=( --port "$RS485_PORT" --baud "$RS485_BAUD" )
+  [[ "$RS485_MANUAL_RTS" -eq 1 ]] && common+=( --manual-rts )
+  [[ -n "$RS485_TIMEOUT_MS" ]] && common+=( --timeout-ms "$RS485_TIMEOUT_MS" )
+  [[ -n "$RS485_RETRIES" ]] && common+=( --retries "$RS485_RETRIES" )
+  # Without this, when RS485_RETRIES (the last check above) is unset, the
+  # function's own return value is that false [[ ]] test's status (1) —
+  # not an error, just the last thing evaluated — and set -e kills the
+  # whole script on the bare 'require_rs485_common_args' call below,
+  # even though the args were built correctly. This is exactly what was
+  # silently swallowing the '--port'-present success path.
+  return 0
 }
 
 cmd_rs485() {
@@ -1114,8 +1139,8 @@ cmd_rs485() {
     parse_rs485_flags "$@"
     [[ ${#words[@]} -ge 1 ]] || die "missing command (e.g. fw rs485 send channel help)"
 
-    local common=()
-    while IFS= read -r line; do common+=("$line"); done < <(rs485_common_args)
+    local common
+    require_rs485_common_args
 
     hdr "RS485 send"
     row "target" "$target"
@@ -1143,8 +1168,8 @@ cmd_rs485() {
   fi
   parse_rs485_flags "$@"
 
-  local common=()
-  while IFS= read -r line; do common+=("$line"); done < <(rs485_common_args)
+  local common
+  require_rs485_common_args
 
   hdr "RS485 console"
   row "target" "$target"
