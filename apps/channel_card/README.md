@@ -4,15 +4,15 @@
 > commands, DFU flashing and the STM32CubeMX regeneration rules are
 > common to both cards and documented there.
 
-| | |
-|---|---|
-| MCU | STM32H725xG |
-| CMake target | `channel_MCU` |
-| CubeMX project | `channel_MCU.ioc` |
-| Linker script | `STM32H725xG_flash.ld` |
-| USB stack | TinyUSB 0.17 (`ThirdParty/tinyusb`) |
-| USB device | UAC2 speaker (mono, 32-bit, 96 kHz) + CDC console |
-| RS485 address | `c:` |
+|                |                                                   |
+| -------------- | ------------------------------------------------- |
+| MCU            | STM32H725xG                                       |
+| CMake target   | `channel_MCU`                                     |
+| CubeMX project | `channel_MCU.ioc`                                 |
+| Linker script  | `STM32H725xG_flash.ld`                            |
+| USB stack      | TinyUSB 0.17 (`ThirdParty/tinyusb`)               |
+| USB device     | UAC2 speaker (mono, 32-bit, 96 kHz) + CDC console |
+| RS485 address  | `c:`                                              |
 
 ## What this card does
 
@@ -37,12 +37,12 @@ by GPIO. Every tan box maps to one name in the `sw` console command.
 The CS4304S is one 4-channel DAC doing two different jobs — **one audio
 channel and three control voltages**:
 
-| DAC ch | Role | Set with |
-|---|---|---|
-| CH1 | **Audio** — the USB playback signal, or an internal test tone | host volume / `gain 1`, `tone1 <Hz>` |
-| CH2 | **CV → VCA** gain | `dc 2 <-100..100>` |
-| CH3 | **CV → VCF cutoff** | `dc 3 <-100..100>` |
-| CH4 | **CV → VCF resonance** | `dc 4 <-100..100>` |
+| DAC ch | Role                                                          | Set with                             |
+| ------ | ------------------------------------------------------------- | ------------------------------------ |
+| CH1    | **Audio** — the USB playback signal, or an internal test tone | host volume / `gain 1`, `tone1 <Hz>` |
+| CH2    | **CV → VCA** gain                                             | `dc 2 <-100..100>`                   |
+| CH3    | **CV → VCF cutoff**                                           | `dc 3 <-100..100>`                   |
+| CH4    | **CV → VCF resonance**                                        | `dc 4 <-100..100>`                   |
 
 So CH2–CH4 are not heard directly: they steer the analog blocks. (They
 can also emit tones via `freq` for testing the CV lines themselves.)
@@ -61,16 +61,16 @@ sine directly at `out`. `tone1 0` restores the normal USB source.
 
 ### Switch reference
 
-| `sw` name | Diagram block | Function | Polarity |
-|---|---|---|---|
-| `bypass` | bypass (dry → out) | Route unprocessed CH1 to the output | active-low |
-| `scf` | scf sw (post-filter) | Pass the SCF output on to the VCA | active-low |
-| `hp_ctl` | mux 2:1 select | SCF input: HP stage (on) or direct (off) | **active-high** |
-| `vcf` | vcf path enable | Feed CH1 into the VCF block | active-low |
-| `lp` | vcf → lp | Take the VCF **low-pass** tap | active-low |
-| `bp` | vcf → bp | Take the VCF **band-pass** tap | active-low |
-| `hp` | vcf → hp | Take the VCF **high-pass** tap | active-low |
-| `vca` | vca sw (wet → out) | Route the VCA (wet) output to `out` | active-low |
+| `sw` name | Diagram block        | Function                                 | Polarity        |
+| --------- | -------------------- | ---------------------------------------- | --------------- |
+| `bypass`  | bypass (dry → out)   | Route unprocessed CH1 to the output      | active-low      |
+| `scf`     | scf sw (post-filter) | Pass the SCF output on to the VCA        | active-low      |
+| `hp_ctl`  | mux 2:1 select       | SCF input: HP stage (on) or direct (off) | **active-high** |
+| `vcf`     | vcf path enable      | Feed CH1 into the VCF block              | active-low      |
+| `lp`      | vcf → lp             | Take the VCF **low-pass** tap            | active-low      |
+| `bp`      | vcf → bp             | Take the VCF **band-pass** tap           | active-low      |
+| `hp`      | vcf → hp             | Take the VCF **high-pass** tap           | active-low      |
+| `vca`     | vca sw (wet → out)   | Route the VCA (wet) output to `out`      | active-low      |
 
 `hp_ctl` is the one **active-high** switch — see the `switches[]` table
 in `main.c`, where its `active_low` field is `0` while every other entry
@@ -88,10 +88,10 @@ The SCF's `lp core` cutoff is **clock ÷ 100**, so:
 scf 100      → 100 kHz clock → 1 kHz cutoff
 ```
 
-| Command | Action |
-|---|---|
+| Command         | Action                                              |
+| --------------- | --------------------------------------------------- |
 | `scf <1..2000>` | SCF clock in kHz (`0` = off) — this is `filter_ctl` |
-| `duty <1..99>` | SCF clock duty cycle % (default 50) |
+| `duty <1..99>`  | SCF clock duty cycle % (default 50)                 |
 
 ## Build & flash
 
@@ -108,12 +108,12 @@ Then flash `build/Debug/channel_MCU.hex` over DFU — see
 
 ## Source map
 
-| Path | Contents |
-|---|---|
-| `Core/Src/main.c` | Console parser, RS485 multi-drop, startup |
+| Path                      | Contents                                                                     |
+| ------------------------- | ---------------------------------------------------------------------------- |
+| `Core/Src/main.c`         | Console parser, RS485 multi-drop, startup                                    |
 | `Core/Src/audio_bridge.c` | **USB→I2S audio engine** — ring buffer, tone/DC generators, I2S2 workarounds |
-| `Core/Src/cs4304.c` | CS4304 DAC driver (I2C) |
-| `USB_APP/` | TinyUSB descriptors, `tusb_config.h`, UAC2 + CDC glue |
+| `Core/Src/cs4304.c`       | CS4304 DAC driver (I2C)                                                      |
+| `USB_APP/`                | TinyUSB descriptors, `tusb_config.h`, UAC2 + CDC glue                        |
 
 ### `audio_bridge.c` — handle with care
 
@@ -149,15 +149,15 @@ device stuck at a stale attenuation. Do not re-add a volume control
 without re-testing the full slider range on Windows.
 
 **`N0`** applies **bypass ON** and **`gain 1 0`** (0 dB CH1 DAC trim) at
-boot and on bare `n0`. Setting a frequency (`n0 <Hz>`) only changes the tone
-— it does not touch gain or bypass. **`gain`** is also available as its own
-command to change DAC atten on any channel.
+boot and on bare `n0`. **`N0`…`NF`** are 16 independent phase-accumulator
+sines summed onto CH1; setting a frequency only changes that note — it does
+not touch gain or bypass. **`gain`** changes DAC atten on any channel.
 
 ## Console quick reference
 
-| Command | Action |
-|---|---|
-| `N0` | Session defaults: bypass on, gain 1 0 |
-| `N0 0` | Tone off (gain/bypass unchanged) |
-| `N0 <Hz>` | CH1 tone at Hz (20..19999.9); gain/bypass unchanged |
-| `gain <ch> <dB>` | DAC atten 0..127 on ch 1..4 (e.g. `gain 1 40`) |
+| Command          | Action                                                      |
+| ---------------- | ----------------------------------------------------------- |
+| `N0`             | Session defaults: bypass on, gain 1 0                       |
+| `N0`…`NF` `0`    | Turn that note off (gain/bypass unchanged)                  |
+| `N0`…`NF` `<Hz>` | Set note 0..15 (hex) to Hz (20..19999.9); voices sum on CH1 |
+| `gain <ch> <dB>` | DAC atten 0..127 on ch 1..4 (e.g. `gain 1 40`)              |

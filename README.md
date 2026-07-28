@@ -3,8 +3,8 @@
 Common quick-start for **both** cards. Per-card detail lives in each
 project's own `README.md` (to be expanded).
 
-| Card | Folder | MCU | CMake target | CubeMX file |
-|---|---|---|---|---|
+| Card         | Folder               | MCU         | CMake target  | CubeMX file       |
+| ------------ | -------------------- | ----------- | ------------- | ----------------- |
 | Channel Card | `apps/channel_card/` | STM32H725xG | `channel_MCU` | `channel_MCU.ioc` |
 | Effect Card  | `apps/effect_card/`  | STM32H743xx | `effect_card` | `effect_card.ioc` |
 
@@ -20,11 +20,11 @@ firmware projects — see §6.
 
 ## 1. Tools to install
 
-| Tool | Why | Notes |
-|---|---|---|
-| **STM32CubeCLT** | CMake + Ninja + `arm-none-eabi-gcc` toolchain | Provides the whole build chain. Easiest single install. |
-| **STM32CubeMX** | Regenerating the HAL/peripheral framework from the `.ioc` | Only needed if you change pinout/peripherals |
-| **STM32CubeProgrammer** | Flashing over USB DFU | Also installs the DFU USB driver |
+| Tool                    | Why                                                       | Notes                                                   |
+| ----------------------- | --------------------------------------------------------- | ------------------------------------------------------- |
+| **STM32CubeCLT**        | CMake + Ninja + `arm-none-eabi-gcc` toolchain             | Provides the whole build chain. Easiest single install. |
+| **STM32CubeMX**         | Regenerating the HAL/peripheral framework from the `.ioc` | Only needed if you change pinout/peripherals            |
+| **STM32CubeProgrammer** | Flashing over USB DFU                                     | Also installs the DFU USB driver                        |
 
 STM32CubeIDE bundles equivalents under
 `…/AppData/Local/stm32cube/bundles/` (`cmake/`, `ninja/`,
@@ -194,13 +194,13 @@ The Effect Card was upgraded for dwc2 isochronous-IN fixes. Do not
 
 ## 6. Consoles — how to talk to the boards
 
-**Channel Card** (this branch): two commands on RS485 and USB CDC —
+**Channel Card** (this branch): N0–NF note bank + gain on RS485 and USB CDC —
 
-| Command | Meaning |
-|---|---|
-| `N0` | Session defaults: **bypass on** + **gain 1 0** |
-| `N0 0` / `N0 1000.5` | CH1 tone off/on only (gain/bypass unchanged) |
-| `gain <ch> <dB>` | CS4304 DAC atten on CH1..4 (e.g. `gain 1 40` = −40 dB) |
+| Command                | Meaning                                                  |
+| ---------------------- | -------------------------------------------------------- |
+| `N0`                   | Session defaults: **bypass on** + **gain 1 0**           |
+| `N0`…`NF` `0` / `<Hz>` | Note 0..15 off/on (summed on CH1; gain/bypass unchanged) |
+| `gain <ch> <dB>`       | CS4304 DAC atten on CH1..4 (e.g. `gain 1 40` = −40 dB)   |
 
 Entering `fw rs485` sends bare `n0` once (bypass on + gain 1 0). Boot does the same.
 
@@ -209,14 +209,14 @@ Card still has its own full console.
 
 ```bash
 fw rs485 list
-fw rs485 send channel "N0 1000.5" --port /dev/cu.usbserial-XXXX
-fw rs485 channel --port /dev/cu.usbserial-XXXX   # REPL: type 1000.5 or n0 1000.5
+fw rs485 send channel "N0 440" --port /dev/cu.usbserial-XXXX
+fw rs485 channel --port /dev/cu.usbserial-XXXX   # REPL: 440, n1 554.4, …
 ```
 
 See [`apps/console/README.md`](apps/console/README.md) and
 [`docs/rs485_console_architecture.md`](docs/rs485_console_architecture.md).
 
-**USB CDC** — same Channel Card `N0` parser on `/dev/cu.usbmodemCHCARD*`.
+**USB CDC** — same Channel Card `N0`…`NF` parser on `/dev/cu.usbmodemCHCARD*`.
 Effect Card CDC is unchanged (`fw console effect`).
 
 ---

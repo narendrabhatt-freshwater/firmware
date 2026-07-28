@@ -33,10 +33,10 @@
 #include "tim.h"
 #include "usart.h"
 #include "audio_bridge.h"
+#include "note_bank.h"
 #include "usb_app.h"
 #include <stdio.h>
-#include <string.h>
-/* USER CODE END Includes */
+#include <string.h>/* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
@@ -47,11 +47,11 @@
 /* USER CODE BEGIN PD */
 
 /* ---- Multi-drop RS485 card addressing ---- */
-#define RS485_CARD_ID 'c'       /* 'c' = Channel Card, 'e' = Effect Card */
-#define RS485_BROADCAST_ID '*'  /* broadcast prefix */
+#define RS485_CARD_ID 'c'        /* 'c' = Channel Card, 'e' = Effect Card */
+#define RS485_BROADCAST_ID '*'   /* broadcast prefix */
 #define RS485_BUS_TIMEOUT_MS 250 /* max wait for bus to become free */
-#define RS485_ECHO 0 /* 0 = no typing echo (the Effect Card is the echo   \
-                        master; exactly ONE card on the bus may echo) */
+#define RS485_ECHO 0             /* 0 = no typing echo (the Effect Card is the echo \
+                                    master; exactly ONE card on the bus may echo) */
 
 /* USER CODE END PD */
 
@@ -99,7 +99,8 @@ static void MPU_Config(void);
 #define RS485_TAG "[C] " /* response prefix tag for Channel Card */
 
 /** Tri-state CTL and TX so the other MCU can use the bus (idle state). */
-static void RS485_BusRelease(void) {
+static void RS485_BusRelease(void)
+{
   GPIO_InitTypeDef gi = {0};
 
   /* Actively drive DE low first (the other card's CTL is Hi-Z input, so
@@ -107,7 +108,8 @@ static void RS485_BusRelease(void) {
    * pull-down decay.  TX is still driving mark while DE falls, so the
    * transceiver can't clock out garbage during the turnaround. */
   HAL_GPIO_WritePin(RS485_CTL_GPIO_Port, RS485_CTL_Pin, GPIO_PIN_RESET);
-  for (volatile uint32_t i = 0; i < 300; i++) {
+  for (volatile uint32_t i = 0; i < 300; i++)
+  {
   }
 
   gi.Pin = RS485_CTL_Pin;
@@ -122,7 +124,8 @@ static void RS485_BusRelease(void) {
 }
 
 /** Take the bus: TX back to UART AF, CTL driven HIGH (transmit mode). */
-static void RS485_BusAcquire(void) {
+static void RS485_BusAcquire(void)
+{
   GPIO_InitTypeDef gi = {0};
 
   gi.Pin = GPIO_PIN_12; /* PC12 = UART5_TX */
@@ -141,21 +144,25 @@ static void RS485_BusAcquire(void) {
   HAL_GPIO_Init(RS485_CTL_GPIO_Port, &gi);
 
   /* DE enable settle time (~1 us) before the first start bit */
-  for (volatile uint32_t i = 0; i < 300; i++) {
+  for (volatile uint32_t i = 0; i < 300; i++)
+  {
   }
 }
 
 /** Check whether the RS485 bus is free (CTL low = no one transmitting).
  * Our own CTL is Hi-Z input while idle, so this reads the real DE line. */
-static inline uint8_t RS485_BusFree(void) {
+static inline uint8_t RS485_BusFree(void)
+{
   return (HAL_GPIO_ReadPin(RS485_CTL_GPIO_Port, RS485_CTL_Pin) ==
           GPIO_PIN_RESET);
 }
 
 /** Wait up to timeout_ms for the bus to become free.  Returns 1 if free. */
-static uint8_t RS485_WaitBusFree(uint32_t timeout_ms) {
+static uint8_t RS485_WaitBusFree(uint32_t timeout_ms)
+{
   uint32_t t0 = HAL_GetTick();
-  while (!RS485_BusFree()) {
+  while (!RS485_BusFree())
+  {
     if ((HAL_GetTick() - t0) >= timeout_ms)
       return 0; /* timed out — bus still busy */
   }
@@ -165,7 +172,8 @@ static uint8_t RS485_WaitBusFree(uint32_t timeout_ms) {
 /** Transmit a string on the RS485 bus with collision avoidance.
  * Waits for the bus to be free, asserts DE, sends data, releases DE.
  * Returns 0 on success, -1 if the bus was busy (timeout). */
-static int __attribute__((unused)) RS485_Send(const char *s) {
+static int __attribute__((unused)) RS485_Send(const char *s)
+{
   if (!RS485_WaitBusFree(RS485_BUS_TIMEOUT_MS))
     return -1; /* bus occupied — drop this message */
 
@@ -184,8 +192,10 @@ static uint8_t console_via_usb = 0;
 
 /** Send a tagged response: prefixes the string with [C] so the host knows
  * which card replied. */
-static void RS485_Reply(const char *s) {
-  if (console_via_usb) {
+static void RS485_Reply(const char *s)
+{
+  if (console_via_usb)
+  {
     USB_CDC_WriteStr(s);
     return;
   }
@@ -207,7 +217,8 @@ static void RS485_Reply(const char *s) {
 static uint8_t led_show_on = 1;
 
 /* Boot-time switch defaults only — console no longer exposes sw/pwm/etc. */
-typedef struct {
+typedef struct
+{
   const char *name;
   GPIO_TypeDef *port;
   uint16_t pin;
@@ -229,78 +240,133 @@ static const SwitchDef_t switches[] = {
 /* Console commands (RS485 + USB CDC). Console_Poll lowercases, so "N0"/"GAIN"
  * arrive as "n0"/"gain".
  *
- *   n0 [Hz]     — CH1 test tone; bare n0 / boot = bypass ON + gain 1 0
+ *   n0          — session defaults: bypass ON + gain 1 0
+ *   n0..nf <Hz> — set note 0..15 frequency (0=off); summed onto CH1
  *   gain <ch> <dB> — CS4304 per-channel DAC atten (0..127 dB), ch 1..4 */
 #define N0_DEFAULT_ATTEN_DB 0u
 
 /** Bypass is active-low (LOW = ON). */
-static void Console_SetBypassOn(void) {
+static void Console_SetBypassOn(void)
+{
   HAL_GPIO_WritePin(BYPASS_SW_GPIO_Port, BYPASS_SW_Pin, GPIO_PIN_RESET);
 }
 
 /** Defaults for bare n0 / boot: dry path + CH1 DAC trim 0 dB (`gain 1 0`).
- * Frequency changes (`n0 <Hz>`) do not touch gain or bypass. */
-static void Console_ApplySessionDefaults(void) {
+ * Frequency changes (`nX <Hz>`) do not touch gain or bypass. */
+static void Console_ApplySessionDefaults(void)
+{
   Console_SetBypassOn();
   CS4304_SetChannelTrim(&hcs4304, '1', (uint8_t)(N0_DEFAULT_ATTEN_DB * 2u));
 }
 
-static void Console_Exec(char *line) {
+/** Map hex digit '0'..'9','a'..'f' → 0..15; else 0xFF. */
+static uint8_t Console_ParseNoteSlot(char hex_digit)
+{
+  if (hex_digit >= '0' && hex_digit <= '9')
+  {
+    return (uint8_t)(hex_digit - '0');
+  }
+  if (hex_digit >= 'a' && hex_digit <= 'f')
+  {
+    return (uint8_t)(10u + (uint8_t)(hex_digit - 'a'));
+  }
+  return 0xFFu;
+}
+
+/** Apply nX <Hz> after the slot is known. Replies ok:/err:. */
+static void Console_SetNoteFreq(uint8_t note, double hz)
+{
+  char b[80];
+  char tag = (note < 10u) ? (char)('0' + note) : (char)('a' + (note - 10u));
+
+  if (hz <= 0.0)
+  {
+    NoteBank_SetFreq(note, 0.0);
+    snprintf(b, sizeof b, "ok: N%c off\r\n", tag);
+    RS485_Reply(b);
+    return;
+  }
+
+  if (hz < 20.0 || hz >= 20000.0)
+  {
+    snprintf(b, sizeof b, "err: n%c <Hz> (0=off, else 20..19999.9)\r\n", tag);
+    RS485_Reply(b);
+    return;
+  }
+
+  NoteBank_SetFreq(note, hz);
+  snprintf(b, sizeof b, "ok: N%c %.1f Hz\r\n", tag, hz);
+  RS485_Reply(b);
+}
+
+static void Console_Exec(char *line)
+{
   char b[80];
   double hz;
   unsigned int ch, val;
+  uint8_t note;
 
-  if (line[0] == '\0') {
+  if (line[0] == '\0')
+  {
     return;
   }
 
   /* ---- gain <ch> <dB>: CS4304 DAC atten (0.5 dB steps via trim×2) ---- */
-  if (sscanf(line, "gain %u %u", &ch, &val) == 2) {
-    if (ch >= 1 && ch <= 4 && val <= 127) {
+  if (sscanf(line, "gain %u %u", &ch, &val) == 2)
+  {
+    if (ch >= 1 && ch <= 4 && val <= 127)
+    {
       CS4304_SetChannelTrim(&hcs4304, (char)('0' + ch), (uint8_t)(val * 2u));
       snprintf(b, sizeof b, "ok: CH%u attenuation -%u dB\r\n", ch, val);
       RS485_Reply(b);
-    } else {
+    }
+    else
+    {
       RS485_Reply("err: gain <ch 1..4> <dB 0..127>\r\n");
     }
     return;
   }
 
-  /* ---- n0 [Hz]: CH1 test tone ---- */
-  if (strncmp(line, "n0 ", 3) != 0 && strcmp(line, "n0") != 0) {
-    RS485_Reply("err: commands are n0 <Hz> | gain <ch> <dB>\r\n");
+  /* ---- n0..nf: 16-voice note bank on CH1 ---- */
+  if (line[0] != 'n' || line[1] == '\0')
+  {
+    RS485_Reply("err: commands are n0..nf <Hz> | gain <ch> <dB>\r\n");
     return;
   }
 
-  /* Bare "n0" = apply session defaults only (bypass on + gain 1 0). */
-  if (strcmp(line, "n0") == 0) {
-    Console_ApplySessionDefaults();
-    snprintf(b, sizeof b, "ok: bypass on, gain 1 -%u dB\r\n",
-             (unsigned)N0_DEFAULT_ATTEN_DB);
+  note = Console_ParseNoteSlot(line[1]);
+  if (note == 0xFFu || (line[2] != '\0' && line[2] != ' '))
+  {
+    RS485_Reply("err: commands are n0..nf <Hz> | gain <ch> <dB>\r\n");
+    return;
+  }
+
+  /* Bare "n0" = session defaults only. Bare n1..nf are not session cmds. */
+  if (line[2] == '\0')
+  {
+    if (note == 0u)
+    {
+      Console_ApplySessionDefaults();
+      snprintf(b, sizeof b, "ok: bypass on, gain 1 -%u dB\r\n",
+               (unsigned)N0_DEFAULT_ATTEN_DB);
+      RS485_Reply(b);
+    }
+    else
+    {
+      RS485_Reply("err: n1..nf need <Hz> (bare n0 = session defaults)\r\n");
+    }
+    return;
+  }
+
+  if (sscanf(line + 3, "%lf", &hz) != 1)
+  {
+    snprintf(b, sizeof b, "err: n%c <Hz> (0=off, else 20..19999.9)\r\n",
+             line[1]);
     RS485_Reply(b);
     return;
   }
 
-  if (sscanf(line + 3, "%lf", &hz) != 1) {
-    RS485_Reply("err: n0 <Hz> (0=off, else 20..19999.9)\r\n");
-    return;
-  }
-
-  /* Frequency-only: leave bypass/gain alone (set via bare n0 / gain cmd). */
-  if (hz <= 0.0) {
-    Audio_SetCh1ToneFreq(0.0);
-    RS485_Reply("ok: N0 off\r\n");
-    return;
-  }
-
-  if (hz < 20.0 || hz >= 20000.0) {
-    RS485_Reply("err: n0 <Hz> (0=off, else 20..19999.9)\r\n");
-    return;
-  }
-
-  Audio_SetCh1ToneFreq(hz);
-  snprintf(b, sizeof b, "ok: N0 %.1f Hz\r\n", hz);
-  RS485_Reply(b);
+  Console_SetNoteFreq(note, hz);
 }
 
 /** Check if a received line is addressed to this card.
@@ -311,15 +377,20 @@ static void Console_Exec(char *line) {
  * If addressed to us, strips the prefix and returns 1.
  * If addressed to another card, returns 0 (ignore).
  * The stripped command is written back to `line`. */
-static uint8_t RS485_IsForMe(char *line) {
+static uint8_t RS485_IsForMe(char *line)
+{
   /* Check for "X:" prefix (at least 2 chars, second is ':') */
-  if (line[0] != '\0' && line[1] == ':') {
+  if (line[0] != '\0' && line[1] == ':')
+  {
     char id = line[0];
-    if (id == RS485_CARD_ID || id == RS485_BROADCAST_ID) {
+    if (id == RS485_CARD_ID || id == RS485_BROADCAST_ID)
+    {
       /* Strip the "X:" prefix — shift the string left by 2 */
       memmove(line, line + 2, strlen(line + 2) + 1);
       return 1; /* addressed to us (or broadcast) */
-    } else {
+    }
+    else
+    {
       return 0; /* addressed to another card — ignore */
     }
   }
@@ -329,7 +400,8 @@ static uint8_t RS485_IsForMe(char *line) {
 
 /** Console entry point for lines arriving over the USB CDC port.
  * Same parser and commands as RS485; replies are routed back to CDC. */
-void Console_ExecFromUSB(char *line) {
+void Console_ExecFromUSB(char *line)
+{
   if (!RS485_IsForMe(line)) /* accept "c:", "*:" or bare commands */
     return;
   console_via_usb = 1;
@@ -339,21 +411,25 @@ void Console_ExecFromUSB(char *line) {
 
 /** Poll RX, echo typing, run a command on Enter. Non-blocking.
  * Messages addressed to other cards are silently dropped. */
-static void Console_Poll(void) {
+static void Console_Poll(void)
+{
   static char cmd[48];
   static uint8_t idx = 0;
   uint8_t c;
 
   __HAL_UART_CLEAR_OREFLAG(&huart5);
-  while (HAL_UART_Receive(&huart5, &c, 1, 0) == HAL_OK) {
-    if (c == '\r' || c == '\n') {
+  while (HAL_UART_Receive(&huart5, &c, 1, 0) == HAL_OK)
+  {
+    if (c == '\r' || c == '\n')
+    {
 #if RS485_ECHO
       RS485_Send("\r\n");
 #endif
       cmd[idx] = '\0';
 
       /* Card-address filtering: only execute if addressed to us */
-      if (RS485_IsForMe(cmd)) {
+      if (RS485_IsForMe(cmd))
+      {
 #if !RS485_ECHO
         /* The echo master transmits its "\r\n" echo at the same instant
          * we received Enter — hold off briefly so our reply doesn't
@@ -366,15 +442,19 @@ static void Console_Poll(void) {
       /* else: message for another card — silently ignore */
 
       idx = 0;
-    } else if (c == 0x08 || c == 0x7F) /* backspace */
+    }
+    else if (c == 0x08 || c == 0x7F) /* backspace */
     {
-      if (idx > 0) {
+      if (idx > 0)
+      {
         idx--;
 #if RS485_ECHO
         RS485_Send("\b \b");
 #endif
       }
-    } else if (c >= 32 && c < 127 && idx < sizeof(cmd) - 1) {
+    }
+    else if (c >= 32 && c < 127 && idx < sizeof(cmd) - 1)
+    {
       cmd[idx++] = (char)((c >= 'A' && c <= 'Z') ? c + 32 : c); /* lowercase */
 #if RS485_ECHO
       char e[2] = {(char)c, '\0'};
@@ -385,7 +465,8 @@ static void Console_Poll(void) {
 }
 
 /** Non-blocking 5-LED chaser (150 ms per step) so the console stays snappy. */
-static void LED_Task(void) {
+static void LED_Task(void)
+{
   static const GPIO_TypeDef *ports[5] = {LED_R_GPIO_Port, LED_Y_GPIO_Port,
                                          RGB_R_GPIO_Port, RGB_G_GPIO_Port,
                                          RGB_B_GPIO_Port};
@@ -394,13 +475,16 @@ static void LED_Task(void) {
   static uint32_t t_next = 0;
   static uint8_t step = 0;
 
-  if (!led_show_on) {
-    for (uint8_t i = 0; i < 5; i++) {
+  if (!led_show_on)
+  {
+    for (uint8_t i = 0; i < 5; i++)
+    {
       HAL_GPIO_WritePin((GPIO_TypeDef *)ports[i], pins[i], GPIO_PIN_RESET);
     }
     return;
   }
-  if (HAL_GetTick() >= t_next) {
+  if (HAL_GetTick() >= t_next)
+  {
     t_next = HAL_GetTick() + 150;
     HAL_GPIO_WritePin((GPIO_TypeDef *)ports[step], pins[step], GPIO_PIN_RESET);
     step = (step + 1) % 5;
@@ -411,9 +495,9 @@ static void LED_Task(void) {
 /* USER CODE END 0 */
 
 /**
-  * @brief  The application entry point.
-  * @retval int
-  */
+ * @brief  The application entry point.
+ * @retval int
+ */
 int main(void)
 {
 
@@ -462,7 +546,6 @@ int main(void)
    * Kept inside USER CODE so CubeMX regeneration preserves it. */
   USB_App_Init();
 
-
   /* Tri-state RS485_CTL (PB3) and UART5_TX (PC12) — both nets are shared
    * with the Effect Card MCU, so they must be Hi-Z whenever this card is
    * not transmitting.  RS485_BusAcquire()/Release() toggle them around
@@ -479,7 +562,8 @@ int main(void)
                                  RGB_B_Pin};
     const uint8_t num_leds = 5;
 
-    for (uint8_t i = 0; i < num_leds; i++) {
+    for (uint8_t i = 0; i < num_leds; i++)
+    {
       HAL_GPIO_WritePin((GPIO_TypeDef *)led_ports[i], led_pins[i],
                         GPIO_PIN_SET);
       HAL_Delay(150);
@@ -496,7 +580,8 @@ int main(void)
   hcs4304.hi2c = &hi2c5;
   hcs4304.DevAddr = CS4304_I2C_ADDR_C5_GND_0R;
 
-  if (CS4304_Init(&hcs4304) != HAL_OK) {
+  if (CS4304_Init(&hcs4304) != HAL_OK)
+  {
     HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_SET);
   }
 
@@ -518,7 +603,8 @@ int main(void)
 
   /* All analog path switches default OFF, then session defaults: bypass ON
    * and CH1 @ 0 dB so RS485 N0 tones are audible on the dry path. */
-  for (uint8_t i = 0; i < NUM_SWITCHES; i++) {
+  for (uint8_t i = 0; i < NUM_SWITCHES; i++)
+  {
     HAL_GPIO_WritePin(switches[i].port, switches[i].pin,
                       switches[i].active_low ? GPIO_PIN_SET : GPIO_PIN_RESET);
   }
@@ -542,7 +628,7 @@ int main(void)
   RS485_Reply("\r\n"
               "**************************************************\r\n"
               "*  Channel Card [C] ready  (multi-drop RS485)    *\r\n"
-              "*  n0 <Hz> | gain <ch> <dB>                      *\r\n"
+              "*  n0..nf <Hz> | gain <ch> <dB>                  *\r\n"
               "*  enter/boot: bypass ON, gain 1 0               *\r\n"
               "**************************************************\r\n");
 
@@ -550,7 +636,8 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1) {
+  while (1)
+  {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -564,28 +651,30 @@ int main(void)
 }
 
 /**
-  * @brief System Clock Configuration
-  * @retval None
-  */
+ * @brief System Clock Configuration
+ * @retval None
+ */
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
   /** Supply configuration update enable
-  */
+   */
   HAL_PWREx_ConfigSupply(PWR_DIRECT_SMPS_SUPPLY);
 
   /** Configure the main internal regulator output voltage
-  */
+   */
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE0);
 
-  while(!__HAL_PWR_GET_FLAG(PWR_FLAG_VOSRDY)) {}
+  while (!__HAL_PWR_GET_FLAG(PWR_FLAG_VOSRDY))
+  {
+  }
 
   /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI48|RCC_OSCILLATORTYPE_HSE;
+   * in the RCC_OscInitTypeDef structure.
+   */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI48 | RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
   RCC_OscInitStruct.HSI48State = RCC_HSI48_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
@@ -604,10 +693,8 @@ void SystemClock_Config(void)
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2
-                              |RCC_CLOCKTYPE_D3PCLK1|RCC_CLOCKTYPE_D1PCLK1;
+   */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2 | RCC_CLOCKTYPE_D3PCLK1 | RCC_CLOCKTYPE_D1PCLK1;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.SYSCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV2;
@@ -624,15 +711,15 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief Peripherals Common Clock Configuration
-  * @retval None
-  */
+ * @brief Peripherals Common Clock Configuration
+ * @retval None
+ */
 void PeriphCommonClock_Config(void)
 {
   RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
 
   /** Initializes the peripherals clock
-  */
+   */
   PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_CKPER;
   PeriphClkInitStruct.CkperClockSelection = RCC_CLKPSOURCE_HSE;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
@@ -645,7 +732,7 @@ void PeriphCommonClock_Config(void)
 
 /* USER CODE END 4 */
 
- /* MPU Configuration */
+/* MPU Configuration */
 
 void MPU_Config(void)
 {
@@ -655,7 +742,7 @@ void MPU_Config(void)
   HAL_MPU_Disable();
 
   /** Initializes and configures the Region and the memory to be protected
-  */
+   */
   MPU_InitStruct.Enable = MPU_REGION_ENABLE;
   MPU_InitStruct.Number = MPU_REGION_NUMBER0;
   MPU_InitStruct.BaseAddress = 0x0;
@@ -671,30 +758,30 @@ void MPU_Config(void)
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
   /* Enables the MPU */
   HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
-
 }
 
 /**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
+ * @brief  This function is executed in case of error occurrence.
+ * @retval None
+ */
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
-  while (1) {
+  while (1)
+  {
   }
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT
 /**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
+ * @brief  Reports the name of the source file and the source line number
+ *         where the assert_param error has occurred.
+ * @param  file: pointer to the source file name
+ * @param  line: assert_param error line source number
+ * @retval None
+ */
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */

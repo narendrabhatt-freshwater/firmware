@@ -1,7 +1,7 @@
 # RS485 Console — `rs485_console`
 
-PC-side front-end for the Channel Card’s sole RS485/USB command **`N0`**,
-via a USB↔RS485 adapter (no board USB CDC required).
+PC-side front-end for the Channel Card’s **`N0`…`NF`** note bank (and
+`gain`) over a USB↔RS485 adapter (no board USB CDC required).
 
 Protocol / bus details:
 [`../../docs/rs485_console_architecture.md`](../../docs/rs485_console_architecture.md).
@@ -20,13 +20,14 @@ cmake --build build
 | Input | Meaning |
 |---|---|
 | (REPL start) / `N0` | bypass on + gain 1 0 |
-| `N0 0` or `0` | tone off (gain/bypass unchanged) |
-| `N0 1000.5` or `1000.5` | CH1 tone @ 1000.5 Hz (gain/bypass unchanged) |
+| `N0`…`NF` `0` | that note off (gain/bypass unchanged) |
+| `N0 440` / `440` | note 0 @ 440 Hz (bare number → n0) |
+| `N1 554.4` | note 1 @ 554.4 Hz (summed with other active notes) |
 | `gain 1 40` | CH1 DAC atten −40 dB (any ch 1..4, 0..127 dB) |
 
 ```bash
 fw rs485 list
-fw rs485 send channel "N0 1000.5" --port /dev/cu.usbserial-XXXX
+fw rs485 send channel "N0 440" --port /dev/cu.usbserial-XXXX
 fw rs485 channel --port /dev/cu.usbserial-XXXX
 ```
 

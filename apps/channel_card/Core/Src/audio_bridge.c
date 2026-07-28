@@ -1,34 +1,34 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : usbd_audio_if.c
-  * @version        : v2.0_Channel_Card
-  * @brief          : USB Audio to I2S bridge for CS4304 4-channel DAC.
-  *
-  *                   USB Audio (mono 32-bit 96kHz) → I2S1 (Ch1+Ch2)
-  *                   I2S2 (Ch3+Ch4) available for testing.
-  *
-  *                   Data flow:
-  *                     1. USB host sends mono 32-bit PCM samples
-  *                     2. Audio_Bridge_WriteUSB() receives one USB packet
-  *                     3. DMA half/full transfer callbacks trigger
-  *                     4. Audio samples are duplicated from mono to stereo (L+R)
-  *                        and placed into I2S1 DMA buffer
-  *                     5. I2S2 outputs silence (or test tone when enabled)
-  *
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
- /* USER CODE END Header */
+ ******************************************************************************
+ * @file           : usbd_audio_if.c
+ * @version        : v2.0_Channel_Card
+ * @brief          : USB Audio to I2S bridge for CS4304 4-channel DAC.
+ *
+ *                   USB Audio (mono 32-bit 96kHz) → I2S1 (Ch1+Ch2)
+ *                   I2S2 (Ch3+Ch4) available for testing.
+ *
+ *                   Data flow:
+ *                     1. USB host sends mono 32-bit PCM samples
+ *                     2. Audio_Bridge_WriteUSB() receives one USB packet
+ *                     3. DMA half/full transfer callbacks trigger
+ *                     4. Audio samples are duplicated from mono to stereo (L+R)
+ *                        and placed into I2S1 DMA buffer
+ *                     5. I2S2 outputs silence (or test tone when enabled)
+ *
+ ******************************************************************************
+ * @attention
+ *
+ * Copyright (c) 2026 STMicroelectronics.
+ * All rights reserved.
+ *
+ * This software is licensed under terms that can be found in the LICENSE file
+ * in the root directory of this software component.
+ * If no LICENSE file comes with this software, it is provided AS-IS.
+ *
+ ******************************************************************************
+ */
+/* USER CODE END Header */
 
 /* Includes ------------------------------------------------------------------*/
 #include "audio_bridge.h"
@@ -36,8 +36,8 @@
 /* USER CODE BEGIN INCLUDE */
 #include "i2s.h"
 #include "cs4304.h"
+#include "note_bank.h"
 #include <string.h>
-#include <math.h>
 /* USER CODE END INCLUDE */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -56,8 +56,8 @@
  * AUDIO_I2S_BUF_FRAMES: number of stereo frames in the DMA buffer.
  * We use 96 frames = 1 ms at 96 kHz. Double-buffered = 192 frames total.
  */
-#define AUDIO_I2S_BUF_FRAMES       384  /* 4 ms at 96 kHz — headroom for USB↔I2S clock phase drift */
-#define AUDIO_I2S_BUF_SIZE         (AUDIO_I2S_BUF_FRAMES * 2)  /* × 2 for L+R, in 32-bit words */
+#define AUDIO_I2S_BUF_FRAMES 384                      /* 4 ms at 96 kHz — headroom for USB↔I2S clock phase drift */
+#define AUDIO_I2S_BUF_SIZE (AUDIO_I2S_BUF_FRAMES * 2) /* × 2 for L+R, in 32-bit words */
 
 /* I2S2 (CH3/CH4) enabled. Slave TX on SPI2 requires two workarounds
  * (full story in BRINGUP_REPORT.md):
@@ -65,13 +65,13 @@
  *     cleared; the TIM7 pump clears it every tick.
  *  2. IOSWP — the H7 slave transmits on MISO, but the board wires PC1
  *     (MOSI) to the DAC's SDIN2; CFG2.IOSWP swaps them internally. */
-#define AUDIO_USE_I2S2             1
+#define AUDIO_USE_I2S2 1
 
 /* 0 = DMA feed (preferred): guaranteed sample ordering → stable CH3/CH4
  *     left/right assignment and no pump-parity slips (which caused spikes
  *     and CH3/CH4 swapping in pump mode). TIM7 stays on as a UDR guard.
  * 1 = TIM7 FIFO pump (fallback if DMA misbehaves). */
-#define AUDIO_I2S2_IT              0
+#define AUDIO_I2S2_IT 0
 
 /*
  * IMPORTANT: DMA1 (D2 domain) cannot access DTCM RAM where .bss lives.
@@ -109,149 +109,311 @@ void Audio_SetUSBMute(uint8_t mute) { usb_muted = mute ? 1u : 0u; }
 #define TEST_TONE_SAMPLE_RATE 96000
 /* CH1 = USB audio (no tone); CH2 = 1 kHz, CH3 = 2 kHz, CH4 = 3 kHz */
 static uint32_t test_tone_freq_hz[4] = {1000, 1000, 2000, 3000}; /* CH1..CH4 (CH1 entry unused) */
-static uint32_t test_tone_phase[4]   = {0, 0, 0, 0};
+static uint32_t test_tone_phase[4] = {0, 0, 0, 0};
 /* Phase increment per sample (fixed-point 32-bit, full scale = 2^32),
  * precomputed per channel so ISRs never do 64-bit divides. */
-#define TONE_PHASE_INC(f)  ((uint32_t)(((uint64_t)(f) << 32) / TEST_TONE_SAMPLE_RATE))
+#define TONE_PHASE_INC(f) ((uint32_t)(((uint64_t)(f) << 32) / TEST_TONE_SAMPLE_RATE))
 static uint32_t test_tone_inc[4] = {0, 0, 0, 0};
 
 /* --- Per-channel output mode: TONE (sine) or DC (constant level) ---
  * CH1 is always USB audio; modes only apply to CH2..CH4 generation. */
-static Audio_ChannelMode_t channel_mode[4] = { AUDIO_MODE_TONE, AUDIO_MODE_TONE,
-                                               AUDIO_MODE_TONE, AUDIO_MODE_TONE };
-static int8_t   dc_level_pct[4] = {0, 0, 0, 0};   /* -100..+100 percent (signed!) */
-static int32_t  dc_level_tgt[4] = {0, 0, 0, 0};   /* target Q31 sample value */
-static int32_t  dc_level_now[4] = {0, 0, 0, 0};   /* slewed current value */
+static Audio_ChannelMode_t channel_mode[4] = {AUDIO_MODE_TONE, AUDIO_MODE_TONE,
+                                              AUDIO_MODE_TONE, AUDIO_MODE_TONE};
+static int8_t dc_level_pct[4] = {0, 0, 0, 0};  /* -100..+100 percent (signed!) */
+static int32_t dc_level_tgt[4] = {0, 0, 0, 0}; /* target Q31 sample value */
+static int32_t dc_level_now[4] = {0, 0, 0, 0}; /* slewed current value */
 /* Slew rate: full range (±0.5 FS) in ~21 ms at 96 kHz. An instant step
  * rings the DAC's interpolation filter → spikes on the control line. */
-#define DC_SLEW_STEP  (1L << 19)
+#define DC_SLEW_STEP (1L << 19)
 
 /* Simple sine lookup table (256 entries, Q31 format) */
 #define SINE_TABLE_SIZE 256
 static const int32_t sine_table[SINE_TABLE_SIZE] = {
-   0x00000000, 0x0323ECBE, 0x0647D97C, 0x096A9049, 0x0C8BD35E, 0x0FAB272B, 0x12C8106F, 0x15E21445,
-   0x18F8B83C, 0x1C0B826A, 0x1F19F97B, 0x2223A4C5, 0x25280C5E, 0x2826B928, 0x2B1F34EB, 0x2E110A62,
-   0x30FBC54D, 0x33DEF287, 0x36BA2014, 0x398CDD32, 0x3C56BA70, 0x3F1749B8, 0x41CE1E65, 0x447ACD50,
-   0x471CECE7, 0x49B41533, 0x4C3FDFF4, 0x4EBFE8A5, 0x5133CC94, 0x539B2AF0, 0x55F5A4D2, 0x5842DD54,
-   0x5A82799A, 0x5CB420E0, 0x5ED77C8A, 0x60EC3830, 0x62F201AC, 0x64E88926, 0x66CF8120, 0x68A69E81,
-   0x6A6D98A4, 0x6C242960, 0x6DCA0D14, 0x6F5F02B2, 0x70E2CBC6, 0x72552C85, 0x73B5EBD1, 0x7504D345,
-   0x7641AF3D, 0x776C4EDB, 0x78848414, 0x798A23B1, 0x7A7D055B, 0x7B5D039E, 0x7C29FBEE, 0x7CE3CEB2,
-   0x7D8A5F40, 0x7E1D93EA, 0x7E9D55FC, 0x7F0991C4, 0x7F62368F, 0x7FA736B4, 0x7FD8878E, 0x7FF62182,
-   0x7FFFFFFF, 0x7FF62182, 0x7FD8878E, 0x7FA736B4, 0x7F62368F, 0x7F0991C4, 0x7E9D55FC, 0x7E1D93EA,
-   0x7D8A5F40, 0x7CE3CEB2, 0x7C29FBEE, 0x7B5D039E, 0x7A7D055B, 0x798A23B1, 0x78848414, 0x776C4EDB,
-   0x7641AF3D, 0x7504D345, 0x73B5EBD1, 0x72552C85, 0x70E2CBC6, 0x6F5F02B2, 0x6DCA0D14, 0x6C242960,
-   0x6A6D98A4, 0x68A69E81, 0x66CF8120, 0x64E88926, 0x62F201AC, 0x60EC3830, 0x5ED77C8A, 0x5CB420E0,
-   0x5A82799A, 0x5842DD54, 0x55F5A4D2, 0x539B2AF0, 0x5133CC94, 0x4EBFE8A5, 0x4C3FDFF4, 0x49B41533,
-   0x471CECE7, 0x447ACD50, 0x41CE1E65, 0x3F1749B8, 0x3C56BA70, 0x398CDD32, 0x36BA2014, 0x33DEF287,
-   0x30FBC54D, 0x2E110A62, 0x2B1F34EB, 0x2826B928, 0x25280C5E, 0x2223A4C5, 0x1F19F97B, 0x1C0B826A,
-   0x18F8B83C, 0x15E21445, 0x12C8106F, 0x0FAB272B, 0x0C8BD35E, 0x096A9049, 0x0647D97C, 0x0323ECBE,
-   0x00000000, 0xFCDC1342, 0xF9B82684, 0xF6956FB7, 0xF3742CA2, 0xF054D8D5, 0xED37EF91, 0xEA1DEBBB,
-   0xE70747C4, 0xE3F47D96, 0xE0E60685, 0xDDDC5B3B, 0xDAD7F3A2, 0xD7D946D8, 0xD4E0CB15, 0xD1EEF59E,
-   0xCF043AB3, 0xCC210D79, 0xC945DFEC, 0xC67322CE, 0xC3A94590, 0xC0E8B648, 0xBE31E19B, 0xBB8532B0,
-   0xB8E31319, 0xB64BEACD, 0xB3C0200C, 0xB140175B, 0xAECC336C, 0xAC64D510, 0xAA0A5B2E, 0xA7BD22AC,
-   0xA57D8666, 0xA34BDF20, 0xA1288376, 0x9F13C7D0, 0x9D0DFE54, 0x9B1776DA, 0x99307EE0, 0x9759617F,
-   0x9592675C, 0x93DBD6A0, 0x9235F2EC, 0x90A0FD4E, 0x8F1D343A, 0x8DAAD37B, 0x8C4A142F, 0x8AFB2CBB,
-   0x89BE50C3, 0x8893B125, 0x877B7BEC, 0x8675DC4F, 0x8782FAA5, 0x84A2FC62, 0x83D60412, 0x831C314E,
-   0x8275A0C0, 0x81E26C16, 0x8162AA04, 0x80F66E3C, 0x809DC971, 0x8058C94C, 0x80277872, 0x8009DE7E,
-   0x80000001, 0x8009DE7E, 0x80277872, 0x8058C94C, 0x809DC971, 0x80F66E3C, 0x8162AA04, 0x81E26C16,
-   0x8275A0C0, 0x831C314E, 0x83D60412, 0x84A2FC62, 0x8782FAA5, 0x8675DC4F, 0x877B7BEC, 0x8893B125,
-   0x89BE50C3, 0x8AFB2CBB, 0x8C4A142F, 0x8DAAD37B, 0x8F1D343A, 0x90A0FD4E, 0x9235F2EC, 0x93DBD6A0,
-   0x9592675C, 0x9759617F, 0x99307EE0, 0x9B1776DA, 0x9D0DFE54, 0x9F13C7D0, 0xA1288376, 0xA34BDF20,
-   0xA57D8666, 0xA7BD22AC, 0xAA0A5B2E, 0xAC64D510, 0xAECC336C, 0xB140175B, 0xB3C0200C, 0xB64BEACD,
-   0xB8E31319, 0xBB8532B0, 0xBE31E19B, 0xC0E8B648, 0xC3A94590, 0xC67322CE, 0xC945DFEC, 0xCC210D79,
-   0xCF043AB3, 0xD1EEF59E, 0xD4E0CB15, 0xD7D946D8, 0xDAD7F3A2, 0xDDDC5B3B, 0xE0E60685, 0xE3F47D96,
-   0xE70747C4, 0xEA1DEBBB, 0xED37EF91, 0xF054D8D5, 0xF3742CA2, 0xF6956FB7, 0xF9B82684, 0xFCDC1342,
+    0x00000000,
+    0x0323ECBE,
+    0x0647D97C,
+    0x096A9049,
+    0x0C8BD35E,
+    0x0FAB272B,
+    0x12C8106F,
+    0x15E21445,
+    0x18F8B83C,
+    0x1C0B826A,
+    0x1F19F97B,
+    0x2223A4C5,
+    0x25280C5E,
+    0x2826B928,
+    0x2B1F34EB,
+    0x2E110A62,
+    0x30FBC54D,
+    0x33DEF287,
+    0x36BA2014,
+    0x398CDD32,
+    0x3C56BA70,
+    0x3F1749B8,
+    0x41CE1E65,
+    0x447ACD50,
+    0x471CECE7,
+    0x49B41533,
+    0x4C3FDFF4,
+    0x4EBFE8A5,
+    0x5133CC94,
+    0x539B2AF0,
+    0x55F5A4D2,
+    0x5842DD54,
+    0x5A82799A,
+    0x5CB420E0,
+    0x5ED77C8A,
+    0x60EC3830,
+    0x62F201AC,
+    0x64E88926,
+    0x66CF8120,
+    0x68A69E81,
+    0x6A6D98A4,
+    0x6C242960,
+    0x6DCA0D14,
+    0x6F5F02B2,
+    0x70E2CBC6,
+    0x72552C85,
+    0x73B5EBD1,
+    0x7504D345,
+    0x7641AF3D,
+    0x776C4EDB,
+    0x78848414,
+    0x798A23B1,
+    0x7A7D055B,
+    0x7B5D039E,
+    0x7C29FBEE,
+    0x7CE3CEB2,
+    0x7D8A5F40,
+    0x7E1D93EA,
+    0x7E9D55FC,
+    0x7F0991C4,
+    0x7F62368F,
+    0x7FA736B4,
+    0x7FD8878E,
+    0x7FF62182,
+    0x7FFFFFFF,
+    0x7FF62182,
+    0x7FD8878E,
+    0x7FA736B4,
+    0x7F62368F,
+    0x7F0991C4,
+    0x7E9D55FC,
+    0x7E1D93EA,
+    0x7D8A5F40,
+    0x7CE3CEB2,
+    0x7C29FBEE,
+    0x7B5D039E,
+    0x7A7D055B,
+    0x798A23B1,
+    0x78848414,
+    0x776C4EDB,
+    0x7641AF3D,
+    0x7504D345,
+    0x73B5EBD1,
+    0x72552C85,
+    0x70E2CBC6,
+    0x6F5F02B2,
+    0x6DCA0D14,
+    0x6C242960,
+    0x6A6D98A4,
+    0x68A69E81,
+    0x66CF8120,
+    0x64E88926,
+    0x62F201AC,
+    0x60EC3830,
+    0x5ED77C8A,
+    0x5CB420E0,
+    0x5A82799A,
+    0x5842DD54,
+    0x55F5A4D2,
+    0x539B2AF0,
+    0x5133CC94,
+    0x4EBFE8A5,
+    0x4C3FDFF4,
+    0x49B41533,
+    0x471CECE7,
+    0x447ACD50,
+    0x41CE1E65,
+    0x3F1749B8,
+    0x3C56BA70,
+    0x398CDD32,
+    0x36BA2014,
+    0x33DEF287,
+    0x30FBC54D,
+    0x2E110A62,
+    0x2B1F34EB,
+    0x2826B928,
+    0x25280C5E,
+    0x2223A4C5,
+    0x1F19F97B,
+    0x1C0B826A,
+    0x18F8B83C,
+    0x15E21445,
+    0x12C8106F,
+    0x0FAB272B,
+    0x0C8BD35E,
+    0x096A9049,
+    0x0647D97C,
+    0x0323ECBE,
+    0x00000000,
+    0xFCDC1342,
+    0xF9B82684,
+    0xF6956FB7,
+    0xF3742CA2,
+    0xF054D8D5,
+    0xED37EF91,
+    0xEA1DEBBB,
+    0xE70747C4,
+    0xE3F47D96,
+    0xE0E60685,
+    0xDDDC5B3B,
+    0xDAD7F3A2,
+    0xD7D946D8,
+    0xD4E0CB15,
+    0xD1EEF59E,
+    0xCF043AB3,
+    0xCC210D79,
+    0xC945DFEC,
+    0xC67322CE,
+    0xC3A94590,
+    0xC0E8B648,
+    0xBE31E19B,
+    0xBB8532B0,
+    0xB8E31319,
+    0xB64BEACD,
+    0xB3C0200C,
+    0xB140175B,
+    0xAECC336C,
+    0xAC64D510,
+    0xAA0A5B2E,
+    0xA7BD22AC,
+    0xA57D8666,
+    0xA34BDF20,
+    0xA1288376,
+    0x9F13C7D0,
+    0x9D0DFE54,
+    0x9B1776DA,
+    0x99307EE0,
+    0x9759617F,
+    0x9592675C,
+    0x93DBD6A0,
+    0x9235F2EC,
+    0x90A0FD4E,
+    0x8F1D343A,
+    0x8DAAD37B,
+    0x8C4A142F,
+    0x8AFB2CBB,
+    0x89BE50C3,
+    0x8893B125,
+    0x877B7BEC,
+    0x8675DC4F,
+    0x8782FAA5,
+    0x84A2FC62,
+    0x83D60412,
+    0x831C314E,
+    0x8275A0C0,
+    0x81E26C16,
+    0x8162AA04,
+    0x80F66E3C,
+    0x809DC971,
+    0x8058C94C,
+    0x80277872,
+    0x8009DE7E,
+    0x80000001,
+    0x8009DE7E,
+    0x80277872,
+    0x8058C94C,
+    0x809DC971,
+    0x80F66E3C,
+    0x8162AA04,
+    0x81E26C16,
+    0x8275A0C0,
+    0x831C314E,
+    0x83D60412,
+    0x84A2FC62,
+    0x8782FAA5,
+    0x8675DC4F,
+    0x877B7BEC,
+    0x8893B125,
+    0x89BE50C3,
+    0x8AFB2CBB,
+    0x8C4A142F,
+    0x8DAAD37B,
+    0x8F1D343A,
+    0x90A0FD4E,
+    0x9235F2EC,
+    0x93DBD6A0,
+    0x9592675C,
+    0x9759617F,
+    0x99307EE0,
+    0x9B1776DA,
+    0x9D0DFE54,
+    0x9F13C7D0,
+    0xA1288376,
+    0xA34BDF20,
+    0xA57D8666,
+    0xA7BD22AC,
+    0xAA0A5B2E,
+    0xAC64D510,
+    0xAECC336C,
+    0xB140175B,
+    0xB3C0200C,
+    0xB64BEACD,
+    0xB8E31319,
+    0xBB8532B0,
+    0xBE31E19B,
+    0xC0E8B648,
+    0xC3A94590,
+    0xC67322CE,
+    0xC945DFEC,
+    0xCC210D79,
+    0xCF043AB3,
+    0xD1EEF59E,
+    0xD4E0CB15,
+    0xD7D946D8,
+    0xDAD7F3A2,
+    0xDDDC5B3B,
+    0xE0E60685,
+    0xE3F47D96,
+    0xE70747C4,
+    0xEA1DEBBB,
+    0xED37EF91,
+    0xF054D8D5,
+    0xF3742CA2,
+    0xF6956FB7,
+    0xF9B82684,
+    0xFCDC1342,
 };
-
-/* --- CH1 standalone test-tone generator (bypass bring-up, see 'tone1') ---
- *
- * CH1 is normally hard-wired to USB PCM (Audio_Bridge_WriteUSB() below).
- * This is a SEPARATE, dedicated 128-entry Q31 sine table so a sine can be
- * heard through the analog 'bypass' path with no PC/USB attached at all —
- * intentionally independent of the 256-entry `sine_table` used by CH2-4.
- *
- * Table size only sets interpolation error (~-70 dBFS here vs ~-82 dBFS for
- * the 256-entry table), not which frequencies are reachable: the 32-bit
- * phase accumulator gives ~0.0000223 Hz resolution at 96 kHz regardless of
- * table size, so fractional-Hz tones (e.g. 1000.5 Hz) are exact. */
-#define CH1_SINE_TABLE_SIZE 128
-static const int32_t ch1_sine_table[CH1_SINE_TABLE_SIZE] = {
-   0x00000000, 0x0647D97C, 0x0C8BD35E, 0x12C8106E, 0x18F8B83C, 0x1F19F97B, 0x25280C5D, 0x2B1F34EB,
-   0x30FBC54D, 0x36BA2013, 0x3C56BA70, 0x41CE1E64, 0x471CECE6, 0x4C3FDFF3, 0x5133CC94, 0x55F5A4D2,
-   0x5A827999, 0x5ED77C89, 0x62F201AC, 0x66CF811F, 0x6A6D98A3, 0x6DCA0D14, 0x70E2CBC5, 0x73B5EBD0,
-   0x7641AF3C, 0x78848413, 0x7A7D055A, 0x7C29FBED, 0x7D8A5F3F, 0x7E9D55FB, 0x7F62368E, 0x7FD8878D,
-   0x7FFFFFFF, 0x7FD8878D, 0x7F62368E, 0x7E9D55FB, 0x7D8A5F3F, 0x7C29FBED, 0x7A7D055A, 0x78848413,
-   0x7641AF3C, 0x73B5EBD0, 0x70E2CBC5, 0x6DCA0D14, 0x6A6D98A3, 0x66CF811F, 0x62F201AC, 0x5ED77C89,
-   0x5A827999, 0x55F5A4D2, 0x5133CC94, 0x4C3FDFF3, 0x471CECE6, 0x41CE1E64, 0x3C56BA70, 0x36BA2013,
-   0x30FBC54D, 0x2B1F34EB, 0x25280C5D, 0x1F19F97B, 0x18F8B83C, 0x12C8106E, 0x0C8BD35E, 0x0647D97C,
-   0x00000000, 0xF9B82684, 0xF3742CA2, 0xED37EF92, 0xE70747C4, 0xE0E60685, 0xDAD7F3A3, 0xD4E0CB15,
-   0xCF043AB3, 0xC945DFED, 0xC3A94590, 0xBE31E19C, 0xB8E3131A, 0xB3C0200D, 0xAECC336C, 0xAA0A5B2E,
-   0xA57D8667, 0xA1288377, 0x9D0DFE54, 0x99307EE1, 0x9592675D, 0x9235F2EC, 0x8F1D343B, 0x8C4A1430,
-   0x89BE50C4, 0x877B7BED, 0x8582FAA6, 0x83D60413, 0x8275A0C1, 0x8162AA05, 0x809DC972, 0x80277873,
-   0x80000001, 0x80277873, 0x809DC972, 0x8162AA05, 0x8275A0C1, 0x83D60413, 0x8582FAA6, 0x877B7BED,
-   0x89BE50C4, 0x8C4A1430, 0x8F1D343B, 0x9235F2EC, 0x9592675D, 0x99307EE1, 0x9D0DFE54, 0xA1288377,
-   0xA57D8667, 0xAA0A5B2E, 0xAECC336C, 0xB3C0200D, 0xB8E3131A, 0xBE31E19C, 0xC3A94590, 0xC945DFED,
-   0xCF043AB3, 0xD4E0CB15, 0xDAD7F3A3, 0xE0E60685, 0xE70747C4, 0xED37EF92, 0xF3742CA2, 0xF9B82684,
-};
-
-/* CH1 source select + generator state. Cold-path (console-set) frequency
- * is stored as `double` for fractional-Hz precision; the hot-path phase
- * accumulator/increment stay plain uint32_t — no floating point ever runs
- * in the per-sample path (see realtime-audio-performance.mdc). */
-static volatile Audio_CH1_Source_t ch1_source = AUDIO_CH1_SRC_USB;
-static double   ch1_tone_freq_hz = 0.0;
-static uint32_t ch1_tone_phase   = 0;
-static uint32_t ch1_tone_inc     = 0;
-
-/** Convert a (possibly fractional) frequency to a 32-bit phase increment.
- * Runs only from console context (Audio_SetCh1ToneFreq) — never per-sample —
- * so `double` math here is safe and does not touch the ISR/DMA hot path. */
-static uint32_t CH1_PhaseIncFromHz(double freq_hz)
-{
-  double inc = (freq_hz * 4294967296.0) / (double)TEST_TONE_SAMPLE_RATE;
-  return (uint32_t)(inc + 0.5); /* round, don't truncate: keeps fractional Hz exact */
-}
 
 /** Next tone sample for one channel, with LINEAR INTERPOLATION between
-  * sine-table entries. Plain 8-bit table lookup quantizes the phase to
-  * 1/256 cycle, making zero-crossings jitter by up to ~4 µs at 1 kHz
-  * ("shaky" waveform on the scope). Interpolation removes it. -6 dBFS.
-  * Cost: ~10 cycles/sample — negligible at 550 MHz. */
+ * sine-table entries. Plain 8-bit table lookup quantizes the phase to
+ * 1/256 cycle, making zero-crossings jitter by up to ~4 µs at 1 kHz
+ * ("shaky" waveform on the scope). Interpolation removes it. -6 dBFS.
+ * Cost: ~10 cycles/sample — negligible at 550 MHz. */
 static inline int32_t Tone_NextSineSample(uint8_t ch)
 {
-  uint32_t ph   = test_tone_phase[ch];
-  uint8_t  idx  = (uint8_t)(ph >> 24);
-  int32_t  s0   = sine_table[idx];
-  int32_t  s1   = sine_table[(uint8_t)(idx + 1u)];
-  uint32_t frac = (ph >> 8) & 0xFFFFu;                       /* 16-bit fraction */
-  int32_t  s    = s0 + (int32_t)(((int64_t)(s1 - s0) * (int64_t)frac) >> 16);
+  uint32_t ph = test_tone_phase[ch];
+  uint8_t idx = (uint8_t)(ph >> 24);
+  int32_t s0 = sine_table[idx];
+  int32_t s1 = sine_table[(uint8_t)(idx + 1u)];
+  uint32_t frac = (ph >> 8) & 0xFFFFu; /* 16-bit fraction */
+  int32_t s = s0 + (int32_t)(((int64_t)(s1 - s0) * (int64_t)frac) >> 16);
 
   test_tone_phase[ch] = ph + test_tone_inc[ch];
-  return s >> 1;                                             /* -6 dB headroom */
+  return s >> 1; /* -6 dB headroom */
 }
 
-/** Next CH1 test-tone sample from the dedicated 128-entry table. Same
- * phase-accumulator + linear-interpolation technique as
- * Tone_NextSineSample(), just re-derived for a 128- instead of 256-entry
- * table: 7-bit index (top 7 bits of phase), 16-bit interpolation fraction
- * from the next 16 bits down. Pure integer math — no floats in this path.
- * ~10 cycles/sample, negligible at 550 MHz (see realtime-audio-performance.mdc). */
-static inline int32_t Tone_NextCh1Sample(void)
+/** CH1 left slot plays the N0–NF note bank when any voice is active. */
+static inline uint8_t Audio_Ch1NoteBankActive(void)
 {
-  uint32_t ph   = ch1_tone_phase;
-  uint8_t  idx  = (uint8_t)(ph >> 25);                       /* 7-bit index, 0..127 */
-  int32_t  s0   = ch1_sine_table[idx];
-  int32_t  s1   = ch1_sine_table[(uint8_t)((idx + 1u) & (CH1_SINE_TABLE_SIZE - 1u))];
-  uint32_t frac = (ph >> 9) & 0xFFFFu;                       /* 16-bit fraction */
-  int32_t  s    = s0 + (int32_t)(((int64_t)(s1 - s0) * (int64_t)frac) >> 16);
-
-  ch1_tone_phase = ph + ch1_tone_inc;
-  return s >> 1;                                             /* -6 dB headroom, matches CH2-4 */
+  return NoteBank_AnyActive();
 }
 
 /** Next sample for one channel — returns sine tone or DC level depending
-  * on the channel mode. CH1 (index 0) is always USB audio so this is
-  * only meaningful for CH2..CH4 (indices 1..3). */
+ * on the channel mode. CH1 (index 0) is always USB audio so this is
+ * only meaningful for CH2..CH4 (indices 1..3). */
 static inline int32_t Audio_NextSample(uint8_t ch)
 {
   if (channel_mode[ch] == AUDIO_MODE_DC)
@@ -262,12 +424,18 @@ static inline int32_t Audio_NextSample(uint8_t ch)
     if (now < tgt)
     {
       now += DC_SLEW_STEP;
-      if (now > tgt) { now = tgt; }
+      if (now > tgt)
+      {
+        now = tgt;
+      }
     }
     else if (now > tgt)
     {
       now -= DC_SLEW_STEP;
-      if (now < tgt) { now = tgt; }
+      if (now < tgt)
+      {
+        now = tgt;
+      }
     }
     dc_level_now[ch] = now;
     return now;
@@ -281,105 +449,105 @@ extern CS4304_HandleTypeDef hcs4304;
 /* USER CODE END PV */
 
 /** @addtogroup STM32_USB_OTG_DEVICE_LIBRARY
-  * @brief Usb device library.
-  * @{
-  */
+ * @brief Usb device library.
+ * @{
+ */
 
 /** @addtogroup USBD_AUDIO_IF
-  * @{
-  */
+ * @{
+ */
 
 /** @defgroup USBD_AUDIO_IF_Private_TypesDefinitions USBD_AUDIO_IF_Private_TypesDefinitions
-  * @brief Private types.
-  * @{
-  */
+ * @brief Private types.
+ * @{
+ */
 
 /* USER CODE BEGIN PRIVATE_TYPES */
 
 /* USER CODE END PRIVATE_TYPES */
 
 /**
-  * @}
-  */
+ * @}
+ */
 
 /** @defgroup USBD_AUDIO_IF_Private_Defines USBD_AUDIO_IF_Private_Defines
-  * @brief Private defines.
-  * @{
-  */
+ * @brief Private defines.
+ * @{
+ */
 
 /* USER CODE BEGIN PRIVATE_DEFINES */
 
 /* USER CODE END PRIVATE_DEFINES */
 
 /**
-  * @}
-  */
+ * @}
+ */
 
 /** @defgroup USBD_AUDIO_IF_Private_Macros USBD_AUDIO_IF_Private_Macros
-  * @brief Private macros.
-  * @{
-  */
+ * @brief Private macros.
+ * @{
+ */
 
 /* USER CODE BEGIN PRIVATE_MACRO */
 
 /* USER CODE END PRIVATE_MACRO */
 
 /**
-  * @}
-  */
+ * @}
+ */
 
 /** @defgroup USBD_AUDIO_IF_Private_Variables USBD_AUDIO_IF_Private_Variables
-  * @brief Private variables.
-  * @{
-  */
+ * @brief Private variables.
+ * @{
+ */
 
 /* USER CODE BEGIN PRIVATE_VARIABLES */
 static volatile uint8_t dma_active_half = 0; /* 0 = playing first half (write to second), 1 = playing second half (write to first) */
 /* USER CODE END PRIVATE_VARIABLES */
 
 /**
-  * @}
-  */
+ * @}
+ */
 
 /** @defgroup USBD_AUDIO_IF_Exported_Variables USBD_AUDIO_IF_Exported_Variables
-  * @brief Public variables.
-  * @{
-  */
+ * @brief Public variables.
+ * @{
+ */
 
 /* USER CODE BEGIN EXPORTED_VARIABLES */
 
 /* USER CODE END EXPORTED_VARIABLES */
 
 /**
-  * @}
-  */
+ * @}
+ */
 
 /** @defgroup USBD_AUDIO_IF_Private_FunctionPrototypes USBD_AUDIO_IF_Private_FunctionPrototypes
-  * @brief Private functions declaration.
-  * @{
-  */
+ * @brief Private functions declaration.
+ * @{
+ */
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_DECLARATION */
 static void Audio_FillTestTone(int32_t *buf, uint32_t num_frames,
                                uint8_t chL, uint8_t chR);
 static void Audio_FillToneSlot(int32_t *buf, uint32_t num_frames,
                                uint8_t ch, uint8_t slot);
-static void Audio_FillCh1ToneSlot(int32_t *buf, uint32_t num_frames, uint8_t slot);
+static void Audio_FillCh1NoteBankSlot(int32_t *buf, uint32_t num_frames,
+                                      uint8_t slot);
 static HAL_StatusTypeDef I2S2_Start(void);
 /* USER CODE END PRIVATE_FUNCTIONS_DECLARATION */
 
 /**
-  * @}
-  */
-
+ * @}
+ */
 
 /* Private functions ---------------------------------------------------------*/
 /**
-  * @brief  Initializes the AUDIO media low layer over the USB HS IP
-  * @param  AudioFreq: Audio frequency used to play the audio stream.
-  * @param  Volume: Initial volume level (from 0 (Mute) to 100 (Max))
-  * @param  options: Reserved for future use
-  */
+ * @brief  Initializes the AUDIO media low layer over the USB HS IP
+ * @param  AudioFreq: Audio frequency used to play the audio stream.
+ * @param  Volume: Initial volume level (from 0 (Mute) to 100 (Max))
+ * @param  options: Reserved for future use
+ */
 void Audio_Bridge_Start(void)
 {
   /* USER CODE BEGIN 9 */
@@ -405,7 +573,10 @@ void Audio_Bridge_Start(void)
     /* Let BCLK/WS run before enabling the slave. MUST be a busy-wait:
      * Audio_Bridge_Start runs in USB interrupt context where HAL_Delay
      * deadlocks (SysTick cannot preempt the USB IRQ). ~2 ms at 550 MHz. */
-    for (volatile uint32_t d = 0; d < 300000u; d++) { __NOP(); }
+    for (volatile uint32_t d = 0; d < 300000u; d++)
+    {
+      __NOP();
+    }
     I2S2_Start();
 #endif
 
@@ -423,9 +594,9 @@ void Audio_Bridge_Start(void)
 }
 
 /**
-  * @brief  DeInitializes the AUDIO media low layer
-  * @param  options: Reserved for future use
-  */
+ * @brief  DeInitializes the AUDIO media low layer
+ * @param  options: Reserved for future use
+ */
 void Audio_Bridge_Stop(void)
 {
   /* USER CODE BEGIN 10 */
@@ -441,11 +612,11 @@ void Audio_Bridge_Stop(void)
 }
 
 /**
-  * @brief  Handles AUDIO command.
-  * @param  pbuf: Pointer to buffer of data to be sent
-  * @param  size: Number of data to be sent (in bytes)
-  * @param  cmd: Command opcode
-  */
+ * @brief  Handles AUDIO command.
+ * @param  pbuf: Pointer to buffer of data to be sent
+ * @param  size: Number of data to be sent (in bytes)
+ * @param  cmd: Command opcode
+ */
 void Audio_Bridge_StreamStop(void)
 {
   /* USER CODE BEGIN 11 */
@@ -457,20 +628,20 @@ void Audio_Bridge_StreamStop(void)
 }
 
 /**
-  * @brief  Controls AUDIO Volume.
-  * @param  vol: volume level (0..100)
-  */
+ * @brief  Controls AUDIO Volume.
+ * @param  vol: volume level (0..100)
+ */
 void Audio_Bridge_SetVolume(uint8_t vol)
 {
-  /* USER CODE BEGIN 12 */
-  /*
-   * vol = 0..100, linear in dB across the advertised range (vol_min..vol_max
-   * = −50..0 dB, see USBD_AUDIO_Init), plus a fixed pad so 100% matches the
-   * M031N amp input (~80 mV full drive from ~1.06 Vrms full scale ≈ −22 dB).
-   * Set AMP_MATCH_PAD_HALFDB to 0 for full line-level output.
-   */
-  #define AMP_MATCH_PAD_HALFDB  0u    /* pad moved to external resistor divider
-                                       * (10k + 1k at amp input) for better SNR */
+/* USER CODE BEGIN 12 */
+/*
+ * vol = 0..100, linear in dB across the advertised range (vol_min..vol_max
+ * = −50..0 dB, see USBD_AUDIO_Init), plus a fixed pad so 100% matches the
+ * M031N amp input (~80 mV full drive from ~1.06 Vrms full scale ≈ −22 dB).
+ * Set AMP_MATCH_PAD_HALFDB to 0 for full line-level output.
+ */
+#define AMP_MATCH_PAD_HALFDB 0u /* pad moved to external resistor divider \
+                                 * (10k + 1k at amp input) for better SNR */
   uint32_t a = AMP_MATCH_PAD_HALFDB + ((vol >= 100) ? 0u : (100u - vol));
   uint8_t atten = (a > 255u) ? 255u : (uint8_t)a;
   CS4304_SetVolume(&hcs4304, atten);
@@ -478,9 +649,9 @@ void Audio_Bridge_SetVolume(uint8_t vol)
 }
 
 /**
-  * @brief  Controls AUDIO Mute.
-  * @param  cmd: command opcode
-  */
+ * @brief  Controls AUDIO Mute.
+ * @param  cmd: command opcode
+ */
 void Audio_Bridge_SetMute(uint8_t cmd)
 {
   /* USER CODE BEGIN 13 */
@@ -489,9 +660,9 @@ void Audio_Bridge_SetMute(uint8_t cmd)
 }
 
 /**
-  * @brief  Audio_Bridge_WriteUSB
-  * @param  cmd: command opcode
-  */
+ * @brief  Audio_Bridge_WriteUSB
+ * @param  cmd: command opcode
+ */
 void Audio_Bridge_WriteUSB(const uint8_t *pbuf, uint32_t size)
 {
   /* USER CODE BEGIN 14 */
@@ -500,15 +671,15 @@ void Audio_Bridge_WriteUSB(const uint8_t *pbuf, uint32_t size)
    * there is no command opcode to test — a packet arriving *is* the
    * "host is streaming" signal. */
   {
-    /* CH1 test-tone generator owns the left slot while active (see the
-     * SPI1 DMA callbacks) — ignore USB packets instead of fighting it. */
-    if (ch1_source == AUDIO_CH1_SRC_TEST_TONE)
+    /* Note bank owns the left slot while any N0–NF voice is active —
+     * ignore USB packets instead of fighting the DMA refill. */
+    if (Audio_Ch1NoteBankActive())
     {
       return;
     }
 
     audio_playing = 1;
-    uint32_t num_mono_samples = size / 4;  /* 4 bytes per 32-bit sample */
+    uint32_t num_mono_samples = size / 4; /* 4 bytes per 32-bit sample */
 
     /* Current DMA read position in words (NDTR counts remaining transfers) */
     DMA_Stream_TypeDef *st = (DMA_Stream_TypeDef *)hi2s1.hdmatx->Instance;
@@ -548,9 +719,9 @@ void Audio_Bridge_WriteUSB(const uint8_t *pbuf, uint32_t size)
 }
 
 /**
-  * @brief  Manages the DMA full transfer complete event.
-  * @retval None
-  */
+ * @brief  Manages the DMA full transfer complete event.
+ * @retval None
+ */
 void TransferComplete_CallBack_HS(void)
 {
   /* USER CODE BEGIN 16 */
@@ -562,9 +733,9 @@ void TransferComplete_CallBack_HS(void)
 }
 
 /**
-  * @brief  Manages the DMA Half transfer complete event.
-  * @retval None
-  */
+ * @brief  Manages the DMA Half transfer complete event.
+ * @retval None
+ */
 void HalfTransfer_CallBack_HS(void)
 {
   /* USER CODE BEGIN 17 */
@@ -575,26 +746,26 @@ void HalfTransfer_CallBack_HS(void)
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_IMPLEMENTATION */
 
 /**
-  * @brief  Fill buffer with a 1 kHz sine test tone (32-bit, stereo).
-  *         Used for testing all 4 DAC channels.
-  * @param  buf         Pointer to stereo buffer (interleaved L+R, 32-bit)
-  * @param  num_frames  Number of stereo frames to generate
-  */
+ * @brief  Fill buffer with a 1 kHz sine test tone (32-bit, stereo).
+ *         Used for testing all 4 DAC channels.
+ * @param  buf         Pointer to stereo buffer (interleaved L+R, 32-bit)
+ * @param  num_frames  Number of stereo frames to generate
+ */
 static void Audio_FillTestTone(int32_t *buf, uint32_t num_frames,
                                uint8_t chL, uint8_t chR)
 {
   for (uint32_t i = 0; i < num_frames; i++)
   {
-    buf[i * 2]     = Audio_NextSample(chL);
+    buf[i * 2] = Audio_NextSample(chL);
     buf[i * 2 + 1] = Audio_NextSample(chR);
   }
 }
 
 /**
-  * @brief  Fill ONE slot (0 = L, 1 = R) of an interleaved stereo buffer with
-  *         a sine tone, leaving the other slot untouched. Used to put the
-  *         CH2 tone in I2S1's right slot while USB audio owns the left slot.
-  */
+ * @brief  Fill ONE slot (0 = L, 1 = R) of an interleaved stereo buffer with
+ *         a sine tone, leaving the other slot untouched. Used to put the
+ *         CH2 tone in I2S1's right slot while USB audio owns the left slot.
+ */
 static void Audio_FillToneSlot(int32_t *buf, uint32_t num_frames,
                                uint8_t ch, uint8_t slot)
 {
@@ -605,74 +776,50 @@ static void Audio_FillToneSlot(int32_t *buf, uint32_t num_frames,
 }
 
 /**
-  * @brief  Fill ONE slot of an interleaved stereo buffer with the CH1
-  *         internal test-tone generator. Only called while
-  *         ch1_source == AUDIO_CH1_SRC_TEST_TONE (see the SPI1 DMA
-  *         callbacks below) — otherwise CH1's slot is left for
-  *         Audio_Bridge_WriteUSB() to fill from the USB stream.
-  */
-static void Audio_FillCh1ToneSlot(int32_t *buf, uint32_t num_frames, uint8_t slot)
+ * @brief  Fill ONE slot with the mixed N0–NF note bank. Only called while
+ *         NoteBank_AnyActive() (see SPI1 DMA callbacks) — otherwise CH1's
+ *         slot is left for Audio_Bridge_WriteUSB() to fill from USB.
+ */
+static void Audio_FillCh1NoteBankSlot(int32_t *buf, uint32_t num_frames,
+                                      uint8_t slot)
 {
   for (uint32_t i = 0; i < num_frames; i++)
   {
-    buf[i * 2 + slot] = Tone_NextCh1Sample();
+    buf[i * 2 + slot] = NoteBank_NextSample();
   }
 }
 
 /**
-  * @brief  Set the test tone frequency for one channel (1..4), in Hz.
-  *         Takes effect immediately while the tone is running.
-  */
+ * @brief  Set the test tone frequency for one channel (1..4), in Hz.
+ *         Takes effect immediately while the tone is running.
+ */
 void Audio_SetToneFreq(uint8_t channel, uint32_t freq_hz)
 {
   if (channel >= 1 && channel <= 4 && freq_hz > 0 && freq_hz < 20000)
   {
     test_tone_freq_hz[channel - 1] = freq_hz;
-    test_tone_inc[channel - 1]     = TONE_PHASE_INC(freq_hz);
+    test_tone_inc[channel - 1] = TONE_PHASE_INC(freq_hz);
   }
 }
 
 /**
-  * @brief  Get the current test tone frequency for one channel (1..4).
-  * @retval frequency in Hz, 0 if channel invalid
-  */
+ * @brief  Get the current test tone frequency for one channel (1..4).
+ * @retval frequency in Hz, 0 if channel invalid
+ */
 uint32_t Audio_GetToneFreq(uint8_t channel)
 {
   return (channel >= 1 && channel <= 4) ? test_tone_freq_hz[channel - 1] : 0;
 }
 
-/**
-  * @brief  Start/retune the CH1 internal test-tone generator, or turn it off.
-  *         freq_hz <= 0 reverts CH1 to its normal USB-audio source.
-  *         Fractional Hz (e.g. 1000.5) is exact — see CH1_PhaseIncFromHz().
-  */
-void Audio_SetCh1ToneFreq(double freq_hz)
-{
-  if (freq_hz <= 0.0)
-  {
-    ch1_source = AUDIO_CH1_SRC_USB;
-    ch1_tone_freq_hz = 0.0;
-    ch1_tone_inc = 0;
-    return;
-  }
-  ch1_tone_freq_hz = freq_hz;
-  ch1_tone_inc = CH1_PhaseIncFromHz(freq_hz);
-  ch1_source = AUDIO_CH1_SRC_TEST_TONE;
-}
-
-double Audio_GetCh1ToneFreq(void)
-{
-  return ch1_tone_freq_hz;
-}
-
 Audio_CH1_Source_t Audio_GetCh1Source(void)
 {
-  return ch1_source;
+  return Audio_Ch1NoteBankActive() ? AUDIO_CH1_SRC_TEST_TONE
+                                   : AUDIO_CH1_SRC_USB;
 }
 
 /**
-  * @brief  Start standalone I2S playback without waiting for USB.
-  */
+ * @brief  Start standalone I2S playback without waiting for USB.
+ */
 void Audio_StartPlayback(void)
 {
   test_tone_phase[0] = test_tone_phase[1] = 0;
@@ -741,8 +888,8 @@ static int16_t dc_trim_x100[4] = {0, 0, 0, 0};
 
 static int32_t DC_PctToTarget(uint8_t idx, int8_t percent)
 {
-  int32_t p  = ((dc_invert_mask >> idx) & 1u) ? -percent : percent;
-  int32_t z  = dc_zero_pct[idx];
+  int32_t p = ((dc_invert_mask >> idx) & 1u) ? -percent : percent;
+  int32_t z = dc_zero_pct[idx];
   int32_t az = (z < 0) ? -z : z;
   /* effective percent × 100 for precision: z*100 + p*(100-|z|)  (|..| ≤ 10000) */
   int32_t eff_x100 = z * 100 + p * (100 - az) + dc_trim_x100[idx];
@@ -757,7 +904,7 @@ void Audio_SetDCLevel(uint8_t channel, int8_t percent)
     dc_level_pct[idx] = percent;
     /* The generator slews toward this target (DC_SLEW_STEP) — no spikes. */
     dc_level_tgt[idx] = DC_PctToTarget(idx, percent);
-    channel_mode[idx] = AUDIO_MODE_DC;  /* auto-switch to DC mode */
+    channel_mode[idx] = AUDIO_MODE_DC; /* auto-switch to DC mode */
   }
 }
 
@@ -787,11 +934,17 @@ void Audio_SetDCInvert(uint8_t channel, uint8_t invert)
   if (channel >= 2 && channel <= 4)
   {
     uint8_t idx = channel - 1;
-    if (invert) { dc_invert_mask |=  (uint8_t)(1u << idx); }
-    else        { dc_invert_mask &= (uint8_t)~(1u << idx); }
+    if (invert)
+    {
+      dc_invert_mask |= (uint8_t)(1u << idx);
+    }
+    else
+    {
+      dc_invert_mask &= (uint8_t)~(1u << idx);
+    }
     if (channel_mode[idx] == AUDIO_MODE_DC)
     {
-      dc_level_tgt[idx] = DC_PctToTarget(idx, dc_level_pct[idx]);  /* re-apply */
+      dc_level_tgt[idx] = DC_PctToTarget(idx, dc_level_pct[idx]); /* re-apply */
     }
   }
 }
@@ -825,7 +978,7 @@ void Audio_SetDCTrim(uint8_t channel, int16_t trim_x100)
   {
     uint8_t idx = channel - 1;
     dc_trim_x100[idx] = trim_x100;
-    channel_mode[idx] = AUDIO_MODE_DC;   /* trimming implies DC output */
+    channel_mode[idx] = AUDIO_MODE_DC; /* trimming implies DC output */
     dc_level_tgt[idx] = DC_PctToTarget(idx, dc_level_pct[idx]);
   }
 }
@@ -845,11 +998,11 @@ int8_t Audio_GetDCLevel(uint8_t channel)
  * writes (HAL IT/DMA feeds freeze without error). TIM7 fires at 40 kHz and
  * tops up the FIFO exactly like the polling loop, generating the CH3/CH4
  * tones inline. HAL is armed once (SPE+CSTART) then kept dormant. */
-volatile uint32_t g_pump_words = 0;          /* debugger: must keep rising */
-volatile uint32_t g_i2s2_udr_clears = 0;    /* UDR wedge recoveries */
+volatile uint32_t g_pump_words = 0;      /* debugger: must keep rising */
+volatile uint32_t g_i2s2_udr_clears = 0; /* UDR wedge recoveries */
 static volatile uint8_t i2s2_pump_on = 0;
 #if AUDIO_I2S2_IT
-static uint8_t pump_slot = 0;                /* 0 = CH3 (L), 1 = CH4 (R) */
+static uint8_t pump_slot = 0; /* 0 = CH3 (L), 1 = CH4 (R) */
 #endif
 
 void Audio_I2S2_Pump(void)
@@ -877,9 +1030,12 @@ void Audio_I2S2_Pump(void)
   if (i2s2_pump_on && ((SPI2->SR & SPI_SR_TXP) != 0u))
   {
     int32_t s;
-    if (pump_slot == 0) {
+    if (pump_slot == 0)
+    {
       s = Audio_NextSample(2); /* CH3 on I2S2 left slot */
-    } else {
+    }
+    else
+    {
       s = Audio_NextSample(3); /* CH4 on I2S2 right slot */
     }
     SPI2->TXDR = (uint32_t)s;
@@ -894,21 +1050,24 @@ void Audio_I2S2_Pump(void)
 static void I2S2_PumpTimerInit(void)
 {
   static uint8_t inited = 0;
-  if (inited) { return; }
+  if (inited)
+  {
+    return;
+  }
   inited = 1;
   __HAL_RCC_TIM7_CLK_ENABLE();
-  TIM7->PSC  = 274;             /* 275 MHz / 275 = 1 MHz            */
-  TIM7->ARR  = 9;               /* 1 MHz / 10 = 100 kHz tick        */
+  TIM7->PSC = 274; /* 275 MHz / 275 = 1 MHz            */
+  TIM7->ARR = 9;   /* 1 MHz / 10 = 100 kHz tick        */
   TIM7->DIER = TIM_DIER_UIE;
-  HAL_NVIC_SetPriority(TIM7_IRQn, 0, 0);  /* must not be starved: the FIFO
-                                             is only ~20 µs deep at 96 kHz */
+  HAL_NVIC_SetPriority(TIM7_IRQn, 0, 0); /* must not be starved: the FIFO
+                                            is only ~20 µs deep at 96 kHz */
   HAL_NVIC_EnableIRQ(TIM7_IRQn);
-  TIM7->CR1  = TIM_CR1_CEN;
+  TIM7->CR1 = TIM_CR1_CEN;
 }
 
 /** Start the I2S2 transfer — interrupt mode (SPI2 DMA request line dead)
-  * or DMA mode, per AUDIO_I2S2_IT. Pre-fills the tone so the first pass
-  * is not silence. */
+ * or DMA mode, per AUDIO_I2S2_IT. Pre-fills the tone so the first pass
+ * is not silence. */
 static HAL_StatusTypeDef I2S2_Start(void)
 {
   Audio_FillTestTone(&i2s2_tx_buf[0], AUDIO_I2S_BUF_FRAMES, 2, 3);
@@ -959,12 +1118,11 @@ static HAL_StatusTypeDef I2S2_Start(void)
 #endif
 }
 
-
 /**
-  * @brief  I2S1 DMA half transfer complete callback.
-  *         Called when DMA has transmitted the first half of i2s1_tx_buf.
-  *         If test tone is enabled, fill the first half with test data.
-  */
+ * @brief  I2S1 DMA half transfer complete callback.
+ *         Called when DMA has transmitted the first half of i2s1_tx_buf.
+ *         If test tone is enabled, fill the first half with test data.
+ */
 void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 {
   if (hi2s->Instance == SPI1)
@@ -979,12 +1137,11 @@ void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 
     /* CH2 tone/DC in the RIGHT slot only — CH1 (left slot) belongs to USB */
     Audio_FillToneSlot(&i2s1_tx_buf[0], AUDIO_I2S_BUF_FRAMES / 2, 1, 1);
-    /* CH1 (left slot): USB playback (Audio_Bridge_WriteUSB) normally owns
-     * this slot; when the 'tone1' test generator is active it takes over
-     * instead — see Audio_SetCh1ToneFreq(). */
-    if (ch1_source == AUDIO_CH1_SRC_TEST_TONE)
+    /* CH1 (left): USB normally; N0–NF note bank takes over when any voice
+     * is active — see note_bank.c / NoteBank_SetFreq(). */
+    if (Audio_Ch1NoteBankActive())
     {
-      Audio_FillCh1ToneSlot(&i2s1_tx_buf[0], AUDIO_I2S_BUF_FRAMES / 2, 0);
+      Audio_FillCh1NoteBankSlot(&i2s1_tx_buf[0], AUDIO_I2S_BUF_FRAMES / 2, 0);
     }
   }
   else if (hi2s->Instance == SPI2)
@@ -994,10 +1151,10 @@ void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 }
 
 /**
-  * @brief  I2S DMA full transfer complete callback.
-  *         Called when DMA has transmitted the second half of the buffer.
-  *         Fill the second half with new data.
-  */
+ * @brief  I2S DMA full transfer complete callback.
+ *         Called when DMA has transmitted the second half of the buffer.
+ *         Fill the second half with new data.
+ */
 void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s)
 {
   if (hi2s->Instance == SPI1)
@@ -1007,10 +1164,11 @@ void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s)
 
     /* CH2 tone/DC in the RIGHT slot only — CH1 (left slot) belongs to USB */
     Audio_FillToneSlot(&i2s1_tx_buf[AUDIO_I2S_BUF_FRAMES], AUDIO_I2S_BUF_FRAMES / 2, 1, 1);
-    /* CH1 (left slot): see the matching branch in HAL_I2S_TxHalfCpltCallback. */
-    if (ch1_source == AUDIO_CH1_SRC_TEST_TONE)
+    /* CH1 (left): see matching branch in HAL_I2S_TxHalfCpltCallback. */
+    if (Audio_Ch1NoteBankActive())
     {
-      Audio_FillCh1ToneSlot(&i2s1_tx_buf[AUDIO_I2S_BUF_FRAMES], AUDIO_I2S_BUF_FRAMES / 2, 0);
+      Audio_FillCh1NoteBankSlot(&i2s1_tx_buf[AUDIO_I2S_BUF_FRAMES],
+                                AUDIO_I2S_BUF_FRAMES / 2, 0);
     }
   }
   else if (hi2s->Instance == SPI2)
@@ -1035,9 +1193,9 @@ void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s)
 volatile uint32_t g_i2s2_err_restarts = 0;
 
 /**
-  * @brief  I2S error callback — self-heal I2S2: if any error still aborts
-  *         the interrupt transfer, clear the flag and re-arm immediately.
-  */
+ * @brief  I2S error callback — self-heal I2S2: if any error still aborts
+ *         the interrupt transfer, clear the flag and re-arm immediately.
+ */
 void HAL_I2S_ErrorCallback(I2S_HandleTypeDef *hi2s)
 {
   if (hi2s->Instance == SPI2)
@@ -1057,9 +1215,9 @@ void HAL_I2S_ErrorCallback(I2S_HandleTypeDef *hi2s)
 /* USER CODE END PRIVATE_FUNCTIONS_IMPLEMENTATION */
 
 /**
-  * @}
-  */
+ * @}
+ */
 
 /**
-  * @}
-  */
+ * @}
+ */

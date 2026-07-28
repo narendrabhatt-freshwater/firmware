@@ -51,6 +51,8 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # CS4304 DAC driver (hand-written, not CubeMX-generated)
     Core/Src/cs4304.c
+    # N0–NF additive sine bank for CH1 (phase-accumulators + mixer)
+    Core/Src/note_bank.c
     # USB audio -> I2S bridge (relocated out of USB_DEVICE/ when the card
     # moved from ST's USB Device Library to TinyUSB)
     Core/Src/audio_bridge.c
