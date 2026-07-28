@@ -28,6 +28,14 @@ SERIAL_PORT="${FW_SERIAL_PORT:-}"     # e.g. /dev/cu.usbmodemCHCARD_0013
 SERIAL_BAUD="${FW_SERIAL_BAUD:-115200}"
 SEND_WAIT_SECS="${FW_SEND_WAIT:-1.5}"
 
+# RS485 console (apps/console — talks to the shared bus, no USB CDC needed)
+RS485_PORT="${FW_RS485_PORT:-}"       # e.g. /dev/cu.usbserial-XXXX (the adapter, not a card)
+RS485_BAUD="${FW_RS485_BAUD:-115200}"
+RS485_TARGET="${FW_RS485_TARGET:-all}" # channel | effect | all
+RS485_MANUAL_RTS=0
+RS485_TIMEOUT_MS=""
+RS485_RETRIES=""
+
 # Running firmware USB IDs (placeholders — see USB_APP/usb_descriptors.c)
 CHANNEL_VID_PID="cafe:4013"
 EFFECT_VID_PID="cafe:4015"
@@ -79,6 +87,8 @@ usage() {
     "  fw console  [channel|effect] [--port PATH]"
     "  fw log      [channel|effect] [--port PATH]"
     "  fw send     [channel|effect] <command...> [--port PATH]"
+    "  fw rs485    [channel|effect|all] [--port PATH] [--baud N]"
+    "  fw rs485    build | list | send <channel|effect|all> <command...>"
     "  fw clean    [channel|effect|all]"
     "  fw status"
     "  fw help"
@@ -93,11 +103,20 @@ usage() {
     "  --no-verify             skip verify"
     "  --no-start              skip run-after-write"
     ""
-    "Serial / logs"
+    "Serial / logs (per card, over USB CDC)"
     "  fw console channel      interactive USB CDC console (Ctrl-A K to quit screen)"
     "  fw log effect           follow CDC output (Ctrl-C to stop)"
     "  fw send channel help    send one command, print reply"
     "  fw send channel status"
+    ""
+    "RS485 console (apps/console — no USB CDC needed, either board)"
+    "  fw rs485 build                    build apps/console (once, or after editing it)"
+    "  fw rs485 list                     candidate RS485 adapter serial ports"
+    "  fw rs485 --port PATH              interactive REPL, default target 'all'"
+    "  fw rs485 channel --port PATH      interactive REPL, default target 'channel'"
+    "  fw rs485 send effect status --port PATH   one-shot, print reply"
+    "  --manual-rts   toggle RTS around TX (dongles without auto-direction)"
+    "  --timeout-ms N / --retries N      reply-wait tuning (defaults 300 / 2)"
     ""
     "Cards"
     "  channel    channel_MCU   STM32H725   /dev/cu.usbmodemCHCARD*"
@@ -113,6 +132,8 @@ usage() {
     "  fw console channel"
     "  fw log effect"
     "  fw send channel help"
+    "  fw rs485 list"
+    "  fw rs485 send channel help --port /dev/cu.usbserial-XXXX"
     "  fw flash channel --port USB1"
     "  fw build all --release"
   )
@@ -973,6 +994,155 @@ cmd_ports() {
   [[ "$found" -eq 0 ]] && row "-" "(none)"
 }
 
+# ── RS485 console (apps/console — talks to the shared bus directly) ────────
+
+console_dir() { echo "$ROOT/apps/console"; }
+console_bin() { echo "$(console_dir)/build/rs485_console"; }
+
+cmd_rs485_build() {
+  local dir bin
+  dir="$(console_dir)"
+  bin="$(console_bin)"
+  need_cmd cmake
+  info "build rs485_console"
+  (
+    cd "$dir"
+    cmake -S . -B build >/dev/null
+    cmake --build build
+  )
+  ok "$(relpath "$bin")"
+}
+
+# Builds apps/console only if the binary is missing — 'fw rs485 build' is
+# the explicit rebuild-after-editing path.
+ensure_rs485_built() {
+  local bin
+  bin="$(console_bin)"
+  if [[ ! -x "$bin" ]]; then
+    warn "rs485_console not built yet — building"
+    cmd_rs485_build
+  fi
+}
+
+list_rs485_ports() {
+  hdr "RS485 adapter candidates"
+  ensure_rs485_built
+  local out
+  out="$("$(console_bin)" --list)"
+  if [[ -z "$out" || "$out" == "(no likely serial ports found)" ]]; then
+    row "-" "(none — plug in the RS485 adapter, or pass --port explicitly)"
+  else
+    while IFS= read -r p; do
+      [[ -n "$p" ]] && row "port" "$p"
+    done <<< "$out"
+  fi
+}
+
+# Parses the rs485-specific flags this subcommand adds on top of the
+# common --port/--baud (handled the same way as elsewhere via _set_port_arg).
+parse_rs485_flags() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --port|-p)
+        [[ $# -ge 2 ]] || die "--port needs a value"
+        RS485_PORT="$2"; shift
+        ;;
+      --port=*) RS485_PORT="${1#--port=}" ;;
+      --baud)
+        [[ $# -ge 2 ]] || die "--baud needs a value"
+        RS485_BAUD="$2"; shift
+        ;;
+      --baud=*) RS485_BAUD="${1#--baud=}" ;;
+      --manual-rts) RS485_MANUAL_RTS=1 ;;
+      --timeout-ms)
+        [[ $# -ge 2 ]] || die "--timeout-ms needs a value"
+        RS485_TIMEOUT_MS="$2"; shift
+        ;;
+      --timeout-ms=*) RS485_TIMEOUT_MS="${1#--timeout-ms=}" ;;
+      --retries)
+        [[ $# -ge 2 ]] || die "--retries needs a value"
+        RS485_RETRIES="$2"; shift
+        ;;
+      --retries=*) RS485_RETRIES="${1#--retries=}" ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "unknown rs485 option: $1" ;;
+    esac
+    shift
+  done
+}
+
+# Builds the rs485_console argv common to REPL/send: --port/--baud plus
+# whichever of --manual-rts/--timeout-ms/--retries were set.
+rs485_common_args() {
+  [[ -n "$RS485_PORT" ]] || die "fw rs485 needs --port PATH (see: fw rs485 list)"
+  local args=( --port "$RS485_PORT" --baud "$RS485_BAUD" )
+  [[ "$RS485_MANUAL_RTS" -eq 1 ]] && args+=( --manual-rts )
+  [[ -n "$RS485_TIMEOUT_MS" ]] && args+=( --timeout-ms "$RS485_TIMEOUT_MS" )
+  [[ -n "$RS485_RETRIES" ]] && args+=( --retries "$RS485_RETRIES" )
+  printf '%s\n' "${args[@]}"
+}
+
+cmd_rs485() {
+  local sub="${1:-}" a
+  for a in "$@"; do
+    if [[ "$a" == "-h" || "$a" == "--help" ]]; then
+      usage
+      exit 0
+    fi
+  done
+
+  if [[ "$sub" == "build" ]]; then
+    cmd_rs485_build
+    return
+  fi
+  if [[ "$sub" == "list" ]]; then
+    list_rs485_ports
+    return
+  fi
+
+  ensure_rs485_built
+
+  if [[ "$sub" == "send" ]]; then
+    shift
+    [[ $# -ge 2 ]] || die "usage: fw rs485 send <channel|effect|all> <command...> [--port PATH]"
+    local target="$1"; shift
+    local words=()
+    while [[ $# -gt 0 && "$1" != --* ]]; do
+      words+=("$1"); shift
+    done
+    parse_rs485_flags "$@"
+    [[ ${#words[@]} -ge 1 ]] || die "missing command (e.g. fw rs485 send channel help)"
+
+    local common=()
+    while IFS= read -r line; do common+=("$line"); done < <(rs485_common_args)
+
+    hdr "RS485 send"
+    row "target" "$target"
+    row "port" "$RS485_PORT"
+    row "cmd" "${words[*]}"
+    outn
+    "$(console_bin)" "${common[@]}" send "$target" "${words[*]}"
+    return
+  fi
+
+  # Interactive REPL: optional leading target (channel|effect|all), rest are flags.
+  local target="$RS485_TARGET"
+  if [[ -n "$sub" && "$sub" != --* ]]; then
+    target="$sub"
+    shift
+  fi
+  parse_rs485_flags "$@"
+
+  local common=()
+  while IFS= read -r line; do common+=("$line"); done < <(rs485_common_args)
+
+  hdr "RS485 console"
+  row "target" "$target"
+  row "port" "$RS485_PORT"
+  outn
+  exec "$(console_bin)" "${common[@]}" --target "$target"
+}
+
 # ── flag parsing ─────────────────────────────────────────────────────────────
 
 parse_flags() {
@@ -1054,6 +1224,7 @@ main() {
     console|shell|repl) cmd_console "$@" ;;
     log|logs|follow|tail) cmd_log "$@" ;;
     send|cmd) cmd_send "$@" ;;
+    rs485) cmd_rs485 "$@" ;;
     clean)  cmd_clean "$@" ;;
     status|info) cmd_status "$@" ;;
     help|-h|--help) usage ;;
