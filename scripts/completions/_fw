@@ -13,6 +13,7 @@ _fw() {
     'console:Interactive USB CDC console'
     'log:Follow CDC output'
     'send:Send one console command'
+    'rs485:RS485 console (apps/console — no USB CDC needed)'
     'clean:Remove build directories'
     'status:Show toolchain and artifacts'
     'help:Show help'
@@ -40,6 +41,15 @@ _fw() {
     '--port[CDC device path]:port:_fw_serial_ports'
     '-p[CDC device path]:port:_fw_serial_ports'
     '--baud[Baud rate]:baud:(115200 9600)'
+  )
+
+  rs485_opts=(
+    '--port[RS485 adapter device path]:port:_fw_serial_ports'
+    '-p[RS485 adapter device path]:port:_fw_serial_ports'
+    '--baud[Baud rate]:baud:(115200 9600)'
+    '--manual-rts[Toggle RTS around TX (dongles w/o auto-direction)]'
+    '--timeout-ms[Per-attempt reply wait, ms]:ms:(300)'
+    '--retries[Extra send attempts on no reply]:n:(2)'
   )
 
   _arguments -C \
@@ -76,6 +86,12 @@ _fw() {
             '1:card:(channel effect)' \
             '2:command:(help status sw led)' \
             "${serial_opts[@]}"
+          ;;
+        rs485)
+          _arguments \
+            '1:target-or-sub:(console build list send channel effect all)' \
+            '2:target-or-command:(channel effect all help status sw led)' \
+            "${rs485_opts[@]}"
           ;;
         status|info|help)
           ;;

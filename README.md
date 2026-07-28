@@ -5,13 +5,16 @@ project's own `README.md` (to be expanded).
 
 | Card | Folder | MCU | CMake target | CubeMX file |
 |---|---|---|---|---|
-| Channel Card | `channel_card/` | STM32H725xG | `channel_MCU` | `channel_MCU.ioc` |
-| Effect Card  | `effect_card/`  | STM32H743xx | `effect_card` | `effect_card.ioc` |
+| Channel Card | `apps/channel_card/` | STM32H725xG | `channel_MCU` | `channel_MCU.ioc` |
+| Effect Card  | `apps/effect_card/`  | STM32H743xx | `effect_card` | `effect_card.ioc` |
 
-Both are standalone CMake projects — build them independently. The whole
-`firmware/` folder is self-contained: all dependencies (HAL, CMSIS,
-TinyUSB) are vendored in-tree, so a copy-paste of this folder builds
-as-is with no package manager or submodule fetch.
+Both are standalone CMake projects — build them independently. Each is
+self-contained: all dependencies (HAL, CMSIS, TinyUSB) are vendored
+in-tree, so a copy-paste of either `apps/channel_card/` or
+`apps/effect_card/` folder builds as-is with no package manager or
+submodule fetch. PC-side tooling (the `fw` CLI in `scripts/`, the
+standalone RS485 console in `apps/console/`) is separate from the two
+firmware projects — see §6.
 
 ---
 
@@ -43,7 +46,7 @@ conversion failed.
 
 ## 2. Building
 
-From inside a project folder (`channel_card/` or `effect_card/`):
+From inside a project folder (`apps/channel_card/` or `apps/effect_card/`):
 
 ```bash
 cmake --preset Debug
@@ -156,8 +159,13 @@ CODE blocks, but check anyway):
 
 ## 5. Repository layout (same shape in both projects)
 
+Both firmware projects live under `apps/` (`apps/channel_card/`,
+`apps/effect_card/`), alongside the standalone PC-side console app
+(`apps/console/`, see §6). The `fw` CLI wrapping all of this lives in
+`scripts/` at the repo root.
+
 ```
-<project>/
+<project>/    (apps/channel_card/ or apps/effect_card/)
 ├── CMakeLists.txt            ← hand-written sources + TinyUSB go HERE
 ├── CMakePresets.json         ← Debug / Release presets
 ├── <project>.ioc             ← STM32CubeMX project (source of truth)
@@ -201,9 +209,27 @@ c:help
 e:status
 ```
 
+From a PC, reach the RS485 bus directly with the standalone console in
+[`apps/console`](apps/console) (wrapped by `fw rs485`) through an
+ADAM-4520 or a generic USB↔RS-485 dongle — **this has zero dependency on
+either board's own USB CDC connection**, so it keeps working even with
+both boards' USB entirely unplugged:
+
+```bash
+fw rs485 list                                          # find the adapter's serial port
+fw rs485 send channel status --port /dev/cu.usbserial-XXXX
+fw rs485 console channel --port /dev/cu.usbserial-XXXX # interactive REPL
+```
+
+See [`apps/console/README.md`](apps/console/README.md) and
+[`docs/rs485_console_architecture.md`](docs/rs485_console_architecture.md)
+for the full design.
+
 **USB CDC** — each card also enumerates a virtual COM port running the
 same parser. Open it at any baud rate; commands there are addressed to
-that card (a bare `help` works).
+that card (a bare `help` works). Use `fw console`/`fw send` for this path
+— unlike `fw rs485` above, it depends on *that specific card's* own USB
+connection.
 
 Type `help` on either transport for the current command list.
 
@@ -237,6 +263,10 @@ hardware:
   TDM/SAI, one selectable channel streamed to the PC (UAC2 microphone,
   mono 32-bit 96 kHz), 48 V phantom rail control, RS485 + USB CDC
   consoles.
+- **`apps/console`** — standalone C++ RS485 console (`fw rs485 ...`, §6)
+  reaching either board over the shared bus with no USB CDC dependency.
+  Verified against a mock firmware responder; not yet run against the
+  real RS485↔PC adapter (not connected as of this writing).
 
 > **Not under version control yet.** Initialising a git repo at
 > `firmware/` and committing this baseline is strongly recommended
