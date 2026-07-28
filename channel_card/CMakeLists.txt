@@ -89,6 +89,19 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     # Add user defined libraries
 )
 
+# --specs=nano.specs (cmake/gcc-arm-none-eabi.cmake) strips floating-point
+# scanf/printf conversions out of newlib-nano by default to save flash.
+# The console's 'tone1 <Hz>' command relies on sscanf(..., "%lf", ...) to
+# support fractional-Hz tones, and its reply (plus 'status') uses %.1f.
+# Without these, sscanf("%lf") always returns 0 -> 'tone1' answers
+# "err:" for every input, valid or not. Force-link the float variants
+# instead of dropping nano.specs entirely (keeps flash usage low
+# everywhere else).
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
+    -Wl,-u,_scanf_float
+    -Wl,-u,_printf_float
+)
+
 # Generate .hex and .bin output files from .elf
 add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -O ihex $<TARGET_FILE:${CMAKE_PROJECT_NAME}> ${CMAKE_PROJECT_NAME}.hex

@@ -70,6 +70,26 @@ typedef enum {
 void Audio_SetChannelMode(uint8_t channel, Audio_ChannelMode_t mode);
 Audio_ChannelMode_t Audio_GetChannelMode(uint8_t channel);
 
+/* ---------------- CH1 standalone test-tone source (bypass bring-up) ------ */
+
+typedef enum {
+  AUDIO_CH1_SRC_USB = 0,       /**< CH1 carries USB PCM (default) */
+  AUDIO_CH1_SRC_TEST_TONE = 1, /**< CH1 carries the internal 128-entry sine
+                                    generator; USB samples are ignored */
+} Audio_CH1_Source_t;
+
+/** Start/retune ('tone1' console command) the CH1 internal test-tone
+ * generator at freq_hz (fractional Hz supported, e.g. 1000.5). Switches
+ * CH1's source to AUDIO_CH1_SRC_TEST_TONE. freq_hz <= 0 turns it off and
+ * reverts CH1 to AUDIO_CH1_SRC_USB (see Audio_SetCh1ToneFreq(0)). */
+void Audio_SetCh1ToneFreq(double freq_hz);
+
+/** Last frequency passed to Audio_SetCh1ToneFreq(), in Hz. 0 if off. */
+double Audio_GetCh1ToneFreq(void);
+
+/** Current CH1 source (USB or internal test tone). */
+Audio_CH1_Source_t Audio_GetCh1Source(void);
+
 void Audio_SetDCLevel(uint8_t channel, int8_t percent);
 int8_t Audio_GetDCLevel(uint8_t channel);
 

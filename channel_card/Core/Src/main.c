@@ -270,6 +270,7 @@ static void Console_Help(void) {
               "* dczero <ch> <-99..99> calibrate 0V code        *\r\n"
               "* dctrim <ch> <-999..999> fine 0V trim (0.01%)   *\r\n"
               "* freq <ch> <Hz>       sine tone, ch=2..4        *\r\n"
+              "* tone1 <Hz>           CH1 bypass test tone, 0=off*\r\n"
               "* gain <ch> <dB>       DAC atten, ch=1..4        *\r\n"
               "* led <on|off>         LED flashing              *\r\n"
               "**************************************************\r\n"
@@ -341,10 +342,15 @@ static void Console_Status(void) {
   char b[96];
 
   RS485_Reply("\r\n**************** Status ****************\r\n");
-  snprintf(b, sizeof b,
-           "CH1: USB stream, trim -%u.%u dB (+ host volume -%u.%u dB)\r\n",
-           hcs4304.Trim[0] / 2, (hcs4304.Trim[0] & 1) * 5, hcs4304.Volume / 2,
-           (hcs4304.Volume & 1) * 5);
+  if (Audio_GetCh1Source() == AUDIO_CH1_SRC_TEST_TONE) {
+    snprintf(b, sizeof b, "CH1: test tone %.1f Hz (bypass test), trim -%u.%u dB\r\n",
+             Audio_GetCh1ToneFreq(), hcs4304.Trim[0] / 2, (hcs4304.Trim[0] & 1) * 5);
+  } else {
+    snprintf(b, sizeof b,
+             "CH1: USB stream, trim -%u.%u dB (+ host volume -%u.%u dB)\r\n",
+             hcs4304.Trim[0] / 2, (hcs4304.Trim[0] & 1) * 5, hcs4304.Volume / 2,
+             (hcs4304.Volume & 1) * 5);
+  }
   RS485_Reply(b);
   for (uint8_t ch = 2; ch <= 4; ch++) {
     Audio_ChannelMode_t mode = Audio_GetChannelMode(ch);
@@ -563,6 +569,26 @@ static void Console_Exec(char *line) {
       RS485_Reply(b);
     } else {
       RS485_Reply("err: freq <ch 2..4> <Hz 20..19999>\r\n");
+    }
+  }
+  /* ---- tone1 <Hz>: CH1 standalone bypass test tone (fractional Hz OK).
+   *      0 (or <= 0) stops it and restores CH1's normal USB source,
+   *      matching the existing 'scf 0' = off convention. ---- */
+  else if (strncmp(line, "tone1 ", 6) == 0) {
+    double hz;
+    if (sscanf(line + 6, "%lf", &hz) == 1) {
+      if (hz <= 0.0) {
+        Audio_SetCh1ToneFreq(0.0);
+        RS485_Reply("ok: CH1 tone off (USB source restored)\r\n");
+      } else if (hz >= 20.0 && hz < 20000.0) {
+        Audio_SetCh1ToneFreq(hz);
+        snprintf(b, sizeof b, "ok: CH1 tone %.1f Hz ('sw bypass on' to hear it dry)\r\n", hz);
+        RS485_Reply(b);
+      } else {
+        RS485_Reply("err: tone1 <Hz> (0=off, else 20..19999.9)\r\n");
+      }
+    } else {
+      RS485_Reply("err: tone1 <Hz> (0=off, else 20..19999.9)\r\n");
     }
   } else if (strcmp(line, "led on") == 0) {
     led_show_on = 1;

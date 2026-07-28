@@ -1,0 +1,31 @@
+---
+description: STM32CubeMX regeneration rules — how to safely edit generated projects
+globs: channel_card/**,effect_card/**
+alwaysApply: false
+---
+
+# STM32CubeMX Regeneration Rules
+
+The `.ioc` file is the source of truth for pins, clocks and peripheral init.
+Regenerating from it **overwrites generated files**, so these rules exist to
+avoid silently losing working code (see `README.md` §4 for the full story).
+
+- **Only write inside `/* USER CODE BEGIN ... END */` blocks.** Anything
+  outside them is regenerated and lost.
+- **Never add hand-written sources to `cmake/stm32cubemx/CMakeLists.txt`** —
+  it is regenerated from the `.ioc`. Add hand-written sources to the
+  **top-level** `CMakeLists.txt` instead (see how `cs4304.c` and
+  `audio_bridge.c` are registered there on the Channel Card).
+- **`Middlewares/` belongs to CubeMX; third-party code goes in `ThirdParty/`.**
+  CubeMX prunes `Middlewares/` on regeneration — TinyUSB lives in
+  `ThirdParty/` for exactly this reason.
+- **Do not enable ST's USB Device middleware.** USB is owned by TinyUSB on
+  both cards — enabling `USB_DEVICE class` in CubeMX pulls in a second stack
+  that fights TinyUSB for the same peripheral.
+- **After every `.ioc` regeneration**, verify:
+  - [ ] `USB_App_Init()` is still called in `main()`
+  - [ ] `USB_App_Task()` is still called in the main `while(1)` loop
+  - [ ] `tud_int_handler(0)` is still wired in the OTG IRQ handler in
+        `stm32h7xx_it.c`
+  - [ ] Hand-written sources are still listed in the top-level `CMakeLists.txt`
+  - [ ] The project builds and the board still enumerates over USB

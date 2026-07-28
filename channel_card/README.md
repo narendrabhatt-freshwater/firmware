@@ -39,7 +39,7 @@ channel and three control voltages**:
 
 | DAC ch | Role | Set with |
 |---|---|---|
-| CH1 | **Audio** — the USB playback signal | host volume / `gain 1` |
+| CH1 | **Audio** — the USB playback signal, or an internal test tone | host volume / `gain 1`, `tone1 <Hz>` |
 | CH2 | **CV → VCA** gain | `dc 2 <-100..100>` |
 | CH3 | **CV → VCF cutoff** | `dc 3 <-100..100>` |
 | CH4 | **CV → VCF resonance** | `dc 4 <-100..100>` |
@@ -53,6 +53,11 @@ Audio from CH1 reaches the output by either — or both — of:
 
 - **Dry:** `bypass` switch → straight to `out`
 - **Wet:** through SCF and/or VCF → **VCA** → `vca` switch → `out`
+
+For bring-up/verification with no PC attached, `tone1 <Hz>` swaps CH1's
+source from USB to an internal 128-entry sine generator (see
+`audio_bridge.c`); combine with `sw bypass on` to hear a clean, filter-free
+sine directly at `out`. `tone1 0` restores the normal USB source.
 
 ### Switch reference
 
@@ -158,6 +163,7 @@ Frequently used:
 | `sw <name> [on\|off]` | Toggle/set a switch — see the signal-path table above |
 | `dc <ch> <-100..100>` | DC level % (the CVs), ch = 2..4 |
 | `freq <ch> <Hz>` | Tone frequency, ch = 2..4 |
+| `tone1 <Hz>` | CH1 standalone bypass test tone (fractional Hz OK, e.g. `1000.5`); `0` = off, restores USB source. Enable `sw bypass on` to hear it dry. |
 | `gain <ch> <dB>` | DAC attenuation, ch = 1..4 |
 | `scf <1..2000>` | SCF clock kHz (cutoff = clock/100), `0` = off |
 | `duty <1..99>` | SCF clock duty % |

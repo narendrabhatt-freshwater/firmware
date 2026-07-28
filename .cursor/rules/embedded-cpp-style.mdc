@@ -1,0 +1,50 @@
+---
+description: Core C/C++ embedded coding standards for the Channel/Effect Card firmware
+alwaysApply: true
+---
+
+# Embedded C/C++ Style
+
+- Use fixed-width types (`uint32_t`, `int32_t`, `int8_t`, ...) everywhere — never
+  bare `int`/`long` for register values, sample data, or sizes.
+- No dynamic allocation (`malloc`/`new`) anywhere in firmware. Use static storage,
+  `.bss`, or the `.dma_buffer` section (see `audio-dsp-conventions.mdc`).
+- Never call `HAL_Delay()` from interrupt or DMA-callback context — it deadlocks
+  when SysTick can't preempt the caller. See `Audio_Bridge_Start()` in
+  `audio_bridge.c`, which busy-waits instead specifically because it can run in
+  USB IRQ context.
+- Comment the **why**, not the **what** — match the existing style (e.g. the
+  RS485 bus-turnaround comments in `main.c`).
+- Bounds-check all console/register inputs; reply `ok: ...` / `err: ...` —
+  never silently clamp a bad value.
+
+## Function size
+
+Soft cap ~40 lines / one screen for cold-path functions (init, console
+handlers, drivers). Split a function when it does more than one job. Prefer
+table-driven dispatch (`switches[]`, `pwm_outputs[]` in `main.c`) over growing
+an if/else chain when adding new cases.
+
+**Exception — command dispatchers:** `Console_Exec()`'s long if/else-if chain
+is an intentional single dispatcher, not a violation of the above. Don't
+fragment it into many tiny functions; delegate any branch with real logic to
+a well-named helper (`Console_PrintSwitches()`, `Pwm_Apply()`,
+`DC_PctToTarget()`), keeping the dispatcher itself a flat list of one-liners.
+
+## SOLID, adapted for embedded C
+
+No classes here, but the ideas still apply:
+
+- **Single Responsibility** — one file = one concern (`cs4304.c` = DAC
+  register access, `audio_bridge.c` = sample pipeline, `main.c` = console +
+  wiring). Don't let a driver file grow console logic or vice versa.
+- **Open/Closed** — extend via data tables and new enum cases
+  (`Audio_ChannelMode_t`, `switches[]`) rather than editing existing hot-path
+  branches.
+- **Interface Segregation** — headers expose only what callers need; mirror
+  `audio_bridge.h`'s split between "USB stack facing API" and
+  "Console / application API".
+- **Dependency Inversion** — console/high-level code calls named setters
+  (`Audio_SetToneFreq`, `Audio_SetDCLevel`) — never pokes `SPI2->TXDR` or a
+  GPIO register directly from `main.c`; that belongs in the driver/bridge
+  layer.

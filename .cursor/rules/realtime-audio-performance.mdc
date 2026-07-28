@@ -1,0 +1,47 @@
+---
+description: Hot-path timing budgets for ISRs, DMA callbacks and audio generators
+globs: **/audio_bridge.*,**/*_it.c
+alwaysApply: false
+---
+
+# Real-Time Audio Performance
+
+This firmware has real microsecond-scale deadlines. Know the actual budget
+before touching hot-path code — don't guess:
+
+- CPU @ 550 MHz, sample rate 96 kHz → ~5,729 CPU cycles (~10.4 µs) of
+  aggregate headroom per sample across everything running (ISRs, USB,
+  console). Generation is batched, so this isn't a hard per-sample deadline,
+  but it's the right mental model for "is this fast enough."
+- **Tightest real deadline in this codebase**: the TIM7 UDR-guard
+  (`I2S2_PumpTimerInit()` in `audio_bridge.c`) fires every **10 µs** and must
+  clear the SPI2 underrun flag before the slave wedges. Use this as the
+  reference example for "must complete in microseconds."
+- The I2S1 half/full DMA callbacks have a looser **~2 ms** budget (192 frames
+  @ 96 kHz) to refill half the ring buffer — plenty of room for table
+  lookups + interpolation.
+
+## Hot path = ISRs, DMA callbacks, per-sample generators
+
+(`Tone_NextSineSample()`, any new per-channel generator, `Audio_I2S2_Pump()`.)
+In these:
+
+- No heap allocation, no blocking HAL calls (`HAL_Delay`, blocking I2C/SPI
+  transactions), no `printf`/console I/O.
+- No floating point and no runtime 64-bit division — precompute divides
+  outside the ISR, exactly as `TONE_PHASE_INC()` is computed once per
+  frequency change instead of once per sample.
+- Prefer `static inline` helpers over large monolithic ISR bodies — the
+  compiler inlines them away (zero call overhead) while keeping the hot path
+  short and single-purpose.
+- When in doubt whether something is "fast enough," reason in cycles
+  (`cycles = seconds × 550,000,000`) before micro-optimizing — the
+  `Tone_NextSineSample()` comment ("~10 cycles/sample — negligible at 550
+  MHz") is the model to follow.
+
+## Interrupt priority is part of the contract
+
+USB is deliberately higher priority than SAI/audio DMA on the Effect Card,
+because missing an isochronous token loses a frame outright while audio
+callbacks have a soft ~ms deadline. Any new ISR must be slotted into the
+priority order deliberately, not left at its default.

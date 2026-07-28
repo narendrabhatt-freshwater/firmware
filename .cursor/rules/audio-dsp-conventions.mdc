@@ -1,0 +1,34 @@
+---
+description: Audio/DSP data-format and buffer conventions for the audio pipeline
+globs: **/audio_bridge.*,**/cs4304.*,**/i2s.*,**/sai.*
+alwaysApply: false
+---
+
+# Audio / DSP Conventions
+
+- **Sample format is 32-bit fixed-point Q31** (`int32_t`), matching the
+  existing `sine_table` and the `.ioc`'s `I2S_DATAFORMAT_32B` — not IEEE
+  `float`/`double`. Every sample that reaches the DAC over I2S must be Q31.
+  `double`/`float` are only acceptable in cold-path, one-time setup code
+  (e.g. converting a typed-in frequency to a phase increment) — never in a
+  per-sample generator or ISR/DMA callback. See `realtime-audio-performance.mdc`.
+- **Never step a parameter instantaneously** if it's continuously read by
+  DMA (gain, DC level, frequency) — slew-limit it like `DC_SLEW_STEP` in
+  `audio_bridge.c` to avoid filter-ringing/output spikes.
+- **Sample rate: 96 kHz is the primary target** for all new audio work on
+  this hardware. A 48 kHz fallback requires touching three places in
+  lockstep — the `.ioc`'s `I2S1`/`I2S2` `AudioFreq`, `CS4304_SAMPLE_RATE_96K`
+  in `cs4304.h`, and the phase-increment denominator (`TONE_PHASE_INC`).
+  Never hardcode the sample rate in new generator code — always derive it
+  from one `#define`.
+- **DMA buffers touched by DMA1 must live in AXI SRAM** (the `.dma_buffer`
+  linker section), never DTCM/`.bss` — DMA1 (D2 domain) cannot reach DTCM.
+  See the buffer declarations and comment in `audio_bridge.c`.
+- **Double-buffer discipline**: half/full DMA callbacks each own exactly one
+  half of the buffer at a time — never write the half currently being read
+  by the DMA engine.
+- **Wavetable generation**: use a 32-bit fixed-point phase accumulator with
+  linear interpolation between table entries (see `Tone_NextSineSample()`).
+  Table size sets interpolation error, not the achievable frequency — the
+  phase accumulator itself gives ~0.0000223 Hz resolution at 96 kHz, more
+  than enough for fractional-Hz tones.

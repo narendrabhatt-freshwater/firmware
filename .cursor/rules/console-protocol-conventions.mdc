@@ -1,0 +1,29 @@
+---
+description: Conventions for adding RS485/USB console commands on either card
+globs: **/main.c
+alwaysApply: false
+---
+
+# Console Command Conventions
+
+Both cards share one command parser, reachable over two transports (RS485
+multi-drop and USB CDC). When adding a new command:
+
+- **Update `Console_Help()`** with the new command so `help`/`c:help`/`e:help`
+  stays accurate.
+- **Work identically over both transports** — commands must go through
+  `Console_Exec()` so they work from `Console_Poll()` (RS485) and
+  `Console_ExecFromUSB()` (USB CDC) without a separate code path.
+- **Respect card-address prefixes** — `c:` (Channel), `e:` (Effect), `*:`/no
+  prefix (broadcast). Don't bypass `RS485_IsForMe()`.
+- **Reply with `ok: ...` / `err: ...`** tags, consistent with every existing
+  command.
+- **Prefer `<cmd> <value>` where `0` = off** (see `scf <kHz>` / `scf 0`) over
+  inventing separate `on`/`off` subcommands for a new generator or output
+  toggle — it's the established idiom in this codebase.
+- **Console polling must stay non-blocking** — no blocking reads or
+  `HAL_Delay()` loops in the main loop; follow the `Console_Poll()` pattern
+  of draining one byte at a time per iteration.
+- If a command changes something the operator needs to hear/see the effect
+  of, say so in the reply (e.g. remind them which switch to flip) rather than
+  silently toggling other state on their behalf.

@@ -1,0 +1,25 @@
+---
+description: Git branching and commit conventions for the FreshWater firmware repo
+alwaysApply: true
+---
+
+# Git Workflow
+
+- **Branch naming**: `feature/<card>-<short-desc>` (e.g.
+  `feature/channel-ch1-sine-test`), `fix/<short-desc>` for bug fixes.
+- **Commit messages**: imperative subject line + a short rationale paragraph,
+  matching the descriptive style already used in this repo (e.g.
+  `Initial commit: known-good Channel and Effect card firmware baseline.`).
+  Explain *why*, especially for hardware workarounds — future readers (and
+  future agents) can't see the oscilloscope trace that justified a change.
+- **Never commit `build/` output.** Already covered by the per-project
+  `channel_card/.gitignore` / `effect_card/.gitignore` (`build`,
+  `mx.scratch`) — don't `git add -f` around it.
+- **`.ioc`-derived regenerated files** (`cmake/stm32cubemx/**`) should only be
+  committed alongside a note in the commit body confirming the post-regen
+  checklist (`stm32-cubemx-workflow.mdc`) was run.
+- **Small, reviewable commits/PRs per feature** — don't mix rule/doc changes
+  with firmware behavior changes in the same commit.
+- Run a `git diff` before committing generated-adjacent files; a regeneration
+  silently deleting hand-written code is a real, previously-hit failure mode
+  on this project.

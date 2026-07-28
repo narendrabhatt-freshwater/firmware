@@ -163,6 +163,55 @@ static const int32_t sine_table[SINE_TABLE_SIZE] = {
    0xE70747C4, 0xEA1DEBBB, 0xED37EF91, 0xF054D8D5, 0xF3742CA2, 0xF6956FB7, 0xF9B82684, 0xFCDC1342,
 };
 
+/* --- CH1 standalone test-tone generator (bypass bring-up, see 'tone1') ---
+ *
+ * CH1 is normally hard-wired to USB PCM (Audio_Bridge_WriteUSB() below).
+ * This is a SEPARATE, dedicated 128-entry Q31 sine table so a sine can be
+ * heard through the analog 'bypass' path with no PC/USB attached at all —
+ * intentionally independent of the 256-entry `sine_table` used by CH2-4.
+ *
+ * Table size only sets interpolation error (~-70 dBFS here vs ~-82 dBFS for
+ * the 256-entry table), not which frequencies are reachable: the 32-bit
+ * phase accumulator gives ~0.0000223 Hz resolution at 96 kHz regardless of
+ * table size, so fractional-Hz tones (e.g. 1000.5 Hz) are exact. */
+#define CH1_SINE_TABLE_SIZE 128
+static const int32_t ch1_sine_table[CH1_SINE_TABLE_SIZE] = {
+   0x00000000, 0x0647D97C, 0x0C8BD35E, 0x12C8106E, 0x18F8B83C, 0x1F19F97B, 0x25280C5D, 0x2B1F34EB,
+   0x30FBC54D, 0x36BA2013, 0x3C56BA70, 0x41CE1E64, 0x471CECE6, 0x4C3FDFF3, 0x5133CC94, 0x55F5A4D2,
+   0x5A827999, 0x5ED77C89, 0x62F201AC, 0x66CF811F, 0x6A6D98A3, 0x6DCA0D14, 0x70E2CBC5, 0x73B5EBD0,
+   0x7641AF3C, 0x78848413, 0x7A7D055A, 0x7C29FBED, 0x7D8A5F3F, 0x7E9D55FB, 0x7F62368E, 0x7FD8878D,
+   0x7FFFFFFF, 0x7FD8878D, 0x7F62368E, 0x7E9D55FB, 0x7D8A5F3F, 0x7C29FBED, 0x7A7D055A, 0x78848413,
+   0x7641AF3C, 0x73B5EBD0, 0x70E2CBC5, 0x6DCA0D14, 0x6A6D98A3, 0x66CF811F, 0x62F201AC, 0x5ED77C89,
+   0x5A827999, 0x55F5A4D2, 0x5133CC94, 0x4C3FDFF3, 0x471CECE6, 0x41CE1E64, 0x3C56BA70, 0x36BA2013,
+   0x30FBC54D, 0x2B1F34EB, 0x25280C5D, 0x1F19F97B, 0x18F8B83C, 0x12C8106E, 0x0C8BD35E, 0x0647D97C,
+   0x00000000, 0xF9B82684, 0xF3742CA2, 0xED37EF92, 0xE70747C4, 0xE0E60685, 0xDAD7F3A3, 0xD4E0CB15,
+   0xCF043AB3, 0xC945DFED, 0xC3A94590, 0xBE31E19C, 0xB8E3131A, 0xB3C0200D, 0xAECC336C, 0xAA0A5B2E,
+   0xA57D8667, 0xA1288377, 0x9D0DFE54, 0x99307EE1, 0x9592675D, 0x9235F2EC, 0x8F1D343B, 0x8C4A1430,
+   0x89BE50C4, 0x877B7BED, 0x8582FAA6, 0x83D60413, 0x8275A0C1, 0x8162AA05, 0x809DC972, 0x80277873,
+   0x80000001, 0x80277873, 0x809DC972, 0x8162AA05, 0x8275A0C1, 0x83D60413, 0x8582FAA6, 0x877B7BED,
+   0x89BE50C4, 0x8C4A1430, 0x8F1D343B, 0x9235F2EC, 0x9592675D, 0x99307EE1, 0x9D0DFE54, 0xA1288377,
+   0xA57D8667, 0xAA0A5B2E, 0xAECC336C, 0xB3C0200D, 0xB8E3131A, 0xBE31E19C, 0xC3A94590, 0xC945DFED,
+   0xCF043AB3, 0xD4E0CB15, 0xDAD7F3A3, 0xE0E60685, 0xE70747C4, 0xED37EF92, 0xF3742CA2, 0xF9B82684,
+};
+
+/* CH1 source select + generator state. Cold-path (console-set) frequency
+ * is stored as `double` for fractional-Hz precision; the hot-path phase
+ * accumulator/increment stay plain uint32_t — no floating point ever runs
+ * in the per-sample path (see realtime-audio-performance.mdc). */
+static volatile Audio_CH1_Source_t ch1_source = AUDIO_CH1_SRC_USB;
+static double   ch1_tone_freq_hz = 0.0;
+static uint32_t ch1_tone_phase   = 0;
+static uint32_t ch1_tone_inc     = 0;
+
+/** Convert a (possibly fractional) frequency to a 32-bit phase increment.
+ * Runs only from console context (Audio_SetCh1ToneFreq) — never per-sample —
+ * so `double` math here is safe and does not touch the ISR/DMA hot path. */
+static uint32_t CH1_PhaseIncFromHz(double freq_hz)
+{
+  double inc = (freq_hz * 4294967296.0) / (double)TEST_TONE_SAMPLE_RATE;
+  return (uint32_t)(inc + 0.5); /* round, don't truncate: keeps fractional Hz exact */
+}
+
 /** Next tone sample for one channel, with LINEAR INTERPOLATION between
   * sine-table entries. Plain 8-bit table lookup quantizes the phase to
   * 1/256 cycle, making zero-crossings jitter by up to ~4 µs at 1 kHz
@@ -179,6 +228,25 @@ static inline int32_t Tone_NextSineSample(uint8_t ch)
 
   test_tone_phase[ch] = ph + test_tone_inc[ch];
   return s >> 1;                                             /* -6 dB headroom */
+}
+
+/** Next CH1 test-tone sample from the dedicated 128-entry table. Same
+ * phase-accumulator + linear-interpolation technique as
+ * Tone_NextSineSample(), just re-derived for a 128- instead of 256-entry
+ * table: 7-bit index (top 7 bits of phase), 16-bit interpolation fraction
+ * from the next 16 bits down. Pure integer math — no floats in this path.
+ * ~10 cycles/sample, negligible at 550 MHz (see realtime-audio-performance.mdc). */
+static inline int32_t Tone_NextCh1Sample(void)
+{
+  uint32_t ph   = ch1_tone_phase;
+  uint8_t  idx  = (uint8_t)(ph >> 25);                       /* 7-bit index, 0..127 */
+  int32_t  s0   = ch1_sine_table[idx];
+  int32_t  s1   = ch1_sine_table[(uint8_t)((idx + 1u) & (CH1_SINE_TABLE_SIZE - 1u))];
+  uint32_t frac = (ph >> 9) & 0xFFFFu;                       /* 16-bit fraction */
+  int32_t  s    = s0 + (int32_t)(((int64_t)(s1 - s0) * (int64_t)frac) >> 16);
+
+  ch1_tone_phase = ph + ch1_tone_inc;
+  return s >> 1;                                             /* -6 dB headroom, matches CH2-4 */
 }
 
 /** Next sample for one channel — returns sine tone or DC level depending
@@ -296,6 +364,7 @@ static void Audio_FillTestTone(int32_t *buf, uint32_t num_frames,
                                uint8_t chL, uint8_t chR);
 static void Audio_FillToneSlot(int32_t *buf, uint32_t num_frames,
                                uint8_t ch, uint8_t slot);
+static void Audio_FillCh1ToneSlot(int32_t *buf, uint32_t num_frames, uint8_t slot);
 static HAL_StatusTypeDef I2S2_Start(void);
 /* USER CODE END PRIVATE_FUNCTIONS_DECLARATION */
 
@@ -431,6 +500,13 @@ void Audio_Bridge_WriteUSB(const uint8_t *pbuf, uint32_t size)
    * there is no command opcode to test — a packet arriving *is* the
    * "host is streaming" signal. */
   {
+    /* CH1 test-tone generator owns the left slot while active (see the
+     * SPI1 DMA callbacks) — ignore USB packets instead of fighting it. */
+    if (ch1_source == AUDIO_CH1_SRC_TEST_TONE)
+    {
+      return;
+    }
+
     audio_playing = 1;
     uint32_t num_mono_samples = size / 4;  /* 4 bytes per 32-bit sample */
 
@@ -529,6 +605,21 @@ static void Audio_FillToneSlot(int32_t *buf, uint32_t num_frames,
 }
 
 /**
+  * @brief  Fill ONE slot of an interleaved stereo buffer with the CH1
+  *         internal test-tone generator. Only called while
+  *         ch1_source == AUDIO_CH1_SRC_TEST_TONE (see the SPI1 DMA
+  *         callbacks below) — otherwise CH1's slot is left for
+  *         Audio_Bridge_WriteUSB() to fill from the USB stream.
+  */
+static void Audio_FillCh1ToneSlot(int32_t *buf, uint32_t num_frames, uint8_t slot)
+{
+  for (uint32_t i = 0; i < num_frames; i++)
+  {
+    buf[i * 2 + slot] = Tone_NextCh1Sample();
+  }
+}
+
+/**
   * @brief  Set the test tone frequency for one channel (1..4), in Hz.
   *         Takes effect immediately while the tone is running.
   */
@@ -548,6 +639,35 @@ void Audio_SetToneFreq(uint8_t channel, uint32_t freq_hz)
 uint32_t Audio_GetToneFreq(uint8_t channel)
 {
   return (channel >= 1 && channel <= 4) ? test_tone_freq_hz[channel - 1] : 0;
+}
+
+/**
+  * @brief  Start/retune the CH1 internal test-tone generator, or turn it off.
+  *         freq_hz <= 0 reverts CH1 to its normal USB-audio source.
+  *         Fractional Hz (e.g. 1000.5) is exact — see CH1_PhaseIncFromHz().
+  */
+void Audio_SetCh1ToneFreq(double freq_hz)
+{
+  if (freq_hz <= 0.0)
+  {
+    ch1_source = AUDIO_CH1_SRC_USB;
+    ch1_tone_freq_hz = 0.0;
+    ch1_tone_inc = 0;
+    return;
+  }
+  ch1_tone_freq_hz = freq_hz;
+  ch1_tone_inc = CH1_PhaseIncFromHz(freq_hz);
+  ch1_source = AUDIO_CH1_SRC_TEST_TONE;
+}
+
+double Audio_GetCh1ToneFreq(void)
+{
+  return ch1_tone_freq_hz;
+}
+
+Audio_CH1_Source_t Audio_GetCh1Source(void)
+{
+  return ch1_source;
 }
 
 /**
@@ -859,7 +979,13 @@ void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 
     /* CH2 tone/DC in the RIGHT slot only — CH1 (left slot) belongs to USB */
     Audio_FillToneSlot(&i2s1_tx_buf[0], AUDIO_I2S_BUF_FRAMES / 2, 1, 1);
-    /* CH1 (left slot) carries USB playback placed by Audio_Bridge_WriteUSB */
+    /* CH1 (left slot): USB playback (Audio_Bridge_WriteUSB) normally owns
+     * this slot; when the 'tone1' test generator is active it takes over
+     * instead — see Audio_SetCh1ToneFreq(). */
+    if (ch1_source == AUDIO_CH1_SRC_TEST_TONE)
+    {
+      Audio_FillCh1ToneSlot(&i2s1_tx_buf[0], AUDIO_I2S_BUF_FRAMES / 2, 0);
+    }
   }
   else if (hi2s->Instance == SPI2)
   {
@@ -881,6 +1007,11 @@ void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s)
 
     /* CH2 tone/DC in the RIGHT slot only — CH1 (left slot) belongs to USB */
     Audio_FillToneSlot(&i2s1_tx_buf[AUDIO_I2S_BUF_FRAMES], AUDIO_I2S_BUF_FRAMES / 2, 1, 1);
+    /* CH1 (left slot): see the matching branch in HAL_I2S_TxHalfCpltCallback. */
+    if (ch1_source == AUDIO_CH1_SRC_TEST_TONE)
+    {
+      Audio_FillCh1ToneSlot(&i2s1_tx_buf[AUDIO_I2S_BUF_FRAMES], AUDIO_I2S_BUF_FRAMES / 2, 0);
+    }
   }
   else if (hi2s->Instance == SPI2)
   {
