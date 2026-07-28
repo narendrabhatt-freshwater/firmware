@@ -89,8 +89,8 @@ _fw() {
           ;;
         rs485)
           _arguments \
-            '1:target-or-sub:(build list send channel effect all)' \
-            '2:command:(help status sw led)' \
+            '1:target-or-sub:(console build list send channel effect all)' \
+            '2:target-or-command:(channel effect all help status sw led)' \
             "${rs485_opts[@]}"
           ;;
         status|info|help)

@@ -87,7 +87,7 @@ usage() {
     "  fw console  [channel|effect] [--port PATH]"
     "  fw log      [channel|effect] [--port PATH]"
     "  fw send     [channel|effect] <command...> [--port PATH]"
-    "  fw rs485    [channel|effect|all] [--port PATH] [--baud N]"
+    "  fw rs485    console [channel|effect|all] [--port PATH] [--baud N]"
     "  fw rs485    build | list | send <channel|effect|all> <command...>"
     "  fw clean    [channel|effect|all]"
     "  fw status"
@@ -112,8 +112,9 @@ usage() {
     "RS485 console (apps/console — no USB CDC needed, either board)"
     "  fw rs485 build                    build apps/console (once, or after editing it)"
     "  fw rs485 list                     candidate RS485 adapter serial ports"
-    "  fw rs485 --port PATH              interactive REPL, default target 'all'"
-    "  fw rs485 channel --port PATH      interactive REPL, default target 'channel'"
+    "  fw rs485 console --port PATH      interactive REPL, default target 'all'"
+    "  fw rs485 console channel --port PATH   interactive REPL, target 'channel'"
+    "  fw rs485 channel --port PATH      same as above ('console' is optional)"
     "  fw rs485 send effect status --port PATH   one-shot, print reply"
     "  --manual-rts   toggle RTS around TX (dongles without auto-direction)"
     "  --timeout-ms N / --retries N      reply-wait tuning (defaults 300 / 2)"
@@ -1125,6 +1126,15 @@ cmd_rs485() {
     return
   fi
 
+  # 'console'/'repl'/'shell' is an explicit alias for the interactive REPL,
+  # matching 'fw console' for USB CDC — 'fw rs485 console' == 'fw rs485'.
+  # Strip it and re-read $sub so the target-detection below still works
+  # whether or not the alias was used.
+  if [[ "$sub" == "console" || "$sub" == "repl" || "$sub" == "shell" ]]; then
+    shift
+    sub="${1:-}"
+  fi
+
   # Interactive REPL: optional leading target (channel|effect|all), rest are flags.
   local target="$RS485_TARGET"
   if [[ -n "$sub" && "$sub" != --* ]]; then
@@ -1138,7 +1148,9 @@ cmd_rs485() {
 
   hdr "RS485 console"
   row "target" "$target"
-  row "port" "$RS485_PORT"
+  row "port"   "$RS485_PORT"
+  row "baud"   "$RS485_BAUD"
+  [[ "$RS485_MANUAL_RTS" -eq 1 ]] && row "rts" "manual (toggled around TX)"
   outn
   exec "$(console_bin)" "${common[@]}" --target "$target"
 }

@@ -164,9 +164,13 @@ int RunSendOnce(RS485Link &link, Target target, const std::string &command) {
   return 0;
 }
 
-int RunRepl(RS485Link &link, Target default_target) {
-  std::cout << "rs485_console — target: " << TargetName(default_target)
-            << " ('card channel|effect|all' to change, 'quit' to exit)\n";
+int RunRepl(RS485Link &link, Target default_target, const std::string &port,
+            uint32_t baud) {
+  std::cout << "rs485_console — connected " << port << " @ " << baud
+            << " 8N1, target: " << TargetName(default_target) << "\n"
+            << "type a command and press Enter (your terminal echoes as you "
+               "type; the firmware doesn't echo over RS485 itself)\n"
+            << "'card channel|effect|all' to change target, 'quit' to exit\n";
   std::string line;
   Target target = default_target;
   while (true) {
@@ -270,5 +274,5 @@ int main(int argc, char **argv) {
     return RunSendOnce(link, target, command);
   }
 
-  return RunRepl(link, opts.target);
+  return RunRepl(link, opts.target, opts.port, opts.baud);
 }

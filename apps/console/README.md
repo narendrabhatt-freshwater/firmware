@@ -11,9 +11,9 @@ for the full protocol design and how this fits with the on-firmware side
 (`Console_Poll()` / `RS485_IsForMe()` / `RS485_Reply()` in each card's
 `main.c`).
 
-Usually driven through the `fw` CLI (`fw rs485 ...` — see the top-level
-[`../../README.md`](../../README.md) §6); this README covers the standalone
-binary directly.
+Usually driven through the `fw` CLI (`fw rs485 console|send|list|build` —
+see the top-level [`../../README.md`](../../README.md) §6); this README
+covers the standalone binary directly.
 
 ## Build
 

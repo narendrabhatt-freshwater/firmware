@@ -216,9 +216,9 @@ either board's own USB CDC connection**, so it keeps working even with
 both boards' USB entirely unplugged:
 
 ```bash
-fw rs485 list                                  # find the adapter's serial port
+fw rs485 list                                          # find the adapter's serial port
 fw rs485 send channel status --port /dev/cu.usbserial-XXXX
-fw rs485 channel --port /dev/cu.usbserial-XXXX # interactive REPL
+fw rs485 console channel --port /dev/cu.usbserial-XXXX # interactive REPL
 ```
 
 See [`apps/console/README.md`](apps/console/README.md) and

@@ -13,7 +13,7 @@ _fw_complete() {
   local flash_flags="--debug --release --tool --port -p --sn --select --erase --no-verify --no-start"
   local serial_flags="--port -p --baud"
   local rs485_flags="--port -p --baud --manual-rts --timeout-ms --retries"
-  local rs485_subs="build list send channel effect all"
+  local rs485_subs="console build list send channel effect all"
 
   if [[ ${COMP_CWORD} -eq 1 ]]; then
     COMPREPLY=( $(compgen -W "${cmds}" -- "${cur}") )
@@ -81,6 +81,8 @@ _fw_complete() {
         COMPREPLY=( $(compgen -W "${cards_all}" -- "${cur}") )
       elif [[ ${COMP_CWORD} -eq 4 && "${COMP_WORDS[2]}" == send ]]; then
         COMPREPLY=( $(compgen -W "help status sw led" -- "${cur}") )
+      elif [[ ${COMP_CWORD} -eq 3 && "${COMP_WORDS[2]}" == console ]]; then
+        COMPREPLY=( $(compgen -W "${cards_all}" -- "${cur}") )
       else
         COMPREPLY=( $(compgen -W "${rs485_flags}" -- "${cur}") )
       fi
