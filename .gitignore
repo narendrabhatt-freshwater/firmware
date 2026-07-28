@@ -6,5 +6,4 @@ apps/effect_card/docs/img/
 
 # Ignoring these folders for now will be removed later
 .serena/
-docs/
 public/

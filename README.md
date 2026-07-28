@@ -209,9 +209,27 @@ c:help
 e:status
 ```
 
+From a PC, reach the RS485 bus directly with the standalone console in
+[`apps/console`](apps/console) (wrapped by `fw rs485`) through an
+ADAM-4520 or a generic USB↔RS-485 dongle — **this has zero dependency on
+either board's own USB CDC connection**, so it keeps working even with
+both boards' USB entirely unplugged:
+
+```bash
+fw rs485 list                                  # find the adapter's serial port
+fw rs485 send channel status --port /dev/cu.usbserial-XXXX
+fw rs485 channel --port /dev/cu.usbserial-XXXX # interactive REPL
+```
+
+See [`apps/console/README.md`](apps/console/README.md) and
+[`docs/rs485_console_architecture.md`](docs/rs485_console_architecture.md)
+for the full design.
+
 **USB CDC** — each card also enumerates a virtual COM port running the
 same parser. Open it at any baud rate; commands there are addressed to
-that card (a bare `help` works).
+that card (a bare `help` works). Use `fw console`/`fw send` for this path
+— unlike `fw rs485` above, it depends on *that specific card's* own USB
+connection.
 
 Type `help` on either transport for the current command list.
 
@@ -245,6 +263,10 @@ hardware:
   TDM/SAI, one selectable channel streamed to the PC (UAC2 microphone,
   mono 32-bit 96 kHz), 48 V phantom rail control, RS485 + USB CDC
   consoles.
+- **`apps/console`** — standalone C++ RS485 console (`fw rs485 ...`, §6)
+  reaching either board over the shared bus with no USB CDC dependency.
+  Verified against a mock firmware responder; not yet run against the
+  real RS485↔PC adapter (not connected as of this writing).
 
 > **Not under version control yet.** Initialising a git repo at
 > `firmware/` and committing this baseline is strongly recommended
