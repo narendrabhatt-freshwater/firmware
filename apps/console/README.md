@@ -21,13 +21,15 @@ cmake --build build
 |---|---|
 | (REPL start) / `N0` | bypass on + gain 1 0 |
 | `N0`…`NF` `0` | that note off (gain/bypass unchanged) |
-| `N0 440` / `440` | note 0 @ 440 Hz (bare number → n0) |
-| `N1 554.4` | note 1 @ 554.4 Hz (summed with other active notes) |
+| `N0 440` / `440` | note 0 @ 440 Hz, scale **1.0** (bare number → n0) |
+| `N0 440 0.5` | note 0 @ 440 Hz, amplitude 0.5 |
+| `N1 550` | note 1 @ 550 Hz, scale 1.0 (summed with other notes) |
+| `N2 660 0.1` | note 2 @ 660 Hz, amplitude 0.1 |
 | `gain 1 40` | CH1 DAC atten −40 dB (any ch 1..4, 0..127 dB) |
 
 ```bash
 fw rs485 list
-fw rs485 send channel "N0 440" --port /dev/cu.usbserial-XXXX
+fw rs485 send channel "N0 440 0.5" --port /dev/cu.usbserial-XXXX
 fw rs485 channel --port /dev/cu.usbserial-XXXX
 ```
 

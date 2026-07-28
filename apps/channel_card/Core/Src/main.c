@@ -240,9 +240,9 @@ static const SwitchDef_t switches[] = {
 /* Console commands (RS485 + USB CDC). Console_Poll lowercases, so "N0"/"GAIN"
  * arrive as "n0"/"gain".
  *
- *   n0          — session defaults: bypass ON + gain 1 0
- *   n0..nf <Hz> — set note 0..15 frequency (0=off); summed onto CH1
- *   gain <ch> <dB> — CS4304 per-channel DAC atten (0..127 dB), ch 1..4 */
+ *   n0                — session defaults: bypass ON + gain 1 0
+ *   n0..nf <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 1.0)
+ *   gain <ch> <dB>    — CS4304 per-channel DAC atten (0..127 dB), ch 1..4 */
 #define N0_DEFAULT_ATTEN_DB 0u
 
 /** Bypass is active-low (LOW = ON). */
@@ -273,15 +273,15 @@ static uint8_t Console_ParseNoteSlot(char hex_digit)
   return 0xFFu;
 }
 
-/** Apply nX <Hz> after the slot is known. Replies ok:/err:. */
-static void Console_SetNoteFreq(uint8_t note, double hz)
+/** Apply nX <Hz> [scale]. Scale defaults to 1.0 when omitted by caller. */
+static void Console_SetNoteFreq(uint8_t note, double hz, double scale)
 {
   char b[80];
   char tag = (note < 10u) ? (char)('0' + note) : (char)('a' + (note - 10u));
 
   if (hz <= 0.0)
   {
-    NoteBank_SetFreq(note, 0.0);
+    NoteBank_SetFreq(note, 0.0, 0.0);
     snprintf(b, sizeof b, "ok: N%c off\r\n", tag);
     RS485_Reply(b);
     return;
@@ -289,13 +289,22 @@ static void Console_SetNoteFreq(uint8_t note, double hz)
 
   if (hz < 20.0 || hz >= 20000.0)
   {
-    snprintf(b, sizeof b, "err: n%c <Hz> (0=off, else 20..19999.9)\r\n", tag);
+    snprintf(b, sizeof b,
+             "err: n%c <Hz> [scale] (0=off, else 20..19999.9, scale 0..1)\r\n",
+             tag);
     RS485_Reply(b);
     return;
   }
 
-  NoteBank_SetFreq(note, hz);
-  snprintf(b, sizeof b, "ok: N%c %.1f Hz\r\n", tag, hz);
+  if (scale < 0.0 || scale > 1.0)
+  {
+    snprintf(b, sizeof b, "err: n%c scale must be 0.0..1.0\r\n", tag);
+    RS485_Reply(b);
+    return;
+  }
+
+  NoteBank_SetFreq(note, hz, scale);
+  snprintf(b, sizeof b, "ok: N%c %.1f Hz scale %.2f\r\n", tag, hz, scale);
   RS485_Reply(b);
 }
 
@@ -303,8 +312,10 @@ static void Console_Exec(char *line)
 {
   char b[80];
   double hz;
+  double scale;
   unsigned int ch, val;
   uint8_t note;
+  int nscan;
 
   if (line[0] == '\0')
   {
@@ -330,14 +341,14 @@ static void Console_Exec(char *line)
   /* ---- n0..nf: 16-voice note bank on CH1 ---- */
   if (line[0] != 'n' || line[1] == '\0')
   {
-    RS485_Reply("err: commands are n0..nf <Hz> | gain <ch> <dB>\r\n");
+    RS485_Reply("err: commands are n0..nf <Hz> [scale] | gain <ch> <dB>\r\n");
     return;
   }
 
   note = Console_ParseNoteSlot(line[1]);
   if (note == 0xFFu || (line[2] != '\0' && line[2] != ' '))
   {
-    RS485_Reply("err: commands are n0..nf <Hz> | gain <ch> <dB>\r\n");
+    RS485_Reply("err: commands are n0..nf <Hz> [scale] | gain <ch> <dB>\r\n");
     return;
   }
 
@@ -358,15 +369,21 @@ static void Console_Exec(char *line)
     return;
   }
 
-  if (sscanf(line + 3, "%lf", &hz) != 1)
+  nscan = sscanf(line + 3, "%lf %lf", &hz, &scale);
+  if (nscan == 1)
   {
-    snprintf(b, sizeof b, "err: n%c <Hz> (0=off, else 20..19999.9)\r\n",
+    scale = 1.0; /* default max amplitude */
+  }
+  else if (nscan != 2)
+  {
+    snprintf(b, sizeof b,
+             "err: n%c <Hz> [scale] (0=off, else 20..19999.9, scale 0..1)\r\n",
              line[1]);
     RS485_Reply(b);
     return;
   }
 
-  Console_SetNoteFreq(note, hz);
+  Console_SetNoteFreq(note, hz, scale);
 }
 
 /** Check if a received line is addressed to this card.
@@ -628,7 +645,7 @@ int main(void)
   RS485_Reply("\r\n"
               "**************************************************\r\n"
               "*  Channel Card [C] ready  (multi-drop RS485)    *\r\n"
-              "*  n0..nf <Hz> | gain <ch> <dB>                  *\r\n"
+              "*  n0..nf <Hz> [scale] | gain <ch> <dB>          *\r\n"
               "*  enter/boot: bypass ON, gain 1 0               *\r\n"
               "**************************************************\r\n");
 

@@ -150,14 +150,16 @@ without re-testing the full slider range on Windows.
 
 **`N0`** applies **bypass ON** and **`gain 1 0`** (0 dB CH1 DAC trim) at
 boot and on bare `n0`. **`N0`…`NF`** are 16 independent phase-accumulator
-sines summed onto CH1; setting a frequency only changes that note — it does
-not touch gain or bypass. **`gain`** changes DAC atten on any channel.
+sines summed onto CH1. Optional **`[scale]`** (0.0..1.0, default **1.0**) sets
+that note’s amplitude. Frequency/scale changes do not touch gain or bypass.
+**`gain`** changes DAC atten on any channel.
 
 ## Console quick reference
 
-| Command          | Action                                                      |
-| ---------------- | ----------------------------------------------------------- |
-| `N0`             | Session defaults: bypass on, gain 1 0                       |
-| `N0`…`NF` `0`    | Turn that note off (gain/bypass unchanged)                  |
-| `N0`…`NF` `<Hz>` | Set note 0..15 (hex) to Hz (20..19999.9); voices sum on CH1 |
-| `gain <ch> <dB>` | DAC atten 0..127 on ch 1..4 (e.g. `gain 1 40`)              |
+| Command | Action |
+|---|---|
+| `N0` | Session defaults: bypass on, gain 1 0 |
+| `N0`…`NF` `0` | Turn that note off (gain/bypass unchanged) |
+| `N0`…`NF` `<Hz>` | Note at Hz, scale **1.0** (max); voices sum on CH1 |
+| `N0`…`NF` `<Hz> <scale>` | Note at Hz with amplitude 0.0..1.0 (e.g. `n0 440 0.5`) |
+| `gain <ch> <dB>` | DAC atten 0..127 on ch 1..4 (e.g. `gain 1 40`) |

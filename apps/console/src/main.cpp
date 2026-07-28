@@ -57,9 +57,10 @@ namespace
                  "  -h, --help          This help\n"
                  "\n"
                  "Channel Card commands (RS485 / USB CDC):\n"
-                 "  N0                 bypass on + gain 1 0 (session defaults)\n"
-                 "  N0..NF <Hz>        set note 0..15 (hex); 0=off; voices sum on CH1\n"
-                 "  gain <ch> <dB>     DAC atten 0..127 on CH1..4 (e.g. gain 1 40)\n"
+                 "  N0                      bypass on + gain 1 0 (session defaults)\n"
+                 "  N0..NF <Hz> [scale]     note 0..15; scale 0..1 optional (default 1.0)\n"
+                 "  e.g. N0 440 0.5 / N1 550 / N2 660 0.1\n"
+                 "  gain <ch> <dB>          DAC atten 0..127 on CH1..4 (e.g. gain 1 40)\n"
                  "\n"
                  "Entering the REPL sends bare 'n0' once (bypass on, gain 1 0).\n"
                  "Bare numbers are sent as 'n0 <Hz>'. 'quit' exits.\n";
@@ -352,8 +353,8 @@ namespace
 
     std::cout << "rs485_console — connected " << port << " @ " << baud
               << " 8N1, target: " << TargetName(default_target) << "\n"
-              << "Channel Card: n0..nf <Hz> | gain <ch> <dB>  (enter applies bypass + gain 1 0)\n"
-              << "type a frequency, 'n0 440', 'n1 554.4', or 'gain 1 40'; 'quit' to exit\n";
+              << "Channel Card: n0..nf <Hz> [scale] | gain <ch> <dB>  (enter applies bypass + gain 1 0)\n"
+              << "type a frequency, 'n0 440 0.5', 'n1 550', or 'gain 1 40'; 'quit' to exit\n";
 
     /* Entering the console applies session defaults on the Channel Card. */
     if (default_target == Target::Channel || default_target == Target::All)

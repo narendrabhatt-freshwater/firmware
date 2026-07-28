@@ -152,10 +152,15 @@ static const int32_t note_sine_table[NOTE_SINE_TABLE_SIZE] = {
     0xF9B82684,
 };
 
-/* Cold-path Hz (for GetFreq); hot path uses phase/inc only. */
+/* Cold-path Hz/scale (for getters); hot path uses phase/inc/amp_q15 only. */
 static double note_freq_hz[NOTE_BANK_VOICES];
+static double note_scale[NOTE_BANK_VOICES];
 static uint32_t note_phase[NOTE_BANK_VOICES];
 static uint32_t note_inc[NOTE_BANK_VOICES];
+/* Q15 amplitude: 0 = silence, 32767 = full table peak (scale 1.0). */
+static int32_t note_amp_q15[NOTE_BANK_VOICES];
+
+#define NOTE_AMP_Q15_MAX 32767
 
 /** Cold path only — convert Hz to 32-bit phase increment at NOTE_BANK_SAMPLE_RATE. */
 static uint32_t NoteBank_PhaseIncFromHz(double freq_hz)
@@ -164,9 +169,21 @@ static uint32_t NoteBank_PhaseIncFromHz(double freq_hz)
   return (uint32_t)(inc + 0.5);
 }
 
+/** Cold path — linear scale 0.0..1.0 → Q15. */
+static int32_t NoteBank_ScaleToQ15(double scale)
+{
+  if (scale <= 0.0) {
+    return 0;
+  }
+  if (scale >= 1.0) {
+    return NOTE_AMP_Q15_MAX;
+  }
+  return (int32_t)(scale * (double)NOTE_AMP_Q15_MAX + 0.5);
+}
+
 /**
- * One voice: 128-entry table, linear interp, -6 dBFS (matches former CH1 tone).
- * Pure integer; ~10 cycles — fine inside the DMA half refill.
+ * One voice: 128-entry table, linear interp, then Q15 amplitude.
+ * Pure integer; fine inside the DMA half refill.
  */
 static inline int32_t NoteBank_VoiceSample(uint8_t note)
 {
@@ -179,7 +196,7 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
   int32_t s = s0 + (int32_t)(((int64_t)(s1 - s0) * (int64_t)frac) >> 16);
 
   note_phase[note] = ph + note_inc[note];
-  return s >> 1;
+  return (int32_t)(((int64_t)s * (int64_t)note_amp_q15[note]) >> 15);
 }
 
 /** Saturate a 64-bit mix sum into Q31. */
@@ -196,31 +213,45 @@ static inline int32_t NoteBank_Saturate(int64_t sum)
   return (int32_t)sum;
 }
 
-void NoteBank_SetFreq(uint8_t note, double freq_hz)
+void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
 {
-  if (note >= NOTE_BANK_VOICES)
-  {
+  if (note >= NOTE_BANK_VOICES) {
     return;
   }
 
-  if (freq_hz <= 0.0)
-  {
+  if (freq_hz <= 0.0) {
     note_freq_hz[note] = 0.0;
     note_inc[note] = 0;
+    /* Leave stored scale so a later on-command can reuse GetScale if needed. */
     return;
+  }
+
+  if (scale < 0.0) {
+    scale = 0.0;
+  } else if (scale > 1.0) {
+    scale = 1.0;
   }
 
   note_freq_hz[note] = freq_hz;
+  note_scale[note] = scale;
   note_inc[note] = NoteBank_PhaseIncFromHz(freq_hz);
+  note_amp_q15[note] = NoteBank_ScaleToQ15(scale);
 }
 
 double NoteBank_GetFreq(uint8_t note)
 {
-  if (note >= NOTE_BANK_VOICES)
-  {
+  if (note >= NOTE_BANK_VOICES) {
     return 0.0;
   }
   return note_freq_hz[note];
+}
+
+double NoteBank_GetScale(uint8_t note)
+{
+  if (note >= NOTE_BANK_VOICES) {
+    return 0.0;
+  }
+  return note_scale[note];
 }
 
 uint8_t NoteBank_AnyActive(void)

@@ -196,11 +196,13 @@ The Effect Card was upgraded for dwc2 isochronous-IN fixes. Do not
 
 **Channel Card** (this branch): N0–NF note bank + gain on RS485 and USB CDC —
 
-| Command                | Meaning                                                  |
-| ---------------------- | -------------------------------------------------------- |
-| `N0`                   | Session defaults: **bypass on** + **gain 1 0**           |
-| `N0`…`NF` `0` / `<Hz>` | Note 0..15 off/on (summed on CH1; gain/bypass unchanged) |
-| `gain <ch> <dB>`       | CS4304 DAC atten on CH1..4 (e.g. `gain 1 40` = −40 dB)   |
+| Command | Meaning |
+|---|---|
+| `N0` | Session defaults: **bypass on** + **gain 1 0** |
+| `N0`…`NF` `0` / `<Hz> [scale]` | Note off/on; optional scale 0..1 (default 1.0); summed on CH1 |
+| `gain <ch> <dB>` | CS4304 DAC atten on CH1..4 (e.g. `gain 1 40` = −40 dB) |
+
+Examples: `n0 440 0.5`, `n1 550` (scale 1.0), `n2 660 0.1`.
 
 Entering `fw rs485` sends bare `n0` once (bypass on + gain 1 0). Boot does the same.
 
@@ -209,8 +211,8 @@ Card still has its own full console.
 
 ```bash
 fw rs485 list
-fw rs485 send channel "N0 440" --port /dev/cu.usbserial-XXXX
-fw rs485 channel --port /dev/cu.usbserial-XXXX   # REPL: 440, n1 554.4, …
+fw rs485 send channel "N0 440 0.5" --port /dev/cu.usbserial-XXXX
+fw rs485 channel --port /dev/cu.usbserial-XXXX   # REPL: 440, n1 550, …
 ```
 
 See [`apps/console/README.md`](apps/console/README.md) and
