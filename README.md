@@ -194,44 +194,30 @@ The Effect Card was upgraded for dwc2 isochronous-IN fixes. Do not
 
 ## 6. Consoles — how to talk to the boards
 
-Both cards expose the **same command console** over two transports.
+**Channel Card** (this branch): two commands on RS485 and USB CDC —
 
-**RS485 multi-drop** (both cards share one bus, 115200 8N1):
-
-| Prefix | Goes to |
+| Command | Meaning |
 |---|---|
-| `c:` | Channel Card only |
-| `e:` | Effect Card only |
-| `*:` or no prefix | Both |
+| `N0` | Session defaults: **bypass on** + **gain 1 0** |
+| `N0 0` / `N0 1000.5` | CH1 tone off/on only (gain/bypass unchanged) |
+| `gain <ch> <dB>` | CS4304 DAC atten on CH1..4 (e.g. `gain 1 40` = −40 dB) |
 
-```
-c:help
-e:status
-```
+Entering `fw rs485` sends bare `n0` once (bypass on + gain 1 0). Boot does the same.
 
-From a PC, reach the RS485 bus directly with the standalone console in
-[`apps/console`](apps/console) (wrapped by `fw rs485`) through an
-ADAM-4520 or a generic USB↔RS-485 dongle — **this has zero dependency on
-either board's own USB CDC connection**, so it keeps working even with
-both boards' USB entirely unplugged:
+Addressing on the shared RS485 bus is unchanged (`c:` / `e:` / `*:`). Effect
+Card still has its own full console.
 
 ```bash
-fw rs485 list                                          # find the adapter's serial port
-fw rs485 send channel status --port /dev/cu.usbserial-XXXX
-fw rs485 console channel --port /dev/cu.usbserial-XXXX # interactive REPL
+fw rs485 list
+fw rs485 send channel "N0 1000.5" --port /dev/cu.usbserial-XXXX
+fw rs485 channel --port /dev/cu.usbserial-XXXX   # REPL: type 1000.5 or n0 1000.5
 ```
 
 See [`apps/console/README.md`](apps/console/README.md) and
-[`docs/rs485_console_architecture.md`](docs/rs485_console_architecture.md)
-for the full design.
+[`docs/rs485_console_architecture.md`](docs/rs485_console_architecture.md).
 
-**USB CDC** — each card also enumerates a virtual COM port running the
-same parser. Open it at any baud rate; commands there are addressed to
-that card (a bare `help` works). Use `fw console`/`fw send` for this path
-— unlike `fw rs485` above, it depends on *that specific card's* own USB
-connection.
-
-Type `help` on either transport for the current command list.
+**USB CDC** — same Channel Card `N0` parser on `/dev/cu.usbmodemCHCARD*`.
+Effect Card CDC is unchanged (`fw console effect`).
 
 ---
 

@@ -38,37 +38,37 @@ namespace {
 
 void PrintUsage() {
   std::cout <<
-      "rs485_console - standalone RS485 console for the Channel/Effect Card bus\n"
+      "rs485_console - Channel Card N0 tone control over RS485\n"
       "\n"
       "Usage:\n"
       "  rs485_console --list\n"
       "  rs485_console --port <path> [options]\n"
-      "  rs485_console --port <path> [options] send <channel|effect|all> <command...>\n"
+      "  rs485_console --port <path> [options] send channel <n0-command>\n"
       "\n"
       "Options:\n"
       "  --port PATH        Serial device for the RS485 adapter (required unless --list)\n"
-      "  --baud N            Baud rate (default 115200, matches both cards' UART5/UART4)\n"
-      "  --target TARGET     Default target for the REPL: channel|effect|all (default all)\n"
+      "  --baud N            Baud rate (default 115200)\n"
+      "  --target TARGET     Default target: channel|effect|all (default channel)\n"
       "  --timeout-ms N      Per-attempt reply wait, ms (default 500)\n"
       "  --retries N         Extra send attempts if no reply arrives (default 2)\n"
-      "  --manual-rts        Toggle RTS around each transmit (only for USB-RS485\n"
-      "                      dongles without auto-direction; most don't need this)\n"
-      "  --list              List likely serial ports for this OS and exit\n"
+      "  --manual-rts        Toggle RTS around each transmit (rare dongles only)\n"
+      "  --list              List likely serial ports and exit\n"
       "  -h, --help          This help\n"
       "\n"
-      "Interactive REPL commands (not sent to the bus):\n"
-      "  card channel|effect|all   change the default target\n"
-      "  quit / exit                leave the REPL\n"
+      "Channel Card commands (RS485 / USB CDC):\n"
+      "  N0                 bypass on + gain 1 0 (session defaults)\n"
+      "  N0 0               tone off (gain/bypass unchanged)\n"
+      "  N0 1000.5          CH1 test tone at 1000.5 Hz (gain/bypass unchanged)\n"
+      "  gain <ch> <dB>     DAC atten 0..127 on CH1..4 (e.g. gain 1 40)\n"
       "\n"
-      "Any other line is sent as a console command, e.g. 'help', 'status',\n"
-      "'sw bypass on'. An explicit 'c:'/'e:'/'*:' prefix on a line overrides\n"
-      "the current default target for that line only.\n";
+      "Entering the REPL sends bare 'n0' once (bypass on, gain 1 0).\n"
+      "Bare numbers are sent as 'n0 <Hz>'. 'quit' exits.\n";
 }
 
 struct Options {
   std::string port;
   uint32_t baud = 115200;
-  Target target = Target::All;
+  Target target = Target::Channel;
   uint32_t timeout_ms = 500;
   int retries = 2;
   bool manual_rts = false;
@@ -200,6 +200,34 @@ int RunSendOnce(RS485Link &link, Target target, const std::string &command) {
   return 0;
 }
 
+/** Map REPL / one-shot input to the sole Channel Card command.
+ * "1000.5" / "0" → "n0 1000.5" / "n0 0"; "n0 …" / "N0 …" left as-is
+ * (link lowercases before TX). */
+std::string NormalizeN0Command(std::string line) {
+  while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
+    line.erase(line.begin());
+  while (!line.empty() && (line.back() == ' ' || line.back() == '\t'))
+    line.pop_back();
+  if (line.empty())
+    return line;
+
+  std::string lower = line;
+  for (char &c : lower) {
+    if (c >= 'A' && c <= 'Z')
+      c = static_cast<char>(c - 'A' + 'a');
+  }
+  if (lower.rfind("n0", 0) == 0)
+    return lower;
+
+  /* Bare number → wrap as n0 <Hz>. */
+  char *end = nullptr;
+  std::strtod(line.c_str(), &end);
+  if (end != line.c_str() && end != nullptr && *end == '\0')
+    return std::string("n0 ") + line;
+
+  return lower;
+}
+
 /** Put the keyboard TTY into cooked line-edit mode for the REPL (Enter
  * submits, Backspace deletes) and restore whatever it was on exit.
  *
@@ -268,9 +296,19 @@ int RunRepl(RS485Link &link, Target default_target, const std::string &port,
 
   std::cout << "rs485_console — connected " << port << " @ " << baud
             << " 8N1, target: " << TargetName(default_target) << "\n"
-            << "type a command and press Enter (your terminal echoes as you "
-               "type; the firmware doesn't echo over RS485 itself)\n"
-            << "'card channel|effect|all' to change target, 'quit' to exit\n";
+            << "Channel Card: N0 <Hz> | gain <ch> <dB>  (enter applies bypass + gain 1 0)\n"
+            << "type a frequency, 'n0 1000.5', or 'gain 1 40'; 'quit' to exit\n";
+
+  /* Entering the console applies session defaults on the Channel Card. */
+  if (default_target == Target::Channel || default_target == Target::All) {
+    ExchangeResult init = link.Send(Target::Channel, "n0");
+    if (init.got_reply) {
+      PrintReply(init.reply);
+    } else {
+      std::cerr << "(warn: could not apply session defaults — is channel on the bus?)\n";
+    }
+  }
+
   std::string line;
   Target target = default_target;
   while (true) {
@@ -298,7 +336,8 @@ int RunRepl(RS485Link &link, Target default_target, const std::string &port,
       continue;
     }
 
-    ExchangeResult result = link.Send(target, line);
+    std::string cmd = NormalizeN0Command(line);
+    ExchangeResult result = link.Send(target, cmd);
     if (!result.got_reply) {
       std::cerr << "(no reply — bus busy or no card listening)\n";
     } else {
@@ -371,7 +410,7 @@ int main(int argc, char **argv) {
         command += " ";
       command += opts.positional[i];
     }
-    return RunSendOnce(link, target, command);
+    return RunSendOnce(link, target, NormalizeN0Command(command));
   }
 
   return RunRepl(link, opts.target, opts.port, opts.baud);

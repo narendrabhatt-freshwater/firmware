@@ -148,22 +148,16 @@ push one value at enumeration and then never update it, leaving the
 device stuck at a stale attenuation. Do not re-add a volume control
 without re-testing the full slider range on Windows.
 
-The console `gain` command drives the CS4304's own attenuator and is
-independent of the host volume.
+**`N0`** applies **bypass ON** and **`gain 1 0`** (0 dB CH1 DAC trim) at
+boot and on bare `n0`. Setting a frequency (`n0 <Hz>`) only changes the tone
+— it does not touch gain or bypass. **`gain`** is also available as its own
+command to change DAC atten on any channel.
 
 ## Console quick reference
 
-Type `help` on RS485 (`c:help`) or the USB COM port for the live list.
-Frequently used:
-
 | Command | Action |
 |---|---|
-| `status` | All channel settings + health |
-| `sw` | Show all switch states |
-| `sw <name> [on\|off]` | Toggle/set a switch — see the signal-path table above |
-| `dc <ch> <-100..100>` | DC level % (the CVs), ch = 2..4 |
-| `freq <ch> <Hz>` | Tone frequency, ch = 2..4 |
-| `tone1 <Hz>` | CH1 standalone bypass test tone (fractional Hz OK, e.g. `1000.5`); `0` = off, restores USB source. Enable `sw bypass on` to hear it dry. |
-| `gain <ch> <dB>` | DAC attenuation, ch = 1..4 |
-| `scf <1..2000>` | SCF clock kHz (cutoff = clock/100), `0` = off |
-| `duty <1..99>` | SCF clock duty % |
+| `N0` | Session defaults: bypass on, gain 1 0 |
+| `N0 0` | Tone off (gain/bypass unchanged) |
+| `N0 <Hz>` | CH1 tone at Hz (20..19999.9); gain/bypass unchanged |
+| `gain <ch> <dB>` | DAC atten 0..127 on ch 1..4 (e.g. `gain 1 40`) |

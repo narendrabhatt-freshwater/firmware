@@ -31,7 +31,7 @@ SEND_WAIT_SECS="${FW_SEND_WAIT:-1.5}"
 # RS485 console (apps/console — talks to the shared bus, no USB CDC needed)
 RS485_PORT="${FW_RS485_PORT:-}"       # e.g. /dev/cu.usbserial-XXXX (the adapter, not a card)
 RS485_BAUD="${FW_RS485_BAUD:-115200}"
-RS485_TARGET="${FW_RS485_TARGET:-all}" # channel | effect | all
+RS485_TARGET="${FW_RS485_TARGET:-channel}" # channel | effect | all
 RS485_MANUAL_RTS=0
 RS485_TIMEOUT_MS=""
 RS485_RETRIES=""
