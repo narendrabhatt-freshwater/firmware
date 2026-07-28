@@ -1,6 +1,6 @@
 # Effect Card — Firmware
 
-> **Start with [`../README.md`](../README.md)** — toolchain setup, build
+> **Start with [`../../README.md`](../../README.md)** — toolchain setup, build
 > commands, DFU flashing and the STM32CubeMX regeneration rules are
 > common to both cards and documented there.
 
@@ -40,7 +40,7 @@ cmake --build build/Debug
 ```
 
 Then flash `build/Debug/effect_card.hex` over DFU — see
-[`../README.md`](../README.md) §3.
+[`../../README.md`](../../README.md) §3.
 
 ## Source map
 

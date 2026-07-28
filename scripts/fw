@@ -126,8 +126,8 @@ usage() {
 
 card_dir() {
   case "$1" in
-    channel|c) echo "$ROOT/channel_card" ;;
-    effect|e)  echo "$ROOT/effect_card" ;;
+    channel|c) echo "$ROOT/apps/channel_card" ;;
+    effect|e)  echo "$ROOT/apps/effect_card" ;;
     *) die "unknown card: $1 (use channel|effect|all)" ;;
   esac
 }

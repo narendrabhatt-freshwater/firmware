@@ -5,13 +5,16 @@ project's own `README.md` (to be expanded).
 
 | Card | Folder | MCU | CMake target | CubeMX file |
 |---|---|---|---|---|
-| Channel Card | `channel_card/` | STM32H725xG | `channel_MCU` | `channel_MCU.ioc` |
-| Effect Card  | `effect_card/`  | STM32H743xx | `effect_card` | `effect_card.ioc` |
+| Channel Card | `apps/channel_card/` | STM32H725xG | `channel_MCU` | `channel_MCU.ioc` |
+| Effect Card  | `apps/effect_card/`  | STM32H743xx | `effect_card` | `effect_card.ioc` |
 
-Both are standalone CMake projects — build them independently. The whole
-`firmware/` folder is self-contained: all dependencies (HAL, CMSIS,
-TinyUSB) are vendored in-tree, so a copy-paste of this folder builds
-as-is with no package manager or submodule fetch.
+Both are standalone CMake projects — build them independently. Each is
+self-contained: all dependencies (HAL, CMSIS, TinyUSB) are vendored
+in-tree, so a copy-paste of either `apps/channel_card/` or
+`apps/effect_card/` folder builds as-is with no package manager or
+submodule fetch. PC-side tooling (the `fw` CLI in `scripts/`, the
+standalone RS485 console in `apps/console/`) is separate from the two
+firmware projects — see §6.
 
 ---
 
@@ -43,7 +46,7 @@ conversion failed.
 
 ## 2. Building
 
-From inside a project folder (`channel_card/` or `effect_card/`):
+From inside a project folder (`apps/channel_card/` or `apps/effect_card/`):
 
 ```bash
 cmake --preset Debug
@@ -156,8 +159,13 @@ CODE blocks, but check anyway):
 
 ## 5. Repository layout (same shape in both projects)
 
+Both firmware projects live under `apps/` (`apps/channel_card/`,
+`apps/effect_card/`), alongside the standalone PC-side console app
+(`apps/console/`, see §6). The `fw` CLI wrapping all of this lives in
+`scripts/` at the repo root.
+
 ```
-<project>/
+<project>/    (apps/channel_card/ or apps/effect_card/)
 ├── CMakeLists.txt            ← hand-written sources + TinyUSB go HERE
 ├── CMakePresets.json         ← Debug / Release presets
 ├── <project>.ioc             ← STM32CubeMX project (source of truth)
