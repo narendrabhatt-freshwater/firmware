@@ -309,9 +309,31 @@ static void Console_SetNoteFreq(uint8_t note, double hz, double scale)
   RS485_Reply(b);
 }
 
+/** Deterministic 16-voice load: fixed freqs + equal scale so sum ≈ 1.0 FS. */
+#define CPULOAD_VOICE_SCALE (1.0 / (double)NOTE_BANK_VOICES)
+#define CPULOAD_BASE_HZ 220.0
+#define CPULOAD_STEP_HZ 40.0
+
+static void Console_CpuLoad_EnableVoices(void)
+{
+  for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
+  {
+    NoteBank_SetFreq(i, CPULOAD_BASE_HZ + (CPULOAD_STEP_HZ * (double)i),
+                     CPULOAD_VOICE_SCALE);
+  }
+}
+
+static void Console_CpuLoad_DisableVoices(void)
+{
+  for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
+  {
+    NoteBank_SetFreq(i, 0.0, 0.0);
+  }
+}
+
 static void Console_Exec(char *line)
 {
-  char b[80];
+  char b[96];
   double hz;
   double scale;
   unsigned int ch, val;
@@ -349,35 +371,46 @@ static void Console_Exec(char *line)
       arg++;
     }
 
+    /* Bare "cpuload" == "cpuload on" */
+    if (*arg == '\0')
+    {
+      arg = "on";
+    }
+
     if (strcmp(arg, "off") == 0 || strcmp(arg, "0") == 0)
     {
       Audio_CpuLoad_SetMode(AUDIO_CPULOAD_OFF);
+      Console_CpuLoad_DisableVoices();
       led_show_on = 1;
-      RS485_Reply("ok: cpuload off (LED chaser resumed)\r\n");
+      RS485_Reply("ok: cpuload off (notes cleared, LED chaser on)\r\n");
       return;
     }
     if (strcmp(arg, "on") == 0 || strcmp(arg, "1") == 0 ||
         strcmp(arg, "dma") == 0)
     {
+      Console_ApplySessionDefaults();
       Audio_StartPlayback();
+      Console_CpuLoad_EnableVoices();
       Audio_CpuLoad_SetMode(AUDIO_CPULOAD_DMA);
       led_show_on = 0;
       RS485_Reply(
-          "ok: cpuload dma — scope LED_Y (PB9); enable N0..NF; "
-          "CPU% ~ t_low/(t_low+t_high)\r\n");
+          "ok: cpuload on — 16 voices 220..820 Hz; scope yellow LED "
+          "(PB9); low=busy high=idle; CPU%≈t_low/(t_low+t_high)\r\n");
       return;
     }
     if (strcmp(arg, "queue") == 0)
     {
+      Console_ApplySessionDefaults();
       Audio_StartPlayback();
+      Console_CpuLoad_EnableVoices();
       Audio_CpuLoad_SetMode(AUDIO_CPULOAD_QUEUE);
       led_show_on = 0;
       RS485_Reply(
-          "ok: cpuload queue — soft queue + LED_Y; enable N0..NF\r\n");
+          "ok: cpuload queue — 16 voices auto; scope yellow LED (PB9)\r\n");
       return;
     }
 
-    RS485_Reply("err: cpuload off|on|dma|queue\r\n");
+    RS485_Reply("err: cpuload [off|on|dma|queue]  (bare = on)\r\n");
     return;
   }
 
@@ -386,7 +419,7 @@ static void Console_Exec(char *line)
   {
     RS485_Reply(
         "err: commands are n0..nf <Hz> [scale] | gain <ch> <dB> | "
-        "cpuload off|on|dma|queue\r\n");
+        "cpuload [off|on|dma|queue]\r\n");
     return;
   }
 
@@ -395,7 +428,7 @@ static void Console_Exec(char *line)
   {
     RS485_Reply(
         "err: commands are n0..nf <Hz> [scale] | gain <ch> <dB> | "
-        "cpuload off|on|dma|queue\r\n");
+        "cpuload [off|on|dma|queue]\r\n");
     return;
   }
 
@@ -697,7 +730,7 @@ int main(void)
               "**************************************************\r\n"
               "*  Channel Card [C] ready  (multi-drop RS485)    *\r\n"
               "*  n0..nf <Hz> [scale] | gain <ch> <dB>          *\r\n"
-              "*  cpuload off|on|dma|queue  (LED_Y / PB9)       *\r\n"
+              "*  cpuload [on|off]  — scope yellow LED (PB9)     *\r\n"
               "*  enter/boot: bypass ON, gain 1 0               *\r\n"
               "**************************************************\r\n");
 
