@@ -242,7 +242,8 @@ static const SwitchDef_t switches[] = {
  *
  *   n0                — session defaults: bypass ON + gain 1 0
  *   n0..nf <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 1.0)
- *   gain <ch> <dB>    — CS4304 per-channel DAC atten (0..127 dB), ch 1..4 */
+ *   gain <ch> <dB>    — CS4304 per-channel DAC atten (0..127 dB), ch 1..4
+ *   cpuload off|on|dma|queue — LED_Y (PB9) CPU-load probe (see README) */
 #define N0_DEFAULT_ATTEN_DB 0u
 
 /** Bypass is active-low (LOW = ON). */
@@ -338,17 +339,63 @@ static void Console_Exec(char *line)
     return;
   }
 
+  /* ---- cpuload off|on|dma|queue: LED_Y busy/idle probe ---- */
+  if (strncmp(line, "cpuload", 7) == 0 &&
+      (line[7] == '\0' || line[7] == ' '))
+  {
+    const char *arg = line + 7;
+    while (*arg == ' ')
+    {
+      arg++;
+    }
+
+    if (strcmp(arg, "off") == 0 || strcmp(arg, "0") == 0)
+    {
+      Audio_CpuLoad_SetMode(AUDIO_CPULOAD_OFF);
+      led_show_on = 1;
+      RS485_Reply("ok: cpuload off (LED chaser resumed)\r\n");
+      return;
+    }
+    if (strcmp(arg, "on") == 0 || strcmp(arg, "1") == 0 ||
+        strcmp(arg, "dma") == 0)
+    {
+      Audio_StartPlayback();
+      Audio_CpuLoad_SetMode(AUDIO_CPULOAD_DMA);
+      led_show_on = 0;
+      RS485_Reply(
+          "ok: cpuload dma — scope LED_Y (PB9); enable N0..NF; "
+          "CPU% ~ t_low/(t_low+t_high)\r\n");
+      return;
+    }
+    if (strcmp(arg, "queue") == 0)
+    {
+      Audio_StartPlayback();
+      Audio_CpuLoad_SetMode(AUDIO_CPULOAD_QUEUE);
+      led_show_on = 0;
+      RS485_Reply(
+          "ok: cpuload queue — soft queue + LED_Y; enable N0..NF\r\n");
+      return;
+    }
+
+    RS485_Reply("err: cpuload off|on|dma|queue\r\n");
+    return;
+  }
+
   /* ---- n0..nf: 16-voice note bank on CH1 ---- */
   if (line[0] != 'n' || line[1] == '\0')
   {
-    RS485_Reply("err: commands are n0..nf <Hz> [scale] | gain <ch> <dB>\r\n");
+    RS485_Reply(
+        "err: commands are n0..nf <Hz> [scale] | gain <ch> <dB> | "
+        "cpuload off|on|dma|queue\r\n");
     return;
   }
 
   note = Console_ParseNoteSlot(line[1]);
   if (note == 0xFFu || (line[2] != '\0' && line[2] != ' '))
   {
-    RS485_Reply("err: commands are n0..nf <Hz> [scale] | gain <ch> <dB>\r\n");
+    RS485_Reply(
+        "err: commands are n0..nf <Hz> [scale] | gain <ch> <dB> | "
+        "cpuload off|on|dma|queue\r\n");
     return;
   }
 
@@ -481,7 +528,8 @@ static void Console_Poll(void)
   }
 }
 
-/** Non-blocking 5-LED chaser (150 ms per step) so the console stays snappy. */
+/** Non-blocking 5-LED chaser (150 ms per step) so the console stays snappy.
+ * Skipped while cpuload probe owns LED_Y. */
 static void LED_Task(void)
 {
   static const GPIO_TypeDef *ports[5] = {LED_R_GPIO_Port, LED_Y_GPIO_Port,
@@ -492,11 +540,14 @@ static void LED_Task(void)
   static uint32_t t_next = 0;
   static uint8_t step = 0;
 
-  if (!led_show_on)
+  if (Audio_CpuLoad_IsActive() || !led_show_on)
   {
-    for (uint8_t i = 0; i < 5; i++)
+    if (!Audio_CpuLoad_IsActive())
     {
-      HAL_GPIO_WritePin((GPIO_TypeDef *)ports[i], pins[i], GPIO_PIN_RESET);
+      for (uint8_t i = 0; i < 5; i++)
+      {
+        HAL_GPIO_WritePin((GPIO_TypeDef *)ports[i], pins[i], GPIO_PIN_RESET);
+      }
     }
     return;
   }
@@ -646,6 +697,7 @@ int main(void)
               "**************************************************\r\n"
               "*  Channel Card [C] ready  (multi-drop RS485)    *\r\n"
               "*  n0..nf <Hz> [scale] | gain <ch> <dB>          *\r\n"
+              "*  cpuload off|on|dma|queue  (LED_Y / PB9)       *\r\n"
               "*  enter/boot: bypass ON, gain 1 0               *\r\n"
               "**************************************************\r\n");
 
@@ -661,6 +713,7 @@ int main(void)
 
     Console_Poll(); /* RS485 command console (see RS485_MANUAL.md) */
     USB_App_Task(); /* TinyUSB stack + CDC console */
+    Audio_CpuLoad_Poll(); /* queue-mode NoteBank producer (no-op otherwise) */
     LED_Task();     /* non-blocking LED chaser */
     // HAL_Delay(10);
   }

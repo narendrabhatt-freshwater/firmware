@@ -100,6 +100,24 @@ extern "C"
   void Audio_SetDCTrim(uint8_t channel, int16_t trim_x100);
   int16_t Audio_GetDCTrim(uint8_t channel);
 
+  /* ---------------- CPU load probe (LED_Y / PB9) --------------------------- */
+
+  typedef enum
+  {
+    AUDIO_CPULOAD_OFF = 0,   /**< Normal path; LED_Y free for chaser */
+    AUDIO_CPULOAD_DMA = 1,   /**< Busy=low around NoteBank DMA half fill */
+    AUDIO_CPULOAD_QUEUE = 2, /**< Soft queue (256) filled in main, drained by DMA */
+  } Audio_CpuLoadMode_t;
+
+  void Audio_CpuLoad_SetMode(Audio_CpuLoadMode_t mode);
+  Audio_CpuLoadMode_t Audio_CpuLoad_GetMode(void);
+
+  /** Non-zero while DMA or queue probe owns LED_Y (pause LED chaser). */
+  uint8_t Audio_CpuLoad_IsActive(void);
+
+  /** Queue-mode producer: call from main loop. No-op unless QUEUE mode. */
+  void Audio_CpuLoad_Poll(void);
+
 #ifdef __cplusplus
 }
 #endif

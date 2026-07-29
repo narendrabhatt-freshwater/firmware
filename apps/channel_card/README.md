@@ -93,6 +93,21 @@ scf 100      → 100 kHz clock → 1 kHz cutoff
 | `scf <1..2000>` | SCF clock in kHz (`0` = off) — this is `filter_ctl` |
 | `duty <1..99>`  | SCF clock duty cycle % (default 50)                 |
 
+## CPU load probe (LED_Y)
+
+Scope **LED_Y (PB9)** to measure NoteBank CPU cost with all 16 voices on.
+Busy = pin **low**, idle = pin **high**. Approximate load:
+
+`CPU% ≈ t_low / (t_low + t_high)`
+
+| Command | Mode |
+|---|---|
+| `cpuload on` / `cpuload dma` | GPIO around existing DMA half fill (safe default) |
+| `cpuload queue` | Soft queue producer in main + DMA drain (closer to watermark method) |
+| `cpuload off` | Restore LED chaser |
+
+Example: `cpuload on`, then enable N0…NF (e.g. scales ~0.06 each to avoid clip), probe PB9.
+
 ## Build & flash
 
 ```bash
@@ -163,3 +178,6 @@ that note’s amplitude. Frequency/scale changes do not touch gain or bypass.
 | `N0`…`NF` `<Hz>` | Note at Hz, scale **1.0** (max); voices sum on CH1 |
 | `N0`…`NF` `<Hz> <scale>` | Note at Hz with amplitude 0.0..1.0 (e.g. `n0 440 0.5`) |
 | `gain <ch> <dB>` | DAC atten 0..127 on ch 1..4 (e.g. `gain 1 40`) |
+| `cpuload on` / `dma` | LED_Y load probe around DMA NoteBank fill |
+| `cpuload queue` | LED_Y load probe via soft queue watermark fill |
+| `cpuload off` | Disable probe; resume LED chaser |
