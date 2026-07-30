@@ -1,0 +1,56 @@
+# midi_host — MIDI keyboard → speakers or Channel Card
+
+PC-side C++17 app: MIDI in (RtMidi), 16-voice FIFO note bank, equal-temperament
+pitch (A4 = 440 Hz). Output is either Mac speakers (RtAudio) or the Channel
+Card note bank over RS485 (`n0`…`nf`).
+
+## MIDI input — any controller
+
+Auto-pick prefers a Novation **Launchkey “… MIDI Out”** port (skips DAW Out).
+Any other keyboard works if you pass an index from `fw midi list`:
+
+```bash
+fw midi list
+fw midi --midi 0          # any device at index 0 → speakers
+```
+
+## Output — speakers vs Channel Card
+
+| Command | Where sound goes |
+| --- | --- |
+| `fw midi` | Mac speakers (default) |
+| `fw midi channel --rs485 /dev/cu.usbserial-XXXX` | Channel Card via RS485 (no local speaker) |
+| `fw midi channel --rs485 PATH --midi 0` | same, explicit MIDI port |
+
+`--port N` is an alias for `--midi N`. With `channel`, `--port /dev/...` means
+the RS485 adapter (same idea as `fw rs485 --port`). You can also set
+`FW_RS485_PORT`.
+
+## Build
+
+```bash
+fw midi build
+```
+
+## Behaviour
+
+| Event | Meaning |
+| --- | --- |
+| `ON` | New key allotted to a free slot |
+| `OFF` | Key released; slot freed |
+| `RETRIG` | Same key pressed again → same slot, phase reset |
+| `STEAL` | Bank full (16); oldest note dropped before new `ON` |
+
+Velocity is ignored. Pitch: \(f = 440 \times 2^{(n-69)/12}\).
+
+On Channel Card mode, each event becomes `c:nX <Hz>` / `c:nX 0` (slot =
+N0–NF). Session starts with bare `n0` (bypass + gain 1 0).
+
+Example (speakers):
+
+```text
+midi:   Launchkey MK4 37 MIDI Out
+output: speakers (MacBook Pro Speakers @ 48000 Hz)
+playing… (Enter to quit)
+ON     slot=0  note=69  A4   freq=440.00 Hz  active=1/16
+```

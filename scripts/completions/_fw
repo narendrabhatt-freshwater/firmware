@@ -14,6 +14,7 @@ _fw() {
     'log:Follow CDC output'
     'send:Send one console command'
     'rs485:RS485 console (apps/console — no USB CDC needed)'
+    'midi:MIDI → speakers or Channel Card (apps/midi_host)'
     'clean:Remove build directories'
     'status:Show toolchain and artifacts'
     'help:Show help'
@@ -50,6 +51,14 @@ _fw() {
     '--manual-rts[Toggle RTS around TX (dongles w/o auto-direction)]'
     '--timeout-ms[Per-attempt reply wait, ms]:ms:(300)'
     '--retries[Extra send attempts on no reply]:n:(2)'
+  )
+
+  midi_opts=(
+    '--midi[MIDI input port index]:index:'
+    '--port[MIDI index or RS485 serial path]:port-or-index:'
+    '-p[MIDI index or RS485 serial path]:port-or-index:'
+    '--rs485[USB-RS485 adapter path]:path:_fw_serial_ports'
+    '--baud[RS485 baud]:baud:(115200)'
   )
 
   _arguments -C \
@@ -92,6 +101,11 @@ _fw() {
             '1:target-or-sub:(console build list send channel effect all)' \
             '2:target-or-command:(channel effect all help status sw led)' \
             "${rs485_opts[@]}"
+          ;;
+        midi)
+          _arguments \
+            '1:sub:(build list run play channel)' \
+            "${midi_opts[@]}"
           ;;
         status|info|help)
           ;;

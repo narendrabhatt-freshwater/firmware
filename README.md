@@ -221,6 +221,18 @@ See [`apps/console/README.md`](apps/console/README.md) and
 **USB CDC** — same Channel Card `N0`…`NF` parser on `/dev/cu.usbmodemCHCARD*`.
 Effect Card CDC is unchanged (`fw console effect`).
 
+**MIDI host** (any MIDI keyboard → Mac speakers, or Channel Card over RS485) —
+
+```bash
+fw midi build
+fw midi list
+fw midi                                    # speakers (Launchkey auto-pick)
+fw midi --midi 0                           # speakers, any MIDI device
+fw midi channel --rs485 /dev/cu.usbserial-XXXX --midi 0
+```
+
+See [`apps/midi_host/README.md`](apps/midi_host/README.md).
+
 ---
 
 ## 7. USB descriptor changes — bump the PID
@@ -255,6 +267,8 @@ hardware:
   reaching either board over the shared bus with no USB CDC dependency.
   Verified against a mock firmware responder; not yet run against the
   real RS485↔PC adapter (not connected as of this writing).
+- **`apps/midi_host`** — Launchkey MIDI → 16-voice FIFO sine bank → Mac
+  speakers (RtMidi + RtAudio). See [`apps/midi_host/README.md`](apps/midi_host/README.md).
 
 > **Not under version control yet.** Initialising a git repo at
 > `firmware/` and committing this baseline is strongly recommended
