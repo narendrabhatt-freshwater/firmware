@@ -69,6 +69,8 @@ void PrintUsage()
          "  --target channel     Drive Channel Card N0–NF over RS485 (no local speaker)\n"
          "  --rs485 PATH         USB↔RS485 adapter serial path (required with channel)\n"
          "  --baud N             RS485 baud (default 115200)\n"
+         "  --pace-us N          Delay between TX bytes (default 1000).\n"
+         "                       Use 0 only if Effect Card is off the bus.\n"
          "  --gain DB            CH1 DAC atten in dB at session start (0..127, default 6)\n"
          "                       e.g. --gain 6 → sends \"gain 1 6\" once at open\n"
          "\n"
@@ -162,6 +164,7 @@ int main(int argc, char** argv)
   std::string rs485_path;
   uint32_t rs485_baud = 115200;
   uint32_t gain_db = 6;
+  uint32_t pace_us = 1000;
 
   for (int i = 1; i < argc; ++i) {
     const char* arg = argv[i];
@@ -236,6 +239,20 @@ int main(int argc, char** argv)
       rs485_baud = static_cast<uint32_t>(v);
       continue;
     }
+    if (std::strcmp(arg, "--pace-us") == 0) {
+      if (i + 1 >= argc) {
+        std::cerr << "err: --pace-us requires a value (0..10000)\n";
+        return 1;
+      }
+      char* end = nullptr;
+      const long v = std::strtol(argv[++i], &end, 10);
+      if (end == argv[i] || *end != '\0' || v < 0 || v > 10000) {
+        std::cerr << "err: --pace-us must be 0..10000\n";
+        return 1;
+      }
+      pace_us = static_cast<uint32_t>(v);
+      continue;
+    }
     if (std::strcmp(arg, "--gain") == 0) {
       if (i + 1 >= argc) {
         std::cerr << "err: --gain requires dB 0..127\n";
@@ -303,10 +320,10 @@ int main(int argc, char** argv)
                 << audio->SampleRate() << " Hz)\n";
     } else {
       channel = std::make_unique<ChannelRs485Out>();
-      channel->Open(rs485_path, rs485_baud, gain_db);
+      channel->Open(rs485_path, rs485_baud, gain_db, pace_us);
       std::cout << "output: channel card via RS485 (" << channel->Path()
                 << " @ " << rs485_baud << ", gain 1 " << channel->AttenDb()
-                << ")\n";
+                << ", pace " << channel->PaceUs() << " us)\n";
     }
     std::cout << "playing… (Enter to quit)\n";
   } catch (const std::exception& ex) {

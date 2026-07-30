@@ -49,6 +49,15 @@ Each note is one RS485 exchange: `c:nX <Hz> 0.5` or `c:nX 0` (same path as
 `fw rs485`). Scale 0.5 keeps the wave visible with `gain 1 6`; chords may
 soft-clip past a couple of notes.
 
+Pending commands are **coalesced per slot** (latest wins), so a release can
+never be dropped behind a queued press — that was the cause of notes sticking
+on after a chord.
+
+`--pace-us N` sets the delay between transmitted bytes (default **1000**).
+That matches `fw rs485 send` and keeps Effect Card keystroke-echo from
+corrupting frames on the shared bus. `--pace-us 0` is only safe with Effect
+powered off (and Channel interrupt RX).
+
 Example (speakers):
 
 ```text

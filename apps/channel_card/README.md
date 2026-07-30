@@ -137,6 +137,7 @@ Then flash `build/Debug/channel_MCU.hex` over DFU — see
 | ------------------------- | ---------------------------------------------------------------------------- |
 | `Core/Src/main.c`         | Bring-up, DAC init, main loop wiring                                         |
 | `Core/Src/channel_console.c` | RS485 + USB CDC console, `cpuload`, LED chaser                            |
+| `Core/Src/uart5_rx.c`     | Interrupt-driven UART5 RX ring buffer feeding the RS485 console               |
 | `Core/Src/audio_bridge.c` | **USB→I2S audio engine** — ring buffer, tone/DC generators, I2S2 workarounds |
 | `Core/Src/cs4304.c`       | CS4304 DAC driver (I2C)                                                      |
 | `Core/Src/note_bank.c`    | N0–NF additive sine bank                                                     |

@@ -55,6 +55,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/note_bank.c
     # RS485 + USB CDC console, cpuload probe, LED chaser
     Core/Src/channel_console.c
+    # Interrupt-driven UART5 RX ring buffer feeding the RS485 console
+    Core/Src/uart5_rx.c
     # USB audio -> I2S bridge (relocated out of USB_DEVICE/ when the card
     # moved from ST's USB Device Library to TinyUSB)
     Core/Src/audio_bridge.c

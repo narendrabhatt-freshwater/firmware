@@ -95,8 +95,14 @@ Key implementation details (Channel Card; Effect Card mirrors this):
 - **Shared parser** — the exact same `Console_Exec()` function serves both
   transports. USB CDC commands go through `Console_ExecFromUSB()`, which
   routes replies back over USB (`console_via_usb` flag) instead of the bus.
-- **Non-blocking** — `Console_Poll()` drains one byte per main-loop
+- **Non-blocking** — `Console_Poll()` drains the RX buffer each main-loop
   iteration; no blocking reads anywhere in the loop.
+- **Interrupt-driven RX** — `Core/Src/uart5_rx.c` buffers UART5 characters in
+  the RXNE interrupt (NVIC priority 3, below the audio path) rather than
+  relying on the main loop to look within one character time. Before this,
+  hosts had to pace every transmitted byte ~1 ms apart or characters were
+  lost; a MIDI chord then took ~100 ms to send. Bytes lost to overrun or a
+  full ring are reported as `err: rs485 rx dropped N bytes`, never swallowed.
 
 This is already documented at a glance in the top-level
 [`README.md`](../README.md) §6 and per-card in

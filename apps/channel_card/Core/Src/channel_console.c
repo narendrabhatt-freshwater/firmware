@@ -15,6 +15,7 @@
 #include "cs4304.h"
 #include "audio_bridge.h"
 #include "note_bank.h"
+#include "uart5_rx.h"
 #include "usb_app.h"
 
 #include <stdio.h>
@@ -553,10 +554,22 @@ static void Console_Poll(void)
 {
   static char cmd[48];
   static uint8_t idx = 0;
+  static uint32_t dropped_reported = 0;
   uint8_t c;
 
-  __HAL_UART_CLEAR_OREFLAG(&huart5);
-  while (HAL_UART_Receive(&huart5, &c, 1, 0) == HAL_OK)
+  /* Fail loud on lost characters — but only when idle between lines.
+   * Replying mid-command would itself drive the bus and lose more RX. */
+  const uint32_t dropped = Uart5Rx_DroppedCount();
+  if (dropped != dropped_reported && idx == 0u)
+  {
+    char b[64];
+    snprintf(b, sizeof b, "err: rs485 rx dropped %lu bytes\r\n",
+             (unsigned long)dropped);
+    dropped_reported = dropped;
+    RS485_Reply(b);
+  }
+
+  while (Uart5Rx_Get(&c))
   {
     if (c == '\r' || c == '\n')
     {
@@ -594,6 +607,18 @@ static void Console_Poll(void)
     else if (c >= 32 && c < 127 && idx < sizeof(cmd) - 1)
     {
       cmd[idx++] = (char)((c >= 'A' && c <= 'Z') ? c + 32 : c); /* lowercase */
+      /* Multi-drop: Effect echoes every host keystroke onto the same wire.
+       * Our IRQ RX now catches that echo mixed into the real frame, which
+       * showed up as "cjc:n0…" (Channel then failed to parse). Whenever a
+       * fresh "c:"/"e:"/"*:" address lands, discard everything before it. */
+      if (idx >= 2u && cmd[idx - 1u] == ':' &&
+          (cmd[idx - 2u] == RS485_CARD_ID ||
+           cmd[idx - 2u] == RS485_BROADCAST_ID || cmd[idx - 2u] == 'e'))
+      {
+        cmd[0] = cmd[idx - 2u];
+        cmd[1] = ':';
+        idx = 2u;
+      }
 #if RS485_ECHO
       char e[2] = {(char)c, '\0'};
       RS485_Send(e); /* echo typing */
@@ -638,6 +663,7 @@ static void LED_Task(void)
 void ChannelConsole_Init(void)
 {
   RS485_BusRelease();
+  Uart5Rx_Init();
 
   for (uint8_t i = 0; i < NUM_SWITCHES; i++)
   {
