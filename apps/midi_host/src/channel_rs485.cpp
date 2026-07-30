@@ -10,15 +10,20 @@
 #include <cstdio>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <thread>
+#include <vector>
 
 namespace midi_host
 {
 namespace
 {
 
-/** Visible on scope with gain 1 6; soft-clips if many notes at once. */
-constexpr double kVoiceScale = 0.5;
+/** Fixed per-voice scale: ~1/8 FS so chords get louder additively. */
+constexpr double kVoiceScale = 0.125;
+
+/** Inter-byte gap while Effect Card is still echoing. */
+constexpr uint32_t kPaceUs = 1000;
 
 void SleepMs(uint32_t ms)
 {
@@ -36,9 +41,7 @@ void SleepUs(uint32_t us)
   std::this_thread::sleep_for(std::chrono::microseconds(us));
 }
 
-/** Read until the RX line is quiet for quiet_ms, or overall_ms elapses.
- * Channel replies to every nX; we must finish draining that reply before
- * the next TX or half-duplex collisions corrupt / drop note-offs. */
+/** Read until the RX line is quiet for quiet_ms, or overall_ms elapses. */
 void DrainUntilQuiet(rs485::SerialPort& port,
                      uint32_t overall_ms,
                      uint32_t quiet_ms)
@@ -54,100 +57,178 @@ void DrainUntilQuiet(rs485::SerialPort& port,
   }
 }
 
+bool ReplyLooksOk(const std::string& reply)
+{
+  return reply.find("ok:") != std::string::npos;
+}
+
 } // namespace
 
 struct ChannelRs485Out::Impl
 {
   rs485::SerialPort port;
   std::unique_ptr<rs485::RS485Link> link;
-  /** Inter-byte TX delay (µs). 0 is treated as 1000 in SendCommand. */
-  uint32_t pace_us = 1000;
 
   std::mutex mu_;
   std::condition_variable cv_;
-  /** Latest pending command per voice slot; empty string = nothing queued.
-   * Coalescing means a release always replaces a pending press for that
-   * slot — backlog cannot drop offs while keeping stale ons. */
-  std::array<std::string, kVoiceCount> pending_{};
+  /**
+   * Absolute desired bank: freq_hz[i] > 0 → voice on, else off.
+   * Incremental On/Off over a lossy bus left stuck sines whenever an Off
+   * frame was dropped. Latest snapshot wins — a later sync heals any miss.
+   */
+  std::array<double, kVoiceCount> snap_hz_{};
+  /** Last frequencies we believe the card has (for delta sync). */
+  std::array<double, kVoiceCount> sent_hz_{};
+  bool snap_dirty_ = false;
   std::atomic<bool> run_{false};
   std::thread worker_;
 
-  bool AnyPendingLocked() const
+  bool echo_disabled_ = false;
+  bool quiet_enabled_ = false;
+  bool burst_notes_ = false;
+
+  void WriteWire(const uint8_t* bytes, size_t len, bool drain)
   {
-    for (const std::string& p : pending_) {
-      if (!p.empty()) {
-        return true;
-      }
+    if (port.ManualRtsControl()) {
+      port.SetRts(true);
     }
-    return false;
+    (void)port.Write(bytes, len);
+    if (port.ManualRtsControl()) {
+      port.SetRts(false);
+    }
+    // tcdrain on every USB-serial frame makes a 16-key chord feel hung
+    // (each drain can cost tens of ms). Only use it when we must not leave
+    // a stale chord queued behind a clear.
+    if (drain) {
+      port.DrainOutput();
+    }
   }
 
-  /** Take one pending command (lowest slot index). Empty if none. */
-  std::string TakeOneLocked()
+  static std::string SlotOffCommand(uint8_t slot)
   {
-    for (uint8_t i = 0; i < kVoiceCount; ++i) {
-      if (!pending_[i].empty()) {
-        std::string cmd = std::move(pending_[i]);
-        pending_[i].clear();
-        return cmd;
-      }
-    }
-    return std::string();
+    const char hex = "0123456789abcdef"[slot & 0x0Fu];
+    char cmd[8];
+    std::snprintf(cmd, sizeof(cmd), "n%c 0", hex);
+    return std::string(cmd);
   }
 
-  void SendCommand(const std::string& body)
+  static std::string SlotOnCommand(uint8_t slot, double hz)
   {
-    // Match apps/console RS485Link pacing: Effect Card echoes every
-    // keystroke onto the shared bus. A burst write overlaps that echo and
-    // corrupts the frame on Channel (fw rs485 send works; pace-0 MIDI did
-    // not). Default pacing drains between bytes; after the final CR, wait
-    // for Channel's reply without eating it mid-flight.
+    const char hex = "0123456789abcdef"[slot & 0x0Fu];
+    char cmd[32];
+    std::snprintf(cmd, sizeof(cmd), "n%c %.0f %.2f", hex, hz, kVoiceScale);
+    return std::string(cmd);
+  }
+
+  void SendOneFrame(const std::string& body, bool drain)
+  {
+    const std::string wire = std::string("c:") + body + "\r";
+    port.FlushInput();
+    WriteWire(reinterpret_cast<const uint8_t*>(wire.data()), wire.size(),
+              drain);
+  }
+
+  void SendCommandPaced(const std::string& body)
+  {
     const std::string wire = std::string("c:") + body + "\r";
     port.FlushInput();
     const auto* bytes = reinterpret_cast<const uint8_t*>(wire.data());
 
-    if (pace_us == 0u) {
+    if (burst_notes_) {
+      WriteWire(bytes, wire.size(), true);
+      SleepMs(3);
+      DrainUntilQuiet(port, 40, 3);
+      return;
+    }
+
+    for (size_t i = 0; i < wire.size(); ++i) {
       if (port.ManualRtsControl()) {
         port.SetRts(true);
       }
-      (void)port.Write(bytes, wire.size());
-      if (port.ManualRtsControl()) {
-        port.SetRts(false);
-      }
-    } else {
-      for (size_t i = 0; i < wire.size(); ++i) {
-        if (port.ManualRtsControl()) {
-          port.SetRts(true);
-        }
-        if (!port.Write(bytes + i, 1)) {
-          if (port.ManualRtsControl()) {
-            port.SetRts(false);
-          }
-          return;
-        }
+      if (!port.Write(bytes + i, 1)) {
         if (port.ManualRtsControl()) {
           port.SetRts(false);
         }
-        const bool last = (i + 1u == wire.size());
-        if (!last) {
-          SleepUs(pace_us);
-          DrainUntilQuiet(port, (pace_us + 999u) / 1000u + 2u, 2);
+        return;
+      }
+      if (port.ManualRtsControl()) {
+        port.SetRts(false);
+      }
+      const bool last = (i + 1u == wire.size());
+      if (!last) {
+        SleepUs(kPaceUs);
+        DrainUntilQuiet(port, (kPaceUs + 999u) / 1000u + 2u, 2);
+      }
+    }
+    port.DrainOutput();
+    SleepMs(2);
+    DrainUntilQuiet(port, 25, 2);
+  }
+
+  /**
+   * Delta sync. Note-ons are fast (no tcdrain). Full release is paced and
+   * drained so clears land even under 16-voice audio load.
+   */
+  void SendSnapshot(const std::array<double, kVoiceCount>& hz)
+  {
+    const bool quiet_burst = burst_notes_ && quiet_enabled_;
+    auto emit = [&](const std::string& body, uint32_t gap_us, bool drain) {
+      if (quiet_burst) {
+        SendOneFrame(body, drain);
+        if (gap_us > 0) {
+          SleepUs(gap_us);
         }
+      } else {
+        SendCommandPaced(body);
+      }
+    };
+
+    bool any_on = false;
+    for (uint8_t i = 0; i < kVoiceCount; ++i) {
+      if (hz[i] > 0.0) {
+        any_on = true;
+        break;
       }
     }
 
-    SleepMs(2);
-    DrainUntilQuiet(port, 40, 3);
-  }
-
-  void Enqueue(uint8_t slot, std::string cmd)
-  {
-    if (slot >= kVoiceCount) {
+    if (!any_on) {
+      // Full clear: one silence, then every slot off. Drain only the last
+      // frame so the USB queue cannot hide a stale On behind us.
+      emit("silence", 2000, false);
+      for (uint8_t i = 0; i < kVoiceCount; ++i) {
+        const bool last = (i + 1u == kVoiceCount);
+        emit(SlotOffCommand(i), last ? 0 : 2000, last);
+      }
+      emit("silence", 0, true);
+      sent_hz_.fill(0.0);
       return;
     }
+
+    for (uint8_t i = 0; i < kVoiceCount; ++i) {
+      if (sent_hz_[i] > 0.0 && hz[i] <= 0.0) {
+        emit(SlotOffCommand(i), 800, false);
+        sent_hz_[i] = 0.0;
+      }
+    }
+    for (uint8_t i = 0; i < kVoiceCount; ++i) {
+      if (hz[i] > 0.0 && hz[i] != sent_hz_[i]) {
+        emit(SlotOnCommand(i, hz[i]), 400, false);
+        sent_hz_[i] = hz[i];
+      }
+    }
+  }
+
+  void PublishBank(const VoiceBank& bank)
+  {
     {
       std::lock_guard<std::mutex> lock(mu_);
-      pending_[slot] = std::move(cmd);
+      const auto& slots = bank.Slots();
+      for (uint8_t i = 0; i < kVoiceCount; ++i) {
+        snap_hz_[i] =
+            (slots[i].active && slots[i].freq_hz > 0.0) ? slots[i].freq_hz
+                                                         : 0.0;
+      }
+      snap_dirty_ = true;
     }
     cv_.notify_one();
   }
@@ -155,18 +236,26 @@ struct ChannelRs485Out::Impl
   void WorkerMain()
   {
     while (true) {
-      std::string cmd;
       {
         std::unique_lock<std::mutex> lock(mu_);
-        cv_.wait(lock, [&] { return AnyPendingLocked() || !run_.load(); });
-        if (!run_.load() && !AnyPendingLocked()) {
+        cv_.wait(lock, [&] { return snap_dirty_ || !run_.load(); });
+        if (!run_.load() && !snap_dirty_) {
           return;
         }
-        cmd = TakeOneLocked();
       }
-      if (!cmd.empty()) {
-        SendCommand(cmd);
+      // Short coalesce so a 16-key mash is one delta, not 16 bus trips.
+      SleepMs(2);
+
+      std::array<double, kVoiceCount> local{};
+      {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!run_.load() && !snap_dirty_) {
+          return;
+        }
+        local = snap_hz_;
+        snap_dirty_ = false;
       }
+      SendSnapshot(local);
     }
   }
 
@@ -181,15 +270,25 @@ struct ChannelRs485Out::Impl
     {
       std::lock_guard<std::mutex> lock(mu_);
       run_ = false;
+      snap_dirty_ = false;
     }
     cv_.notify_all();
     if (worker_.joinable()) {
       worker_.join();
     }
-    std::lock_guard<std::mutex> lock(mu_);
-    for (std::string& p : pending_) {
-      p.clear();
+  }
+
+  void EnsureLink()
+  {
+    if (link) {
+      return;
     }
+    rs485::LinkOptions opts;
+    opts.reply_timeout_ms = 300;
+    opts.idle_gap_ms = 50;
+    opts.retries = 1;
+    opts.inter_byte_ms = 8;
+    link = std::make_unique<rs485::RS485Link>(port, opts);
   }
 };
 
@@ -205,35 +304,38 @@ ChannelRs485Out::~ChannelRs485Out()
 
 void ChannelRs485Out::Open(const std::string& serial_path,
                            uint32_t baud,
-                           uint32_t atten_db,
-                           uint32_t pace_us)
+                           uint32_t atten_db)
 {
   Close();
   if (atten_db > 127u) {
     throw std::runtime_error("gain atten_db must be 0..127");
   }
   atten_db_ = atten_db;
-  pace_us_ = pace_us;
-  impl_->pace_us = pace_us;
+  impl_->echo_disabled_ = false;
+  impl_->quiet_enabled_ = false;
+  impl_->burst_notes_ = false;
+  impl_->snap_hz_.fill(0.0);
+  impl_->sent_hz_.fill(0.0);
+  impl_->snap_dirty_ = false;
 
   if (!impl_->port.Open(serial_path, baud)) {
     throw std::runtime_error("RS485 open failed: " + impl_->port.LastError());
   }
   path_ = serial_path;
 
-  // Session setup still uses the reliable request/reply path (once).
-  rs485::LinkOptions opts;
-  opts.reply_timeout_ms = 300;
-  opts.idle_gap_ms = 50;
-  opts.retries = 1;
-  opts.inter_byte_ms = 8;
-  impl_->link = std::make_unique<rs485::RS485Link>(impl_->port, opts);
+  impl_->EnsureLink();
+
+  // Ctrl+C / kill skips Close(), which leaves c:quiet on armed — and quiet
+  // mutes every RS485 reply, so the next session's n0 looks like a dead bus.
+  // quiet off clears the flag before TX, so this recovers without a power cycle.
+  (void)impl_->link->Send(rs485::Target::Channel, "quiet off");
 
   const rs485::ExchangeResult init =
       impl_->link->Send(rs485::Target::Channel, "n0");
   if (!init.got_reply) {
     throw std::runtime_error(
-        "no reply to session n0 — check RS485 wiring / Channel Card power");
+        "no reply to session n0 — check RS485 wiring / Channel Card power "
+        "(or flash Channel with quiet on|off + bare-n0 quiet clear)");
   }
 
   char gain_cmd[32];
@@ -244,7 +346,6 @@ void ChannelRs485Out::Open(const std::string& serial_path,
     throw std::runtime_error(std::string("no reply to ") + gain_cmd);
   }
 
-  // Clear leftover tones synchronously before the worker starts.
   static const char* const kSlots = "0123456789abcdef";
   for (uint8_t i = 0; i < 16; ++i) {
     char cmd[8];
@@ -252,7 +353,23 @@ void ChannelRs485Out::Open(const std::string& serial_path,
     (void)impl_->link->Send(rs485::Target::Channel, cmd);
   }
 
-  // Note traffic: background TX, MIDI thread never waits.
+  const rs485::ExchangeResult quiet =
+      impl_->link->Send(rs485::Target::Channel, "quiet on");
+  impl_->quiet_enabled_ = quiet.got_reply && ReplyLooksOk(quiet.reply);
+
+  const rs485::ExchangeResult echo_off =
+      impl_->link->Send(rs485::Target::Effect, "echo off");
+  if (!echo_off.got_reply) {
+    impl_->burst_notes_ = true;
+    impl_->echo_disabled_ = false;
+  } else if (ReplyLooksOk(echo_off.reply)) {
+    impl_->burst_notes_ = true;
+    impl_->echo_disabled_ = true;
+  } else {
+    impl_->burst_notes_ = false;
+    impl_->echo_disabled_ = false;
+  }
+
   impl_->link.reset();
   impl_->StartWorker();
 }
@@ -263,48 +380,63 @@ void ChannelRs485Out::Close()
     return;
   }
   if (impl_->run_.load()) {
-    // Best-effort silence before stopping the worker.
-    static const char* const kSlots = "0123456789abcdef";
-    for (uint8_t i = 0; i < 16; ++i) {
-      char cmd[8];
-      std::snprintf(cmd, sizeof(cmd), "n%c 0", kSlots[i]);
-      impl_->Enqueue(i, cmd);
+    {
+      std::lock_guard<std::mutex> lock(impl_->mu_);
+      impl_->snap_hz_.fill(0.0);
+      impl_->snap_dirty_ = true;
     }
-    // Give the worker a moment to drain.
-    SleepMs(200);
+    impl_->cv_.notify_one();
+    SleepMs(impl_->burst_notes_ && impl_->quiet_enabled_ ? 150 : 500);
     impl_->StopWorker();
   }
+
+  if (impl_->port.IsOpen() &&
+      (impl_->quiet_enabled_ || impl_->echo_disabled_)) {
+    impl_->EnsureLink();
+    if (impl_->quiet_enabled_) {
+      (void)impl_->link->Send(rs485::Target::Channel, "quiet off");
+      impl_->quiet_enabled_ = false;
+    }
+    if (impl_->echo_disabled_) {
+      (void)impl_->link->Send(rs485::Target::Effect, "echo on");
+      impl_->echo_disabled_ = false;
+    }
+  }
+
+  impl_->link.reset();
+  impl_->burst_notes_ = false;
   impl_->port.Close();
   path_.clear();
 }
 
 void ChannelRs485Out::ApplyBankEvent(const BankEvent& event,
-                                     const VoiceBank& /*bank*/)
+                                     const VoiceBank& bank)
 {
   if (!impl_ || !impl_->run_.load()) {
     return;
   }
-
-  const uint8_t slot = static_cast<uint8_t>(event.slot & 0x0Fu);
-  const char slot_hex = "0123456789abcdef"[slot];
-  char cmd[64];
-
-  switch (event.kind) {
-  case BankEventKind::On:
-  case BankEventKind::Retrig:
-    // Every byte costs ~1 ms of pacing, and the card quantises to 0.1 Hz
-    // in its own reply — keep the frame short rather than 4 decimals.
-    std::snprintf(cmd, sizeof(cmd), "n%c %.1f %.2f", slot_hex, event.freq_hz,
-                  kVoiceScale);
-    break;
-  case BankEventKind::Off:
-  case BankEventKind::Steal:
-    std::snprintf(cmd, sizeof(cmd), "n%c 0", slot_hex);
-    break;
+  // Steal is followed by On for the same slot; sync once on On/Off/Retrig.
+  if (event.kind == BankEventKind::Steal) {
+    return;
   }
+  // Absolute sync: push the whole bank, not a single delta. A lost Off on
+  // the previous frame is corrected the next time any key moves.
+  impl_->PublishBank(bank);
+}
 
-  // Steal then On for the same slot coalesce to just On — one bus trip.
-  impl_->Enqueue(slot, cmd);
+bool ChannelRs485Out::BurstNotes() const
+{
+  return impl_ && impl_->burst_notes_;
+}
+
+bool ChannelRs485Out::EffectEchoDisabled() const
+{
+  return impl_ && impl_->echo_disabled_;
+}
+
+bool ChannelRs485Out::QuietReplies() const
+{
+  return impl_ && impl_->quiet_enabled_;
 }
 
 } // namespace midi_host

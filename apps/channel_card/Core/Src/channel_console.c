@@ -140,14 +140,22 @@ static int __attribute__((unused)) RS485_Send(const char *s)
  * over USB instead of the RS485 bus.  Console_ExecFromUSB() sets this
  * for the duration of the command. */
 static uint8_t console_via_usb = 0;
+/** When set, the card never drives RS485 for console replies. MIDI note
+ * bursts collide with any TX (ok:, err:, drop reports) and garble Offs into
+ * stuck voices — quiet must mute the bus completely, not just ok:. */
+static uint8_t rs485_quiet = 0;
 
 /** Send a tagged response: prefixes the string with [C] so the host knows
- * which card replied. */
+ * which card replied. No-op on RS485 while quiet (USB CDC still replies). */
 static void RS485_Reply(const char *s)
 {
   if (console_via_usb)
   {
     USB_CDC_WriteStr(s);
+    return;
+  }
+  if (rs485_quiet)
+  {
     return;
   }
   if (!RS485_WaitBusFree(RS485_BUS_TIMEOUT_MS))
@@ -204,9 +212,12 @@ static void Console_SetBypassOn(void)
 }
 
 /** Defaults for bare n0 / boot: dry path + CH1 DAC trim 0 dB (`gain 1 0`).
- * Frequency changes (`nX <Hz>`) do not touch gain or bypass. */
+ * Frequency changes (`nX <Hz>`) do not touch gain or bypass.
+ * Also clears rs485_quiet so a host that died mid-session (Ctrl+C) can
+ * still get an n0 reply on the next open. */
 static void Console_ApplySessionDefaults(void)
 {
+  rs485_quiet = 0;
   Console_SetBypassOn();
   CS4304_SetChannelTrim(&hcs4304, '1', (uint8_t)(N0_DEFAULT_ATTEN_DB * 2u));
 }
@@ -235,7 +246,7 @@ static void Console_SetNoteFreq(uint8_t note, double hz, double scale)
   {
     NoteBank_SetFreq(note, 0.0, 0.0);
     snprintf(b, sizeof b, "ok: N%c off\r\n", tag);
-    RS485_Reply(b);
+    RS485_Reply(b); /* no-op when quiet */
     return;
   }
 
@@ -244,7 +255,7 @@ static void Console_SetNoteFreq(uint8_t note, double hz, double scale)
     snprintf(b, sizeof b,
              "err: n%c <Hz> [scale] (0=off, else 20..19999.9, scale 0..1)\r\n",
              tag);
-    RS485_Reply(b);
+    RS485_Reply(b); /* no-op when quiet — never collide with MIDI TX */
     return;
   }
 
@@ -398,6 +409,36 @@ static void Console_Exec(char *line)
     {
       RS485_Reply("err: gain <ch 1..4> <dB 0..127>\r\n");
     }
+    return;
+  }
+
+  /* ---- quiet on|off: mute ALL RS485 replies during MIDI bursts ---- */
+  if (strcmp(line, "quiet on") == 0)
+  {
+    /* Reply before arming quiet — RS485_Reply is a no-op once set. */
+    RS485_Reply("ok: quiet on\r\n");
+    rs485_quiet = 1;
+    return;
+  }
+  if (strcmp(line, "quiet off") == 0)
+  {
+    rs485_quiet = 0;
+    RS485_Reply("ok: quiet off\r\n");
+    return;
+  }
+  if (strcmp(line, "quiet") == 0)
+  {
+    snprintf(b, sizeof b, "quiet: %s  (usage: quiet on|off)\r\n",
+             rs485_quiet ? "on" : "off");
+    RS485_Reply(b);
+    return;
+  }
+
+  /* ---- silence: turn off every note-bank voice (one short MIDI frame) ---- */
+  if (strcmp(line, "silence") == 0)
+  {
+    Console_CpuLoad_DisableVoices();
+    RS485_Reply("ok: silence\r\n"); /* no-op when quiet */
     return;
   }
 
@@ -582,11 +623,13 @@ static void Console_Poll(void)
       if (RS485_IsForMe(cmd))
       {
 #if !RS485_ECHO
-        /* The echo master transmits its "\r\n" echo at the same instant
-         * we received Enter — hold off briefly so our reply doesn't
-         * collide with it (both would sample "bus free" simultaneously,
-         * which CSMA cannot serialize). */
-        HAL_Delay(3);
+        /* Hold off before a reply so we don't collide with Effect's echo of
+         * Enter. Quiet MIDI bursts send no reply — skip the delay so a
+         * 16-note snapshot is applied in one Poll instead of 16×3 ms. */
+        if (!rs485_quiet)
+        {
+          HAL_Delay(3);
+        }
 #endif
         Console_Exec(cmd);
       }
@@ -676,6 +719,7 @@ void ChannelConsole_Init(void)
               "**************************************************\r\n"
               "*  Channel Card [C] ready  (multi-drop RS485)    *\r\n"
               "*  n0..nf <Hz> [scale] | gain <ch> <dB>          *\r\n"
+              "*  quiet on|off | silence  — MIDI bus helpers    *\r\n"
               "*  cpuload [on|off] [1..16]  — yellow LED PB9   *\r\n"
               "*  enter/boot: bypass ON, gain 1 0               *\r\n"
               "**************************************************\r\n");

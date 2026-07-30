@@ -6,6 +6,8 @@
  * Each voice is an independent fixed-point phase-accumulator oscillator with
  * its own amplitude scale (0.0..1.0). Hot-path samples are amplitude-scaled,
  * summed, and saturated into one Q31 sample for the CH1 (I2S1 left) slot.
+ * Hosts should pick a fixed per-voice scale (e.g. 1/8) so chords get louder
+ * additively; saturate is the last-resort clip rail.
  * Cold-path frequency/scale use double only to compute phase inc / Q15 amp —
  * never in DMA/ISR code.
  ******************************************************************************

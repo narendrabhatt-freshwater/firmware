@@ -11,9 +11,12 @@ namespace midi_host
 
 /**
  * Channel Card note bank over RS485.
- * Note commands are coalesced per slot (latest wins) and sent on a
- * background thread so the MIDI loop never blocks on bus turnaround.
- * Coalescing prevents chord note-offs from being dropped under backlog.
+ *
+ * Transport is absolute bank snapshots (all 16 slot freqs), not incremental
+ * On/Off deltas. Latest snapshot wins on a background thread so a dropped
+ * Off is healed on the next key event. Session open sends `c:quiet on` +
+ * `e:echo off` for wire-speed bursts; falls back to paced TX if Effect
+ * cannot disable echo.
  */
 class ChannelRs485Out
 {
@@ -25,33 +28,33 @@ public:
   ChannelRs485Out& operator=(const ChannelRs485Out&) = delete;
 
   /**
-   * Open adapter, bare n0, gain 1 <atten_db>, silence N0–NF, start TX worker.
+   * Open adapter, bare n0, gain 1 <atten_db>, silence N0–NF, quiet+echo
+   * setup when possible, start TX worker.
    * atten_db: CS4304 CH1 atten in dB (0..127), default 6.
-   * pace_us: delay between TX bytes. Default 1000. Required while Effect
-   *   Card echo shares the bus — a burst (0) overlaps that echo and Channel
-   *   sees garbled frames like "cjc:n0…". Use 0 only with Effect powered off
-   *   and interrupt-driven UART5 RX on Channel.
    */
   void Open(const std::string& serial_path,
             uint32_t baud = 115200,
-            uint32_t atten_db = 6,
-            uint32_t pace_us = 1000);
+            uint32_t atten_db = 6);
 
   void Close();
 
-  /** Enqueue one note command (returns immediately). */
+  /** Publish the current VoiceBank as the next absolute RS485 snapshot. */
   void ApplyBankEvent(const BankEvent& event, const VoiceBank& bank);
 
   std::string Path() const { return path_; }
   uint32_t AttenDb() const { return atten_db_; }
-  uint32_t PaceUs() const { return pace_us_; }
+  /** True when note TX is wire-speed (Effect echo off or absent). */
+  bool BurstNotes() const;
+  /** True when this session issued a successful e:echo off. */
+  bool EffectEchoDisabled() const;
+  /** True when this session issued a successful c:quiet on. */
+  bool QuietReplies() const;
 
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
   std::string path_;
   uint32_t atten_db_ = 6;
-  uint32_t pace_us_ = 1000;
 };
 
 } // namespace midi_host

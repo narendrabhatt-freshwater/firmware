@@ -13,6 +13,7 @@
 #include "pitch.hpp"
 #include "voice_bank.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -25,6 +26,7 @@
 #include <vector>
 
 #if !defined(_WIN32)
+#include <csignal>
 #include <unistd.h>
 #include <sys/select.h>
 #endif
@@ -41,6 +43,16 @@ using midi_host::VoiceBank;
 
 namespace
 {
+
+/** Set by SIGINT/SIGTERM so Ctrl+C still runs Close() (quiet off / echo on). */
+std::atomic<bool> g_quit_signal{false};
+
+#if !defined(_WIN32)
+void OnQuitSignal(int /*sig*/)
+{
+  g_quit_signal.store(true);
+}
+#endif
 
 enum class OutTarget
 {
@@ -69,8 +81,6 @@ void PrintUsage()
          "  --target channel     Drive Channel Card N0–NF over RS485 (no local speaker)\n"
          "  --rs485 PATH         USB↔RS485 adapter serial path (required with channel)\n"
          "  --baud N             RS485 baud (default 115200)\n"
-         "  --pace-us N          Delay between TX bytes (default 1000).\n"
-         "                       Use 0 only if Effect Card is off the bus.\n"
          "  --gain DB            CH1 DAC atten in dB at session start (0..127, default 6)\n"
          "                       e.g. --gain 6 → sends \"gain 1 6\" once at open\n"
          "\n"
@@ -104,7 +114,8 @@ void PrintBankEvent(const BankEvent& ev)
               name.c_str(),
               ev.freq_hz,
               static_cast<unsigned>(ev.active_count));
-  std::fflush(stdout);
+  // No fflush — under a 16-key mash, flushing every line stalls the MIDI
+  // poll loop and delays RS485 Offs (notes hang on the card).
 }
 
 #if !defined(_WIN32)
@@ -126,6 +137,9 @@ bool StdinReady()
  */
 bool ConsumeQuitRequest()
 {
+  if (g_quit_signal.load()) {
+    return true;
+  }
   if (!StdinReady()) {
     return false;
   }
@@ -144,7 +158,7 @@ bool ConsumeQuitRequest()
 #else
 bool ConsumeQuitRequest()
 {
-  return false;
+  return g_quit_signal.load();
 }
 #endif
 
@@ -158,13 +172,18 @@ bool LooksLikeSerialPath(const char* s)
 
 int main(int argc, char** argv)
 {
+#if !defined(_WIN32)
+  // Prefer a clean Close() over abrupt exit — Channel quiet / Effect echo
+  // are sticky until the host restores them.
+  std::signal(SIGINT, OnQuitSignal);
+  std::signal(SIGTERM, OnQuitSignal);
+#endif
   bool list_only = false;
   std::optional<unsigned> midi_index;
   OutTarget out_target = OutTarget::Speaker;
   std::string rs485_path;
   uint32_t rs485_baud = 115200;
   uint32_t gain_db = 6;
-  uint32_t pace_us = 1000;
 
   for (int i = 1; i < argc; ++i) {
     const char* arg = argv[i];
@@ -239,20 +258,6 @@ int main(int argc, char** argv)
       rs485_baud = static_cast<uint32_t>(v);
       continue;
     }
-    if (std::strcmp(arg, "--pace-us") == 0) {
-      if (i + 1 >= argc) {
-        std::cerr << "err: --pace-us requires a value (0..10000)\n";
-        return 1;
-      }
-      char* end = nullptr;
-      const long v = std::strtol(argv[++i], &end, 10);
-      if (end == argv[i] || *end != '\0' || v < 0 || v > 10000) {
-        std::cerr << "err: --pace-us must be 0..10000\n";
-        return 1;
-      }
-      pace_us = static_cast<uint32_t>(v);
-      continue;
-    }
     if (std::strcmp(arg, "--gain") == 0) {
       if (i + 1 >= argc) {
         std::cerr << "err: --gain requires dB 0..127\n";
@@ -320,10 +325,28 @@ int main(int argc, char** argv)
                 << audio->SampleRate() << " Hz)\n";
     } else {
       channel = std::make_unique<ChannelRs485Out>();
-      channel->Open(rs485_path, rs485_baud, gain_db, pace_us);
+      channel->Open(rs485_path, rs485_baud, gain_db);
       std::cout << "output: channel card via RS485 (" << channel->Path()
                 << " @ " << rs485_baud << ", gain 1 " << channel->AttenDb()
-                << ", pace " << channel->PaceUs() << " us)\n";
+                << ")\n";
+      if (channel->EffectEchoDisabled()) {
+        std::cout << "bus:    effect echo off";
+      } else if (channel->BurstNotes()) {
+        std::cout << "bus:    effect quiet/absent";
+      } else {
+        std::cout << "bus:    effect echo still on — paced note TX "
+                     "(flash Effect with echo on|off)";
+      }
+      if (channel->QuietReplies()) {
+        std::cout << ", channel quiet on";
+      } else {
+        std::cout << ", channel replies on "
+                     "(flash Channel with quiet on|off)";
+      }
+      if (channel->BurstNotes()) {
+        std::cout << " — note TX burst";
+      }
+      std::cout << "\n";
     }
     std::cout << "playing… (Enter to quit)\n";
   } catch (const std::exception& ex) {
@@ -345,14 +368,14 @@ int main(int argc, char** argv)
         events = bank.NoteOff(ne.key);
       }
       for (const BankEvent& ev : events) {
-        // Speakers / log first — never wait on RS485 before audible feedback.
+        // RS485 / speakers first — never stall the bus behind terminal I/O.
         if (audio) {
           audio->ApplyBankEvent(ev);
         }
-        PrintBankEvent(ev);
         if (channel) {
           channel->ApplyBankEvent(ev, bank);
         }
+        PrintBankEvent(ev);
       }
     }
 

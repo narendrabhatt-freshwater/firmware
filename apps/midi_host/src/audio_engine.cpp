@@ -122,9 +122,8 @@ void AudioEngine::ApplyBankEvent(const BankEvent& event)
     v.retrigger = true;
     break;
   case BankEventKind::Steal:
-    v.active = false;
-    v.freq_hz = 0.0;
-    v.retrigger = false;
+    // Slot is reused by the following On in the same NoteOn(); ignore here
+    // so we do not briefly silence the voice between the two events.
     break;
   case BankEventKind::Off:
     v.active = false;
@@ -165,7 +164,7 @@ void AudioEngine::Render(float* out, unsigned n_frames)
     }
   }
 
-  constexpr double kVoiceGain = 1.0 / 16.0;
+  constexpr double kVoiceGain = 0.125; /* match channel RS485 1/8 scale */
   const double two_pi = 2.0 * M_PI;
 
   for (unsigned frame = 0; frame < n_frames; ++frame) {

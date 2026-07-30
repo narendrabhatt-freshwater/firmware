@@ -28,9 +28,11 @@
 #include "main.h"
 #include "usart.h"
 
-/** Power of two so the wrap is a mask, not a modulo. 256 B is >5x the
- * 48-byte console line buffer, so a full ring means a real fault. */
-#define UART5_RX_BUF_SIZE 256u
+/** Power of two so the wrap is a mask, not a modulo. 2048 B holds several
+ * full 16-voice note bursts (~20 B each) so a mash of On+Off chords cannot
+ * overrun while the main loop is in USB/audio work. 256 was too small: one
+ * 16-note batch alone is ~300 B and dropped Offs left voices stuck. */
+#define UART5_RX_BUF_SIZE 2048u
 #define UART5_RX_BUF_MASK (UART5_RX_BUF_SIZE - 1u)
 
 static volatile uint8_t rx_buf[UART5_RX_BUF_SIZE];
@@ -67,9 +69,11 @@ void Uart5Rx_Init(void)
   }
   UART5->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF;
 
-  /* Priority 2: below USB/DMA/TIM7 (0) and I2S (1), above everything else.
-   * FIFO covers the remaining latency. */
-  HAL_NVIC_SetPriority(UART5_IRQn, 2, 0);
+  /* Priority 1: same band as I2S. Was 2, which let 16-voice NoteBank DMA
+   * starve UART long enough to drop the silence/Off frames that end a chord
+   * — host bank went idle while the card kept singing. FIFO still covers
+   * brief priority-0 USB/TIM7 work. */
+  HAL_NVIC_SetPriority(UART5_IRQn, 1, 0);
   HAL_NVIC_EnableIRQ(UART5_IRQn);
 
   UART5->CR1 |= USART_CR1_RXNEIE_RXFNEIE;

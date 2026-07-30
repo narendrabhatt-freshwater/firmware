@@ -186,6 +186,12 @@ void SerialPort::FlushInput() {
   tcflush(impl_->fd, TCIFLUSH);
 }
 
+void SerialPort::DrainOutput() {
+  if (!is_open_)
+    return;
+  (void)tcdrain(impl_->fd);
+}
+
 void SerialPort::SetRts(bool asserted) {
   if (!is_open_ || !manual_rts_)
     return;

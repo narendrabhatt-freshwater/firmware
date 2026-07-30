@@ -45,18 +45,19 @@ Velocity is ignored. Pitch: \(f = 440 \times 2^{(n-69)/12}\).
 
 On Channel Card mode, session start sends `n0` (bypass + defaults), then
 **`gain 1 6`** (−6 dB on CH1), then `n0`…`nf 0` to clear leftover tones.
-Each note is one RS485 exchange: `c:nX <Hz> 0.5` or `c:nX 0` (same path as
-`fw rs485`). Scale 0.5 keeps the wave visible with `gain 1 6`; chords may
-soft-clip past a couple of notes.
+Each note event publishes the desired bank; the TX worker sends a **delta**:
+only slots that changed (`nX 0` or `nX <Hz> 0.12`). A full release paces
+all 16 offs (4 ms apart — each dead voice frees UART CPU) then `silence`
+twice. UART5 IRQ priority was raised so 16-voice audio cannot starve the
+clear frames. `DrainOutput` waits for USB-serial TX to finish so a silence
+cannot sit behind a stale chord in the driver queue.
 
-Pending commands are **coalesced per slot** (latest wins), so a release can
-never be dropped behind a queued press — that was the cause of notes sticking
-on after a chord.
+Scale **1/8** keeps single notes quiet and lets chords get louder
+additively until ~8 voices approach full-scale.
 
-`--pace-us N` sets the delay between transmitted bytes (default **1000**).
-That matches `fw rs485 send` and keeps Effect Card keystroke-echo from
-corrupting frames on the shared bus. `--pace-us 0` is only safe with Effect
-powered off (and Channel interrupt RX).
+At session start the host sends **`c:quiet on`** (Channel must not drive
+the bus at all during note bursts) and **`e:echo off`**. On quit it
+restores `quiet off` / `echo on`.
 
 Example (speakers):
 

@@ -157,6 +157,12 @@ void SerialPort::FlushInput() {
   PurgeComm(impl_->handle, PURGE_RXCLEAR);
 }
 
+void SerialPort::DrainOutput() {
+  if (!is_open_)
+    return;
+  (void)FlushFileBuffers(impl_->handle);
+}
+
 void SerialPort::SetRts(bool asserted) {
   if (!is_open_ || !manual_rts_)
     return;

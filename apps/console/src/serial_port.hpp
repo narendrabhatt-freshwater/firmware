@@ -53,6 +53,11 @@ public:
    * transmit so ReadReply() only sees post-TX traffic. */
   void FlushInput();
 
+  /** Block until the OS has shifted out every byte from the last Write().
+   * Needed before a follow-up frame so a "silence" cannot sit behind a
+   * stale chord still in the USB-serial TX queue. */
+  void DrainOutput();
+
   /** Some USB-RS485 dongles lack auto-direction and need RTS driven high
    * only while transmitting. Off by default (matches ADAM-4520 and most
    * modern auto-direction dongles, which need no RTS handling at all). */

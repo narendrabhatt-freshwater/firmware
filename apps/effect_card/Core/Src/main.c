@@ -46,7 +46,7 @@
 #define RS485_CARD_ID 'e'        /* 'c' = Channel Card, 'e' = Effect Card */
 #define RS485_BROADCAST_ID '*'   /* broadcast prefix */
 #define RS485_BUS_TIMEOUT_MS 250 /* max wait for bus to become free */
-#define RS485_ECHO 1             /* 1 = this card echoes typing */
+#define RS485_ECHO 1             /* default: this card echoes typing */
 
 /* USER CODE END PD */
 
@@ -60,6 +60,10 @@
 /* USER CODE BEGIN PV */
 
 static uint8_t led_show_on = 1; /* LED flashing enable flag */
+/** Runtime RS485 keystroke echo (bus re-TX). Default from RS485_ECHO.
+ * midi_host turns this off for the session so Channel note frames can
+ * burst at wire speed without colliding with our echo. */
+static uint8_t rs485_echo = RS485_ECHO;
 
 /* USER CODE END PV */
 
@@ -265,6 +269,7 @@ static void Console_Help(void) {
               "* adc rd <n> <reg>     read ADC register (hex)   *\r\n"
               "* adc wr <n> <reg> <v> write ADC register (hex)  *\r\n"
               "* usb ch <1..8>        ADC ch for USB stream     *\r\n"
+              "* echo on|off          RS485 keystroke bus echo  *\r\n"
               "**************************************************\r\n"
               "Type a command and press Enter.\r\n\r\n");
 }
@@ -291,6 +296,9 @@ static void Console_Status(void) {
 
   /* LEDs */
   snprintf(b, sizeof b, "LED flashing: %s\r\n", led_show_on ? "on" : "off");
+  RS485_Reply(b);
+
+  snprintf(b, sizeof b, "RS485 echo: %s\r\n", rs485_echo ? "on" : "off");
   RS485_Reply(b);
 
   snprintf(
@@ -492,6 +500,18 @@ static void Console_Exec(char *line) {
     }
     RS485_Reply(b);
   }
+  /* ---- echo on|off  (RS485 keystroke bus echo; midi_host uses off) ---- */
+  else if (strcmp(line, "echo on") == 0) {
+    rs485_echo = 1;
+    RS485_Reply("ok: RS485 echo on\r\n");
+  } else if (strcmp(line, "echo off") == 0) {
+    rs485_echo = 0;
+    RS485_Reply("ok: RS485 echo off\r\n");
+  } else if (strcmp(line, "echo") == 0) {
+    snprintf(b, sizeof b, "RS485 echo: %s  (usage: echo on|off)\r\n",
+             rs485_echo ? "on" : "off");
+    RS485_Reply(b);
+  }
   /* ---- unknown ---- */
   else {
     snprintf(b, sizeof b, "unknown: '%s' (try 'help')\r\n", line);
@@ -543,20 +563,19 @@ static void Console_Poll(void) {
   __HAL_UART_CLEAR_OREFLAG(&huart4);
   while (HAL_UART_Receive(&huart4, &c, 1, 0) == HAL_OK) {
     if (c == '\r' || c == '\n') {
-#if RS485_ECHO
-      RS485_Send("\r\n");
-#endif
+      if (rs485_echo) {
+        RS485_Send("\r\n");
+      }
       cmd[idx] = '\0';
 
       /* Card-address filtering: only execute if addressed to us */
       if (RS485_IsForMe(cmd)) {
-#if !RS485_ECHO
-        /* The echo master transmits its "\r\n" echo at the same instant
-         * we received Enter — hold off briefly so our reply doesn't
-         * collide with it (both would sample "bus free" simultaneously,
-         * which CSMA cannot serialize). */
-        HAL_Delay(3);
-#endif
+        if (!rs485_echo) {
+          /* When we are not echoing, another card might still be the
+           * echo master — hold off so our reply doesn't collide with
+           * its "\r\n" (both would sample "bus free" simultaneously). */
+          HAL_Delay(3);
+        }
         Console_Exec(cmd);
       }
       /* else: message for another card — silently ignore */
@@ -566,16 +585,16 @@ static void Console_Poll(void) {
     {
       if (idx > 0) {
         idx--;
-#if RS485_ECHO
-        RS485_Send("\b \b");
-#endif
+        if (rs485_echo) {
+          RS485_Send("\b \b");
+        }
       }
     } else if (c >= 32 && c < 127 && idx < sizeof(cmd) - 1) {
       cmd[idx++] = (char)((c >= 'A' && c <= 'Z') ? c + 32 : c); /* lowercase */
-#if RS485_ECHO
-      char e[2] = {(char)c, '\0'};
-      RS485_Send(e); /* echo typing */
-#endif
+      if (rs485_echo) {
+        char e[2] = {(char)c, '\0'};
+        RS485_Send(e); /* echo typing onto the shared bus */
+      }
     }
   }
 }
