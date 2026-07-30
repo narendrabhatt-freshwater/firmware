@@ -104,6 +104,9 @@ scf 100      → 100 kHz clock → 1 kHz cutoff
 5. `CPU% ≈ t_low / (t_low + t_high)`.
 6. When done: `cpuload off`.
 
+Smoke after console extract / flash: `cpuload 1`, `cpuload 16`, `cpuload off`,
+`n0 440 0.5`, `gain 1 0` — LED chaser should resume after `cpuload off`.
+
 `cpuload on` / bare `cpuload` starts **16** oscillators (220, 260, … Hz). Pass
 **`1..16`** to change how many run — busy % should rise roughly with count
 (e.g. `cpuload 1` then `cpuload 16` on the scope).
@@ -132,9 +135,11 @@ Then flash `build/Debug/channel_MCU.hex` over DFU — see
 
 | Path                      | Contents                                                                     |
 | ------------------------- | ---------------------------------------------------------------------------- |
-| `Core/Src/main.c`         | Console parser, RS485 multi-drop, startup                                    |
+| `Core/Src/main.c`         | Bring-up, DAC init, main loop wiring                                         |
+| `Core/Src/channel_console.c` | RS485 + USB CDC console, `cpuload`, LED chaser                            |
 | `Core/Src/audio_bridge.c` | **USB→I2S audio engine** — ring buffer, tone/DC generators, I2S2 workarounds |
 | `Core/Src/cs4304.c`       | CS4304 DAC driver (I2C)                                                      |
+| `Core/Src/note_bank.c`    | N0–NF additive sine bank                                                     |
 | `USB_APP/`                | TinyUSB descriptors, `tusb_config.h`, UAC2 + CDC glue                        |
 
 ### `audio_bridge.c` — handle with care
