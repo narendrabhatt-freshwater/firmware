@@ -44,7 +44,7 @@ using midi_host::VoiceBank;
 namespace
 {
 
-/** Set by SIGINT/SIGTERM so Ctrl+C still runs Close() (quiet off / echo on). */
+/** Set by SIGINT/SIGTERM so Ctrl+C still runs Close() (quiet off). */
 std::atomic<bool> g_quit_signal{false};
 
 #if !defined(_WIN32)
@@ -173,8 +173,8 @@ bool LooksLikeSerialPath(const char* s)
 int main(int argc, char** argv)
 {
 #if !defined(_WIN32)
-  // Prefer a clean Close() over abrupt exit — Channel quiet / Effect echo
-  // are sticky until the host restores them.
+  // Prefer a clean Close() over abrupt exit — Channel quiet is sticky
+  // until the host clears it.
   std::signal(SIGINT, OnQuitSignal);
   std::signal(SIGTERM, OnQuitSignal);
 #endif
@@ -329,22 +329,17 @@ int main(int argc, char** argv)
       std::cout << "output: channel card via RS485 (" << channel->Path()
                 << " @ " << rs485_baud << ", gain 1 " << channel->AttenDb()
                 << ")\n";
+      std::cout << "bus:    note TX burst";
       if (channel->EffectEchoDisabled()) {
-        std::cout << "bus:    effect echo off";
-      } else if (channel->BurstNotes()) {
-        std::cout << "bus:    effect quiet/absent";
+        std::cout << ", effect echo off";
       } else {
-        std::cout << "bus:    effect echo still on — paced note TX "
-                     "(flash Effect with echo on|off)";
+        std::cout << ", effect absent/no echo ack";
       }
       if (channel->QuietReplies()) {
         std::cout << ", channel quiet on";
       } else {
         std::cout << ", channel replies on "
                      "(flash Channel with quiet on|off)";
-      }
-      if (channel->BurstNotes()) {
-        std::cout << " — note TX burst";
       }
       std::cout << "\n";
     }

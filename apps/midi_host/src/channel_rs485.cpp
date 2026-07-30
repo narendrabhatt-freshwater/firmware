@@ -22,8 +22,10 @@ namespace
 /** Fixed per-voice scale: ~1/8 FS so chords get louder additively. */
 constexpr double kVoiceScale = 0.125;
 
-/** Inter-byte gap while Effect Card is still echoing. */
-constexpr uint32_t kPaceUs = 1000;
+/** Inter-frame gaps (µs) with Effect echo off + quiet on. */
+constexpr uint32_t kGapOnUs = 100;
+constexpr uint32_t kGapOffUs = 150;
+constexpr uint32_t kGapClearUs = 300;
 
 void SleepMs(uint32_t ms)
 {
@@ -39,22 +41,6 @@ void SleepUs(uint32_t us)
     return;
   }
   std::this_thread::sleep_for(std::chrono::microseconds(us));
-}
-
-/** Read until the RX line is quiet for quiet_ms, or overall_ms elapses. */
-void DrainUntilQuiet(rs485::SerialPort& port,
-                     uint32_t overall_ms,
-                     uint32_t quiet_ms)
-{
-  using clock = std::chrono::steady_clock;
-  const auto deadline = clock::now() + std::chrono::milliseconds(overall_ms);
-  uint8_t trash[64];
-
-  while (clock::now() < deadline) {
-    if (port.ReadTimeout(trash, sizeof(trash), quiet_ms) == 0) {
-      return;
-    }
-  }
 }
 
 bool ReplyLooksOk(const std::string& reply)
@@ -128,58 +114,16 @@ struct ChannelRs485Out::Impl
               drain);
   }
 
-  void SendCommandPaced(const std::string& body)
-  {
-    const std::string wire = std::string("c:") + body + "\r";
-    port.FlushInput();
-    const auto* bytes = reinterpret_cast<const uint8_t*>(wire.data());
-
-    if (burst_notes_) {
-      WriteWire(bytes, wire.size(), true);
-      SleepMs(3);
-      DrainUntilQuiet(port, 40, 3);
-      return;
-    }
-
-    for (size_t i = 0; i < wire.size(); ++i) {
-      if (port.ManualRtsControl()) {
-        port.SetRts(true);
-      }
-      if (!port.Write(bytes + i, 1)) {
-        if (port.ManualRtsControl()) {
-          port.SetRts(false);
-        }
-        return;
-      }
-      if (port.ManualRtsControl()) {
-        port.SetRts(false);
-      }
-      const bool last = (i + 1u == wire.size());
-      if (!last) {
-        SleepUs(kPaceUs);
-        DrainUntilQuiet(port, (kPaceUs + 999u) / 1000u + 2u, 2);
-      }
-    }
-    port.DrainOutput();
-    SleepMs(2);
-    DrainUntilQuiet(port, 25, 2);
-  }
-
   /**
-   * Delta sync. Note-ons are fast (no tcdrain). Full release is paced and
-   * drained so clears land even under 16-voice audio load.
+   * Delta sync at wire speed. Full release drains the last frame so clears
+   * land even under 16-voice audio load.
    */
   void SendSnapshot(const std::array<double, kVoiceCount>& hz)
   {
-    const bool quiet_burst = burst_notes_ && quiet_enabled_;
     auto emit = [&](const std::string& body, uint32_t gap_us, bool drain) {
-      if (quiet_burst) {
-        SendOneFrame(body, drain);
-        if (gap_us > 0) {
-          SleepUs(gap_us);
-        }
-      } else {
-        SendCommandPaced(body);
+      SendOneFrame(body, drain);
+      if (gap_us > 0) {
+        SleepUs(gap_us);
       }
     };
 
@@ -194,10 +138,10 @@ struct ChannelRs485Out::Impl
     if (!any_on) {
       // Full clear: one silence, then every slot off. Drain only the last
       // frame so the USB queue cannot hide a stale On behind us.
-      emit("silence", 2000, false);
+      emit("silence", kGapClearUs, false);
       for (uint8_t i = 0; i < kVoiceCount; ++i) {
         const bool last = (i + 1u == kVoiceCount);
-        emit(SlotOffCommand(i), last ? 0 : 2000, last);
+        emit(SlotOffCommand(i), last ? 0 : kGapClearUs, last);
       }
       emit("silence", 0, true);
       sent_hz_.fill(0.0);
@@ -206,13 +150,13 @@ struct ChannelRs485Out::Impl
 
     for (uint8_t i = 0; i < kVoiceCount; ++i) {
       if (sent_hz_[i] > 0.0 && hz[i] <= 0.0) {
-        emit(SlotOffCommand(i), 800, false);
+        emit(SlotOffCommand(i), kGapOffUs, false);
         sent_hz_[i] = 0.0;
       }
     }
     for (uint8_t i = 0; i < kVoiceCount; ++i) {
       if (hz[i] > 0.0 && hz[i] != sent_hz_[i]) {
-        emit(SlotOnCommand(i, hz[i]), 400, false);
+        emit(SlotOnCommand(i, hz[i]), kGapOnUs, false);
         sent_hz_[i] = hz[i];
       }
     }
@@ -357,18 +301,13 @@ void ChannelRs485Out::Open(const std::string& serial_path,
       impl_->link->Send(rs485::Target::Channel, "quiet on");
   impl_->quiet_enabled_ = quiet.got_reply && ReplyLooksOk(quiet.reply);
 
+  // Effect defaults to echo off; still request it for older firmware. Note
+  // TX always bursts — paced per-byte fallback is gone.
   const rs485::ExchangeResult echo_off =
       impl_->link->Send(rs485::Target::Effect, "echo off");
-  if (!echo_off.got_reply) {
-    impl_->burst_notes_ = true;
-    impl_->echo_disabled_ = false;
-  } else if (ReplyLooksOk(echo_off.reply)) {
-    impl_->burst_notes_ = true;
-    impl_->echo_disabled_ = true;
-  } else {
-    impl_->burst_notes_ = false;
-    impl_->echo_disabled_ = false;
-  }
+  impl_->echo_disabled_ =
+      echo_off.got_reply && ReplyLooksOk(echo_off.reply);
+  impl_->burst_notes_ = true;
 
   impl_->link.reset();
   impl_->StartWorker();
@@ -386,24 +325,20 @@ void ChannelRs485Out::Close()
       impl_->snap_dirty_ = true;
     }
     impl_->cv_.notify_one();
-    SleepMs(impl_->burst_notes_ && impl_->quiet_enabled_ ? 150 : 500);
+    SleepMs(150);
     impl_->StopWorker();
   }
 
-  if (impl_->port.IsOpen() &&
-      (impl_->quiet_enabled_ || impl_->echo_disabled_)) {
+  // Leave Effect echo off (firmware default). Only clear Channel quiet so
+  // the next fw rs485 console session still gets replies.
+  if (impl_->port.IsOpen() && impl_->quiet_enabled_) {
     impl_->EnsureLink();
-    if (impl_->quiet_enabled_) {
-      (void)impl_->link->Send(rs485::Target::Channel, "quiet off");
-      impl_->quiet_enabled_ = false;
-    }
-    if (impl_->echo_disabled_) {
-      (void)impl_->link->Send(rs485::Target::Effect, "echo on");
-      impl_->echo_disabled_ = false;
-    }
+    (void)impl_->link->Send(rs485::Target::Channel, "quiet off");
+    impl_->quiet_enabled_ = false;
   }
 
   impl_->link.reset();
+  impl_->echo_disabled_ = false;
   impl_->burst_notes_ = false;
   impl_->port.Close();
   path_.clear();

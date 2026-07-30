@@ -46,7 +46,7 @@
 #define RS485_CARD_ID 'e'        /* 'c' = Channel Card, 'e' = Effect Card */
 #define RS485_BROADCAST_ID '*'   /* broadcast prefix */
 #define RS485_BUS_TIMEOUT_MS 250 /* max wait for bus to become free */
-#define RS485_ECHO 1             /* default: this card echoes typing */
+#define RS485_ECHO 0             /* default off: midi_host bursts at wire speed */
 
 /* USER CODE END PD */
 

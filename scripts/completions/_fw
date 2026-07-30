@@ -47,7 +47,7 @@ _fw() {
   rs485_opts=(
     '--port[RS485 adapter device path]:port:_fw_serial_ports'
     '-p[RS485 adapter device path]:port:_fw_serial_ports'
-    '--baud[Baud rate]:baud:(115200 9600)'
+    '--baud[Baud rate]:baud:(115200 230400 9600)'
     '--manual-rts[Toggle RTS around TX (dongles w/o auto-direction)]'
     '--timeout-ms[Per-attempt reply wait, ms]:ms:(300)'
     '--retries[Extra send attempts on no reply]:n:(2)'

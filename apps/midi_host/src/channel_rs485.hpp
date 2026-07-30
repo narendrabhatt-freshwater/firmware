@@ -15,8 +15,7 @@ namespace midi_host
  * Transport is absolute bank snapshots (all 16 slot freqs), not incremental
  * On/Off deltas. Latest snapshot wins on a background thread so a dropped
  * Off is healed on the next key event. Session open sends `c:quiet on` +
- * `e:echo off` for wire-speed bursts; falls back to paced TX if Effect
- * cannot disable echo.
+ * `e:echo off`; note TX is always wire-speed burst (Effect echo stays off).
  */
 class ChannelRs485Out
 {
@@ -43,9 +42,9 @@ public:
 
   std::string Path() const { return path_; }
   uint32_t AttenDb() const { return atten_db_; }
-  /** True when note TX is wire-speed (Effect echo off or absent). */
+  /** True when note TX is wire-speed burst (always after a successful Open). */
   bool BurstNotes() const;
-  /** True when this session issued a successful e:echo off. */
+  /** True when this session got ok: to e:echo off. */
   bool EffectEchoDisabled() const;
   /** True when this session issued a successful c:quiet on. */
   bool QuietReplies() const;
