@@ -98,18 +98,21 @@ scf 100      → 100 kHz clock → 1 kHz cutoff
 **What you do**
 
 1. Flash the Channel Card build.
-2. On RS485/USB console: `cpuload on` (or just `cpuload`).
+2. On RS485/USB console: `cpuload on` or `cpuload on 4` (voice count).
 3. Probe the **yellow LED** pin — **PB9 / `LED_Y`** (not the red LED).
 4. On the scope: **low = CPU busy**, **high = idle**.
 5. `CPU% ≈ t_low / (t_low + t_high)`.
 6. When done: `cpuload off`.
 
-**You do not set N0…NF yourself.** `cpuload on` automatically starts all **16** oscillators at fixed freqs **220, 260, … 820 Hz**, each at scale **1/16**, so the mix is deterministic and roughly unity-full-scale.
+`cpuload on` / bare `cpuload` starts **16** oscillators (220, 260, … Hz). Pass
+**`1..16`** to change how many run — busy % should rise roughly with count
+(e.g. `cpuload 1` then `cpuload 16` on the scope).
 
 | Command | Action |
 |---|---|
-| `cpuload` / `cpuload on` | Auto 16 voices + DMA half-fill LED probe (default) |
-| `cpuload queue` | Same voices + soft-queue LED probe |
+| `cpuload` / `cpuload on` | 16 voices + DMA LED probe |
+| `cpuload on 4` / `cpuload 4` | 4 voices only (compare duty cycle) |
+| `cpuload queue 8` | 8 voices + soft-queue LED probe |
 | `cpuload off` | Clear notes, stop probe, resume LED chaser |
 
 ## Build & flash
@@ -182,6 +185,6 @@ that note’s amplitude. Frequency/scale changes do not touch gain or bypass.
 | `N0`…`NF` `<Hz>` | Note at Hz, scale **1.0** (max); voices sum on CH1 |
 | `N0`…`NF` `<Hz> <scale>` | Note at Hz with amplitude 0.0..1.0 (e.g. `n0 440 0.5`) |
 | `gain <ch> <dB>` | DAC atten 0..127 on ch 1..4 (e.g. `gain 1 40`) |
-| `cpuload` / `on` | Auto 16 voices + LED_Y (PB9) DMA load probe |
-| `cpuload queue` | Same, soft-queue producer mode |
+| `cpuload` / `on` `[1..16]` | N voices + LED_Y (PB9) DMA load probe (default 16) |
+| `cpuload queue` `[1..16]` | Same, soft-queue producer mode |
 | `cpuload off` | Clear notes; resume LED chaser |
