@@ -52,12 +52,14 @@
  * I2S DMA buffer sizing:
  * I2S is configured for 32-bit data, stereo (L+R), at 96 kHz.
  * Each I2S frame = 2 × 32-bit words (L + R) = 8 bytes
- * DMA buffer holds enough frames for double-buffering with USB audio.
+ * DMA buffer is double-buffered: half/full IRQs each refill one half.
  *
- * AUDIO_I2S_BUF_FRAMES: number of stereo frames in the DMA buffer.
- * We use 96 frames = 1 ms at 96 kHz. Double-buffered = 192 frames total.
+ * AUDIO_I2S_BUF_FRAMES: stereo frames in the full DMA ring.
+ * 96 frames = 1 ms full ring; half = 48 frames = 0.5 ms @ 96 kHz.
+ * (Larger sizes were used for USB↔I2S SOF drift headroom — restore on a
+ * dedicated USB branch if needed.)
  */
-#define AUDIO_I2S_BUF_FRAMES 384                      /* 4 ms at 96 kHz — headroom for USB↔I2S clock phase drift */
+#define AUDIO_I2S_BUF_FRAMES 96                       /* 1 ms full; half = 48 = 0.5 ms @ 96 kHz */
 #define AUDIO_I2S_BUF_SIZE (AUDIO_I2S_BUF_FRAMES * 2) /* × 2 for L+R, in 32-bit words */
 
 /* I2S2 (CH3/CH4) enabled. Slave TX on SPI2 requires two workarounds
@@ -111,7 +113,7 @@ void Audio_SetUSBMute(uint8_t mute) { usb_muted = mute ? 1u : 0u; }
  *   high = idle (waiting for DMA / queue drain)
  * Scope duty: CPU% ≈ t_busy / (t_busy + t_idle).
  *
- * Queue mode: soft ring drained by DMA half/full callbacks (192 frames).
+ * Queue mode: soft ring drained by DMA half/full callbacks (48 frames).
  * Capacity is larger than one half so the main-loop producer can stay ahead.
  * LED is idle only while the queue is full; otherwise Poll fills to full
  * (same duty-cycle idea as a ~16-sample low watermark with sample-at-a-time
@@ -119,7 +121,7 @@ void Audio_SetUSBMute(uint8_t mute) { usb_muted = mute ? 1u : 0u; }
  */
 #define CPULOAD_Q_SIZE 256u
 /* Classic sample-at-a-time low watermark is ~16; with DMA half gulps of
- * AUDIO_I2S_BUF_FRAMES/2 we refill whenever the queue is not full instead. */
+ * AUDIO_I2S_BUF_FRAMES/2 (48) we refill whenever the queue is not full instead. */
 
 static volatile Audio_CpuLoadMode_t cpuload_mode = AUDIO_CPULOAD_OFF;
 
@@ -233,7 +235,7 @@ void Audio_CpuLoad_Poll(void)
   }
 
   count = CpuLoad_QueueCount();
-  /* Full → idle (LED high). Refill whenever not full so a 192-frame DMA
+  /* Full → idle (LED high). Refill whenever not full so a 48-frame DMA
    * pop cannot underrun before the next main-loop Poll. */
   if (count >= (CPULOAD_Q_SIZE - 1u))
   {
@@ -839,7 +841,7 @@ void Audio_Bridge_WriteUSB(const uint8_t *pbuf, uint32_t size)
 
     if (!usb_synced)
     {
-      /* Start writing half a buffer (2 ms) ahead of the DMA read point */
+      /* Start writing half a buffer (0.5 ms) ahead of the DMA read point */
       usb_wr_idx = ((rd + AUDIO_I2S_BUF_SIZE / 2u) % AUDIO_I2S_BUF_SIZE) & ~1u;
       usb_synced = 1;
     }
