@@ -55,7 +55,7 @@ void PrintUsage()
          "\n"
          "Usage:\n"
          "  midi_host [--midi N]                         # speakers (default)\n"
-         "  midi_host --target channel --rs485 PATH [--midi N]\n"
+         "  midi_host --target channel --rs485 PATH [--midi N] [--gain DB]\n"
          "  midi_host --list\n"
          "  midi_host -h | --help\n"
          "\n"
@@ -69,6 +69,8 @@ void PrintUsage()
          "  --target channel     Drive Channel Card N0–NF over RS485 (no local speaker)\n"
          "  --rs485 PATH         USB↔RS485 adapter serial path (required with channel)\n"
          "  --baud N             RS485 baud (default 115200)\n"
+         "  --gain DB            CH1 DAC atten in dB at session start (0..127, default 6)\n"
+         "                       e.g. --gain 6 → sends \"gain 1 6\" once at open\n"
          "\n"
          "Velocity is ignored. Up to 16 notes; overflow steals the oldest.\n"
          "Duplicate Note On retriggers the same oscillator slot.\n"
@@ -114,8 +116,31 @@ bool StdinReady()
   tv.tv_usec = 0;
   return select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0;
 }
+
+/**
+ * Quit on Enter/q without blocking the MIDI loop.
+ * Never call getline() here — if any keystroke arrives, getline would wait
+ * for a full line and freeze note handling for seconds.
+ */
+bool ConsumeQuitRequest()
+{
+  if (!StdinReady()) {
+    return false;
+  }
+  char buf[64];
+  const ssize_t n = ::read(STDIN_FILENO, buf, sizeof(buf));
+  if (n <= 0) {
+    return false;
+  }
+  for (ssize_t i = 0; i < n; ++i) {
+    if (buf[i] == '\n' || buf[i] == '\r' || buf[i] == 'q' || buf[i] == 'Q') {
+      return true;
+    }
+  }
+  return false;
+}
 #else
-bool StdinReady()
+bool ConsumeQuitRequest()
 {
   return false;
 }
@@ -136,6 +161,7 @@ int main(int argc, char** argv)
   OutTarget out_target = OutTarget::Speaker;
   std::string rs485_path;
   uint32_t rs485_baud = 115200;
+  uint32_t gain_db = 6;
 
   for (int i = 1; i < argc; ++i) {
     const char* arg = argv[i];
@@ -210,6 +236,20 @@ int main(int argc, char** argv)
       rs485_baud = static_cast<uint32_t>(v);
       continue;
     }
+    if (std::strcmp(arg, "--gain") == 0) {
+      if (i + 1 >= argc) {
+        std::cerr << "err: --gain requires dB 0..127\n";
+        return 1;
+      }
+      char* end = nullptr;
+      const long v = std::strtol(argv[++i], &end, 10);
+      if (end == argv[i] || *end != '\0' || v < 0 || v > 127) {
+        std::cerr << "err: --gain must be 0..127\n";
+        return 1;
+      }
+      gain_db = static_cast<uint32_t>(v);
+      continue;
+    }
     // Bare "channel" as positional (fw midi channel …).
     if (std::strcmp(arg, "channel") == 0) {
       out_target = OutTarget::Channel;
@@ -263,9 +303,10 @@ int main(int argc, char** argv)
                 << audio->SampleRate() << " Hz)\n";
     } else {
       channel = std::make_unique<ChannelRs485Out>();
-      channel->Open(rs485_path, rs485_baud);
+      channel->Open(rs485_path, rs485_baud, gain_db);
       std::cout << "output: channel card via RS485 (" << channel->Path()
-                << " @ " << rs485_baud << ")\n";
+                << " @ " << rs485_baud << ", gain 1 " << channel->AttenDb()
+                << ")\n";
     }
     std::cout << "playing… (Enter to quit)\n";
   } catch (const std::exception& ex) {
@@ -281,23 +322,24 @@ int main(int argc, char** argv)
       std::vector<BankEvent> events;
       if (ne.action == NoteAction::On) {
         events = bank.NoteOn(ne.key);
+      } else if (ne.action == NoteAction::AllOff) {
+        events = bank.AllOff();
       } else {
         events = bank.NoteOff(ne.key);
       }
       for (const BankEvent& ev : events) {
+        // Speakers / log first — never wait on RS485 before audible feedback.
         if (audio) {
           audio->ApplyBankEvent(ev);
         }
-        if (channel) {
-          channel->ApplyBankEvent(ev);
-        }
         PrintBankEvent(ev);
+        if (channel) {
+          channel->ApplyBankEvent(ev, bank);
+        }
       }
     }
 
-    if (StdinReady()) {
-      std::string line;
-      std::getline(std::cin, line);
+    if (ConsumeQuitRequest()) {
       running = false;
     }
 

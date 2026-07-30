@@ -152,17 +152,25 @@ void MidiInput::HandleMessage(const std::vector<unsigned char>& message)
 
   const uint8_t status = message[0];
   const uint8_t type = status & 0xF0u;
-  const uint8_t key = message[1] & 0x7Fu;
-  const uint8_t velocity = message[2] & 0x7Fu;
+  const uint8_t data1 = message[1] & 0x7Fu;
+  const uint8_t data2 = message[2] & 0x7Fu;
 
   NoteEvent ev;
   if (type == 0x90u) {
     // Note On with velocity 0 is Note Off (MIDI convention).
-    ev.action = (velocity == 0) ? NoteAction::Off : NoteAction::On;
-    ev.key = key;
+    ev.action = (data2 == 0) ? NoteAction::Off : NoteAction::On;
+    ev.key = data1;
   } else if (type == 0x80u) {
     ev.action = NoteAction::Off;
-    ev.key = key;
+    ev.key = data1;
+  } else if (type == 0xB0u) {
+    // CC 120 All Sound Off / CC 123 All Notes Off — kill stuck tones.
+    if (data1 == 120 || data1 == 123) {
+      ev.action = NoteAction::AllOff;
+      ev.key = 0;
+    } else {
+      return;
+    }
   } else {
     return;
   }

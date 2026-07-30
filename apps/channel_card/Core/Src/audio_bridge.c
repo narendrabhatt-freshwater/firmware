@@ -688,6 +688,9 @@ static void Audio_FillToneSlot(int32_t *buf, uint32_t num_frames,
                                uint8_t ch, uint8_t slot);
 static void Audio_FillCh1NoteBankSlot(int32_t *buf, uint32_t num_frames,
                                       uint8_t slot);
+static void Audio_FillCh1SilenceSlot(int32_t *buf, uint32_t num_frames,
+                                     uint8_t slot);
+static void Audio_RefillCh1Slot(int32_t *buf, uint32_t num_frames);
 static HAL_StatusTypeDef I2S2_Start(void);
 /* USER CODE END PRIVATE_FUNCTIONS_DECLARATION */
 
@@ -965,6 +968,35 @@ static void Audio_FillCh1NoteBankSlot(int32_t *buf, uint32_t num_frames,
   {
     CpuLoad_LedBusy(0);
   }
+}
+
+/**
+ * Zero CH1's interleaved slot. Used when the note bank just went idle and
+ * USB is not streaming — otherwise the DMA ring keeps replaying the last
+ * half-buffer of sine forever (looks like "stuck" tone on a scope with
+ * USB unplugged / RS485-only MIDI).
+ */
+static void Audio_FillCh1SilenceSlot(int32_t *buf, uint32_t num_frames,
+                                     uint8_t slot)
+{
+  for (uint32_t i = 0; i < num_frames; i++)
+  {
+    buf[i * 2 + slot] = 0;
+  }
+}
+
+/** CH1 left: note bank, else USB (untouched here), else silence. */
+static void Audio_RefillCh1Slot(int32_t *buf, uint32_t num_frames)
+{
+  if (Audio_Ch1NoteBankActive() || cpuload_mode == AUDIO_CPULOAD_QUEUE)
+  {
+    Audio_FillCh1NoteBankSlot(buf, num_frames, 0);
+  }
+  else if (!audio_playing)
+  {
+    Audio_FillCh1SilenceSlot(buf, num_frames, 0);
+  }
+  /* else: USB owns the left slot via Audio_Bridge_WriteUSB(). */
 }
 
 /**
@@ -1313,15 +1345,10 @@ void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
      */
     HalfTransfer_CallBack_HS();
 
-    /* CH2 tone/DC in the RIGHT slot only — CH1 (left slot) belongs to USB */
+    /* CH2 tone/DC in the RIGHT slot only — CH1 (left slot) belongs to USB
+     * or the note bank (see Audio_RefillCh1Slot). */
     Audio_FillToneSlot(&i2s1_tx_buf[0], AUDIO_I2S_BUF_FRAMES / 2, 1, 1);
-    /* CH1 (left): USB normally; N0–NF note bank takes over when any voice
-     * is active — see note_bank.c / NoteBank_SetFreq(). Queue cpuload mode
-     * also owns CH1 so DMA can drain the soft queue. */
-    if (Audio_Ch1NoteBankActive() || cpuload_mode == AUDIO_CPULOAD_QUEUE)
-    {
-      Audio_FillCh1NoteBankSlot(&i2s1_tx_buf[0], AUDIO_I2S_BUF_FRAMES / 2, 0);
-    }
+    Audio_RefillCh1Slot(&i2s1_tx_buf[0], AUDIO_I2S_BUF_FRAMES / 2);
   }
   else if (hi2s->Instance == SPI2)
   {
@@ -1341,14 +1368,9 @@ void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s)
     /* DMA wrapped: now playing the first half → second half is writable. */
     TransferComplete_CallBack_HS();
 
-    /* CH2 tone/DC in the RIGHT slot only — CH1 (left slot) belongs to USB */
+    /* CH2 tone/DC in the RIGHT slot only — CH1 (left) via Audio_RefillCh1Slot. */
     Audio_FillToneSlot(&i2s1_tx_buf[AUDIO_I2S_BUF_FRAMES], AUDIO_I2S_BUF_FRAMES / 2, 1, 1);
-    /* CH1 (left): see matching branch in HAL_I2S_TxHalfCpltCallback. */
-    if (Audio_Ch1NoteBankActive() || cpuload_mode == AUDIO_CPULOAD_QUEUE)
-    {
-      Audio_FillCh1NoteBankSlot(&i2s1_tx_buf[AUDIO_I2S_BUF_FRAMES],
-                                AUDIO_I2S_BUF_FRAMES / 2, 0);
-    }
+    Audio_RefillCh1Slot(&i2s1_tx_buf[AUDIO_I2S_BUF_FRAMES], AUDIO_I2S_BUF_FRAMES / 2);
   }
   else if (hi2s->Instance == SPI2)
   {

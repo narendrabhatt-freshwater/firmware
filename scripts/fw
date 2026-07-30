@@ -128,10 +128,11 @@ usage() {
     "  fw midi                           speakers (auto-pick Launchkey MIDI Out)"
     "  fw midi --midi 0                  speakers, MIDI port index 0 (any device)"
     "  fw midi channel --rs485 PATH      Channel Card N0–NF over RS485 (no speakers)"
-    "  fw midi channel --rs485 PATH --midi 0"
+    "  fw midi channel --rs485 PATH --midi 0 --gain 6"
+    "  --gain DB                         CH1 atten dB at start (0..127, default 6)"
     "  --port N                          same as --midi N (numeric)"
     "  --port /dev/...                   RS485 adapter path (with channel)"
-    "  FW_RS485_PORT                     default RS485 path for fw midi channel"
+    "  FW_RS485_PORT / FW_MIDI_GAIN      defaults for channel mode"
     ""
     "Cards"
     "  channel    channel_MCU   STM32H725   /dev/cu.usbmodemCHCARD*"
@@ -1252,6 +1253,7 @@ list_midi_ports() {
 MIDI_PORT_INDEX=""
 MIDI_RS485_PATH="${FW_RS485_PORT:-}"
 MIDI_RS485_BAUD="${FW_RS485_BAUD:-115200}"
+MIDI_GAIN_DB="${FW_MIDI_GAIN:-6}"
 MIDI_TARGET=""  # empty = speaker; channel = Channel Card over RS485
 
 parse_midi_flags() {
@@ -1291,6 +1293,11 @@ parse_midi_flags() {
         MIDI_RS485_BAUD="$2"; shift
         ;;
       --baud=*) MIDI_RS485_BAUD="${1#--baud=}" ;;
+      --gain)
+        [[ $# -ge 2 ]] || die "--gain needs dB 0..127"
+        MIDI_GAIN_DB="$2"; shift
+        ;;
+      --gain=*) MIDI_GAIN_DB="${1#--gain=}" ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown midi option: $1" ;;
     esac
@@ -1350,7 +1357,8 @@ cmd_midi() {
     row "output" "channel (RS485)"
     row "rs485" "$MIDI_RS485_PATH"
     row "baud" "$MIDI_RS485_BAUD"
-    args+=( --target channel --rs485 "$MIDI_RS485_PATH" --baud "$MIDI_RS485_BAUD" )
+    row "gain" "1 ${MIDI_GAIN_DB}"
+    args+=( --target channel --rs485 "$MIDI_RS485_PATH" --baud "$MIDI_RS485_BAUD" --gain "$MIDI_GAIN_DB" )
   else
     row "output" "speakers"
   fi

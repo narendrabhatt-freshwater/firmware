@@ -19,12 +19,12 @@ fw midi --midi 0          # any device at index 0 → speakers
 | Command | Where sound goes |
 | --- | --- |
 | `fw midi` | Mac speakers (default) |
-| `fw midi channel --rs485 /dev/cu.usbserial-XXXX` | Channel Card via RS485 (no local speaker) |
-| `fw midi channel --rs485 PATH --midi 0` | same, explicit MIDI port |
+| `fw midi channel --rs485 PATH --gain 6` | Channel Card; CH1 atten −6 dB at start |
+| `fw midi channel --rs485 PATH --midi 0 --gain 12` | same, MIDI port 0, −12 dB |
 
+`--gain DB` is session-start only (`gain 1 <DB>` once). Default **6** (or `FW_MIDI_GAIN`).
 `--port N` is an alias for `--midi N`. With `channel`, `--port /dev/...` means
-the RS485 adapter (same idea as `fw rs485 --port`). You can also set
-`FW_RS485_PORT`.
+the RS485 adapter. You can also set `FW_RS485_PORT`.
 
 ## Build
 
@@ -43,8 +43,11 @@ fw midi build
 
 Velocity is ignored. Pitch: \(f = 440 \times 2^{(n-69)/12}\).
 
-On Channel Card mode, each event becomes `c:nX <Hz>` / `c:nX 0` (slot =
-N0–NF). Session starts with bare `n0` (bypass + gain 1 0).
+On Channel Card mode, session start sends `n0` (bypass + defaults), then
+**`gain 1 6`** (−6 dB on CH1), then `n0`…`nf 0` to clear leftover tones.
+Each note is one RS485 exchange: `c:nX <Hz> 0.5` or `c:nX 0` (same path as
+`fw rs485`). Scale 0.5 keeps the wave visible with `gain 1 6`; chords may
+soft-clip past a couple of notes.
 
 Example (speakers):
 

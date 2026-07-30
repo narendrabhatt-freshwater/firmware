@@ -108,4 +108,21 @@ std::vector<BankEvent> VoiceBank::NoteOff(uint8_t midi_key)
   return events;
 }
 
+std::vector<BankEvent> VoiceBank::AllOff()
+{
+  std::vector<BankEvent> events;
+  std::vector<uint8_t> keys;
+  keys.reserve(fifo_.size());
+  for (uint8_t slot : fifo_) {
+    if (slots_[slot].active) {
+      keys.push_back(slots_[slot].midi_key);
+    }
+  }
+  for (uint8_t key : keys) {
+    auto more = NoteOff(key);
+    events.insert(events.end(), more.begin(), more.end());
+  }
+  return events;
+}
+
 } // namespace midi_host

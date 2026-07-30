@@ -59,6 +59,7 @@ _fw() {
     '-p[MIDI index or RS485 serial path]:port-or-index:'
     '--rs485[USB-RS485 adapter path]:path:_fw_serial_ports'
     '--baud[RS485 baud]:baud:(115200)'
+    '--gain[CH1 DAC atten dB at start]:db:(0 6 12 20 40)'
   )
 
   _arguments -C \

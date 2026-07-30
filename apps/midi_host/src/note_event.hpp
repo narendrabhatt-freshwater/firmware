@@ -9,6 +9,7 @@ enum class NoteAction : uint8_t
 {
   On = 0,
   Off = 1,
+  AllOff = 2, // MIDI CC 120/123 — release every voice
 };
 
 /** MIDI note on/off — key only; velocity is intentionally unused. */

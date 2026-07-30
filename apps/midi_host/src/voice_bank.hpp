@@ -47,6 +47,9 @@ public:
   /** Apply Note Off for key. Empty if key was not active. */
   std::vector<BankEvent> NoteOff(uint8_t midi_key);
 
+  /** Turn every active slot off (MIDI All Notes Off / clean shutdown). */
+  std::vector<BankEvent> AllOff();
+
   uint8_t ActiveCount() const;
   const std::array<VoiceSlot, kVoiceCount>& Slots() const { return slots_; }
 
