@@ -17,9 +17,9 @@ before touching hot-path code — don't guess:
   (`I2S2_PumpTimerInit()` in `audio_bridge.c`) fires every **10 µs** and must
   clear the SPI2 underrun flag before the slave wedges. Use this as the
   reference example for "must complete in microseconds."
-- The I2S1 half/full DMA callbacks have a looser **~2 ms** budget (192 frames
-  @ 96 kHz) to refill half the ring buffer — plenty of room for table
-  lookups + interpolation.
+- The I2S1 half/full DMA callbacks have a **~0.5 ms** budget (48 frames
+  @ 96 kHz) to refill half the ring buffer — enough for table lookups +
+  interpolation at 16 voices, but no longer a multi-millisecond soft window.
 
 ## Hot path = ISRs, DMA callbacks, per-sample generators
 
