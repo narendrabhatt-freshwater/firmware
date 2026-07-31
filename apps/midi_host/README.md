@@ -55,10 +55,10 @@ cannot sit behind a stale chord in the driver queue.
 Scale **1/8** keeps single notes quiet and lets chords get louder
 additively until ~8 voices approach full-scale.
 
-RS485 defaults to **115200** baud (this USB↔RS485 adapter does not run
-460800 cleanly). Speed comes from **burst TX** with Effect echo off.
-At session start the host sends **`c:quiet on`** and **`e:echo off`**.
-On quit it restores `quiet off` and leaves Effect echo off.
+RS485 defaults to **115200** baud. Note sync is one **binary bank frame**
+(16×uint16 Hz) per update — not 16 ASCII `nX` lines. At session start the
+host sends **`c:quiet on`** and **`e:echo off`**. On quit it restores
+`quiet off` and leaves Effect echo off.
 
 Example (speakers):
 

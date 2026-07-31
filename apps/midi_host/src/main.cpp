@@ -329,7 +329,7 @@ int main(int argc, char** argv)
       std::cout << "output: channel card via RS485 (" << channel->Path()
                 << " @ " << rs485_baud << ", gain 1 " << channel->AttenDb()
                 << ")\n";
-      std::cout << "bus:    note TX burst";
+      std::cout << "bus:    note TX binary bank";
       if (channel->EffectEchoDisabled()) {
         std::cout << ", effect echo off";
       } else {

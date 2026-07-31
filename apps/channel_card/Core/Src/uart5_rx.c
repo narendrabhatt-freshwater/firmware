@@ -111,18 +111,14 @@ void UART5_IRQHandler(void)
   {
     const uint8_t c = (uint8_t)(UART5->RDR & 0xFFu);
 
-    /* RS485 turnaround often stamps FE on noise *and* on the first real
-     * character. Keep printable console bytes / CR / LF / BS despite FE;
-     * drop the rest so idle-line garbage never prefixes a command. */
+    /* RS485 turnaround often stamps FE/NE on noise and on real bytes.
+     * Clear the sticky flags so RX keeps running, but keep the byte —
+     * binary bank frames (MIDI) carry non-ASCII Hz/sum/magic; dropping
+     * those on FE truncated banks and left voices stuck. Console_Poll
+     * resyncs on a fresh "c:"/"*:"/"e:" if idle garbage prefixes a line. */
     if (isr & (USART_ISR_FE | USART_ISR_NE))
     {
       UART5->ICR = USART_ICR_FECF | USART_ICR_NECF;
-      if (!(c == '\r' || c == '\n' || c == 0x08u || c == 0x7Fu ||
-            (c >= 32u && c < 127u)))
-      {
-        isr = UART5->ISR;
-        continue;
-      }
     }
 
     const uint16_t next = (uint16_t)((rx_head + 1u) & UART5_RX_BUF_MASK);

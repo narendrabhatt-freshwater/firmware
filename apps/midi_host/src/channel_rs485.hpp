@@ -12,10 +12,10 @@ namespace midi_host
 /**
  * Channel Card note bank over RS485.
  *
- * Transport is absolute bank snapshots (all 16 slot freqs), not incremental
- * On/Off deltas. Latest snapshot wins on a background thread so a dropped
- * Off is healed on the next key event. Session open sends `c:quiet on` +
- * `e:echo off`; note TX is always wire-speed burst (Effect echo stays off).
+ * Transport is one absolute binary bank frame per sync (16×uint16 Hz),
+ * not per-slot ASCII. Latest snapshot wins on a background thread so a
+ * dropped frame is healed on the next key event. Session open still uses
+ * ASCII (`c:quiet on` + `e:echo off`); note TX is the binary frame.
  */
 class ChannelRs485Out
 {
@@ -42,7 +42,7 @@ public:
 
   std::string Path() const { return path_; }
   uint32_t AttenDb() const { return atten_db_; }
-  /** True when note TX is wire-speed burst (always after a successful Open). */
+  /** True when note TX uses binary bank frames (always after Open). */
   bool BurstNotes() const;
   /** True when this session got ok: to e:echo off. */
   bool EffectEchoDisabled() const;
