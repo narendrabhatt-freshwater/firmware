@@ -245,14 +245,15 @@ void ChannelRs485Out::Open(const std::string &serial_path,
   rs485::SessionOptions opts;
   opts.baud = baud;
   opts.atten_db = atten_db;
+  /* Strict one-shot: TX → wait for [C]ok → next. No retries / settle / idle. */
   opts.reply_timeout_ms = 400;
-  opts.retries = 1;
-  opts.idle_gap_ms = 2;
+  opts.retries = 0;
+  opts.idle_gap_ms = 0;
   opts.post_ack_settle_ms = 0;
   opts.post_tx_settle_ms = 0;
-  opts.late_ack_grace_ms = 50;
-  opts.rx_idle_ms = 5;
-  opts.rx_idle_max_ms = 80;
+  opts.late_ack_grace_ms = 0;
+  opts.rx_idle_ms = 0;
+  opts.rx_idle_max_ms = 0;
   opts.effect_echo = effect_echo;
   opts.allow_missing_effect = true;
 

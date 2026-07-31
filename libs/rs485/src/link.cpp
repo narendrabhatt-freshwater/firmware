@@ -250,8 +250,10 @@ ExchangeResult Link::Send(Target target, const std::string &command_in) {
       if (result.status == Status::Err) {
         ++err_count_;
       }
-      WaitRxIdle();
-      SleepMs(opts_.post_ack_settle_ms); /* 0 for MIDI */
+      if (opts_.rx_idle_ms > 0) {
+        WaitRxIdle();
+      }
+      SleepMs(opts_.post_ack_settle_ms);
       last_ = result;
       return result;
     }
@@ -270,18 +272,22 @@ ExchangeResult Link::Send(Target target, const std::string &command_in) {
         if (late.status == Status::Err) {
           ++err_count_;
         }
-        WaitRxIdle();
+        if (opts_.rx_idle_ms > 0) {
+          WaitRxIdle();
+        }
         SleepMs(opts_.post_ack_settle_ms);
         last_ = late;
         return late;
       }
     }
-    if (attempt < opts_.retries) {
+    if (attempt < opts_.retries && opts_.rx_idle_ms > 0) {
       WaitRxIdle();
     }
   }
 
-  WaitRxIdle();
+  if (opts_.rx_idle_ms > 0) {
+    WaitRxIdle();
+  }
 
   if (result.status == Status::Timeout || result.status == Status::BadReply) {
     ++timeout_count_;
