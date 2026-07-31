@@ -4,7 +4,8 @@
  * @brief   16-voice (N0–NF) additive sine bank for Channel Card CH1.
  *
  * Each voice is an independent fixed-point phase-accumulator oscillator with
- * its own amplitude scale (0.0..1.0). Hot-path samples are amplitude-scaled,
+ * its own amplitude scale (0.0..1.0) and optional 4-pole Butterworth LPF
+ * (see note_filter.h). Hot-path samples are amplitude-scaled, filtered,
  * summed, and saturated into one Q31 sample for the CH1 (I2S1 left) slot.
  * Hosts should pick a fixed per-voice scale (e.g. 1/8) so chords get louder
  * additively; saturate is the last-resort clip rail.

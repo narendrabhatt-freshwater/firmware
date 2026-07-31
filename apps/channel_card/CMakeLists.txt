@@ -53,6 +53,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/cs4304.c
     # N0–NF additive sine bank for CH1 (phase-accumulators + mixer)
     Core/Src/note_bank.c
+    # Per-voice 4-pole Butterworth LPF (cascaded fixed-point biquads)
+    Core/Src/note_filter.c
     # RS485 + USB CDC console, cpuload probe, LED chaser
     Core/Src/channel_console.c
     # Interrupt-driven UART5 RX ring buffer feeding the RS485 console

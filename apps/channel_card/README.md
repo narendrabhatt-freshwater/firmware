@@ -141,6 +141,7 @@ Then flash `build/Debug/channel_MCU.hex` over DFU — see
 | `Core/Src/audio_bridge.c` | **USB→I2S audio engine** — ring buffer, tone/DC generators, I2S2 workarounds |
 | `Core/Src/cs4304.c`       | CS4304 DAC driver (I2C)                                                      |
 | `Core/Src/note_bank.c`    | N0–NF additive sine bank                                                     |
+| `Core/Src/note_filter.c`  | Per-voice 4-pole Butterworth LPF (cascaded SOS)                              |
 | `USB_APP/`                | TinyUSB descriptors, `tusb_config.h`, UAC2 + CDC glue                        |
 
 ### `audio_bridge.c` — handle with care
@@ -190,6 +191,7 @@ that note’s amplitude. Frequency/scale changes do not touch gain or bypass.
 | `N0`…`NF` `0` | Turn that note off (gain/bypass unchanged) |
 | `N0`…`NF` `<Hz>` | Note at Hz, scale **1.0** (max); voices sum on CH1 |
 | `N0`…`NF` `<Hz> <scale>` | Note at Hz with amplitude 0.0..1.0 (e.g. `n0 440 0.5`) |
+| `cutoff <0..f\|*> <Hz>` | Per-voice 4-pole Butterworth LPF (20..20000; **20000 = bypass**). See [`docs/note_filter_butterworth.md`](../../docs/note_filter_butterworth.md). |
 | `gain <ch> <dB>` | DAC atten 0..127 on ch 1..4 (e.g. `gain 1 40`) |
 | `cpuload` / `on` `[1..16]` | N voices + LED_Y (PB9) DMA load probe (default 16) |
 | `cpuload queue` `[1..16]` | Same, soft-queue producer mode |

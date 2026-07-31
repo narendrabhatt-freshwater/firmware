@@ -217,6 +217,7 @@ fw rs485 channel --port /dev/cu.usbserial-XXXX   # REPL: 440, n1 550, …
 
 See [`apps/console/README.md`](apps/console/README.md) and
 [`docs/rs485_console_architecture.md`](docs/rs485_console_architecture.md).
+Per-voice digital LPF: [`docs/note_filter_butterworth.md`](docs/note_filter_butterworth.md).
 
 **USB CDC** — same Channel Card `N0`…`NF` parser on `/dev/cu.usbmodemCHCARD*`.
 Effect Card CDC is unchanged (`fw console effect`).

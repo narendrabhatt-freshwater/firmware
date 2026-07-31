@@ -7,7 +7,13 @@
 
 #include "note_bank.h"
 
+#include "note_filter.h"
+
 #include <stdint.h>
+
+_Static_assert(NOTE_FILTER_VOICES == NOTE_BANK_VOICES,
+               "note_filter voice count must match note_bank");
+
 
 /* Must match I2S / CS4304 sample rate (see audio-dsp-conventions.mdc). */
 #define NOTE_BANK_SAMPLE_RATE 96000u
@@ -182,7 +188,7 @@ static int32_t NoteBank_ScaleToQ15(double scale)
 }
 
 /**
- * One voice: 128-entry table, linear interp, then Q15 amplitude.
+ * One voice: 128-entry table, linear interp, Q15 amplitude, then 4-pole LPF.
  * Pure integer; fine inside the DMA half refill.
  */
 static inline int32_t NoteBank_VoiceSample(uint8_t note)
@@ -194,9 +200,11 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
       note_sine_table[(uint8_t)((idx + 1u) & (NOTE_SINE_TABLE_SIZE - 1u))];
   uint32_t frac = (ph >> 9) & 0xFFFFu;
   int32_t s = s0 + (int32_t)(((int64_t)(s1 - s0) * (int64_t)frac) >> 16);
+  int32_t amp;
 
   note_phase[note] = ph + note_inc[note];
-  return (int32_t)(((int64_t)s * (int64_t)note_amp_q15[note]) >> 15);
+  amp = (int32_t)(((int64_t)s * (int64_t)note_amp_q15[note]) >> 15);
+  return NoteFilter_Process(note, amp);
 }
 
 /** Saturate a 64-bit mix sum into Q31. */
@@ -222,6 +230,7 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
   if (freq_hz <= 0.0) {
     note_freq_hz[note] = 0.0;
     note_inc[note] = 0;
+    NoteFilter_Reset(note);
     /* Leave stored scale so a later on-command can reuse GetScale if needed. */
     return;
   }

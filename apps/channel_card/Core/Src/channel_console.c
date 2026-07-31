@@ -15,6 +15,7 @@
 #include "cs4304.h"
 #include "audio_bridge.h"
 #include "note_bank.h"
+#include "note_filter.h"
 #include "uart5_rx.h"
 #include "usb_app.h"
 
@@ -201,6 +202,8 @@ static const SwitchDef_t switches[] = {
  *
  *   n0                — session defaults: bypass ON + gain 1 0
  *   n0..nf <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 1.0)
+ *   cutoff <0..f|*> <Hz> — per-voice 4-pole Butterworth LPF (20..20000;
+ *                        20000 = bypass / transparent)
  *   gain <ch> <dB>    — CS4304 per-channel DAC atten (0..127 dB), ch 1..4
  *   cpuload off|on|dma|queue — LED_Y (PB9) CPU-load probe (see README) */
 #define N0_DEFAULT_ATTEN_DB 0u
@@ -442,6 +445,98 @@ static void Console_Exec(char *line)
     return;
   }
 
+  /* ---- cutoff <0..f|*> <Hz>: per-voice 4-pole Butterworth LPF ---- */
+  if (strncmp(line, "cutoff", 6) == 0 &&
+      (line[6] == '\0' || line[6] == ' '))
+  {
+    const char *arg = line + 6;
+    const char *rest;
+    char slot;
+    double fc;
+    int rc;
+
+    while (*arg == ' ')
+    {
+      arg++;
+    }
+
+    if (*arg == '\0')
+    {
+      RS485_Reply(
+          "err: cutoff <0..f|*> <Hz>  (20..20000; 20000=bypass)\r\n");
+      return;
+    }
+
+    slot = arg[0];
+    rest = arg + 1;
+    while (*rest == ' ')
+    {
+      rest++;
+    }
+
+    if (slot != '*' && Console_ParseNoteSlot(slot) == 0xFFu)
+    {
+      RS485_Reply(
+          "err: cutoff <0..f|*> <Hz>  (20..20000; 20000=bypass)\r\n");
+      return;
+    }
+
+    /* Bare "cutoff <slot>" → report (not valid for *). */
+    if (*rest == '\0')
+    {
+      if (slot == '*')
+      {
+        RS485_Reply(
+            "err: cutoff * needs <Hz>  (or cutoff <0..f> to query)\r\n");
+        return;
+      }
+      note = Console_ParseNoteSlot(slot);
+      fc = NoteFilter_GetCutoff(note);
+      snprintf(b, sizeof b, "ok: cutoff %c %.1f Hz%s\r\n", slot, fc,
+               (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "");
+      RS485_Reply(b);
+      return;
+    }
+
+    if (sscanf(rest, "%lf", &fc) != 1)
+    {
+      RS485_Reply(
+          "err: cutoff <0..f|*> <Hz>  (20..20000; 20000=bypass)\r\n");
+      return;
+    }
+
+    if (slot == '*')
+    {
+      for (uint8_t i = 0; i < NOTE_FILTER_VOICES; i++)
+      {
+        rc = NoteFilter_SetCutoff(i, fc);
+        if (rc != 0)
+        {
+          RS485_Reply(
+              "err: cutoff <0..f|*> <Hz>  (20..20000; 20000=bypass)\r\n");
+          return;
+        }
+      }
+      snprintf(b, sizeof b, "ok: cutoff * %.1f Hz%s\r\n", fc,
+               (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "");
+      RS485_Reply(b);
+      return;
+    }
+
+    note = Console_ParseNoteSlot(slot);
+    rc = NoteFilter_SetCutoff(note, fc);
+    if (rc != 0)
+    {
+      RS485_Reply(
+          "err: cutoff <0..f|*> <Hz>  (20..20000; 20000=bypass)\r\n");
+      return;
+    }
+    snprintf(b, sizeof b, "ok: cutoff %c %.1f Hz%s\r\n", slot, fc,
+             (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "");
+    RS485_Reply(b);
+    return;
+  }
+
   /* ---- cpuload [off|on|dma|queue] [1..16]: LED_Y busy/idle probe ---- */
   if (strncmp(line, "cpuload", 7) == 0 &&
       (line[7] == '\0' || line[7] == ' '))
@@ -501,8 +596,8 @@ static void Console_Exec(char *line)
   if (line[0] != 'n' || line[1] == '\0')
   {
     RS485_Reply(
-        "err: commands are n0..nf <Hz> [scale] | gain <ch> <dB> | "
-        "cpuload [off|on|dma|queue] [1..16]\r\n");
+        "err: commands are n0..nf <Hz> [scale] | cutoff <0..f|*> <Hz> | "
+        "gain <ch> <dB> | cpuload [off|on|dma|queue] [1..16]\r\n");
     return;
   }
 
@@ -510,8 +605,8 @@ static void Console_Exec(char *line)
   if (note == 0xFFu || (line[2] != '\0' && line[2] != ' '))
   {
     RS485_Reply(
-        "err: commands are n0..nf <Hz> [scale] | gain <ch> <dB> | "
-        "cpuload [off|on|dma|queue] [1..16]\r\n");
+        "err: commands are n0..nf <Hz> [scale] | cutoff <0..f|*> <Hz> | "
+        "gain <ch> <dB> | cpuload [off|on|dma|queue] [1..16]\r\n");
     return;
   }
 
@@ -816,10 +911,17 @@ void ChannelConsole_Init(void)
   }
   Console_ApplySessionDefaults();
 
+  /* Default: transparent LPF (20000 Hz = bypass) on every voice. */
+  for (uint8_t i = 0; i < NOTE_FILTER_VOICES; i++)
+  {
+    (void)NoteFilter_SetCutoff(i, NOTE_FILTER_CUTOFF_MAX_HZ);
+  }
+
   RS485_Reply("\r\n"
               "**************************************************\r\n"
               "*  Channel Card [C] ready  (multi-drop RS485)    *\r\n"
               "*  n0..nf <Hz> [scale] | gain <ch> <dB>          *\r\n"
+              "*  cutoff <0..f|*> <Hz>  — 4-pole LPF / voice   *\r\n"
               "*  quiet on|off | silence | binbank (MIDI host)  *\r\n"
               "*  cpuload [on|off] [1..16]  — yellow LED PB9   *\r\n"
               "*  enter/boot: bypass ON, gain 1 0               *\r\n"
