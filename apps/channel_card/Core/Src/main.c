@@ -84,7 +84,13 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+  /* CubeMX never emitted this: the core ran at 558 MHz fetching every
+   * instruction from flash at LATENCY_3. The note-bank refill in the I2S DMA
+   * callback then overran its 500 µs half-buffer above 13 voices, starving
+   * the main loop — RS485 console went deaf and MIDI Offs were never applied
+   * (stuck notes). I-cache only: D-cache needs non-cacheable MPU regions for
+   * the DMA buffers, which this MPU_Config does not set up. */
+  SCB_EnableICache();
   /* USER CODE END 1 */
 
   /* MPU Configuration--------------------------------------------------------*/

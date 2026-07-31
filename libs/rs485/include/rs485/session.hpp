@@ -28,6 +28,13 @@ struct SessionOptions {
   uint32_t atten_db = 6; /**< CH1 gain at open (0..127). */
   uint32_t reply_timeout_ms = 400;
   int retries = 1;
+  /** Post-ACK drain; keep tiny for MIDI (console help uses larger). */
+  uint32_t idle_gap_ms = 50;
+  uint32_t post_tx_settle_ms = 0;
+  uint32_t post_ack_settle_ms = 0;
+  uint32_t late_ack_grace_ms = 120;
+  uint32_t rx_idle_ms = 5;
+  uint32_t rx_idle_max_ms = 80;
   bool manual_rts = false;
   EffectEcho effect_echo = EffectEcho::Off;
   /** Allow Open to succeed if Effect is absent when echo Off/On is requested. */
@@ -64,9 +71,15 @@ public:
   ExchangeResult Silence();
   ExchangeResult Gain(uint8_t ch, uint8_t atten_db);
 
-  /** Best-effort silence + quiet off (short timeouts). Returns true if silence ok. */
+  /** Best-effort silence + quiet off. Always clears bus_fault (ACK or blind). */
   bool SoftRecover();
   void MarkBusFault() { bus_fault_ = true; }
+
+  /**
+   * Blind c:silence (no ACK). Use when replies are lost so voices cannot
+   * stay stuck forever behind bus_fault.
+   */
+  void ForceClearBus();
 
   const ExchangeResult &LastResult() const { return last_; }
   uint32_t TimeoutCount() const { return link_ ? link_->TimeoutCount() : 0; }

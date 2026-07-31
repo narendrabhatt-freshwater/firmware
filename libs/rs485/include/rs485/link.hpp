@@ -27,6 +27,12 @@ public:
    */
   ExchangeResult Send(Target target, const std::string &command);
 
+  /**
+   * Write a CR-terminated command and drain TX — no reply wait.
+   * Used only for bus recovery when ACKs are lost (stuck voices).
+   */
+  bool SendBlind(Target target, const std::string &command);
+
   uint32_t TimeoutCount() const { return timeout_count_; }
   uint32_t ErrCount() const { return err_count_; }
   const ExchangeResult &LastResult() const { return last_; }
@@ -41,6 +47,8 @@ private:
   bool WriteWire(const uint8_t *bytes, size_t len);
   ExchangeResult ReadTerminalReply(Target expected);
   std::string ReadRawWindow();
+  /** Drain RX until idle_ms of silence or max_ms elapsed. */
+  void WaitRxIdle();
 };
 
 } // namespace rs485

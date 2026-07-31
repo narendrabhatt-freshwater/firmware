@@ -41,34 +41,46 @@ struct ChannelRs485Out::Impl
 
   std::mutex mu_;
   std::condition_variable cv_;
-  /**
-   * Absolute desired Hz per slot (0 = off). Latest VoiceBank snapshot wins —
-   * coalesces On/Off storms so a late Off cannot be dropped behind a full queue.
-   */
   std::array<uint16_t, kVoiceCount> desired_hz_{};
-  /** Last Hz we believe the card has (only advanced on Status::Ok). */
+  /** Updated only on [C]ok. */
   std::array<uint16_t, kVoiceCount> sent_hz_{};
   std::atomic<bool> run_{false};
+  /** Missing ACK / I/O — silence once, stop all further note TX. */
+  std::atomic<bool> halted_{false};
   std::thread worker_;
-  uint32_t fault_count_ = 0;
 
   void PublishBank(const VoiceBank &bank)
   {
+    if (halted_.load()) {
+      return;
+    }
     {
       std::lock_guard<std::mutex> lock(mu_);
       const auto &slots = bank.Slots();
       for (uint8_t i = 0; i < kVoiceCount; ++i) {
-        const uint16_t hz =
+        desired_hz_[i] =
             (slots[i].active && slots[i].freq_hz > 0.0)
                 ? HzToU16(slots[i].freq_hz)
                 : static_cast<uint16_t>(0);
-        desired_hz_[i] = hz;
       }
     }
     cv_.notify_one();
   }
 
-  /** Pick next slot to sync: Offs first (clear hangs), then Ons. */
+  bool WorkPending() const
+  {
+    if (halted_.load()) {
+      return false;
+    }
+    for (uint8_t i = 0; i < kVoiceCount; ++i) {
+      if (desired_hz_[i] != sent_hz_[i]) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Offs first, then Ons (lowest index). */
   bool TakeDirtySlot(uint8_t &slot_out, uint16_t &hz_out)
   {
     for (uint8_t i = 0; i < kVoiceCount; ++i) {
@@ -88,15 +100,33 @@ struct ChannelRs485Out::Impl
     return false;
   }
 
-  void MarkSent(uint8_t slot, uint16_t hz)
-  {
-    sent_hz_[slot] = hz;
-  }
+  void MarkSent(uint8_t slot, uint16_t hz) { sent_hz_[slot] = hz; }
 
-  void ClearCardBelief()
+  /**
+   * Bus dead: one silence attempt, no more notes until process restart.
+   * send → wait → ACK; no ACK → stop. Do not keep TX'ing into a dead bus.
+   */
+  void TripHalt(const char *why)
   {
-    sent_hz_.fill(0);
-    /* desired stays as host VoiceBank wants — next loop will re-On held keys. */
+    bool expected = false;
+    if (!halted_.compare_exchange_strong(expected, true)) {
+      return;
+    }
+    session.MarkBusFault();
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      desired_hz_.fill(0);
+      sent_hz_.fill(0);
+    }
+    cv_.notify_all();
+
+    std::fprintf(stderr, "\n*** RS485 fault: %s\n", why);
+    std::fprintf(stderr, "*** sending silence — note output STOPPED\n");
+    std::fprintf(stderr, "*** quit (Enter) and restart midi_host after fixing the bus\n\n");
+
+    if (!session.SoftRecover()) {
+      session.ForceClearBus();
+    }
   }
 
   void WorkerMain()
@@ -110,64 +140,91 @@ struct ChannelRs485Out::Impl
           if (!run_.load()) {
             return true;
           }
-          return TakeDirtySlot(slot, hz);
+          if (halted_.load()) {
+            return false; /* sleep until Close sets run_=false */
+          }
+          return WorkPending();
         });
         if (!run_.load()) {
-          if (!TakeDirtySlot(slot, hz)) {
-            return;
-          }
-        } else if (!TakeDirtySlot(slot, hz)) {
+          return;
+        }
+        if (halted_.load()) {
           continue;
         }
-        /* Always TX the latest desired for this slot (may have moved since
-         * the wait predicate peeked an older value). */
+        if (!TakeDirtySlot(slot, hz)) {
+          continue;
+        }
         hz = desired_hz_[slot];
         if (hz == sent_hz_[slot]) {
           continue;
         }
       }
 
-      if (session.BusFault()) {
-        if (session.SoftRecover()) {
-          std::lock_guard<std::mutex> lock(mu_);
-          ClearCardBelief();
-          ++fault_count_;
-          std::fprintf(stderr,
-                       "(rs485: recovered after fault — silence; re-syncing)\n");
+      auto print_ok = [&](uint16_t ack_hz) {
+        if (ack_hz == 0) {
+          std::printf("ok     slot=%-2u  n%X off\n",
+                      static_cast<unsigned>(slot),
+                      static_cast<unsigned>(slot));
         } else {
-          std::this_thread::sleep_for(std::chrono::milliseconds(50));
-          continue;
+          std::printf("ok     slot=%-2u  n%X %u Hz\n",
+                      static_cast<unsigned>(slot),
+                      static_cast<unsigned>(slot),
+                      static_cast<unsigned>(ack_hz));
         }
-      }
+      };
 
-      const rs485::ExchangeResult r = session.SetNote(slot, hz);
+      rs485::ExchangeResult r = session.SetNote(slot, hz);
       if (r.ok()) {
-        std::lock_guard<std::mutex> lock(mu_);
-        /* Record what the card actually applied. If desired moved during
-         * the round-trip (e.g. key released while On was in flight),
-         * sent != desired and the next loop sends Off — never leave the
-         * card sounding while sent still looks "clean". */
-        MarkSent(slot, hz);
+        {
+          std::lock_guard<std::mutex> lock(mu_);
+          MarkSent(slot, hz);
+        }
+        print_ok(hz);
         continue;
       }
 
       if (r.status == rs485::Status::Err) {
-        std::fprintf(stderr, "(rs485: err:%s on n%X %u)\n", r.err_code,
-                     static_cast<unsigned>(slot), static_cast<unsigned>(hz));
+        char msg[96];
+        std::snprintf(msg, sizeof(msg), "card err:%s on n%X %u", r.err_code,
+                      static_cast<unsigned>(slot), static_cast<unsigned>(hz));
+        TripHalt(msg);
         continue;
       }
 
-      session.MarkBusFault();
-      if (session.SoftRecover()) {
-        std::lock_guard<std::mutex> lock(mu_);
-        ClearCardBelief();
-        ++fault_count_;
-        std::fprintf(stderr,
-                     "(rs485: timeout — silence + re-sync from host bank)\n");
-      } else {
-        std::fprintf(stderr,
-                     "(rs485: timeout and silence failed — will retry)\n");
+      if (r.status == rs485::Status::IoError) {
+        TripHalt("serial I/O error (no reliable ACK path)");
+        continue;
       }
+
+      /*
+       * Empty RX after a long streak is usually USB/DE turnaround, not a
+       * dead card. One cool-off + same-command retry before fail-stop.
+       */
+      std::fprintf(stderr,
+                   "(rs485: no cok n%X %u RX:%s — cool-off retry)\n",
+                   static_cast<unsigned>(slot), static_cast<unsigned>(hz),
+                   r.raw[0] != '\0' ? r.raw : "(empty)");
+      std::this_thread::sleep_for(std::chrono::milliseconds(40));
+      {
+        std::lock_guard<std::mutex> lock(mu_);
+        hz = desired_hz_[slot]; /* may have changed (Off) during wait */
+      }
+      r = session.SetNote(slot, hz);
+      if (r.ok()) {
+        {
+          std::lock_guard<std::mutex> lock(mu_);
+          MarkSent(slot, hz);
+        }
+        print_ok(hz);
+        continue;
+      }
+
+      char msg[192];
+      std::snprintf(msg, sizeof(msg),
+                    "no [C]ok for n%X %u after retry — RX: %s",
+                    static_cast<unsigned>(slot), static_cast<unsigned>(hz),
+                    r.raw[0] != '\0' ? r.raw : "(empty)");
+      TripHalt(msg);
     }
   }
 
@@ -175,6 +232,7 @@ struct ChannelRs485Out::Impl
   {
     desired_hz_.fill(0);
     sent_hz_.fill(0);
+    halted_ = false;
     run_ = true;
     worker_ = std::thread([this] { WorkerMain(); });
   }
@@ -211,8 +269,13 @@ void ChannelRs485Out::Open(const std::string &serial_path,
   rs485::SessionOptions opts;
   opts.baud = baud;
   opts.atten_db = atten_db;
-  opts.reply_timeout_ms = 400;
-  opts.retries = 1;
+  opts.reply_timeout_ms = 500;
+  opts.retries = 2;
+  opts.idle_gap_ms = 2;
+  opts.late_ack_grace_ms = 100;
+  opts.rx_idle_ms = 10;
+  opts.rx_idle_max_ms = 120;
+  opts.post_ack_settle_ms = 25;
   opts.effect_echo = effect_echo;
   opts.allow_missing_effect = true;
 
@@ -248,14 +311,11 @@ void ChannelRs485Out::Close()
   path_.clear();
 }
 
-void ChannelRs485Out::ApplyBankEvent(const BankEvent &event,
+void ChannelRs485Out::ApplyBankEvent(const BankEvent & /*event*/,
                                      const VoiceBank &bank)
 {
-  if (!impl_ || !impl_->run_.load()) {
+  if (!impl_ || !impl_->run_.load() || impl_->halted_.load()) {
     return;
-  }
-  if (event.kind == BankEventKind::Steal) {
-    /* Bank already holds the replacement; full snapshot below covers it. */
   }
   impl_->PublishBank(bank);
 }
@@ -267,7 +327,7 @@ bool ChannelRs485Out::EffectEchoDisabled() const
 
 bool ChannelRs485Out::BusFault() const
 {
-  return impl_ && impl_->session.BusFault();
+  return impl_ && (impl_->halted_.load() || impl_->session.BusFault());
 }
 
 } // namespace midi_host

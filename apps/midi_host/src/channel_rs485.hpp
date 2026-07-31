@@ -42,6 +42,7 @@ public:
   std::string Path() const { return path_; }
   uint32_t AttenDb() const { return atten_db_; }
   bool EffectEchoDisabled() const;
+  /** True after missing ACK / I/O — note output has stopped. */
   bool BusFault() const;
 
 private:

@@ -77,11 +77,14 @@ enable **local** echo in the terminal. Any client can type `e:echo off`
 
 ### Half-duplex
 
-- Cards: `WaitBusFree` → acquire DE → TX → release. No artificial `HAL_Delay`
-  before replies (echo-off invariant).
-- Host (`libs/rs485`): write whole line → drain → wait for tagged
-  terminal CRLF or timeout. No artificial inter-byte sleeps. Operators
-  turn Effect `echo` on/off themselves (`e:echo off` / `--echo-off`).
+- **Single-master (PC / midi_host):** host is the lock — one command in
+  flight, wait for `[C]ok` / timeout, then next. Do not Link-resend into
+  a live ACK (card DE high ⇒ RX deaf ⇒ death spiral of `no cok` on Offs).
+- Cards: **1 ms** before ACK DE (PC adapter DE not on `RS485_CTL`), then
+  one short TX; never drop the ACK.
+- Host: write → drain → wait for tagged line; MIDI uses tiny `idle_gap`.
+  On miss: RX-idle then worker tries other slots. All-off + wedged →
+  silence recover. Operators: `e:echo off` / `--echo-off`.
 
 ### Strict ACK / errors
 

@@ -109,16 +109,18 @@ const char* KindName(BankEventKind kind)
   return "?";
 }
 
-void PrintBankEvent(const BankEvent& ev)
+void PrintBankEvent(const BankEvent& ev, bool via_rs485)
 {
   const std::string name = midi_host::MidiNoteName(ev.midi_key);
-  std::printf("%-6s slot=%-2u note=%-3u %-3s  freq=%7.2f Hz  active=%u/16\n",
+  /* [midi] = VoiceBank only. [C]ok is printed later by ChannelRs485Out. */
+  std::printf("%-6s slot=%-2u note=%-3u %-3s  freq=%7.2f Hz  active=%u/16%s\n",
               KindName(ev.kind),
               static_cast<unsigned>(ev.slot),
               static_cast<unsigned>(ev.midi_key),
               name.c_str(),
               ev.freq_hz,
-              static_cast<unsigned>(ev.active_count));
+              static_cast<unsigned>(ev.active_count),
+              via_rs485 ? "  [midi]" : "");
   // No fflush — under a 16-key mash, flushing every line stalls the MIDI
   // poll loop and delays RS485 Offs (notes hang on the card).
 }
@@ -386,8 +388,14 @@ int main(int argc, char** argv)
         if (channel) {
           channel->ApplyBankEvent(ev, bank);
         }
-        PrintBankEvent(ev);
+        PrintBankEvent(ev, channel != nullptr);
       }
+    }
+
+    if (channel && channel->BusFault()) {
+      std::cerr << "err: RS485 note mode stopped (no ACK) — exiting\n";
+      running = false;
+      continue;
     }
 
     if (ConsumeQuitRequest()) {
@@ -404,5 +412,5 @@ int main(int argc, char** argv)
   if (channel) {
     channel->Close();
   }
-  return 0;
+  return channel && channel->BusFault() ? 2 : 0;
 }

@@ -23,6 +23,8 @@
 
 extern CS4304_HandleTypeDef hcs4304;
 extern UART_HandleTypeDef huart5;
+/** I2S2 self-heal restarts — nonzero means the audio path is erroring. */
+extern volatile uint32_t g_i2s2_err_restarts;
 
 /* ---- Multi-drop RS485 card addressing ---- */
 #define RS485_CARD_ID 'c'
@@ -145,10 +147,26 @@ static uint8_t console_via_usb = 0;
  * stuck voices — quiet must mute the bus completely, not just ok:. */
 static uint8_t rs485_quiet = 0;
 
+/* RS485 path counters — read back with "diag" (works over USB CDC while the
+ * bus itself is unresponsive, which is the only way to see these). */
+static uint32_t rs485_cmd_count;  /**< commands executed from the bus */
+static uint32_t rs485_tx_fail;    /**< HAL_UART_Transmit did not return OK */
+static uint32_t rs485_tx_trunc;   /**< reply longer than the frame buffer */
+
 /** Send a tagged response: prefixes the string with [C] so the host knows
- * which card replied. No-op on RS485 while quiet (USB CDC still replies). */
+ * which card replied. No-op on RS485 while quiet (USB CDC still replies).
+ *
+ * Frame must hold the longest reply (cpuload/status are ~110 chars) — a
+ * short buffer silently swallowed those ACKs and looked like a dead bus.
+ * Truncate rather than drop: a clipped line still terminates the host's
+ * exchange, silence does not. */
 static void RS485_Reply(const char *s)
 {
+  char frame[160];
+  size_t tag_len;
+  size_t body_len;
+  size_t max_body;
+
   if (console_via_usb)
   {
     USB_CDC_WriteStr(s);
@@ -158,16 +176,29 @@ static void RS485_Reply(const char *s)
   {
     return;
   }
-  if (!RS485_WaitBusFree(RS485_BUS_TIMEOUT_MS))
-    return;
+
+  tag_len = strlen(RS485_TAG);
+  body_len = strlen(s);
+  max_body = sizeof(frame) - tag_len - 1u;
+  if (body_len > max_body)
+  {
+    body_len = max_body;
+    rs485_tx_trunc++;
+  }
+  memcpy(frame, RS485_TAG, tag_len);
+  memcpy(frame + tag_len, s, body_len);
+
+  /* ~200 µs host-DE release (not 1 ms tick) — keep ACK path short. */
+  for (volatile uint32_t i = 0; i < 40000u; i++)
+  {
+  }
 
   RS485_BusAcquire();
-
-  /* Send tag + payload in one DE assertion to keep the bus atomically */
-  HAL_UART_Transmit(&huart5, (const uint8_t *)RS485_TAG,
-                    (uint16_t)strlen(RS485_TAG), 50);
-  HAL_UART_Transmit(&huart5, (const uint8_t *)s, (uint16_t)strlen(s), 200);
-
+  if (HAL_UART_Transmit(&huart5, (const uint8_t *)frame,
+                        (uint16_t)(tag_len + body_len), 50) != HAL_OK)
+  {
+    rs485_tx_fail++;
+  }
   RS485_BusRelease();
 }
 
@@ -423,6 +454,19 @@ static void Console_Exec(char *line)
   {
     snprintf(b, sizeof b, "quiet: %s  (usage: quiet on|off)\r\n",
              rs485_quiet ? "on" : "off");
+    RS485_Reply(b);
+    return;
+  }
+
+  /* ---- diag: RS485 path counters (read over USB CDC when bus is dead) ---- */
+  if (strcmp(line, "diag") == 0)
+  {
+    snprintf(b, sizeof b,
+             "ok: rxdrop=%lu cmd=%lu txfail=%lu trunc=%lu i2serr=%lu\r\n",
+             (unsigned long)Uart5Rx_DroppedCount(),
+             (unsigned long)rs485_cmd_count, (unsigned long)rs485_tx_fail,
+             (unsigned long)rs485_tx_trunc,
+             (unsigned long)g_i2s2_err_restarts);
     RS485_Reply(b);
     return;
   }
@@ -683,6 +727,7 @@ static void Console_Poll(void)
        * No artificial post-Enter delay — production requires e:echo off. */
       if (RS485_IsForMe((char *)cmd))
       {
+        rs485_cmd_count++;
         Console_Exec((char *)cmd);
       }
       /* else: message for another card — silently ignore */

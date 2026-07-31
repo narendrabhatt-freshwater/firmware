@@ -53,6 +53,25 @@ struct LinkOptions {
   uint32_t reply_timeout_ms = 500;
   /** After first tagged byte, stop when idle this long (multi-line help). */
   uint32_t idle_gap_ms = 80;
+  /** Optional settle after drain before read (0 = none). */
+  uint32_t post_tx_settle_ms = 0;
+  /**
+   * After a tagged ACK, wait this long before Send returns.
+   * USB-serial can deliver [C]ok to the host while the card still has DE
+   * asserted (mark/idle — WaitRxIdle sees silence and is not enough).
+   */
+  uint32_t post_ack_settle_ms = 0;
+  /**
+   * On Timeout/BadReply, peek this long for a late tagged ACK before
+   * FlushInput + resend (avoids discarding a slow [C]ok then colliding).
+   */
+  uint32_t late_ack_grace_ms = 120;
+  /**
+   * After a miss, require this much RX silence before retry TX
+   * ("is someone still talking?" on A/B — not a fixed bus delay).
+   */
+  uint32_t rx_idle_ms = 5;
+  uint32_t rx_idle_max_ms = 80;
   /** Extra attempts on Timeout/BadReply only (not on Err). */
   int retries = 2;
   /** If set, require reply tag to match this target (All = either). */

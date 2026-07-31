@@ -180,23 +180,31 @@ static int RS485_Send(const char *s) {
  * for the duration of the command. */
 static uint8_t console_via_usb = 0;
 
-/** Send a tagged response: prefixes the string with [E] so the host knows
- * which card replied. */
+/** Send a tagged response — see Channel RS485_Reply (1 ms DE turnaround). */
 static void RS485_Reply(const char *s) {
+  char frame[96];
+  size_t tag_len;
+  size_t body_len;
+  size_t n;
+
   if (console_via_usb) {
     USB_CDC_WriteStr(s);
     return;
   }
-  if (!RS485_WaitBusFree(RS485_BUS_TIMEOUT_MS))
+
+  tag_len = strlen(RS485_TAG);
+  body_len = strlen(s);
+  if (tag_len + body_len >= sizeof(frame)) {
     return;
+  }
+  memcpy(frame, RS485_TAG, tag_len);
+  memcpy(frame + tag_len, s, body_len);
+  n = tag_len + body_len;
+
+  HAL_Delay(1);
 
   RS485_BusAcquire();
-
-  /* Send tag + payload in one DE assertion to keep the bus atomically */
-  HAL_UART_Transmit(&huart4, (const uint8_t *)RS485_TAG,
-                    (uint16_t)strlen(RS485_TAG), 50);
-  HAL_UART_Transmit(&huart4, (const uint8_t *)s, (uint16_t)strlen(s), 200);
-
+  (void)HAL_UART_Transmit(&huart4, (const uint8_t *)frame, (uint16_t)n, 30);
   RS485_BusRelease();
 }
 

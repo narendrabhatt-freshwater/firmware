@@ -34,7 +34,12 @@ ExchangeResult Session::Open(const std::string &path, const SessionOptions &opts
   LinkOptions lo;
   lo.reply_timeout_ms = opts_.reply_timeout_ms;
   lo.retries = opts_.retries;
-  lo.idle_gap_ms = 50;
+  lo.idle_gap_ms = opts_.idle_gap_ms;
+  lo.post_tx_settle_ms = opts_.post_tx_settle_ms;
+  lo.post_ack_settle_ms = opts_.post_ack_settle_ms;
+  lo.late_ack_grace_ms = opts_.late_ack_grace_ms;
+  lo.rx_idle_ms = opts_.rx_idle_ms;
+  lo.rx_idle_max_ms = opts_.rx_idle_max_ms;
   link_ = std::make_unique<Link>(port_, lo);
 
   /* Recover sticky quiet from a killed prior session. */
@@ -104,8 +109,9 @@ bool Session::SoftRecover() {
   LinkOptions lo = link_->Options();
   const uint32_t saved_to = lo.reply_timeout_ms;
   const int saved_retries = lo.retries;
-  lo.reply_timeout_ms = 300;
-  lo.retries = 1;
+  /* Silence is more important than note latency — give the card time. */
+  lo.reply_timeout_ms = 800;
+  lo.retries = 2;
   link_->SetOptions(lo);
   const ExchangeResult sil = link_->Send(Target::Channel, "silence");
   (void)link_->Send(Target::Channel, "quiet off");
@@ -115,8 +121,24 @@ bool Session::SoftRecover() {
   last_ = sil;
   if (sil.ok()) {
     bus_fault_ = false;
+    return true;
   }
-  return sil.ok();
+  /* ACK path failed (common under chord load when a reply was dropped).
+   * Blind-silence so voices cannot hang forever behind bus_fault. */
+  ForceClearBus();
+  bus_fault_ = false;
+  return true;
+}
+
+void Session::ForceClearBus() {
+  if (!link_ || !port_.IsOpen()) {
+    return;
+  }
+  port_.FlushInput();
+  (void)link_->SendBlind(Target::Channel, "silence");
+  (void)link_->SendBlind(Target::Channel, "silence");
+  (void)link_->SendBlind(Target::Channel, "quiet off");
+  port_.FlushInput();
 }
 
 void Session::Close() {

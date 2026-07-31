@@ -69,11 +69,11 @@ void Uart5Rx_Init(void)
   }
   UART5->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF;
 
-  /* Priority 1: same band as I2S. Was 2, which let 16-voice NoteBank DMA
-   * starve UART long enough to drop the silence/Off frames that end a chord
-   * — host bank went idle while the card kept singing. FIFO still covers
-   * brief priority-0 USB/TIM7 work. */
-  HAL_NVIC_SetPriority(UART5_IRQn, 1, 0);
+  /* Preempt 0 — must be ≥ audio DMA (also 0). Was 1: under a held 16-voice
+   * chord NoteBank DMA (prio 0) nested over UART and dropped host nX bytes
+   * → no exec → no [C]ok → midi_host fail-stop on a late slot (e.g. nE).
+   * Handler only drains RDR into the ring; keep it short. */
+  HAL_NVIC_SetPriority(UART5_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(UART5_IRQn);
 
   UART5->CR1 |= USART_CR1_RXNEIE_RXFNEIE;

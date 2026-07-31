@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstring>
+#include <thread>
 
 namespace rs485 {
 namespace {
@@ -40,7 +42,7 @@ std::string ExtractTaggedRegion(const std::string &raw) {
   return out;
 }
 
-/** First tagged line ending with \r\n (or \n after tag). */
+/** First tagged line ending with CRLF, LF, or bare CR (USB-serial quirk). */
 std::string FirstTerminalLine(const std::string &tagged) {
   if (tagged.empty()) {
     return {};
@@ -53,7 +55,18 @@ std::string FirstTerminalLine(const std::string &tagged) {
   if (lf != std::string::npos) {
     return tagged.substr(0, lf);
   }
+  size_t cr = tagged.find('\r');
+  if (cr != std::string::npos) {
+    return tagged.substr(0, cr);
+  }
   return {};
+}
+
+void SleepMs(uint32_t ms) {
+  if (ms == 0) {
+    return;
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(ms));
 }
 
 } // namespace
@@ -65,10 +78,48 @@ bool Link::WriteWire(const uint8_t *bytes, size_t len) {
     port_.SetRts(true);
   }
   const bool ok = port_.Write(bytes, len);
+  if (ok) {
+    port_.DrainOutput();
+  }
+  /* Release DE only after the last stop bit — never mid-frame. */
   if (port_.ManualRtsControl()) {
     port_.SetRts(false);
   }
   return ok;
+}
+
+void Link::WaitRxIdle() {
+  using clock = std::chrono::steady_clock;
+  if (opts_.rx_idle_ms == 0) {
+    return;
+  }
+  const auto deadline =
+      clock::now() + std::chrono::milliseconds(opts_.rx_idle_max_ms);
+  auto last_rx = clock::now();
+  uint8_t buf[128];
+
+  while (clock::now() < deadline) {
+    auto since_rx = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        clock::now() - last_rx)
+                        .count();
+    if (since_rx >= static_cast<int64_t>(opts_.rx_idle_ms)) {
+      return;
+    }
+    auto left_idle = static_cast<uint32_t>(
+        opts_.rx_idle_ms - static_cast<uint32_t>(since_rx));
+    auto left_total = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          deadline - clock::now())
+                          .count();
+    if (left_total <= 0) {
+      return;
+    }
+    uint32_t slice = static_cast<uint32_t>(
+        std::min<int64_t>(left_idle, std::min<int64_t>(left_total, 20)));
+    size_t n = port_.ReadTimeout(buf, sizeof(buf), slice);
+    if (n > 0) {
+      last_rx = clock::now();
+    }
+  }
 }
 
 std::string Link::ReadRawWindow() {
@@ -112,14 +163,36 @@ std::string Link::ReadRawWindow() {
       return ExtractTaggedRegion(raw);
     }
   }
-  return ExtractTaggedRegion(raw);
+  /* Timeout: return whatever arrived (may be empty or untagged noise). */
+  return raw;
 }
 
 ExchangeResult Link::ReadTerminalReply(Target expected) {
-  std::string tagged = ReadRawWindow();
+  std::string window = ReadRawWindow();
+  std::string tagged = ExtractTaggedRegion(window);
   if (tagged.empty()) {
     ExchangeResult r;
     r.status = Status::Timeout;
+    /* Sanitize for logs — show if RX was empty vs garbage. */
+    std::string shown;
+    shown.reserve(window.size());
+    for (unsigned char c : window) {
+      if (c == '\r') {
+        shown += "\\r";
+      } else if (c == '\n') {
+        shown += "\\n";
+      } else if (c >= 0x20 && c < 0x7f && c != '%') {
+        shown.push_back(static_cast<char>(c));
+      } else {
+        shown.push_back('.');
+      }
+    }
+    if (shown.empty()) {
+      shown = "(empty)";
+    }
+    const size_t n = std::min(shown.size(), sizeof(r.raw) - 1);
+    std::memcpy(r.raw, shown.data(), n);
+    r.raw[n] = '\0';
     return r;
   }
 
@@ -163,25 +236,25 @@ ExchangeResult Link::Send(Target target, const std::string &command_in) {
     port_.FlushInput();
 
     const auto *bytes = reinterpret_cast<const uint8_t *>(wire.data());
-    bool ok = WriteWire(bytes, wire.size());
-    if (ok) {
-      port_.DrainOutput();
-    }
-
-    if (!ok) {
+    if (!WriteWire(bytes, wire.size())) {
       result.status = Status::IoError;
       last_ = result;
       return result;
     }
 
+    SleepMs(opts_.post_tx_settle_ms);
+
     result = ReadTerminalReply(expect);
 
-    if (result.status == Status::Ok) {
-      last_ = result;
-      return result;
-    }
-    if (result.status == Status::Err) {
-      ++err_count_;
+    if (result.status == Status::Ok || result.status == Status::Err) {
+      if (result.status == Status::Err) {
+        ++err_count_;
+      }
+      /* RX idle is not enough: USB can finish delivering [C]ok while the
+       * card still has DE high driving mark (no RX bytes). Next TX is then
+       * invisible to the card → RX:(empty) on the following nX. */
+      WaitRxIdle();
+      SleepMs(opts_.post_ack_settle_ms);
       last_ = result;
       return result;
     }
@@ -189,13 +262,53 @@ ExchangeResult Link::Send(Target target, const std::string &command_in) {
       last_ = result;
       return result;
     }
+
+    /* Late ACK peek (even when retries==0), then idle before resend. */
+    if (opts_.late_ack_grace_ms > 0) {
+      const uint32_t saved_to = opts_.reply_timeout_ms;
+      opts_.reply_timeout_ms = opts_.late_ack_grace_ms;
+      ExchangeResult late = ReadTerminalReply(expect);
+      opts_.reply_timeout_ms = saved_to;
+      if (late.status == Status::Ok || late.status == Status::Err) {
+        if (late.status == Status::Err) {
+          ++err_count_;
+        }
+        WaitRxIdle();
+        SleepMs(opts_.post_ack_settle_ms);
+        last_ = late;
+        return late;
+      }
+    }
+    if (attempt < opts_.retries) {
+      WaitRxIdle();
+    }
   }
+
+  WaitRxIdle();
 
   if (result.status == Status::Timeout || result.status == Status::BadReply) {
     ++timeout_count_;
   }
   last_ = result;
   return result;
+}
+
+bool Link::SendBlind(Target target, const std::string &command_in) {
+  std::string command = ToLower(command_in);
+  bool explicit_prefix = command.size() >= 2 && command[1] == ':';
+  std::string line =
+      explicit_prefix ? command : (TargetPrefix(target) + command);
+  std::string wire = line + "\r";
+
+  port_.FlushInput();
+  const auto *bytes = reinterpret_cast<const uint8_t *>(wire.data());
+  if (!WriteWire(bytes, wire.size())) {
+    return false;
+  }
+  SleepMs(opts_.post_tx_settle_ms);
+  WaitRxIdle();
+  port_.FlushInput();
+  return true;
 }
 
 } // namespace rs485
