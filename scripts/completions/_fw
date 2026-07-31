@@ -51,6 +51,7 @@ _fw() {
     '--manual-rts[Toggle RTS around TX (dongles w/o auto-direction)]'
     '--timeout-ms[Per-attempt reply wait, ms]:ms:(300)'
     '--retries[Extra send attempts on no reply]:n:(2)'
+    '--echo-off[Send e:echo off at session start]'
   )
 
   midi_opts=(
@@ -60,6 +61,9 @@ _fw() {
     '--rs485[USB-RS485 adapter path]:path:_fw_serial_ports'
     '--baud[RS485 baud]:baud:(115200)'
     '--gain[CH1 DAC atten dB at start]:db:(0 6 12 20 40)'
+    '--echo-off[Send e:echo off at open (default)]'
+    '--echo-on[Send e:echo on at open]'
+    '--echo-leave[Do not change Effect echo]'
   )
 
   _arguments -C \

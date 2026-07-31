@@ -3,7 +3,7 @@
  * @brief termios-based SerialPort backend for macOS and Linux.
  */
 
-#include "serial_port.hpp"
+#include "rs485/serial_port.hpp"
 
 #include <cerrno>
 #include <cstring>

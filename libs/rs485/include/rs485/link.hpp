@@ -1,0 +1,48 @@
+/**
+ * @file link.hpp
+ * @brief One request/response exchange over a shared RS485 bus.
+ */
+
+#ifndef RS485_LINK_HPP
+#define RS485_LINK_HPP
+
+#include "rs485/serial_port.hpp"
+#include "rs485/types.hpp"
+
+#include <string>
+
+namespace rs485 {
+
+class Link {
+public:
+  explicit Link(SerialPort &port, LinkOptions opts = {});
+
+  void SetOptions(const LinkOptions &opts) { opts_ = opts; }
+  const LinkOptions &Options() const { return opts_; }
+
+  /**
+   * Send `command` to `target`. Prepends address prefix (c: / e: / *:)
+   * unless command already has an explicit X: prefix. Terminates with a
+   * single CR. Never blocks forever — hard reply timeout + bounded retries.
+   */
+  ExchangeResult Send(Target target, const std::string &command);
+
+  uint32_t TimeoutCount() const { return timeout_count_; }
+  uint32_t ErrCount() const { return err_count_; }
+  const ExchangeResult &LastResult() const { return last_; }
+
+private:
+  SerialPort &port_;
+  LinkOptions opts_;
+  ExchangeResult last_{};
+  uint32_t timeout_count_ = 0;
+  uint32_t err_count_ = 0;
+
+  bool WriteWire(const uint8_t *bytes, size_t len);
+  ExchangeResult ReadTerminalReply(Target expected);
+  std::string ReadRawWindow();
+};
+
+} // namespace rs485
+
+#endif // RS485_LINK_HPP

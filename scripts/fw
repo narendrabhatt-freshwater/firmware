@@ -33,6 +33,7 @@ RS485_PORT="${FW_RS485_PORT:-}"       # e.g. /dev/cu.usbserial-XXXX (the adapter
 RS485_BAUD="${FW_RS485_BAUD:-115200}"
 RS485_TARGET="${FW_RS485_TARGET:-channel}" # channel | effect | all
 RS485_MANUAL_RTS=0
+RS485_ECHO_OFF=0
 RS485_TIMEOUT_MS=""
 RS485_RETRIES=""
 
@@ -1077,6 +1078,7 @@ parse_rs485_flags() {
         ;;
       --baud=*) RS485_BAUD="${1#--baud=}" ;;
       --manual-rts) RS485_MANUAL_RTS=1 ;;
+      --echo-off) RS485_ECHO_OFF=1 ;;
       --timeout-ms)
         [[ $# -ge 2 ]] || die "--timeout-ms needs a value"
         RS485_TIMEOUT_MS="$2"; shift
@@ -1101,7 +1103,7 @@ parse_rs485_flags() {
 # Validates --port and fills the CALLER's 'common' array (must already be
 # declared, e.g. 'local common') with the rs485_console flags shared by
 # REPL/send: --port/--baud plus whichever of --manual-rts/--timeout-ms/
-# --retries were set.
+# --retries/--echo-off were set.
 #
 # Deliberately a plain function call, not '< <(...)' / '$(...)': bash's
 # 'die' just calls exit, and exit inside a command-substitution/process-
@@ -1115,6 +1117,7 @@ require_rs485_common_args() {
   [[ -n "$RS485_PORT" ]] || die "fw rs485 needs --port PATH (see: fw rs485 list)"
   common=( --port "$RS485_PORT" --baud "$RS485_BAUD" )
   [[ "$RS485_MANUAL_RTS" -eq 1 ]] && common+=( --manual-rts )
+  [[ "$RS485_ECHO_OFF" -eq 1 ]] && common+=( --echo-off )
   [[ -n "$RS485_TIMEOUT_MS" ]] && common+=( --timeout-ms "$RS485_TIMEOUT_MS" )
   [[ -n "$RS485_RETRIES" ]] && common+=( --retries "$RS485_RETRIES" )
   # Without this, when RS485_RETRIES (the last check above) is unset, the
@@ -1255,6 +1258,7 @@ MIDI_RS485_PATH="${FW_RS485_PORT:-}"
 MIDI_RS485_BAUD="${FW_RS485_BAUD:-115200}"
 MIDI_GAIN_DB="${FW_MIDI_GAIN:-6}"
 MIDI_TARGET=""  # empty = speaker; channel = Channel Card over RS485
+MIDI_ECHO="off" # off | on | leave
 
 parse_midi_flags() {
   while [[ $# -gt 0 ]]; do
@@ -1298,6 +1302,9 @@ parse_midi_flags() {
         MIDI_GAIN_DB="$2"; shift
         ;;
       --gain=*) MIDI_GAIN_DB="${1#--gain=}" ;;
+      --echo-off) MIDI_ECHO="off" ;;
+      --echo-on) MIDI_ECHO="on" ;;
+      --echo-leave) MIDI_ECHO="leave" ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown midi option: $1" ;;
     esac
@@ -1358,7 +1365,9 @@ cmd_midi() {
     row "rs485" "$MIDI_RS485_PATH"
     row "baud" "$MIDI_RS485_BAUD"
     row "gain" "1 ${MIDI_GAIN_DB}"
+    row "echo" "$MIDI_ECHO"
     args+=( --target channel --rs485 "$MIDI_RS485_PATH" --baud "$MIDI_RS485_BAUD" --gain "$MIDI_GAIN_DB" )
+    args+=( --echo-"$MIDI_ECHO" )
   else
     row "output" "speakers"
   fi
