@@ -201,8 +201,6 @@ static void RS485_Reply(const char *s) {
   memcpy(frame + tag_len, s, body_len);
   n = tag_len + body_len;
 
-  HAL_Delay(1);
-
   RS485_BusAcquire();
   (void)HAL_UART_Transmit(&huart4, (const uint8_t *)frame, (uint16_t)n, 30);
   RS485_BusRelease();

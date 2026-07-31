@@ -4,7 +4,6 @@
 
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
@@ -196,32 +195,9 @@ struct ChannelRs485Out::Impl
         continue;
       }
 
-      /*
-       * Empty RX after a long streak is usually USB/DE turnaround, not a
-       * dead card. One cool-off + same-command retry before fail-stop.
-       */
-      std::fprintf(stderr,
-                   "(rs485: no cok n%X %u RX:%s — cool-off retry)\n",
-                   static_cast<unsigned>(slot), static_cast<unsigned>(hz),
-                   r.raw[0] != '\0' ? r.raw : "(empty)");
-      std::this_thread::sleep_for(std::chrono::milliseconds(40));
-      {
-        std::lock_guard<std::mutex> lock(mu_);
-        hz = desired_hz_[slot]; /* may have changed (Off) during wait */
-      }
-      r = session.SetNote(slot, hz);
-      if (r.ok()) {
-        {
-          std::lock_guard<std::mutex> lock(mu_);
-          MarkSent(slot, hz);
-        }
-        print_ok(hz);
-        continue;
-      }
-
       char msg[192];
       std::snprintf(msg, sizeof(msg),
-                    "no [C]ok for n%X %u after retry — RX: %s",
+                    "no [C]ok for n%X %u — RX: %s",
                     static_cast<unsigned>(slot), static_cast<unsigned>(hz),
                     r.raw[0] != '\0' ? r.raw : "(empty)");
       TripHalt(msg);
@@ -269,13 +245,14 @@ void ChannelRs485Out::Open(const std::string &serial_path,
   rs485::SessionOptions opts;
   opts.baud = baud;
   opts.atten_db = atten_db;
-  opts.reply_timeout_ms = 500;
-  opts.retries = 2;
+  opts.reply_timeout_ms = 400;
+  opts.retries = 1;
   opts.idle_gap_ms = 2;
-  opts.late_ack_grace_ms = 100;
-  opts.rx_idle_ms = 10;
-  opts.rx_idle_max_ms = 120;
-  opts.post_ack_settle_ms = 25;
+  opts.post_ack_settle_ms = 0;
+  opts.post_tx_settle_ms = 0;
+  opts.late_ack_grace_ms = 50;
+  opts.rx_idle_ms = 5;
+  opts.rx_idle_max_ms = 80;
   opts.effect_echo = effect_echo;
   opts.allow_missing_effect = true;
 

@@ -188,11 +188,6 @@ static void RS485_Reply(const char *s)
   memcpy(frame, RS485_TAG, tag_len);
   memcpy(frame + tag_len, s, body_len);
 
-  /* ~200 µs host-DE release (not 1 ms tick) — keep ACK path short. */
-  for (volatile uint32_t i = 0; i < 40000u; i++)
-  {
-  }
-
   RS485_BusAcquire();
   if (HAL_UART_Transmit(&huart5, (const uint8_t *)frame,
                         (uint16_t)(tag_len + body_len), 50) != HAL_OK)

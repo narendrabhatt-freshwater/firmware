@@ -56,9 +56,8 @@ struct LinkOptions {
   /** Optional settle after drain before read (0 = none). */
   uint32_t post_tx_settle_ms = 0;
   /**
-   * After a tagged ACK, wait this long before Send returns.
-   * USB-serial can deliver [C]ok to the host while the card still has DE
-   * asserted (mark/idle — WaitRxIdle sees silence and is not enough).
+   * Optional fixed sleep after a tagged ACK before Send returns (0 = none).
+   * Prefer WaitRxIdle for bus-clear; keep this at 0 for MIDI.
    */
   uint32_t post_ack_settle_ms = 0;
   /**

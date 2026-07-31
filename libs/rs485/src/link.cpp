@@ -250,11 +250,8 @@ ExchangeResult Link::Send(Target target, const std::string &command_in) {
       if (result.status == Status::Err) {
         ++err_count_;
       }
-      /* RX idle is not enough: USB can finish delivering [C]ok while the
-       * card still has DE high driving mark (no RX bytes). Next TX is then
-       * invisible to the card → RX:(empty) on the following nX. */
       WaitRxIdle();
-      SleepMs(opts_.post_ack_settle_ms);
+      SleepMs(opts_.post_ack_settle_ms); /* 0 for MIDI */
       last_ = result;
       return result;
     }

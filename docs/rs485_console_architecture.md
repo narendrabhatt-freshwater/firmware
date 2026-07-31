@@ -80,11 +80,14 @@ enable **local** echo in the terminal. Any client can type `e:echo off`
 - **Single-master (PC / midi_host):** host is the lock — one command in
   flight, wait for `[C]ok` / timeout, then next. Do not Link-resend into
   a live ACK (card DE high ⇒ RX deaf ⇒ death spiral of `no cok` on Offs).
-- Cards: **1 ms** before ACK DE (PC adapter DE not on `RS485_CTL`), then
-  one short TX; never drop the ACK.
-- Host: write → drain → wait for tagged line; MIDI uses tiny `idle_gap`.
-  On miss: RX-idle then worker tries other slots. All-off + wedged →
-  silence recover. Operators: `e:echo off` / `--echo-off`.
+- Cards: acquire DE, one short TX, release; never drop the ACK. (PC USB
+  adapter DE is not on `RS485_CTL` — cards cannot see host TX via CTL.)
+- Host: write → drain → wait for tagged line; MIDI uses tiny `idle_gap`
+  and `post_ack_settle_ms = 0`. On miss: RX-idle before Link retry, then
+  fail-stop. Operators: `e:echo off` / `--echo-off`.
+- Channel note-bank must keep the I2S DMA refill inside its half-buffer
+  deadline (enable I-cache); otherwise the main loop starves and the
+  console goes deaf under polyphony.
 
 ### Strict ACK / errors
 
