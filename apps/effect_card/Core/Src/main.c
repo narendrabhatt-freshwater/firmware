@@ -630,7 +630,10 @@ static void LED_Task(void) {
 int main(void) {
 
   /* USER CODE BEGIN 1 */
-
+  /* Same as Channel Card: fetch from flash at high SYSCLK without I-cache
+   * burns cycles in USB/SAI ISRs. I-cache only — D-cache needs non-cacheable
+   * MPU regions for DMA/AXI buffers, which this MPU_Config does not set up. */
+  SCB_EnableICache();
   /* USER CODE END 1 */
 
   /* MPU Configuration--------------------------------------------------------*/
