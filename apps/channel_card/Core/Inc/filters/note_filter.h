@@ -26,6 +26,14 @@ extern "C" {
 #define NOTE_FILTER_CUTOFF_MIN_HZ 20.0
 #define NOTE_FILTER_CUTOFF_MAX_HZ 20000.0
 
+/**
+ * Boss DF4 g (console labels it q). 1.0 ≈ Butterworth.
+ * Higher → more peaking near fc. Not RBJ biquad Q / analog VCF res.
+ */
+#define NOTE_FILTER_Q_MIN 0.5
+#define NOTE_FILTER_Q_MAX 10.0
+#define NOTE_FILTER_Q_DEFAULT 1.0
+
 /** Pass type. v1: LP only (HP/BP reserved for later). */
 typedef enum {
   NOTE_FILTER_PASS_LP = 0,
@@ -37,12 +45,22 @@ typedef enum {
  * Set one voice's LPF cutoff (Hz). voice: 0..15.
  * Returns 0 on success, -1 if voice out of range, -2 if cutoff out of range.
  * At NOTE_FILTER_CUTOFF_MAX_HZ (or 0.0 alias) the filter is bypassed (identity).
- * Clears delay state on every successful set.
+ * Redesigns with the voice's current q; clears delay state on every successful set.
  */
 int NoteFilter_SetCutoff(uint8_t voice, double cutoff_hz);
 
 /** Last cutoff set for voice (Hz). MAX if never configured / invalid. */
 double NoteFilter_GetCutoff(uint8_t voice);
+
+/**
+ * Set DF4 g/q for voice (NOTE_FILTER_Q_MIN..MAX). voice: 0..15.
+ * Returns 0 on success, -1 if voice out of range, -2 if q out of range.
+ * If not bypassed, redesigns from current cutoff (clears delays).
+ */
+int NoteFilter_SetQ(uint8_t voice, double q);
+
+/** Last q set for voice; NOTE_FILTER_Q_DEFAULT if never configured / invalid. */
+double NoteFilter_GetQ(uint8_t voice);
 
 /**
  * Set pass type. v1 accepts NOTE_FILTER_PASS_LP only; HP/BP return -2.

@@ -219,7 +219,8 @@ static const SwitchDef_t switches[] = {
  *   n <Hz> [sc]       — all 16 notes (n 0 = silence)
  *   en0..enf / en     — envelope: end slope [end slope ...] release_slope
  *   ek0..ekf / ek     — pitch-track k (0..10, rate ∝ (f/C4)^k)
- *   f0..f7 <Hz> / f <Hz> — LPF on first 8 voices (0 or 20000 = bypass)
+ *   f0..f7 <Hz> [q] / f <Hz> [q] — LPF on first 8 voices (0 or 20000 = bypass;
+ *                        q = DF4 g 0.5..10, default 1.0; higher = more peak)
  *   g <ch> <dB>       — CS4304 DAC atten (0..127), ch 1..4
  *   cpu [0|N|q [N]]   — LED_Y load probe (see README) */
 #define N0_DEFAULT_ATTEN_DB 0u
@@ -386,7 +387,7 @@ static void Console_Help(void)
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   RS485_Reply("ok: n0 | n0..nf Hz [sc] | n Hz|0 | "
               "en0..enf end slope ... rel_slope | ek0..ekf k | "
-              "s | p|t 0.1..0.9 | f0..f7 Hz | f Hz|0 | g ch dB | "
+              "s | p|t 0.1..0.9 | f0..f7 Hz [q] | f Hz|0 [q] | g ch dB | "
               "cpu [0|N|q N]\r\n");
 }
 
@@ -547,15 +548,16 @@ static void Console_ShapeReply(void)
 
 static void Console_FilterReply(uint8_t voice, double fc)
 {
-  char b[80];
-  snprintf(b, sizeof b, "ok: f%u %.1f Hz%s\r\n", (unsigned)voice, fc,
-           (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "");
+  char b[96];
+  snprintf(b, sizeof b, "ok: f%u %.1f Hz%s q %.2f\r\n", (unsigned)voice, fc,
+           (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "",
+           NoteFilter_GetQ(voice));
   RS485_Reply(b);
 }
 
 static void Console_Exec(char *line)
 {
-  char b[120];
+  char b[160];
   double hz;
   double scale;
   unsigned int ch, val;
@@ -812,11 +814,12 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- f0..f7 / f: LPF on first 8 voices ---- */
+  /* ---- f0..f7 / f: LPF on first 8 voices; optional q = DF4 g ---- */
   if (line[0] == 'f')
   {
     const char *rest;
     double fc;
+    double q;
     int rc;
 
     if (line[1] >= '0' && line[1] <= '7' &&
@@ -833,10 +836,20 @@ static void Console_Exec(char *line)
         Console_FilterReply(note, NoteFilter_GetCutoff(note));
         return;
       }
-      if (sscanf(rest, "%lf", &fc) != 1)
+      nscan = sscanf(rest, "%lf %lf", &fc, &q);
+      if (nscan < 1)
       {
         RS485_Reply("err:syntax\r\n");
         return;
+      }
+      if (nscan == 2)
+      {
+        rc = NoteFilter_SetQ(note, q);
+        if (rc != 0)
+        {
+          RS485_Reply("err:range\r\n");
+          return;
+        }
       }
       rc = NoteFilter_SetCutoff(note, fc);
       if (rc != 0)
@@ -844,7 +857,7 @@ static void Console_Exec(char *line)
         RS485_Reply("err:range\r\n");
         return;
       }
-      Console_FilterReply(note, fc);
+      Console_FilterReply(note, NoteFilter_GetCutoff(note));
       return;
     }
 
@@ -869,15 +882,15 @@ static void Console_Exec(char *line)
       }
       if (*rest == '\0')
       {
-        /* Compact dump of f0..f7. */
+        /* Compact dump of f0..f7 cutoff/q. */
         int n = snprintf(b, sizeof b, "ok:");
         for (uint8_t i = 0; i < NOTE_FILTER_CONSOLE_VOICES && n > 0 &&
                             (size_t)n < sizeof b;
              i++)
         {
           fc = NoteFilter_GetCutoff(i);
-          n += snprintf(b + n, sizeof b - (size_t)n, " f%u=%.0f", (unsigned)i,
-                        fc);
+          n += snprintf(b + n, sizeof b - (size_t)n, " f%u=%.0f/%.2f",
+                        (unsigned)i, fc, NoteFilter_GetQ(i));
         }
         if ((size_t)n < sizeof b - 2u)
         {
@@ -886,13 +899,23 @@ static void Console_Exec(char *line)
         RS485_Reply(b);
         return;
       }
-      if (sscanf(rest, "%lf", &fc) != 1)
+      nscan = sscanf(rest, "%lf %lf", &fc, &q);
+      if (nscan < 1)
       {
         RS485_Reply("err:syntax\r\n");
         return;
       }
       for (uint8_t i = 0; i < NOTE_FILTER_CONSOLE_VOICES; i++)
       {
+        if (nscan == 2)
+        {
+          rc = NoteFilter_SetQ(i, q);
+          if (rc != 0)
+          {
+            RS485_Reply("err:range\r\n");
+            return;
+          }
+        }
         rc = NoteFilter_SetCutoff(i, fc);
         if (rc != 0)
         {
@@ -900,8 +923,10 @@ static void Console_Exec(char *line)
           return;
         }
       }
-      snprintf(b, sizeof b, "ok: f %.1f Hz%s\r\n", fc,
-               (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "");
+      snprintf(b, sizeof b, "ok: f %.1f Hz%s q %.2f\r\n", fc,
+               (fc == 0.0 || fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)"
+                                                              : "",
+               NoteFilter_GetQ(0));
       RS485_Reply(b);
       return;
     }
@@ -1295,10 +1320,11 @@ void ChannelConsole_Init(void)
   }
   Console_ApplySessionDefaults();
 
-  /* Default: transparent filter (20000 Hz = bypass), mode LP. */
+  /* Default: transparent filter (20000 Hz = bypass), mode LP, q = Butterworth. */
   for (uint8_t i = 0; i < NOTE_FILTER_VOICES; i++)
   {
     (void)NoteFilter_SetPass(i, NOTE_FILTER_PASS_LP);
+    (void)NoteFilter_SetQ(i, NOTE_FILTER_Q_DEFAULT);
     (void)NoteFilter_SetCutoff(i, NOTE_FILTER_CUTOFF_MAX_HZ);
   }
 

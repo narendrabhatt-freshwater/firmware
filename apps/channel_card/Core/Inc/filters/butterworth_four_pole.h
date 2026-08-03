@@ -24,10 +24,10 @@ typedef struct {
 /** Clamp cutoff to [0, 0.999 * Nyquist] and return omega = 2π f / fs. */
 double ButterFourPole_CutoffToOmega(double cutoff_hz, double sample_rate);
 
-/** Design LPF at omega with damping g (1.0 ≈ Butterworth). Clears delays. */
+/** Design LPF at omega with g (1.0 ≈ Butterworth; higher → more peak). Clears delays. */
 void ButterFourPole_InitLowPass(ButterFourPole_t *f, double omega, double g);
 
-/** Design HPF at omega with damping g. Clears delays. */
+/** Design HPF at omega with g. Clears delays. */
 void ButterFourPole_InitHighPass(ButterFourPole_t *f, double omega, double g);
 
 /** Clear delay line only (keep coeffs). */

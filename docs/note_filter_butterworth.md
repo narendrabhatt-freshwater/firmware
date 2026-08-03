@@ -28,8 +28,10 @@ changes level (and phase); pulse/tri give harmonics for filter sweeps.
 
 The digital filter is a **4-pole Butterworth LPF** (boss `four_pole_filter_t`
 direct-form algorithm). `cutoff` sets the corner; **20000 Hz** (or console
-**`0`**) is transparent bypass. HP/BP from that reference are **not wired yet**
-(no `pass` console command in this build).
+**`0`**) is transparent bypass. Optional console **`q`** is boss DF4 **`g`**
+(**0.5..10**, default **1.0** ≈ Butterworth); **higher q → more peaking near
+fc** — not RBJ biquad Q, and not analog VCF resonance (`dc 4`). HP/BP from that
+reference are **not wired yet** (no `pass` console command in this build).
 
 Why per-oscillator (not one filter after the mix): independent cutoff per
 note. The analog VCF/SCF on the board still filter the **summed** path and
@@ -43,18 +45,14 @@ exception to the usual “no float on the audio hot path” rule for this module
 
 ## 2. How we chose the structure
 
-| Choice | Reason |
-|--------|--------|
-| Boss DF4 (`coef[9]`, `d[4]`) | Match provided `butterworth.cpp` reference bit-for-algorithm |
-| `g = 1.0` | Default damping in that formulation (Butterworth-like) |
-| `double` hot path | FPU present; stay faithful to reference |
-| LPF only in v1 | Boss: implement LPF first; HP init kept for later |
-| Bypass at 20 kHz | Default = transparent; matches pre-filter bank behaviour |
-| Reset delays on cutoff change | Avoids clicks from stale state |
-| Lower-Q section first                   | Better fixed-point headroom before the higher-Q stage                               |
-| RBJ cookbook LPF                        | Standard bilinear design; matches common reference implementations                  |
-| Bypass at 20 kHz                        | Default = transparent; matches pre-filter bank behaviour                            |
-| Reset state on cutoff change / note-off | Avoids clicks from stale delay-line energy                                          |
+| Choice                          | Reason                                                       |
+| ------------------------------- | ------------------------------------------------------------ |
+| Boss DF4 (`coef[9]`, `d[4]`)    | Match provided `butterworth.cpp` reference bit-for-algorithm |
+| `g` / console `q` (default 1.0) | Boss shape param; 1.0 ≈ Butterworth; higher → more peak      |
+| `double` hot path               | FPU present; stay faithful to reference                      |
+| LPF only in v1                  | Boss: implement LPF first; HP init kept for later            |
+| Bypass at 20 kHz                | Default = transparent; matches pre-filter bank behaviour     |
+| Reset delays on cutoff/q change | Avoids clicks from stale state                               |
 
 ---
 
@@ -165,13 +163,14 @@ At \(f_c \ge 20000\,\mathrm{Hz}\) the process function **returns `x` unchanged**
 
 ## 6. Console API
 
-| Command                 | Meaning                                           |
-| ----------------------- | ------------------------------------------------- |
-| `f0`…`f7` `<Hz>` / `f` `<Hz>` | Set voice (or all 0..7) cutoff; range **20…20000** |
-| `f0`…`f7` / bare `f`        | Query one voice / all eight                         |
-| `0` or `20000`          | Bypass (transparent; stored/reported as 20000)    |
+| Command                                   | Meaning                                                                         |
+| ----------------------------------------- | ------------------------------------------------------------------------------- |
+| `f0`…`f7` `<Hz>` `[q]` / `f` `<Hz>` `[q]` | Set cutoff (20…20000); optional **q** = DF4 g **0.5..10** (omit → keep current) |
+| `f0`…`f7` / bare `f`                      | Query one voice / all eight (includes q)                                        |
+| `0` or `20000`                            | Bypass (transparent; stored/reported as 20000)                                  |
 
-Replies: `ok: …` / `err: …` (never silent clamp).
+Default **q = 1.0** (Butterworth-like). Higher q → more peak near fc. Replies:
+`ok: …` / `err: …` (never silent clamp).
 
 Requires firmware that includes `note_filter.c`. Old images reply with the
 generic unknown-command error (type `h` for the live list).
@@ -238,15 +237,15 @@ Frequency counter / period cursors: **unchanged**. Peak-to-peak: **down**.
 
 ## 8. Files / integration
 
-| File | Role |
-| --- | --- |
-| `Core/Src/filters/butterworth_four_pole.c` | DF4 design + process kernel |
-| `Core/Inc/filters/butterworth_four_pole.h` | Kernel API |
-| `Core/Src/filters/note_filter.c` | Per-voice cutoff/bypass + Q31 edges |
-| `Core/Inc/filters/note_filter.h` | Public voice API |
-| `Core/Src/audio/note_bank.c` | Calls `NoteFilter_Process` after amp; resets on note-off |
-| `Core/Src/console/channel_console.c` | `f0`…`f7` / `f` commands; init all voices to bypass |
-| Top-level `CMakeLists.txt` | Registers filter + audio sources under `Core/Src/<domain>/` |
+| File                                       | Role                                                        |
+| ------------------------------------------ | ----------------------------------------------------------- |
+| `Core/Src/filters/butterworth_four_pole.c` | DF4 design + process kernel                                 |
+| `Core/Inc/filters/butterworth_four_pole.h` | Kernel API                                                  |
+| `Core/Src/filters/note_filter.c`           | Per-voice cutoff/bypass/q + Q31 edges                       |
+| `Core/Inc/filters/note_filter.h`           | Public voice API                                            |
+| `Core/Src/audio/note_bank.c`               | Calls `NoteFilter_Process` after amp; resets on note-off    |
+| `Core/Src/console/channel_console.c`       | `f0`…`f7` / `f` with optional q; init bypass + q=1.0        |
+| Top-level `CMakeLists.txt`                 | Registers filter + audio sources under `Core/Src/<domain>/` |
 
 ---
 
@@ -292,10 +291,11 @@ demo. Sine (`s`) still verifies amplitude drop vs bypass (primary test case).
 No `pass` console command in this build (always LP). Example:
 
 ```text
-f0 500                   # LPF corner
+f0 500                   # LPF corner (keep current q)
+f0 500 5                 # same corner, stronger peak near 500 Hz
 f 0                      # bypass all 0..7 (same as f 20000)
 ```
-Query: `f0` → `ok: f0 …. Hz` (bypass annotated when 20000).
+Query: `f0` → `ok: f0 …. Hz q …` (bypass annotated when 20000).
 
 ## What to produce
 1) Block diagram: sine → SOS(Q=0.541) → SOS(Q=1.307) → out
