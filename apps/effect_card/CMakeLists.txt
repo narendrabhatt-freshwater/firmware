@@ -44,6 +44,8 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    # Hand-written app modules under Core/Src/<domain>/ — CubeMX stays flat.
+    Core/Src/console/effect_console.c
     # TinyUSB core + device stack.  Kept in ThirdParty/ (NOT
     # Middlewares/, which CubeMX manages and prunes on regeneration).
     # Version 0.18.0: upgraded from 0.17.0 for its dwc2 isochronous-IN
@@ -66,6 +68,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+    Core/Inc/console
     ThirdParty/tinyusb-0.18/src
     USB_APP
 )

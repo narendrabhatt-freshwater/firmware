@@ -133,16 +133,21 @@ Then flash `build/Debug/channel_MCU.hex` over DFU — see
 
 ## Source map
 
-| Path                      | Contents                                                                     |
-| ------------------------- | ---------------------------------------------------------------------------- |
-| `Core/Src/main.c`         | Bring-up, DAC init, main loop wiring                                         |
-| `Core/Src/channel_console.c` | RS485 + USB CDC console, `cpuload`, LED chaser                            |
-| `Core/Src/uart5_rx.c`     | Interrupt-driven UART5 RX ring buffer feeding the RS485 console               |
-| `Core/Src/audio_bridge.c` | **USB→I2S audio engine** — ring buffer, tone/DC generators, I2S2 workarounds |
-| `Core/Src/cs4304.c`       | CS4304 DAC driver (I2C)                                                      |
-| `Core/Src/note_bank.c`    | N0–NF additive sine bank                                                     |
-| `Core/Src/note_filter.c`  | Per-voice 4-pole Butterworth LPF (cascaded SOS)                              |
-| `USB_APP/`                | TinyUSB descriptors, `tusb_config.h`, UAC2 + CDC glue                        |
+Hand-written modules live under `Core/Src/<domain>/` (and matching
+`Core/Inc/<domain>/`). CubeMX-generated files stay flat in `Core/Src` /
+`Core/Inc`.
+
+| Path | Contents |
+| --- | --- |
+| `Core/Src/main.c` | Bring-up, DAC init, main loop wiring |
+| `Core/Src/console/channel_console.c` | RS485 + USB CDC console, `cpuload`, LED chaser |
+| `Core/Src/console/uart5_rx.c` | Interrupt-driven UART5 RX ring buffer |
+| `Core/Src/audio/audio_bridge.c` | **USB→I2S audio engine** — ring buffer, tone/DC, I2S2 workarounds |
+| `Core/Src/audio/note_bank.c` | N0–NF additive sine bank |
+| `Core/Src/filters/note_filter.c` | Per-voice LPF wrapper (cutoff/bypass/Q31) |
+| `Core/Src/filters/butterworth_four_pole.c` | Reusable 4-pole DF4 Butterworth kernel |
+| `Core/Src/drivers/cs4304.c` | CS4304 DAC driver (I2C) |
+| `USB_APP/` | TinyUSB descriptors, `tusb_config.h`, UAC2 + CDC glue |
 
 ### `audio_bridge.c` — handle with care
 

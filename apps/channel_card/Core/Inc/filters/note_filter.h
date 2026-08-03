@@ -3,9 +3,9 @@
  * @file    note_filter.h
  * @brief   Per-voice 4-pole Butterworth LPF for the note bank.
  *
- * Ported from boss four_pole_filter_t (butterworth.cpp): direct-form float
- * design + process. Hot path uses double (H725 FPU) intentionally; Q31 only
- * at the NoteFilter_Process boundary. HP/BP deferred — pass API is LP-only.
+ * Voice-bank wrapper around butterworth_four_pole. Hot path uses double
+ * (H725 FPU) intentionally; Q31 only at the NoteFilter_Process boundary.
+ * HP/BP deferred — pass API is LP-only.
  ******************************************************************************
  */
 

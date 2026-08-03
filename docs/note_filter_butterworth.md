@@ -1,9 +1,10 @@
 # Channel Card — Per-voice 4-pole Butterworth LPF
 
-Status: implemented on `feature/channel-note-butterworth`  
-Sources: [`note_filter.c`](../apps/channel_card/Core/Src/note_filter.c),
-[`note_filter.h`](../apps/channel_card/Core/Inc/note_filter.h),
-wired from [`note_bank.c`](../apps/channel_card/Core/Src/note_bank.c).
+Status: implemented (integrated on `develop`)  
+Sources: [`note_filter.c`](../apps/channel_card/Core/Src/filters/note_filter.c),
+[`note_filter.h`](../apps/channel_card/Core/Inc/filters/note_filter.h),
+kernel [`butterworth_four_pole.c`](../apps/channel_card/Core/Src/filters/butterworth_four_pole.c),
+wired from [`note_bank.c`](../apps/channel_card/Core/Src/audio/note_bank.c).
 
 This document explains **why** the filter is built this way, the **formulas**
 used in firmware, and how to **verify** it on a scope against theory.
@@ -236,13 +237,15 @@ Frequency counter / period cursors: **unchanged**. Peak-to-peak: **down**.
 
 ## 8. Files / integration
 
-| File                         | Role                                                     |
-| ---------------------------- | -------------------------------------------------------- |
-| `Core/Src/note_filter.c`     | Design + process                                         |
-| `Core/Inc/note_filter.h`     | Public API                                               |
-| `Core/Src/note_bank.c`       | Calls `NoteFilter_Process` after amp; resets on note-off |
-| `Core/Src/channel_console.c` | `cutoff` command; init all voices to bypass              |
-| Top-level `CMakeLists.txt`   | Registers `note_filter.c`                                |
+| File | Role |
+| --- | --- |
+| `Core/Src/filters/butterworth_four_pole.c` | DF4 design + process kernel |
+| `Core/Inc/filters/butterworth_four_pole.h` | Kernel API |
+| `Core/Src/filters/note_filter.c` | Per-voice cutoff/bypass + Q31 edges |
+| `Core/Inc/filters/note_filter.h` | Public voice API |
+| `Core/Src/audio/note_bank.c` | Calls `NoteFilter_Process` after amp; resets on note-off |
+| `Core/Src/console/channel_console.c` | `cutoff` / `pass` commands; init all voices to bypass |
+| Top-level `CMakeLists.txt` | Registers filter + audio sources under `Core/Src/<domain>/` |
 
 ---
 
