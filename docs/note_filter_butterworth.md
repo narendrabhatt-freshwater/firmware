@@ -27,9 +27,9 @@ duty), `t <0.1..0.9>` (triangle asymmetry). On a pure sine the LPF mostly
 changes level (and phase); pulse/tri give harmonics for filter sweeps.
 
 The digital filter is a **4-pole Butterworth LPF** (boss `four_pole_filter_t`
-direct-form algorithm). `cutoff` sets the corner; **20000 Hz** is transparent
-bypass. HP/BP from that reference are **not wired yet** (no `pass` console
-command in this build).
+direct-form algorithm). `cutoff` sets the corner; **20000 Hz** (or console
+**`0`**) is transparent bypass. HP/BP from that reference are **not wired yet**
+(no `pass` console command in this build).
 
 Why per-oscillator (not one filter after the mix): independent cutoff per
 note. The analog VCF/SCF on the board still filter the **summed** path and
@@ -169,7 +169,7 @@ At \(f_c \ge 20000\,\mathrm{Hz}\) the process function **returns `x` unchanged**
 | ----------------------- | ------------------------------------------------- |
 | `f0`…`f7` `<Hz>` / `f` `<Hz>` | Set voice (or all 0..7) cutoff; range **20…20000** |
 | `f0`…`f7` / bare `f`        | Query one voice / all eight                         |
-| `20000`                 | Bypass (transparent)                              |
+| `0` or `20000`          | Bypass (transparent; stored/reported as 20000)    |
 
 Replies: `ok: …` / `err: …` (never silent clamp).
 
@@ -293,7 +293,7 @@ No `pass` console command in this build (always LP). Example:
 
 ```text
 f0 500                   # LPF corner
-f 20000                  # bypass all 0..7
+f 0                      # bypass all 0..7 (same as f 20000)
 ```
 Query: `f0` → `ok: f0 …. Hz` (bypass annotated when 20000).
 

@@ -225,7 +225,7 @@ Type `h` / `help` / `?` on the card for the live list.
 | `s` | Note-bank shape: sine |
 | `p <0.1..0.9>` | Note-bank shape: pulse (duty) |
 | `t <0.1..0.9>` | Note-bank shape: triangle (asymmetry) |
-| `f0`…`f7` `<Hz>` / `f` `<Hz>` | LPF on voices **0..7** (20..20000; **20000 = bypass**). See [`docs/note_filter_butterworth.md`](../../docs/note_filter_butterworth.md). |
+| `f0`…`f7` `<Hz>` / `f` `<Hz>` | LPF on voices **0..7** (20..20000; **`0` or `20000` = bypass**). See [`docs/note_filter_butterworth.md`](../../docs/note_filter_butterworth.md). |
 | `g <ch> <dB>` | DAC atten 0..127 on ch 1..4 |
 | `cpu` / `cpu N` | N voices + LED_Y main-loop fill load probe (default 16) |
 | `cpu q` `[N]` | Soft-queue load probe |

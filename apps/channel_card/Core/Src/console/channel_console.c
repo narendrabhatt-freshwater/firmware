@@ -217,7 +217,7 @@ static const SwitchDef_t switches[] = {
  *   n0                — session defaults: bypass ON + g 1 0
  *   n0..nf <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 0.125)
  *   n <Hz> [sc]       — all 16 notes (n 0 = silence)
- *   f0..f7 <Hz> / f <Hz> — LPF on first 8 voices (20000 = bypass)
+ *   f0..f7 <Hz> / f <Hz> — LPF on first 8 voices (0 or 20000 = bypass)
  *   g <ch> <dB>       — CS4304 DAC atten (0..127), ch 1..4
  *   cpu [0|N|q [N]]   — LED_Y load probe (see README) */
 #define N0_DEFAULT_ATTEN_DB 0u
@@ -383,7 +383,7 @@ static void Console_Help(void)
 {
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   RS485_Reply("ok: n0 | n0..nf Hz [sc] | n Hz|0 | s | p|t 0.1..0.9 | "
-              "f0..f7 Hz | f Hz | g ch dB | cpu [0|N|q N]\r\n");
+              "f0..f7 Hz | f Hz|0 | g ch dB | cpu [0|N|q N]\r\n");
 }
 
 static void Console_ShapeReply(void)

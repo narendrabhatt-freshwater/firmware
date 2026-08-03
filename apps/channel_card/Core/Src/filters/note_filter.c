@@ -91,6 +91,10 @@ int NoteFilter_SetCutoff(uint8_t voice, double cutoff_hz)
   if (voice >= NOTE_FILTER_VOICES) {
     return -1;
   }
+  /* 0 = bypass alias (same as MAX); keeps console `f 0` / `f0 0` short. */
+  if (cutoff_hz == 0.0) {
+    cutoff_hz = NOTE_FILTER_CUTOFF_MAX_HZ;
+  }
   if (cutoff_hz < NOTE_FILTER_CUTOFF_MIN_HZ ||
       cutoff_hz > NOTE_FILTER_CUTOFF_MAX_HZ) {
     return -2;

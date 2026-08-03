@@ -21,7 +21,8 @@ extern "C" {
 /** Must match NOTE_BANK_VOICES. */
 #define NOTE_FILTER_VOICES 16u
 
-/** Audible cutoff range (Hz). Max also means bypass (transparent). */
+/** Audible cutoff range (Hz). Max also means bypass (transparent).
+ *  Console/API also accept 0.0 as an alias for max (bypass). */
 #define NOTE_FILTER_CUTOFF_MIN_HZ 20.0
 #define NOTE_FILTER_CUTOFF_MAX_HZ 20000.0
 
@@ -35,7 +36,7 @@ typedef enum {
 /**
  * Set one voice's LPF cutoff (Hz). voice: 0..15.
  * Returns 0 on success, -1 if voice out of range, -2 if cutoff out of range.
- * At NOTE_FILTER_CUTOFF_MAX_HZ the filter is bypassed (identity).
+ * At NOTE_FILTER_CUTOFF_MAX_HZ (or 0.0 alias) the filter is bypassed (identity).
  * Clears delay state on every successful set.
  */
 int NoteFilter_SetCutoff(uint8_t voice, double cutoff_hz);

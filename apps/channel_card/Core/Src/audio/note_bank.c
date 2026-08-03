@@ -178,8 +178,10 @@ static double note_shape_param = 0.5;
 /* Pulse: phase < thresh → +peak. Tri: rise [0, rise_end), fall after. */
 static uint32_t note_pulse_thresh = 0x80000000u;
 static uint32_t note_tri_rise_end = 0x80000000u;
-static uint32_t note_tri_rise_inv = 2u; /* Q32 recip: floor(2^32 / rise_end) */
-static uint32_t note_tri_fall_inv = 2u;
+/* floor(2^48 / seg_len); hot path uses (pos * inv) >> 16 → Q32 frac.
+ * Plain floor(2^32 / len) is useless for len >= 2^31 (inv <= 2 → frac stuck at 0). */
+static uint32_t note_tri_rise_inv = 131072u; /* 2^48 / 2^31 */
+static uint32_t note_tri_fall_inv = 131072u;
 
 /** Cold path only — convert Hz to 32-bit phase increment at NOTE_BANK_SAMPLE_RATE. */
 static uint32_t NoteBank_PhaseIncFromHz(double freq_hz)
@@ -218,8 +220,8 @@ static void NoteBank_UpdateShapeThresholds(double param)
 
   note_pulse_thresh = rise_end;
   note_tri_rise_end = rise_end;
-  note_tri_rise_inv = (uint32_t)(0x100000000ULL / (uint64_t)rise_end);
-  note_tri_fall_inv = (uint32_t)(0x100000000ULL / (uint64_t)fall_len);
+  note_tri_rise_inv = (uint32_t)((1ULL << 48) / (uint64_t)rise_end);
+  note_tri_fall_inv = (uint32_t)((1ULL << 48) / (uint64_t)fall_len);
 }
 
 /** Map Q32 fraction 0..~1 → bipolar Q31 (-peak .. +peak). Hot path OK. */
@@ -241,13 +243,13 @@ static inline int32_t NoteBank_OscSample(uint32_t ph)
     if (ph < note_tri_rise_end)
     {
       uint32_t frac =
-          (uint32_t)(((uint64_t)ph * (uint64_t)note_tri_rise_inv) >> 32);
+          (uint32_t)(((uint64_t)ph * (uint64_t)note_tri_rise_inv) >> 16);
       return NoteBank_FracToQ31(frac);
     }
     {
       uint32_t pos = ph - note_tri_rise_end;
       uint32_t frac =
-          (uint32_t)(((uint64_t)pos * (uint64_t)note_tri_fall_inv) >> 32);
+          (uint32_t)(((uint64_t)pos * (uint64_t)note_tri_fall_inv) >> 16);
       return -NoteBank_FracToQ31(frac);
     }
 
