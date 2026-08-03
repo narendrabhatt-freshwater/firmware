@@ -11,7 +11,7 @@
 | CubeMX project | `channel_MCU.ioc`                                 |
 | Linker script  | `STM32H725xG_flash.ld`                            |
 | USB stack      | TinyUSB 0.17 (`ThirdParty/tinyusb`)               |
-| USB device     | UAC2 speaker (mono, 32-bit, 96 kHz) + CDC console |
+| USB device     | UAC2 speaker (mono, 32-bit, 48 kHz) + CDC console |
 | RS485 address  | `c:`                                              |
 
 ## What this card does
@@ -117,6 +117,27 @@ Smoke after console extract / flash: `cpuload 1`, `cpuload 16`, `cpuload off`,
 | `cpuload on 4` / `cpuload 4` | 4 voices only (compare duty cycle) |
 | `cpuload queue 8` | 8 voices + soft-queue LED probe |
 | `cpuload off` | Clear notes, stop probe, resume LED chaser |
+
+### Boss bench: 16 osc + 8 filters @ 48 kHz
+
+Sample rate is compile-time (`AUDIO_SAMPLE_RATE_HZ` in `Core/Inc/audio/audio_rate.h`,
+currently **48 kHz**). Flash this build, then:
+
+```text
+cutoff * 20000          # all voices bypass first
+cutoff 0 300
+cutoff 1 300
+cutoff 2 300
+cutoff 3 300
+cutoff 4 300
+cutoff 5 300
+cutoff 6 300
+cutoff 7 300            # LPF on voices 0..7 only; 8..F stay bypass
+cpuload on              # 16 oscillators
+```
+
+Scope LED_Y duty as above. Console must still ACK (`cpuload off`, `cutoff *`).
+At `cutoff * 20000` + `cpuload on` you get the 16-osc / filter-bypass baseline.
 
 ## Build & flash
 

@@ -16,13 +16,13 @@
   *            - Volume/mute take effect only after writing 1 to OUT_VU.
   *            - Output active ~1 s after enable (STARTUP_DELAY default).
   *
-  *          Board configuration (this project):
-  *            PC7  -> DAC_RST, PA8 -> MCLK (MCO1 = 24.576 MHz = 256·fs)
-  *            PC10 -> I2C5_SDA / PC11 -> I2C5_SCL
-  *            I2S1 (Master TX) -> ASP_DIN1 (Ch1+Ch2)
-  *            I2S2 (Slave  TX) -> ASP_DIN2 (Ch3+Ch4)
-  *            fs = 96 kHz, BCLK = 64·fs = 6.144 MHz, I2S, ASP Secondary.
-  *            Clocking: PLL enabled, MCLK reference @ 24.576 MHz.
+ *          Board configuration (this project):
+ *            PC7  -> DAC_RST, PA8 -> MCLK (MCO1 = 24.576 MHz = 512·fs @ 48 kHz)
+ *            PC10 -> I2C5_SDA / PC11 -> I2C5_SCL
+ *            I2S1 (Master TX) -> ASP_DIN1 (Ch1+Ch2)
+ *            I2S2 (Slave  TX) -> ASP_DIN2 (Ch3+Ch4)
+ *            fs = 48 kHz, BCLK = 64·fs = 3.072 MHz, I2S, ASP Secondary.
+ *            Clocking: PLL enabled, MCLK reference @ 24.576 MHz.
   ******************************************************************************
   */
 
@@ -98,9 +98,13 @@ typedef struct {
 /* CLK_CFG_0: SYSCLK_SRC=1 (PLL, bit12) | PLL_REFCLK_FREQ=11 (24.576 MHz,
  * bits[5:4]) | PLL_REFCLK_SRC=1 (MCLK, bit0)                                  */
 #define CS4304_CLK_CFG_0_PLL_MCLK_24M576   0x1031
-/* CLK_CFG_1: SAMPLE_RATE bits[2:0]: 010 = 96/88.2 kHz, 110 = autodetect      */
+/* CLK_CFG_1: SAMPLE_RATE bits[2:0] (CS4304 / CS530x family):
+ *   001 = 48/44.1 kHz, 010 = 96/88.2 kHz, 110 = autodetect                    */
+#define CS4304_SAMPLE_RATE_48K       0x0001
 #define CS4304_SAMPLE_RATE_96K       0x0002
 #define CS4304_SAMPLE_RATE_AUTO      0x0006
+/** Active bring-up rate — must match AUDIO_SAMPLE_RATE_HZ / I2S AudioFreq. */
+#define CS4304_SAMPLE_RATE_ACTIVE    CS4304_SAMPLE_RATE_48K
 /* ASP_CFG: secondary mode, BCLK non-inverted, BCLK_FREQ = 64 fs (0x01)       */
 #define CS4304_ASP_CFG_SECONDARY_I2S 0x0001
 /* SIGNAL_PATH_CFG: I2S format, normal channel order

@@ -1,6 +1,6 @@
 /* USB application layer — Channel Card
  *
- * UAC2 mono speaker (32-bit / 96 kHz) + CDC-ACM console on USB1_OTG_HS.
+ * UAC2 mono speaker (32-bit / 48 kHz) + CDC-ACM console on USB1_OTG_HS.
  *
  * Audio path: host -> iso OUT -> TinyUSB FIFO -> Audio_Bridge_WriteUSB()
  * -> I2S1 ring buffer -> CS4304 DAC channel 1.  Everything downstream of

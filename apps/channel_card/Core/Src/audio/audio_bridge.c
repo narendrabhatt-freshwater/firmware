@@ -5,7 +5,7 @@
  * @version        : v2.0_Channel_Card
  * @brief          : USB Audio to I2S bridge for CS4304 4-channel DAC.
  *
- *                   USB Audio (mono 32-bit 96kHz) → I2S1 (Ch1+Ch2)
+ *                   USB Audio (mono 32-bit 48kHz) → I2S1 (Ch1+Ch2)
  *                   I2S2 (Ch3+Ch4) available for testing.
  *
  *                   Data flow:
@@ -37,6 +37,7 @@
 #include "main.h"
 #include "i2s.h"
 #include "cs4304.h"
+#include "audio_rate.h"
 #include "note_bank.h"
 #include <string.h>
 /* USER CODE END INCLUDE */
@@ -50,16 +51,16 @@
 
 /*
  * I2S DMA buffer sizing:
- * I2S is configured for 32-bit data, stereo (L+R), at 96 kHz.
+ * I2S is configured for 32-bit data, stereo (L+R), at AUDIO_SAMPLE_RATE_HZ.
  * Each I2S frame = 2 × 32-bit words (L + R) = 8 bytes
  * DMA buffer is double-buffered: half/full IRQs each refill one half.
  *
  * AUDIO_I2S_BUF_FRAMES: stereo frames in the full DMA ring.
- * 96 frames = 1 ms full ring; half = 48 frames = 0.5 ms @ 96 kHz.
+ * 96 frames = 2 ms full ring; half = 48 frames = 1 ms @ 48 kHz.
  * (Larger sizes were used for USB↔I2S SOF drift headroom — restore on a
  * dedicated USB branch if needed.)
  */
-#define AUDIO_I2S_BUF_FRAMES 96                       /* 1 ms full; half = 48 = 0.5 ms @ 96 kHz */
+#define AUDIO_I2S_BUF_FRAMES 96                       /* 2 ms full; half = 48 = 1 ms @ 48 kHz */
 #define AUDIO_I2S_BUF_SIZE (AUDIO_I2S_BUF_FRAMES * 2) /* × 2 for L+R, in 32-bit words */
 
 /* I2S2 (CH3/CH4) enabled. Slave TX on SPI2 requires two workarounds
@@ -259,8 +260,8 @@ void Audio_CpuLoad_Poll(void)
 }
 
 /* Test tone generator — independent frequency per channel (CH1..CH4).
- * All channels share fs = 96 kHz (single CS4304 clock domain). */
-#define TEST_TONE_SAMPLE_RATE 96000
+ * All channels share fs = AUDIO_SAMPLE_RATE_HZ (single CS4304 clock domain). */
+#define TEST_TONE_SAMPLE_RATE AUDIO_SAMPLE_RATE_HZ
 /* CH1 = USB audio (no tone); CH2 = 1 kHz, CH3 = 2 kHz, CH4 = 3 kHz */
 static uint32_t test_tone_freq_hz[4] = {1000, 1000, 2000, 3000}; /* CH1..CH4 (CH1 entry unused) */
 static uint32_t test_tone_phase[4] = {0, 0, 0, 0};
@@ -276,7 +277,7 @@ static Audio_ChannelMode_t channel_mode[4] = {AUDIO_MODE_TONE, AUDIO_MODE_TONE,
 static int8_t dc_level_pct[4] = {0, 0, 0, 0};  /* -100..+100 percent (signed!) */
 static int32_t dc_level_tgt[4] = {0, 0, 0, 0}; /* target Q31 sample value */
 static int32_t dc_level_now[4] = {0, 0, 0, 0}; /* slewed current value */
-/* Slew rate: full range (±0.5 FS) in ~21 ms at 96 kHz. An instant step
+/* Slew rate: full range (±0.5 FS) in ~42 ms at 48 kHz. An instant step
  * rings the DAC's interpolation filter → spikes on the control line. */
 #define DC_SLEW_STEP (1L << 19)
 
@@ -844,7 +845,7 @@ void Audio_Bridge_WriteUSB(const uint8_t *pbuf, uint32_t size)
 
     if (!usb_synced)
     {
-      /* Start writing half a buffer (0.5 ms) ahead of the DMA read point */
+      /* Start writing half a buffer (1 ms @ 48 kHz) ahead of the DMA read point */
       usb_wr_idx = ((rd + AUDIO_I2S_BUF_SIZE / 2u) % AUDIO_I2S_BUF_SIZE) & ~1u;
       usb_synced = 1;
     }
@@ -1270,7 +1271,7 @@ static void I2S2_PumpTimerInit(void)
   TIM7->ARR = 9;   /* 1 MHz / 10 = 100 kHz tick        */
   TIM7->DIER = TIM_DIER_UIE;
   HAL_NVIC_SetPriority(TIM7_IRQn, 0, 0); /* must not be starved: the FIFO
-                                            is only ~20 µs deep at 96 kHz */
+                                            is only ~40 µs deep at 48 kHz */
   HAL_NVIC_EnableIRQ(TIM7_IRQn);
   TIM7->CR1 = TIM_CR1_CEN;
 }

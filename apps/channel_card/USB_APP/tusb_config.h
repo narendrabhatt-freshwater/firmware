@@ -1,7 +1,7 @@
 /* TinyUSB configuration — Channel Card
  *
  * Composite device on USB1_OTG_HS (full-speed, embedded PHY):
- *   - UAC2 speaker, MONO, 32-bit / 96 kHz -> CS4304 DAC channel 1 via I2S1
+ *   - UAC2 speaker, MONO, 32-bit / 48 kHz -> CS4304 DAC channel 1 via I2S1
  *   - CDC-ACM virtual COM port running the same console as RS485
  *
  * Replaces ST's USB Device Library (USB_DEVICE/, Middlewares/ST) which
@@ -61,14 +61,14 @@ extern "C" {
 #define CFG_TUD_CDC_TX_BUFSIZE      512
 
 //--------------------------------------------------------------------
-// AUDIO CLASS DRIVER CONFIGURATION (mono 32-bit 96 kHz speaker)
+// AUDIO CLASS DRIVER CONFIGURATION (mono 32-bit 48 kHz speaker)
 //--------------------------------------------------------------------
 
 #define CFG_TUD_AUDIO_FUNC_1_DESC_LEN         TUD_AUDIO_SPEAKER_MONO_FB_DESC_LEN
 #define CFG_TUD_AUDIO_FUNC_1_N_AS_INT         1
 #define CFG_TUD_AUDIO_FUNC_1_CTRL_BUF_SZ      64
 
-#define CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE          96000
+#define CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE          48000
 #define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX            1
 #define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX    4
 #define CFG_TUD_AUDIO_FUNC_1_RESOLUTION_RX            32

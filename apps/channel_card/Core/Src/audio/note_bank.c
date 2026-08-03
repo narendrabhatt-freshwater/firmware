@@ -9,6 +9,7 @@
 
 #include "note_bank.h"
 
+#include "audio_rate.h"
 #include "note_filter.h"
 
 #include <stdint.h>
@@ -17,12 +18,13 @@ _Static_assert(NOTE_FILTER_VOICES == NOTE_BANK_VOICES,
                "note_filter voice count must match note_bank");
 
 
-/* Must match I2S / CS4304 sample rate (see audio-dsp-conventions.mdc). */
-#define NOTE_BANK_SAMPLE_RATE 96000u
+/* Must match I2S / CS4304 sample rate (see audio_rate.h). */
+#define NOTE_BANK_SAMPLE_RATE AUDIO_SAMPLE_RATE_HZ
 
 /*
  * Dedicated 128-entry Q31 sine table. Table size sets interpolation error
- * only; the 32-bit phase accumulator gives ~0.0000223 Hz resolution at 96 kHz.
+ * only; the 32-bit phase accumulator gives ~0.0000223 Hz resolution at 96 kHz
+ * (finer still at 48 kHz).
  */
 #define NOTE_SINE_TABLE_SIZE 128u
 static const int32_t note_sine_table[NOTE_SINE_TABLE_SIZE] = {

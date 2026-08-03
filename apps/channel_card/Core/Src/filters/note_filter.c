@@ -11,12 +11,13 @@
 
 #include "note_filter.h"
 
+#include "audio_rate.h"
 #include "butterworth_four_pole.h"
 
 #include <stdint.h>
 
-/* Must match I2S / CS4304 / note_bank. */
-#define NOTE_FILTER_SAMPLE_RATE 96000.0
+/* Must match I2S / CS4304 / note_bank (audio_rate.h). */
+#define NOTE_FILTER_SAMPLE_RATE ((double)AUDIO_SAMPLE_RATE_HZ)
 
 /** Damping parameter in boss formulation; 1.0 ≈ Butterworth-like. */
 #define NOTE_FILTER_G 1.0
