@@ -46,7 +46,7 @@ using midi_host::VoiceBank;
 namespace
 {
 
-/** Set by SIGINT/SIGTERM so Ctrl+C still runs Close() (quiet off). */
+/** Set by SIGINT/SIGTERM so Ctrl+C still runs Close(). */
 std::atomic<bool> g_quit_signal{false};
 
 #if !defined(_WIN32)
@@ -85,8 +85,8 @@ void PrintUsage()
          "  --rs485 PATH         USB↔RS485 adapter serial path (required with channel)\n"
          "  --baud N             RS485 baud (default 115200)\n"
          "  --gain DB            CH1 DAC atten in dB at session start (0..127, default 6)\n"
-         "  --echo-off           Send e:echo off at open (default)\n"
-         "  --echo-on            Send e:echo on at open\n"
+         "  --echo-off           Send e:ec 0 at open (default)\n"
+         "  --echo-on            Send e:ec 1 at open\n"
          "  --echo-leave         Do not change Effect echo\n"
          "\n"
          "Velocity is ignored. Up to 16 notes; overflow steals the oldest.\n"
@@ -180,7 +180,7 @@ bool LooksLikeSerialPath(const char* s)
 int main(int argc, char** argv)
 {
 #if !defined(_WIN32)
-  // Prefer a clean Close() over abrupt exit — Channel quiet is sticky
+  // Prefer a clean Close() over abrupt exit.
   // until the host clears it.
   std::signal(SIGINT, OnQuitSignal);
   std::signal(SIGTERM, OnQuitSignal);

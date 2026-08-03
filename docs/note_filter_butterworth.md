@@ -27,8 +27,8 @@ waveforms are not selectable from the console in this build.
 
 The digital filter is a **4-pole Butterworth LPF** (boss `four_pole_filter_t`
 direct-form algorithm). `cutoff` sets the corner; **20000 Hz** is transparent
-bypass. HP/BP from that reference are **not wired yet** (`pass hp|bp` →
-`err:range`).
+bypass. HP/BP from that reference are **not wired yet** (no `pass` console
+command in this build).
 
 Why per-oscillator (not one filter after the mix): independent cutoff per
 note. The analog VCF/SCF on the board still filter the **summed** path and
@@ -99,7 +99,7 @@ static const double k_butter_q[2] = {
 
 ## 4. Digital design (what `NoteFilter_DesignSos` does)
 
-Sample rate \(f_s = 96000\). For each section with cutoff \(f_c\) and quality \(Q\):
+Sample rate \(f_s = 48000\). For each section with cutoff \(f_c\) and quality \(Q\):
 
 ### 4.1 Normalized digital frequency
 
@@ -166,14 +166,14 @@ At \(f_c \ge 20000\,\mathrm{Hz}\) the process function **returns `x` unchanged**
 
 | Command                 | Meaning                                           |
 | ----------------------- | ------------------------------------------------- |
-| `cutoff <0..f\|*> <Hz>` | Set voice (or all `*`) cutoff; range **20…20000** |
-| `cutoff <0..f>`         | Query one voice                                   |
+| `f0`…`f7` `<Hz>` / `f` `<Hz>` | Set voice (or all 0..7) cutoff; range **20…20000** |
+| `f0`…`f7` / bare `f`        | Query one voice / all eight                         |
 | `20000`                 | Bypass (transparent)                              |
 
 Replies: `ok: …` / `err: …` (never silent clamp).
 
 Requires firmware that includes `note_filter.c`. Old images reply with the
-generic unknown-command error (no `cutoff` in the help string).
+generic unknown-command error (type `h` for the live list).
 
 ---
 
@@ -185,14 +185,14 @@ see “rounded” square-like shapes. Verify with **amplitude ratio**.
 ### 7.1 Procedure
 
 ```text
-silence
+n 0
 n0
-gain 1 0
+g 1 0
 n0 1000
-cutoff 0 20000          # reference (bypass)
+f0 20000                # reference (bypass)
 # measure Vpp_ref
 
-cutoff 0 300            # engage LPF
+f0 300            # engage LPF
 # measure Vpp_filt  (same timebase / trigger)
 ```
 
@@ -244,7 +244,7 @@ Frequency counter / period cursors: **unchanged**. Peak-to-peak: **down**.
 | `Core/Src/filters/note_filter.c` | Per-voice cutoff/bypass + Q31 edges |
 | `Core/Inc/filters/note_filter.h` | Public voice API |
 | `Core/Src/audio/note_bank.c` | Calls `NoteFilter_Process` after amp; resets on note-off |
-| `Core/Src/console/channel_console.c` | `cutoff` / `pass` commands; init all voices to bypass |
+| `Core/Src/console/channel_console.c` | `f0`…`f7` / `f` commands; init all voices to bypass |
 | Top-level `CMakeLists.txt` | Registers filter + audio sources under `Core/Src/<domain>/` |
 
 ---
@@ -278,8 +278,8 @@ Analog check formula (n=4):
 ## Primary hardware test case
 Commands:
   n0 1000 1.0
-  cutoff 0 20000   → measure Vpp_ref
-  cutoff 0 300     → measure Vpp_filt
+  f0 20000   → measure Vpp_ref
+  f0 300     → measure Vpp_filt
 Also show fc in {200, 300, 500, 1000, 2000, 5000} at f=1000.
 
 ### Harmonic / noise demo
@@ -287,13 +287,14 @@ Sine-only bank: use amplitude drop vs bypass for verification (see primary
 test case). Richer waveforms are not console-selectable in this build.
 
 ### Pass modes (LP only in v1)
+
+No `pass` console command in this build (always LP). Example:
+
 ```text
-pass lp                  # ok
-pass hp                  # err:range (not wired yet)
-cutoff 0 500             # boss LPF corner
-cutoff * 20000           # bypass
+f0 500                   # LPF corner
+f 20000                  # bypass all 0..7
 ```
-Query: `pass 0` → `ok: pass 0 lp`; `cutoff 0` includes mode in the reply.
+Query: `f0` → `ok: f0 …. Hz` (bypass annotated when 20000).
 
 ## What to produce
 1) Block diagram: sine → SOS(Q=0.541) → SOS(Q=1.307) → out

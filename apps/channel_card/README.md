@@ -98,25 +98,21 @@ scf 100      → 100 kHz clock → 1 kHz cutoff
 **What you do**
 
 1. Flash the Channel Card build.
-2. On RS485/USB console: `cpuload on` or `cpuload on 4` (voice count).
+2. On RS485/USB console: `cpu` or `cpu 4` (voice count).
 3. Probe the **yellow LED** pin — **PB9 / `LED_Y`** (not the red LED).
 4. On the scope: **low = CPU busy**, **high = idle**.
 5. `CPU% ≈ t_low / (t_low + t_high)`.
-6. When done: `cpuload off`.
+6. When done: `cpu 0`.
 
-Smoke after console extract / flash: `cpuload 1`, `cpuload 16`, `cpuload off`,
-`n0 440 0.5`, `gain 1 0` — LED chaser should resume after `cpuload off`.
+Smoke: `cpu 1`, `cpu 16`, `cpu 0`, `n0 440 0.5`, `g 1 0` — LED chaser resumes after `cpu 0`.
 
-`cpuload on` / bare `cpuload` starts **16** oscillators (220, 260, … Hz). Pass
-**`1..16`** to change how many run — busy % should rise roughly with count
-(e.g. `cpuload 1` then `cpuload 16` on the scope).
+Bare `cpu` starts **16** oscillators (220, 260, … Hz). Pass **`1..16`** for count.
 
 | Command | Action |
 |---|---|
-| `cpuload` / `cpuload on` | 16 voices + DMA LED probe |
-| `cpuload on 4` / `cpuload 4` | 4 voices only (compare duty cycle) |
-| `cpuload queue 8` | 8 voices + soft-queue LED probe |
-| `cpuload off` | Clear notes, stop probe, resume LED chaser |
+| `cpu` / `cpu N` | N voices (default 16) + DMA LED probe |
+| `cpu q` / `cpu q N` | Soft-queue LED probe |
+| `cpu 0` | Clear notes, stop probe, resume LED chaser |
 
 ### Boss bench: 16 osc + 8 filters @ 48 kHz
 
@@ -124,20 +120,20 @@ Sample rate is compile-time (`AUDIO_SAMPLE_RATE_HZ` in `Core/Inc/audio/audio_rat
 currently **48 kHz**). Flash this build, then:
 
 ```text
-cutoff * 20000          # all voices bypass first
-cutoff 0 300
-cutoff 1 300
-cutoff 2 300
-cutoff 3 300
-cutoff 4 300
-cutoff 5 300
-cutoff 6 300
-cutoff 7 300            # LPF on voices 0..7 only; 8..F stay bypass
-cpuload on              # 16 oscillators
+f 20000                 # all f0..f7 bypass first
+f0 300
+f1 300
+f2 300
+f3 300
+f4 300
+f5 300
+f6 300
+f7 300                  # LPF on voices 0..7; 8..F stay bypass
+cpu                     # 16 oscillators
 ```
 
-Scope LED_Y duty as above. Console must still ACK (`cpuload off`, `cutoff *`).
-At `cutoff * 20000` + `cpuload on` you get the 16-osc / filter-bypass baseline.
+Scope LED_Y duty as above. Console must still ACK (`cpu 0`, `f`).
+At `f 20000` + `cpu` you get the 16-osc / filter-bypass baseline.
 
 ## Build & flash
 
@@ -161,7 +157,7 @@ Hand-written modules live under `Core/Src/<domain>/` (and matching
 | Path | Contents |
 | --- | --- |
 | `Core/Src/main.c` | Bring-up, DAC init, main loop wiring |
-| `Core/Src/console/channel_console.c` | RS485 + USB CDC console, `cpuload`, LED chaser |
+| `Core/Src/console/channel_console.c` | RS485 + USB CDC console, `cpu`, LED chaser |
 | `Core/Src/console/uart5_rx.c` | Interrupt-driven UART5 RX ring buffer |
 | `Core/Src/audio/audio_bridge.c` | **USB→I2S audio engine** — ring buffer, tone/DC, I2S2 workarounds |
 | `Core/Src/audio/note_bank.c` | N0–NF additive sine bank |
@@ -203,24 +199,25 @@ push one value at enumeration and then never update it, leaving the
 device stuck at a stale attenuation. Do not re-add a volume control
 without re-testing the full slider range on Windows.
 
-**`N0`** applies **bypass ON** and **`gain 1 0`** (0 dB CH1 DAC trim) at
-boot and on bare `n0`. **`N0`…`NF`** are 16 independent phase-accumulator
-sines summed onto CH1. Optional **`[scale]`** (0.0..1.0, default **1.0**) sets
+**`n0`** applies **bypass ON** and **`g 1 0`** (0 dB CH1 DAC trim) at
+boot and on bare `n0`. **`n0`…`nf`** are 16 independent phase-accumulator
+sines summed onto CH1. Optional **`[scale]`** (0.0..1.0, default **0.125**) sets
 that note’s amplitude. Frequency/scale changes do not touch gain or bypass.
-**`gain`** changes DAC atten on any channel.
+**`g`** changes DAC atten on any channel.
 
 ## Console quick reference
 
+Type `h` / `help` / `?` on the card for the live list.
+
 | Command | Action |
 |---|---|
-| `N0` | Session defaults: bypass on, gain 1 0 |
-| `N0`…`NF` `0` | Turn that note off (gain/bypass unchanged) |
-| `N0`…`NF` `<Hz>` | Note at Hz, scale **1.0** (max); voices sum on CH1 |
-| `N0`…`NF` `<Hz> <scale>` | Note at Hz with amplitude 0.0..1.0 (e.g. `n0 440 0.5`) |
-| `cutoff <0..f\|*> <Hz>` | Per-voice 4-pole Butterworth **LPF** (20..20000; **20000 = bypass**). Boss DF4 float algorithm. See [`docs/note_filter_butterworth.md`](../../docs/note_filter_butterworth.md). |
-| `pass lp` | Filter mode (LP only in v1; `hp`/`bp` → `err:range`) |
-| `pass <0..f\|*> lp` | Per-voice / all (LP only) |
-| `gain <ch> <dB>` | DAC atten 0..127 on ch 1..4 (e.g. `gain 1 40`) |
-| `cpuload` / `on` `[1..16]` | N voices + LED_Y (PB9) DMA load probe (default 16) |
-| `cpuload queue` `[1..16]` | Same, soft-queue producer mode |
-| `cpuload off` | Clear notes; resume LED chaser |
+| `h` | Command list |
+| `n0` | Session defaults: bypass on, `g 1 0` |
+| `n0`…`nf` `0` | Turn that note off |
+| `n0`…`nf` `<Hz>` `[scale]` | Note (default scale **0.125**) |
+| `n <Hz>` `[scale]` / `n 0` | All 16 notes / silence |
+| `f0`…`f7` `<Hz>` / `f` `<Hz>` | LPF on voices **0..7** (20..20000; **20000 = bypass**). See [`docs/note_filter_butterworth.md`](../../docs/note_filter_butterworth.md). |
+| `g <ch> <dB>` | DAC atten 0..127 on ch 1..4 |
+| `cpu` / `cpu N` | N voices + LED_Y DMA load probe (default 16) |
+| `cpu q` `[N]` | Soft-queue load probe |
+| `cpu 0` | Clear notes; resume LED chaser |

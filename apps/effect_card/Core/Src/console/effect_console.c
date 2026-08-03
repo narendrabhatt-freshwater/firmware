@@ -161,64 +161,22 @@ void EffectConsole_Reply(const char *s) {
 /* ---------------- Effect Card control console (RS485) ---------------- */
 
 static void Console_Help(void) {
-  EffectConsole_Reply("\r\n"
-              "**************************************************\r\n"
-              "*             Effect Card Console                *\r\n"
-              "**************************************************\r\n"
-              "* help                 this page                 *\r\n"
-              "* status               show all settings         *\r\n"
-              "* 48v on|off           enable/disable 48 V rail  *\r\n"
-              "* 48v                  show 48 V + PGGOOD status *\r\n"
-              "* led on|off           LED flashing on/off       *\r\n"
-              "* led_r on|off         LED_R manual control      *\r\n"
-              "* led_y on|off         LED_Y manual control      *\r\n"
-              "* audio on|off         audio domain / ADC SHDNZ  *\r\n"
-              "* i2cscan              scan I2C2 for devices     *\r\n"
-              "* adc init             wake+config both ADCs     *\r\n"
-              "* adc rd <n> <reg>     read ADC register (hex)   *\r\n"
-              "* adc wr <n> <reg> <v> write ADC register (hex)  *\r\n"
-              "* usb ch <1..8>        ADC ch for USB stream     *\r\n"
-              "* echo on|off          RS485 keystroke bus echo  *\r\n"
-              "**************************************************\r\n"
-              "Type a command and press Enter.\r\n\r\n");
+  /* One tagged line — leading \\r\\n would make the host see bare "[E]". */
+  EffectConsole_Reply("ok: s | v 0|1 | l/lr/ly 0|1 | a 0|1 | i2c | "
+                      "ai | ar n reg | aw n reg v | u 1..8 | ec 0|1\r\n");
 }
 
 static void Console_Status(void) {
   char b[96];
-
-  EffectConsole_Reply("\r\n**************** Status ****************\r\n");
-
-  /* 48V rail */
   GPIO_PinState en = HAL_GPIO_ReadPin(EN_48V_GPIO_Port, EN_48V_Pin);
   GPIO_PinState pg = HAL_GPIO_ReadPin(PG_48V_GPIO_Port, PG_48V_Pin);
-  snprintf(b, sizeof b, "48V rail : %s  |  PGGOOD: %s\r\n",
-           (en == GPIO_PIN_SET) ? "ENABLED" : "disabled",
-           (pg == GPIO_PIN_SET) ? "GOOD" : "bad");
-  EffectConsole_Reply(b);
+  GPIO_PinState aud = HAL_GPIO_ReadPin(AUDIO_EN_GPIO_Port, AUDIO_EN_Pin);
 
-  /* Audio domain (ADC SHDNZ) */
-  snprintf(b, sizeof b, "AUDIO_EN : %s\r\n",
-           (HAL_GPIO_ReadPin(AUDIO_EN_GPIO_Port, AUDIO_EN_Pin) == GPIO_PIN_SET)
-               ? "on (ADCs active)"
-               : "off (ADCs in shutdown)");
+  snprintf(b, sizeof b, "ok: v %u pg %u a %u l %u ec %u\r\n",
+           (en == GPIO_PIN_SET) ? 1u : 0u, (pg == GPIO_PIN_SET) ? 1u : 0u,
+           (aud == GPIO_PIN_SET) ? 1u : 0u, (unsigned)led_show_on,
+           (unsigned)rs485_echo);
   EffectConsole_Reply(b);
-
-  /* LEDs */
-  snprintf(b, sizeof b, "LED flashing: %s\r\n", led_show_on ? "on" : "off");
-  EffectConsole_Reply(b);
-
-  snprintf(b, sizeof b, "RS485 echo: %s\r\n", rs485_echo ? "on" : "off");
-  EffectConsole_Reply(b);
-
-  snprintf(
-      b, sizeof b, "LED_R: %s  |  LED_Y: %s\r\n",
-      (HAL_GPIO_ReadPin(LED_R_GPIO_Port, LED_R_Pin) == GPIO_PIN_SET) ? "ON"
-                                                                     : "OFF",
-      (HAL_GPIO_ReadPin(LED_Y_GPIO_Port, LED_Y_Pin) == GPIO_PIN_SET) ? "ON"
-                                                                     : "OFF");
-  EffectConsole_Reply(b);
-
-  EffectConsole_Reply("****************************************\r\n");
 }
 
 /* ---- TLV320ADC6140 register access (both ADCs on I2C2) ----
@@ -305,120 +263,117 @@ static void Console_Exec(char *line) {
       strcmp(line, "?") == 0) {
     Console_Help();
   }
-  /* ---- status ---- */
-  else if (strcmp(line, "status") == 0 || strcmp(line, "s") == 0) {
+  /* ---- s: status ---- */
+  else if (strcmp(line, "s") == 0) {
     Console_Status();
   }
-  /* ---- 48v [on|off] ---- */
-  else if (strcmp(line, "48v on") == 0) {
+  /* ---- v 0|1 / v ---- */
+  else if (strcmp(line, "v 1") == 0) {
     HAL_GPIO_WritePin(EN_48V_GPIO_Port, EN_48V_Pin, GPIO_PIN_SET);
-    EffectConsole_Reply("ok: 48V rail ENABLED\r\n");
-  } else if (strcmp(line, "48v off") == 0) {
+    EffectConsole_Reply("ok\r\n");
+  } else if (strcmp(line, "v 0") == 0) {
     HAL_GPIO_WritePin(EN_48V_GPIO_Port, EN_48V_Pin, GPIO_PIN_RESET);
-    EffectConsole_Reply("ok: 48V rail disabled\r\n");
-  } else if (strcmp(line, "48v") == 0) {
+    EffectConsole_Reply("ok\r\n");
+  } else if (strcmp(line, "v") == 0) {
     GPIO_PinState en = HAL_GPIO_ReadPin(EN_48V_GPIO_Port, EN_48V_Pin);
     GPIO_PinState pg = HAL_GPIO_ReadPin(PG_48V_GPIO_Port, PG_48V_Pin);
-    snprintf(b, sizeof b, "48V: %s  PGGOOD: %s\r\n",
-             (en == GPIO_PIN_SET) ? "ENABLED" : "disabled",
-             (pg == GPIO_PIN_SET) ? "GOOD" : "bad");
+    snprintf(b, sizeof b, "ok: v %u pg %u\r\n",
+             (en == GPIO_PIN_SET) ? 1u : 0u, (pg == GPIO_PIN_SET) ? 1u : 0u);
     EffectConsole_Reply(b);
   }
-  /* ---- led on|off  (flashing toggle) ---- */
-  else if (strcmp(line, "led on") == 0) {
+  /* ---- l 0|1 ---- */
+  else if (strcmp(line, "l 1") == 0) {
     led_show_on = 1;
-    EffectConsole_Reply("ok: LED flashing on\r\n");
-  } else if (strcmp(line, "led off") == 0) {
+    EffectConsole_Reply("ok\r\n");
+  } else if (strcmp(line, "l 0") == 0) {
     led_show_on = 0;
-    EffectConsole_Reply("ok: LED flashing off\r\n");
+    EffectConsole_Reply("ok\r\n");
   }
-  /* ---- led_r on|off ---- */
-  else if (strcmp(line, "led_r on") == 0) {
-    led_show_on = 0; /* stop auto-flash so manual state sticks */
+  /* ---- lr 0|1 ---- */
+  else if (strcmp(line, "lr 1") == 0) {
+    led_show_on = 0;
     HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_SET);
-    EffectConsole_Reply("ok: LED_R ON (auto-flash off)\r\n");
-  } else if (strcmp(line, "led_r off") == 0) {
+    EffectConsole_Reply("ok\r\n");
+  } else if (strcmp(line, "lr 0") == 0) {
     HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_RESET);
-    EffectConsole_Reply("ok: LED_R OFF\r\n");
+    EffectConsole_Reply("ok\r\n");
   }
-  /* ---- led_y on|off ---- */
-  else if (strcmp(line, "led_y on") == 0) {
-    led_show_on = 0; /* stop auto-flash so manual state sticks */
+  /* ---- ly 0|1 ---- */
+  else if (strcmp(line, "ly 1") == 0) {
+    led_show_on = 0;
     HAL_GPIO_WritePin(LED_Y_GPIO_Port, LED_Y_Pin, GPIO_PIN_SET);
-    EffectConsole_Reply("ok: LED_Y ON (auto-flash off)\r\n");
-  } else if (strcmp(line, "led_y off") == 0) {
+    EffectConsole_Reply("ok\r\n");
+  } else if (strcmp(line, "ly 0") == 0) {
     HAL_GPIO_WritePin(LED_Y_GPIO_Port, LED_Y_Pin, GPIO_PIN_RESET);
-    EffectConsole_Reply("ok: LED_Y OFF\r\n");
+    EffectConsole_Reply("ok\r\n");
   }
-  /* ---- audio on|off  (ADC SHDNZ / audio domain enable) ---- */
-  else if (strcmp(line, "audio on") == 0) {
+  /* ---- a 0|1 ---- */
+  else if (strcmp(line, "a 1") == 0) {
     HAL_GPIO_WritePin(AUDIO_EN_GPIO_Port, AUDIO_EN_Pin, GPIO_PIN_SET);
     HAL_Delay(10); /* SHDNZ release: ADCs need ~1 ms before I2C access */
-    EffectConsole_Reply("ok: AUDIO_EN high (ADCs out of shutdown)\r\n");
-  } else if (strcmp(line, "audio off") == 0) {
+    EffectConsole_Reply("ok\r\n");
+  } else if (strcmp(line, "a 0") == 0) {
     HAL_GPIO_WritePin(AUDIO_EN_GPIO_Port, AUDIO_EN_Pin, GPIO_PIN_RESET);
-    EffectConsole_Reply("ok: AUDIO_EN low (ADCs in shutdown)\r\n");
+    EffectConsole_Reply("ok\r\n");
   }
-  /* ---- i2cscan ---- */
-  else if (strcmp(line, "i2cscan") == 0) {
+  /* ---- i2c ---- */
+  else if (strcmp(line, "i2c") == 0) {
     Console_I2CScan();
   }
-  /* ---- adc init | adc rd <1|2> <reg> | adc wr <1|2> <reg> <val> ---- */
-  else if (strcmp(line, "adc init") == 0) {
+  /* ---- ai / ar / aw ---- */
+  else if (strcmp(line, "ai") == 0) {
     ADC_Init(1);
     ADC_Init(2);
-  } else if (strncmp(line, "adc rd ", 7) == 0) {
+  } else if (strncmp(line, "ar ", 3) == 0) {
     unsigned chip, reg;
     uint8_t v;
-    if (sscanf(line + 7, "%u %x", &chip, &reg) == 2 &&
+    if (sscanf(line + 3, "%u %x", &chip, &reg) == 2 &&
         (chip == 1 || chip == 2) && reg <= 0xFF) {
       if (ADC_Rd(chip, (uint8_t)reg, &v) == HAL_OK) {
-        snprintf(b, sizeof b, "adc%u [0x%02X] = 0x%02X\r\n", chip, reg, v);
+        snprintf(b, sizeof b, "ok: ar %u 0x%02X = 0x%02X\r\n", chip, reg, v);
       } else {
-        snprintf(b, sizeof b, "err: adc%u no ack\r\n", chip);
+        snprintf(b, sizeof b, "err: ar %u no ack\r\n", chip);
       }
     } else {
-      snprintf(b, sizeof b, "usage: adc rd <1|2> <reg-hex>\r\n");
+      snprintf(b, sizeof b, "err:syntax\r\n");
     }
     EffectConsole_Reply(b);
-  } else if (strncmp(line, "adc wr ", 7) == 0) {
+  } else if (strncmp(line, "aw ", 3) == 0) {
     unsigned chip, reg, val;
-    if (sscanf(line + 7, "%u %x %x", &chip, &reg, &val) == 3 &&
+    if (sscanf(line + 3, "%u %x %x", &chip, &reg, &val) == 3 &&
         (chip == 1 || chip == 2) && reg <= 0xFF && val <= 0xFF) {
       if (ADC_Wr(chip, (uint8_t)reg, (uint8_t)val) == HAL_OK) {
-        snprintf(b, sizeof b, "ok: adc%u [0x%02X] <- 0x%02X\r\n", chip, reg,
-                 val);
+        snprintf(b, sizeof b, "ok: aw %u 0x%02X = 0x%02X\r\n", chip, reg, val);
       } else {
-        snprintf(b, sizeof b, "err: adc%u no ack\r\n", chip);
+        snprintf(b, sizeof b, "err: aw %u no ack\r\n", chip);
       }
     } else {
-      snprintf(b, sizeof b, "usage: adc wr <1|2> <reg-hex> <val-hex>\r\n");
+      snprintf(b, sizeof b, "err:syntax\r\n");
     }
     EffectConsole_Reply(b);
   }
-  /* ---- usb ch <1..8>  (select ADC channel for the USB mono stream) ---- */
-  else if (strncmp(line, "usb ch", 6) == 0) {
+  /* ---- u <1..8> ---- */
+  else if (line[0] == 'u' && (line[1] == '\0' || line[1] == ' ')) {
     unsigned ch;
-    if (sscanf(line + 6, "%u", &ch) == 1 && ch >= 1 && ch <= 8) {
+    if (line[1] == '\0') {
+      snprintf(b, sizeof b, "ok: u %u\r\n", usb_adc_ch);
+      EffectConsole_Reply(b);
+    } else if (sscanf(line + 1, "%u", &ch) == 1 && ch >= 1 && ch <= 8) {
       usb_adc_ch = (uint8_t)ch;
-      snprintf(b, sizeof b, "ok: USB stream source = ADC%c ch%u\r\n",
-               (ch <= 4) ? '1' : '2', (ch <= 4) ? ch : ch - 4);
+      EffectConsole_Reply("ok\r\n");
     } else {
-      snprintf(b, sizeof b, "USB ch: %u  (usage: usb ch <1..8>)\r\n",
-               usb_adc_ch);
+      EffectConsole_Reply("err:syntax\r\n");
     }
-    EffectConsole_Reply(b);
   }
-  /* ---- echo on|off  (RS485 keystroke bus echo; production uses off) ---- */
-  else if (strcmp(line, "echo on") == 0) {
+  /* ---- ec 0|1 / ec ---- */
+  else if (strcmp(line, "ec 1") == 0) {
     rs485_echo = 1;
     EffectConsole_Reply("ok\r\n");
-  } else if (strcmp(line, "echo off") == 0) {
+  } else if (strcmp(line, "ec 0") == 0) {
     rs485_echo = 0;
     EffectConsole_Reply("ok\r\n");
-  } else if (strcmp(line, "echo") == 0) {
-    snprintf(b, sizeof b, "RS485 echo: %s  (usage: echo on|off)\r\n",
-             rs485_echo ? "on" : "off");
+  } else if (strcmp(line, "ec") == 0) {
+    snprintf(b, sizeof b, "ok: ec %u\r\n", (unsigned)rs485_echo);
     EffectConsole_Reply(b);
   }
   /* ---- unknown ---- */

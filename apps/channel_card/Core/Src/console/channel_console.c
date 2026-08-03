@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    channel_console.c
- * @brief   Channel Card RS485 + USB CDC console, cpuload probe, LED chaser.
+ * @brief   Channel Card RS485 + USB CDC console (short cmds), cpu probe, LED.
  *
  * Extracted from main.c (behavior-preserving). main.c owns bring-up +
  * hcs4304; this file owns the interactive console surface.
@@ -24,8 +24,6 @@
 
 extern CS4304_HandleTypeDef hcs4304;
 extern UART_HandleTypeDef huart5;
-/** I2S2 self-heal restarts — nonzero means the audio path is erroring. */
-extern volatile uint32_t g_i2s2_err_restarts;
 
 /* ---- Multi-drop RS485 card addressing ---- */
 #define RS485_CARD_ID 'c'
@@ -143,24 +141,18 @@ static int __attribute__((unused)) RS485_Send(const char *s)
  * over USB instead of the RS485 bus.  Console_ExecFromUSB() sets this
  * for the duration of the command. */
 static uint8_t console_via_usb = 0;
-/** When set, the card never drives RS485 for console replies. MIDI note
- * bursts collide with any TX (ok:, err:, drop reports) and garble Offs into
- * stuck voices — quiet must mute the bus completely, not just ok:. */
-static uint8_t rs485_quiet = 0;
 
-/* RS485 path counters — read back with "diag" (works over USB CDC while the
- * bus itself is unresponsive, which is the only way to see these). */
+/* RS485 path counters (internal; no console cmd). */
 static uint32_t rs485_cmd_count;  /**< commands executed from the bus */
 static uint32_t rs485_tx_fail;    /**< HAL_UART_Transmit did not return OK */
 static uint32_t rs485_tx_trunc;   /**< reply longer than the frame buffer */
 
 /** Send a tagged response: prefixes the string with [C] so the host knows
- * which card replied. No-op on RS485 while quiet (USB CDC still replies).
+ * which card replied.
  *
- * Frame must hold the longest reply (cpuload/status are ~110 chars) — a
- * short buffer silently swallowed those ACKs and looked like a dead bus.
- * Truncate rather than drop: a clipped line still terminates the host's
- * exchange, silence does not. */
+ * Frame must hold the longest reply (~110 chars) — a short buffer silently
+ * swallowed those ACKs and looked like a dead bus. Truncate rather than
+ * drop: a clipped line still terminates the host's exchange. */
 static void RS485_Reply(const char *s)
 {
   char frame[160];
@@ -171,10 +163,6 @@ static void RS485_Reply(const char *s)
   if (console_via_usb)
   {
     USB_CDC_WriteStr(s);
-    return;
-  }
-  if (rs485_quiet)
-  {
     return;
   }
 
@@ -223,17 +211,18 @@ static const SwitchDef_t switches[] = {
 };
 #define NUM_SWITCHES (sizeof(switches) / sizeof(switches[0]))
 
-/* Console commands (RS485 + USB CDC). Console_Poll lowercases, so "N0"/"GAIN"
- * arrive as "n0"/"gain".
+/* Console commands (RS485 + USB CDC). Console_Poll lowercases.
  *
- *   n0                — session defaults: bypass ON + gain 1 0
+ *   h / help / ?      — command list
+ *   n0                — session defaults: bypass ON + g 1 0
  *   n0..nf <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 0.125)
- *   cutoff <0..f|*> <Hz> — per-voice 4-pole Butterworth LPF (20..20000;
- *                        20000 = bypass / transparent; float DF4 / FPU)
- *   pass [0..f|*] lp     — filter mode (LP only in v1; hp/bp → err:range)
- *   gain <ch> <dB>    — CS4304 per-channel DAC atten (0..127 dB), ch 1..4
- *   cpuload off|on|dma|queue — LED_Y (PB9) CPU-load probe (see README) */
+ *   n <Hz> [sc]       — all 16 notes (n 0 = silence)
+ *   f0..f7 <Hz> / f <Hz> — LPF on first 8 voices (20000 = bypass)
+ *   g <ch> <dB>       — CS4304 DAC atten (0..127), ch 1..4
+ *   cpu [0|N|q [N]]   — LED_Y load probe (see README) */
 #define N0_DEFAULT_ATTEN_DB 0u
+/** Console-addressable filter slots (voices 8..15 stay boot bypass). */
+#define NOTE_FILTER_CONSOLE_VOICES 8u
 
 /** Bypass is active-low (LOW = ON). */
 static void Console_SetBypassOn(void)
@@ -241,13 +230,10 @@ static void Console_SetBypassOn(void)
   HAL_GPIO_WritePin(BYPASS_SW_GPIO_Port, BYPASS_SW_Pin, GPIO_PIN_RESET);
 }
 
-/** Defaults for bare n0 / boot: dry path + CH1 DAC trim 0 dB (`gain 1 0`).
- * Frequency changes (`nX <Hz>`) do not touch gain or bypass.
- * Also clears rs485_quiet so a host that died mid-session (Ctrl+C) can
- * still get an n0 reply on the next open. */
+/** Defaults for bare n0 / boot: dry path + CH1 DAC trim 0 dB (`g 1 0`).
+ * Frequency changes (`nX <Hz>`) do not touch gain or bypass. */
 static void Console_ApplySessionDefaults(void)
 {
-  rs485_quiet = 0;
   Console_SetBypassOn();
   CS4304_SetChannelTrim(&hcs4304, '1', (uint8_t)(N0_DEFAULT_ATTEN_DB * 2u));
 }
@@ -331,14 +317,15 @@ static void Console_CpuLoad_EnableVoices(uint8_t count)
 }
 
 /**
- * Parse cpuload mode + optional voice count.
+ * Parse cpu mode + optional voice count.
  * Returns 1 and fills *mode_out / *nvoices on success; 0 on bad input.
  * *mode_out: 0=off, 1=dma/on, 2=queue.
+ * Args: bare | 0 | N | q | q N  (no on/off/dma/queue words).
  */
 static uint8_t Console_CpuLoad_Parse(const char *arg, uint8_t *mode_out,
                                      uint8_t *nvoices_out)
 {
-  char mode_tok[12];
+  char mode_tok[8];
   unsigned int nvoices = NOTE_BANK_VOICES;
   unsigned int only_n;
   int nscan;
@@ -347,17 +334,17 @@ static uint8_t Console_CpuLoad_Parse(const char *arg, uint8_t *mode_out,
 
   if (arg == NULL || *arg == '\0')
   {
-    *mode_out = 1u; /* bare cpuload → on, 16 voices */
+    *mode_out = 1u; /* bare cpu → on, 16 voices */
     return 1u;
   }
 
-  /* "cpuload 4" → on with 4 voices (not "cpuload 1" as synonym for on). */
+  /* "cpu 0" / "cpu 8" */
   if (sscanf(arg, "%u", &only_n) == 1)
   {
     char trail[8];
     if (sscanf(arg, "%u %7s", &only_n, trail) != 1)
     {
-      return 0u; /* e.g. "4 junk" */
+      return 0u;
     }
     if (only_n == 0u)
     {
@@ -374,12 +361,13 @@ static uint8_t Console_CpuLoad_Parse(const char *arg, uint8_t *mode_out,
     return 0u;
   }
 
-  nscan = sscanf(arg, "%11s %u", mode_tok, &nvoices);
-  if (nscan < 1)
+  /* "cpu q" / "cpu q 8" */
+  nscan = sscanf(arg, "%7s %u", mode_tok, &nvoices);
+  if (nscan < 1 || strcmp(mode_tok, "q") != 0)
   {
     return 0u;
   }
-  if (nscan == 2u)
+  if (nscan == 2)
   {
     if (nvoices < 1u || nvoices > NOTE_BANK_VOICES)
     {
@@ -387,44 +375,23 @@ static uint8_t Console_CpuLoad_Parse(const char *arg, uint8_t *mode_out,
     }
     *nvoices_out = (uint8_t)nvoices;
   }
-
-  if (strcmp(mode_tok, "off") == 0 || strcmp(mode_tok, "0") == 0)
-  {
-    *mode_out = 0u;
-    return 1u;
-  }
-  if (strcmp(mode_tok, "on") == 0 || strcmp(mode_tok, "dma") == 0)
-  {
-    *mode_out = 1u;
-    return 1u;
-  }
-  if (strcmp(mode_tok, "queue") == 0)
-  {
-    *mode_out = 2u;
-    return 1u;
-  }
-  return 0u;
+  *mode_out = 2u;
+  return 1u;
 }
 
-/** Parse lp|hp|bp → NoteFilter_Pass_t. Returns 0 on success, -1 on unknown. */
-static int Console_ParsePassName(const char *name, NoteFilter_Pass_t *out)
+static void Console_Help(void)
 {
-  if (strcmp(name, "lp") == 0)
-  {
-    *out = NOTE_FILTER_PASS_LP;
-    return 0;
-  }
-  if (strcmp(name, "hp") == 0)
-  {
-    *out = NOTE_FILTER_PASS_HP;
-    return 0;
-  }
-  if (strcmp(name, "bp") == 0)
-  {
-    *out = NOTE_FILTER_PASS_BP;
-    return 0;
-  }
-  return -1;
+  /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
+  RS485_Reply("ok: n0 | n0..nf Hz [sc] | n Hz|0 | f0..f7 Hz | f Hz | "
+              "g ch dB | cpu [0|N|q N]\r\n");
+}
+
+static void Console_FilterReply(uint8_t voice, double fc)
+{
+  char b[80];
+  snprintf(b, sizeof b, "ok: f%u %.1f Hz%s\r\n", (unsigned)voice, fc,
+           (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "");
+  RS485_Reply(b);
 }
 
 static void Console_Exec(char *line)
@@ -441,8 +408,16 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- gain <ch> <dB>: CS4304 DAC atten (0.5 dB steps via trim×2) ---- */
-  if (sscanf(line, "gain %u %u", &ch, &val) == 2)
+  /* ---- h / help / ? ---- */
+  if (strcmp(line, "h") == 0 || strcmp(line, "help") == 0 ||
+      strcmp(line, "?") == 0)
+  {
+    Console_Help();
+    return;
+  }
+
+  /* ---- g <ch> <dB>: CS4304 DAC atten ---- */
+  if (sscanf(line, "g %u %u", &ch, &val) == 2)
   {
     if (ch >= 1 && ch <= 4 && val <= 127)
     {
@@ -456,109 +431,86 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- quiet on|off: mute ALL RS485 replies (lab / legacy; not for MIDI) ---- */
-  if (strcmp(line, "quiet on") == 0)
+  /* ---- f0..f7 / f: LPF on first 8 voices ---- */
+  if (line[0] == 'f')
   {
-    /* Reply before arming quiet — RS485_Reply is a no-op once set. */
-    RS485_Reply("ok\r\n");
-    rs485_quiet = 1;
-    return;
-  }
-  if (strcmp(line, "quiet off") == 0)
-  {
-    rs485_quiet = 0;
-    RS485_Reply("ok\r\n");
-    return;
-  }
-  if (strcmp(line, "quiet") == 0)
-  {
-    snprintf(b, sizeof b, "quiet: %s  (usage: quiet on|off)\r\n",
-             rs485_quiet ? "on" : "off");
-    RS485_Reply(b);
-    return;
-  }
-
-  /* ---- diag: RS485 path counters (read over USB CDC when bus is dead) ---- */
-  if (strcmp(line, "diag") == 0)
-  {
-    snprintf(b, sizeof b,
-             "ok: rxdrop=%lu cmd=%lu txfail=%lu trunc=%lu i2serr=%lu\r\n",
-             (unsigned long)Uart5Rx_DroppedCount(),
-             (unsigned long)rs485_cmd_count, (unsigned long)rs485_tx_fail,
-             (unsigned long)rs485_tx_trunc,
-             (unsigned long)g_i2s2_err_restarts);
-    RS485_Reply(b);
-    return;
-  }
-
-  /* ---- silence: turn off every note-bank voice ---- */
-  if (strcmp(line, "silence") == 0)
-  {
-    Console_CpuLoad_DisableVoices();
-    RS485_Reply("ok\r\n");
-    return;
-  }
-
-  /* ---- cutoff <0..f|*> <Hz>: per-voice 4-pole Butterworth ---- */
-  if (strncmp(line, "cutoff", 6) == 0 &&
-      (line[6] == '\0' || line[6] == ' '))
-  {
-    const char *arg = line + 6;
     const char *rest;
-    char slot;
     double fc;
     int rc;
 
-    while (*arg == ' ')
+    if (line[1] >= '0' && line[1] <= '7' &&
+        (line[2] == '\0' || line[2] == ' '))
     {
-      arg++;
-    }
-
-    if (*arg == '\0')
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-
-    slot = arg[0];
-    rest = arg + 1;
-    while (*rest == ' ')
-    {
-      rest++;
-    }
-
-    if (slot != '*' && Console_ParseNoteSlot(slot) == 0xFFu)
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-
-    /* Bare "cutoff <slot>" → report (not valid for *). */
-    if (*rest == '\0')
-    {
-      if (slot == '*')
+      note = (uint8_t)(line[1] - '0');
+      rest = line + 2;
+      while (*rest == ' ')
+      {
+        rest++;
+      }
+      if (*rest == '\0')
+      {
+        Console_FilterReply(note, NoteFilter_GetCutoff(note));
+        return;
+      }
+      if (sscanf(rest, "%lf", &fc) != 1)
       {
         RS485_Reply("err:syntax\r\n");
         return;
       }
-      note = Console_ParseNoteSlot(slot);
-      fc = NoteFilter_GetCutoff(note);
-      snprintf(b, sizeof b, "ok: cutoff %c %.1f Hz %s%s\r\n", slot, fc,
-               NoteFilter_PassName(NoteFilter_GetPass(note)),
-               (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "");
-      RS485_Reply(b);
+      rc = NoteFilter_SetCutoff(note, fc);
+      if (rc != 0)
+      {
+        RS485_Reply("err:range\r\n");
+        return;
+      }
+      Console_FilterReply(note, fc);
       return;
     }
 
-    if (sscanf(rest, "%lf", &fc) != 1)
+    if ((line[1] >= '8' && line[1] <= '9') ||
+        (line[1] >= 'a' && line[1] <= 'f'))
     {
+      if (line[2] == '\0' || line[2] == ' ')
+      {
+        RS485_Reply("err:range\r\n");
+        return;
+      }
       RS485_Reply("err:syntax\r\n");
       return;
     }
 
-    if (slot == '*')
+    if (line[1] == '\0' || line[1] == ' ')
     {
-      for (uint8_t i = 0; i < NOTE_FILTER_VOICES; i++)
+      rest = line + 1;
+      while (*rest == ' ')
+      {
+        rest++;
+      }
+      if (*rest == '\0')
+      {
+        /* Compact dump of f0..f7. */
+        int n = snprintf(b, sizeof b, "ok:");
+        for (uint8_t i = 0; i < NOTE_FILTER_CONSOLE_VOICES && n > 0 &&
+                            (size_t)n < sizeof b;
+             i++)
+        {
+          fc = NoteFilter_GetCutoff(i);
+          n += snprintf(b + n, sizeof b - (size_t)n, " f%u=%.0f", (unsigned)i,
+                        fc);
+        }
+        if ((size_t)n < sizeof b - 2u)
+        {
+          snprintf(b + n, sizeof b - (size_t)n, "\r\n");
+        }
+        RS485_Reply(b);
+        return;
+      }
+      if (sscanf(rest, "%lf", &fc) != 1)
+      {
+        RS485_Reply("err:syntax\r\n");
+        return;
+      }
+      for (uint8_t i = 0; i < NOTE_FILTER_CONSOLE_VOICES; i++)
       {
         rc = NoteFilter_SetCutoff(i, fc);
         if (rc != 0)
@@ -567,133 +519,20 @@ static void Console_Exec(char *line)
           return;
         }
       }
-      snprintf(b, sizeof b, "ok: cutoff * %.1f Hz %s%s\r\n", fc,
-               NoteFilter_PassName(NoteFilter_GetPass(0)),
+      snprintf(b, sizeof b, "ok: f %.1f Hz%s\r\n", fc,
                (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "");
       RS485_Reply(b);
       return;
     }
 
-    note = Console_ParseNoteSlot(slot);
-    rc = NoteFilter_SetCutoff(note, fc);
-    if (rc != 0)
-    {
-      RS485_Reply("err:range\r\n");
-      return;
-    }
-    snprintf(b, sizeof b, "ok: cutoff %c %.1f Hz %s%s\r\n", slot, fc,
-             NoteFilter_PassName(NoteFilter_GetPass(note)),
-             (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "");
-    RS485_Reply(b);
+    RS485_Reply("err:unknown\r\n");
     return;
   }
 
-  /* ---- pass [0..f|*] lp: Butterworth mode (LP only in v1) ---- */
-  if (strncmp(line, "pass", 4) == 0 &&
-      (line[4] == '\0' || line[4] == ' '))
+  /* ---- cpu [0|N|q [N]]: LED_Y busy/idle probe ---- */
+  if (strncmp(line, "cpu", 3) == 0 && (line[3] == '\0' || line[3] == ' '))
   {
-    const char *arg = line + 4;
-    NoteFilter_Pass_t pmode;
-    char slot;
-    const char *rest;
-    int rc;
-
-    while (*arg == ' ')
-    {
-      arg++;
-    }
-
-    if (*arg == '\0')
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-
-    /* Lab shortcut: pass lp|hp|bp → all voices. */
-    if (Console_ParsePassName(arg, &pmode) == 0)
-    {
-      for (uint8_t i = 0; i < NOTE_FILTER_VOICES; i++)
-      {
-        rc = NoteFilter_SetPass(i, pmode);
-        if (rc != 0)
-        {
-          RS485_Reply("err:range\r\n");
-          return;
-        }
-      }
-      snprintf(b, sizeof b, "ok: pass * %s\r\n", NoteFilter_PassName(pmode));
-      RS485_Reply(b);
-      return;
-    }
-
-    slot = arg[0];
-    rest = arg + 1;
-    while (*rest == ' ')
-    {
-      rest++;
-    }
-
-    if (slot != '*' && Console_ParseNoteSlot(slot) == 0xFFu)
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-
-    /* Bare "pass <slot>" → query. */
-    if (*rest == '\0')
-    {
-      if (slot == '*')
-      {
-        RS485_Reply("err:syntax\r\n");
-        return;
-      }
-      note = Console_ParseNoteSlot(slot);
-      snprintf(b, sizeof b, "ok: pass %c %s\r\n", slot,
-               NoteFilter_PassName(NoteFilter_GetPass(note)));
-      RS485_Reply(b);
-      return;
-    }
-
-    if (Console_ParsePassName(rest, &pmode) != 0)
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-
-    if (slot == '*')
-    {
-      for (uint8_t i = 0; i < NOTE_FILTER_VOICES; i++)
-      {
-        rc = NoteFilter_SetPass(i, pmode);
-        if (rc != 0)
-        {
-          RS485_Reply("err:range\r\n");
-          return;
-        }
-      }
-      snprintf(b, sizeof b, "ok: pass * %s\r\n", NoteFilter_PassName(pmode));
-      RS485_Reply(b);
-      return;
-    }
-
-    note = Console_ParseNoteSlot(slot);
-    rc = NoteFilter_SetPass(note, pmode);
-    if (rc != 0)
-    {
-      RS485_Reply("err:range\r\n");
-      return;
-    }
-    snprintf(b, sizeof b, "ok: pass %c %s\r\n", slot,
-             NoteFilter_PassName(pmode));
-    RS485_Reply(b);
-    return;
-  }
-
-  /* ---- cpuload [off|on|dma|queue] [1..16]: LED_Y busy/idle probe ---- */
-  if (strncmp(line, "cpuload", 7) == 0 &&
-      (line[7] == '\0' || line[7] == ' '))
-  {
-    const char *arg = line + 7;
+    const char *arg = line + 3;
     uint8_t mode;
     uint8_t nvoices;
 
@@ -713,7 +552,7 @@ static void Console_Exec(char *line)
       Audio_CpuLoad_SetMode(AUDIO_CPULOAD_OFF);
       Console_CpuLoad_DisableVoices();
       led_show_on = 1;
-      RS485_Reply("ok: cpuload off (notes cleared, LED chaser on)\r\n");
+      RS485_Reply("ok: cpu 0\r\n");
       return;
     }
 
@@ -725,20 +564,59 @@ static void Console_Exec(char *line)
     if (mode == 2u)
     {
       Audio_CpuLoad_SetMode(AUDIO_CPULOAD_QUEUE);
-      snprintf(b, sizeof b,
-               "ok: cpuload queue %u voices; scope yellow LED (PB9); "
-               "low=busy high=idle\r\n",
-               (unsigned)nvoices);
+      snprintf(b, sizeof b, "ok: cpu q %u\r\n", (unsigned)nvoices);
     }
     else
     {
       Audio_CpuLoad_SetMode(AUDIO_CPULOAD_DMA);
-      snprintf(b, sizeof b,
-               "ok: cpuload on %u voices (220+40*i Hz); scope yellow LED "
-               "(PB9); low=busy; CPU%%≈t_low/(t_low+t_high)\r\n",
-               (unsigned)nvoices);
+      snprintf(b, sizeof b, "ok: cpu %u\r\n", (unsigned)nvoices);
     }
     RS485_Reply(b);
+    return;
+  }
+
+  /* ---- n <Hz> [scale]: all 16 voices (n 0 = silence). n0..nf below. ---- */
+  if (line[0] == 'n' && (line[1] == '\0' || line[1] == ' '))
+  {
+    const char *rest = line + 1;
+
+    while (*rest == ' ')
+    {
+      rest++;
+    }
+    if (*rest == '\0')
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+
+    nscan = sscanf(rest, "%lf %lf", &hz, &scale);
+    if (nscan == 1)
+    {
+      scale = NOTE_DEFAULT_SCALE;
+    }
+    else if (nscan != 2)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+
+    if (hz <= 0.0)
+    {
+      Console_CpuLoad_DisableVoices();
+      RS485_Reply("ok\r\n");
+      return;
+    }
+    if (hz < 20.0 || hz >= 20000.0 || scale < 0.0 || scale > 1.0)
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+    for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
+    {
+      NoteBank_SetFreq(i, hz, scale);
+    }
+    RS485_Reply("ok\r\n");
     return;
   }
 
@@ -872,7 +750,7 @@ static void Console_ApplyBinBank(const uint8_t *hz32, uint8_t sum8)
       NoteBank_SetFreq(i, (double)hz[i], BINBANK_SCALE);
     }
   }
-  RS485_Reply("ok\r\n"); /* no-op when quiet */
+  RS485_Reply("ok\r\n");
 }
 
 /** Poll RX, echo typing, run a command on Enter. Non-blocking.
@@ -1044,15 +922,7 @@ void ChannelConsole_Init(void)
     (void)NoteFilter_SetCutoff(i, NOTE_FILTER_CUTOFF_MAX_HZ);
   }
 
-  RS485_Reply("\r\n"
-              "**************************************************\r\n"
-              "*  Channel Card [C] ready  (multi-drop RS485)    *\r\n"
-              "*  n0..nf <Hz> [scale] | gain <ch> <dB>          *\r\n"
-              "*  cutoff ... | pass lp (Butterworth LPF)      *\r\n"
-              "*  silence | quiet on|off | cpuload ...          *\r\n"
-              "*  replies: [C]ok / [C]err:<code>  (CRLF)        *\r\n"
-              "*  enter/boot: bypass ON, gain 1 0               *\r\n"
-              "**************************************************\r\n");
+  RS485_Reply("ok: ready — h for cmds\r\n");
 }
 
 void ChannelConsole_Poll(void)

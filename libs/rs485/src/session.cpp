@@ -42,14 +42,9 @@ ExchangeResult Session::Open(const std::string &path, const SessionOptions &opts
   lo.rx_idle_max_ms = opts_.rx_idle_max_ms;
   link_ = std::make_unique<Link>(port_, lo);
 
-  /* Recover sticky quiet from a killed prior session. */
-  if (!RequireOk(Target::Channel, "quiet off").ok()) {
-    /* Bare n0 also clears quiet — try once more via n0 later. */
-  }
-
   if (opts_.effect_echo != EffectEcho::Leave) {
     const char *echo_cmd =
-        (opts_.effect_echo == EffectEcho::On) ? "echo on" : "echo off";
+        (opts_.effect_echo == EffectEcho::On) ? "ec 1" : "ec 0";
     ExchangeResult echo = RequireOk(Target::Effect, echo_cmd);
     if (!echo.ok()) {
       if (!opts_.allow_missing_effect) {
@@ -76,7 +71,7 @@ ExchangeResult Session::Open(const std::string &path, const SessionOptions &opts
   }
 
   char gain_cmd[32];
-  std::snprintf(gain_cmd, sizeof(gain_cmd), "gain 1 %u",
+  std::snprintf(gain_cmd, sizeof(gain_cmd), "g 1 %u",
                 static_cast<unsigned>(opts_.atten_db));
   if (!RequireOk(Target::Channel, gain_cmd).ok()) {
     bus_fault_ = true;
@@ -87,7 +82,7 @@ ExchangeResult Session::Open(const std::string &path, const SessionOptions &opts
     return last_;
   }
 
-  if (!RequireOk(Target::Channel, "silence").ok()) {
+  if (!RequireOk(Target::Channel, "n 0").ok()) {
     bus_fault_ = true;
     open_ = false;
     link_.reset();
@@ -113,8 +108,7 @@ bool Session::SoftRecover() {
   lo.reply_timeout_ms = 800;
   lo.retries = 2;
   link_->SetOptions(lo);
-  const ExchangeResult sil = link_->Send(Target::Channel, "silence");
-  (void)link_->Send(Target::Channel, "quiet off");
+  const ExchangeResult sil = link_->Send(Target::Channel, "n 0");
   lo.reply_timeout_ms = saved_to;
   lo.retries = saved_retries;
   link_->SetOptions(lo);
@@ -135,9 +129,8 @@ void Session::ForceClearBus() {
     return;
   }
   port_.FlushInput();
-  (void)link_->SendBlind(Target::Channel, "silence");
-  (void)link_->SendBlind(Target::Channel, "silence");
-  (void)link_->SendBlind(Target::Channel, "quiet off");
+  (void)link_->SendBlind(Target::Channel, "n 0");
+  (void)link_->SendBlind(Target::Channel, "n 0");
   port_.FlushInput();
 }
 
@@ -184,7 +177,7 @@ ExchangeResult Session::SetNote(uint8_t slot, uint16_t hz) {
 }
 
 ExchangeResult Session::Silence() {
-  return Exec(Target::Channel, "silence");
+  return Exec(Target::Channel, "n 0");
 }
 
 ExchangeResult Session::Gain(uint8_t ch, uint8_t atten_db) {
@@ -194,7 +187,7 @@ ExchangeResult Session::Gain(uint8_t ch, uint8_t atten_db) {
     return last_;
   }
   char cmd[32];
-  std::snprintf(cmd, sizeof(cmd), "gain %u %u", static_cast<unsigned>(ch),
+  std::snprintf(cmd, sizeof(cmd), "g %u %u", static_cast<unsigned>(ch),
                 static_cast<unsigned>(atten_db));
   return Exec(Target::Channel, cmd);
 }

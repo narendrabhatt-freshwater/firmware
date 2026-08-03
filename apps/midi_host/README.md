@@ -23,7 +23,7 @@ fw midi --midi 0          # any device at index 0 → speakers
 | `fw midi channel --rs485 PATH --gain 6` | Channel Card; CH1 atten −6 dB at start |
 | `fw midi channel --rs485 PATH --midi 0 --gain 12` | same, MIDI port 0, −12 dB |
 
-`--gain DB` is session-start only (`gain 1 <DB>` once). Default **6** (or `FW_MIDI_GAIN`).
+`--gain DB` is session-start only (`g 1 <DB>` once). Default **6** (or `FW_MIDI_GAIN`).
 `--port N` is an alias for `--midi N`. With `channel`, `--port /dev/...` means
 the RS485 adapter. You can also set `FW_RS485_PORT`.
 
@@ -46,15 +46,14 @@ Velocity is ignored. Pitch: \(f = 440 \times 2^{(n-69)/12}\).
 
 ### Channel Card RS485 session
 
-1. `c:quiet off` (recover sticky quiet)
-2. Effect echo per flag: `--echo-off` (default), `--echo-on`, or `--echo-leave`
-3. `c:n0`, `c:gain 1 <dB>`, `c:silence`
-4. Each On/Off/Retrig → one `c:nX <Hz>` or `c:nX 0`, wait for `[C]ok`
-5. On quit: best-effort `silence` + `quiet off`
+1. Effect echo per flag: `--echo-off` (default), `--echo-on`, or `--echo-leave`
+2. `c:n0`, `c:g 1 <dB>`, `c:n 0`
+3. Each On/Off/Retrig → one `c:nX <Hz>` or `c:nX 0`, wait for `[C]ok`
+4. On quit: best-effort `n 0`
 
 Voice allocation stays in host `VoiceBank`. Card default scale is **0.125**
-when Hz is sent without a scale argument. No binary bank frames; no `quiet on`
-on the production path. Timeouts trigger soft recovery (`silence`); a latched
+when Hz is sent without a scale argument. No binary bank frames.
+Timeouts trigger soft recovery (`n 0`); a latched
 bus fault stops further note TX until reopen.
 
 RS485 defaults to **115200** baud. Same ASCII works from `screen` /

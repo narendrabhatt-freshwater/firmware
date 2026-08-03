@@ -62,17 +62,17 @@ Integer Hz; on-card default scale **0.125** when `[scale]` omitted.
 |--------|------------|-----|
 | Note on | `c:n3 440\r` | `[C]ok\r\n` |
 | Note off | `c:na 0\r` | `[C]ok\r\n` |
-| Silence | `c:silence\r` | `[C]ok\r\n` |
+| Silence | `c:n 0\r` | `[C]ok\r\n` |
+| Gain | `c:g 1 6\r` | `[C]ok\r\n` |
 
 Host keeps the 16-slot **VoiceBank**; the card only receives per-slot `nX`.
-No binary bank frames on the production path. No `quiet on` for MIDI (that
-mutes ACKs).
+No binary bank frames on the production path.
 
 ### Echo (Effect)
 
-`e:echo off` / `e:echo on` — runtime keystroke bus echo (firmware default
+`e:ec 0` / `e:ec 1` — runtime keystroke bus echo (firmware default
 **off**). Production and burst TX require echo off. With device echo off,
-enable **local** echo in the terminal. Any client can type `e:echo off`
+enable **local** echo in the terminal. Any client can type `e:ec 0`
 (including `rs485_console --echo-off`).
 
 ### Half-duplex

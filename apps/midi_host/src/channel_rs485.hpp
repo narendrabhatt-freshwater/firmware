@@ -25,9 +25,9 @@ public:
   ChannelRs485Out &operator=(const ChannelRs485Out &) = delete;
 
   /**
-   * Open adapter, bootstrap (quiet off, optional echo, n0, gain, silence),
+   * Open adapter, bootstrap (optional ec, n0, g, n 0),
    * start TX worker. atten_db: CS4304 CH1 atten 0..127.
-   * effect_echo: Off (default), On, or Leave (no e:echo command).
+   * effect_echo: Off (default), On, or Leave (no e:ec command).
    */
   void Open(const std::string &serial_path,
             uint32_t baud = 115200,

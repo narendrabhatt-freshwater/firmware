@@ -53,17 +53,18 @@ void PrintUsage()
          "  --target TARGET    Default: channel|effect|all (default channel)\n"
          "  --timeout-ms N     Per-attempt reply wait, ms (default 500)\n"
          "  --retries N        Extra attempts on timeout (default 2)\n"
-         "  --echo-off         Send e:echo off at start (burst / half-duplex)\n"
+         "  --echo-off         Send e:ec 0 at start (burst / half-duplex)\n"
          "  --manual-rts       Toggle RTS around each transmit\n"
          "  --list             List likely serial ports and exit\n"
          "  -h, --help         This help\n"
          "\n"
          "Wire: host lines end with CR only; replies are [C]/[E]…\\r\\n.\n"
          "With device echo off, enable local echo in your terminal.\n"
-         "Any serial terminal can type the same commands (e.g. e:echo off).\n"
+         "Any serial terminal can type the same commands (e.g. e:ec 0).\n"
          "Channel Card also accepts:\n"
-         "  cutoff <0..f|*> <Hz>   4-pole Butterworth LPF (20000=bypass)\n"
-         "  pass lp                filter mode (hp/bp not yet)\n";
+         "  f0..f7 <Hz> / f <Hz>   LPF slots 0..7 (20000=bypass)\n"
+         "  g / n 0 / cpu           gain, silence-all, load probe\n"
+         "  h                      list Channel commands\n";
 }
 
 struct Options
@@ -275,15 +276,18 @@ std::string NormalizeN0Command(std::string line)
       return lower;
   }
 
-  if (lower.rfind("gain ", 0) == 0)
+  if (lower.rfind("g ", 0) == 0)
     return lower;
 
-  if (lower.rfind("cutoff", 0) == 0 &&
-      (lower.size() == 6 || lower[6] == ' '))
+  /* f / f0..f7 filter cmds */
+  if (lower[0] == 'f' &&
+      (lower.size() == 1 || lower[1] == ' ' ||
+       ((lower[1] >= '0' && lower[1] <= '7') &&
+        (lower.size() == 2 || lower[2] == ' '))))
     return lower;
 
-  if (lower.rfind("pass", 0) == 0 &&
-      (lower.size() == 4 || lower[4] == ' '))
+  if (lower.rfind("n ", 0) == 0 || lower == "n" ||
+      lower.rfind("cpu", 0) == 0)
     return lower;
 
   char *end = nullptr;
@@ -360,7 +364,7 @@ int RunRepl(Link &link, Target default_target, const std::string &port,
             << "Same protocol as screen/minicom. 'quit' exits.\n";
   if (did_echo_off)
   {
-    std::cout << "(e:echo off sent — use local terminal echo if typing manually)\n";
+    std::cout << "(e:ec 0 sent — use local terminal echo if typing manually)\n";
   }
 
   if (default_target == Target::Channel || default_target == Target::All)
@@ -463,7 +467,7 @@ int main(int argc, char **argv)
   bool did_echo_off = false;
   if (opts.echo_off)
   {
-    ExchangeResult echo = link.Send(Target::Effect, "echo off");
+    ExchangeResult echo = link.Send(Target::Effect, "ec 0");
     PrintStatus(echo);
     if (echo.ok())
     {
@@ -471,7 +475,7 @@ int main(int argc, char **argv)
     }
     else
     {
-      std::cerr << "(warn: e:echo off failed — turn echo off manually if needed)\n";
+      std::cerr << "(warn: e:ec 0 failed — turn echo off manually if needed)\n";
     }
   }
 

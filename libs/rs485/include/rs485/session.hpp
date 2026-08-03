@@ -18,8 +18,8 @@ namespace rs485 {
 
 /** What Session::Open sends to Effect for keystroke bus echo. */
 enum class EffectEcho : uint8_t {
-  Off = 0,  /**< e:echo off (default for MIDI / burst TX) */
-  On = 1,   /**< e:echo on */
+  Off = 0,  /**< e:ec 0 (default for MIDI / burst TX) */
+  On = 1,   /**< e:ec 1 */
   Leave = 2 /**< do not send an echo command */
 };
 
@@ -42,8 +42,8 @@ struct SessionOptions {
 };
 
 /**
- * Owns the serial port + link. Production path: quiet off → echo off →
- * n0 / gain / silence, then burst one-by-one note commands with strict ACK.
+ * Owns the serial port + link. Production path: ec 0 →
+ * n0 / g / n 0, then burst one-by-one note commands with strict ACK.
  */
 class Session {
 public:
@@ -56,7 +56,7 @@ public:
   /** Open adapter and run bootstrap. Returns Ok on success; else last status. */
   ExchangeResult Open(const std::string &path, const SessionOptions &opts = {});
 
-  /** Best-effort silence + quiet off, then close port. */
+  /** Best-effort silence, then close port. */
   void Close();
 
   bool IsOpen() const { return open_; }
@@ -71,7 +71,7 @@ public:
   ExchangeResult Silence();
   ExchangeResult Gain(uint8_t ch, uint8_t atten_db);
 
-  /** Best-effort silence + quiet off. Always clears bus_fault (ACK or blind). */
+  /** Best-effort silence. Always clears bus_fault (ACK or blind). */
   bool SoftRecover();
   void MarkBusFault() { bus_fault_ = true; }
 
