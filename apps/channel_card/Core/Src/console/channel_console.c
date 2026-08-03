@@ -15,6 +15,7 @@
 #include "cs4304.h"
 #include "audio_bridge.h"
 #include "note_bank.h"
+#include "note_envelope.h"
 #include "note_filter.h"
 #include "uart5_rx.h"
 #include "usb_app.h"
@@ -217,6 +218,8 @@ static const SwitchDef_t switches[] = {
  *   n0                — session defaults: bypass ON + g 1 0
  *   n0..nf <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 0.125)
  *   n <Hz> [sc]       — all 16 notes (n 0 = silence)
+ *   en0..enf / en     — multi-seg amp envelope (2..10 × start end slope)
+ *   ek0..ekf / ek     — pitch-track k (0..10, rate ∝ (f/C4)^k)
  *   f0..f7 <Hz> / f <Hz> — LPF on first 8 voices (0 or 20000 = bypass)
  *   g <ch> <dB>       — CS4304 DAC atten (0..127), ch 1..4
  *   cpu [0|N|q [N]]   — LED_Y load probe (see README) */
@@ -382,8 +385,125 @@ static uint8_t Console_CpuLoad_Parse(const char *arg, uint8_t *mode_out,
 static void Console_Help(void)
 {
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
-  RS485_Reply("ok: n0 | n0..nf Hz [sc] | n Hz|0 | s | p|t 0.1..0.9 | "
-              "f0..f7 Hz | f Hz|0 | g ch dB | cpu [0|N|q N]\r\n");
+  RS485_Reply("ok: n0 | n0..nf Hz [sc] | n Hz|0 | en0..enf | ek0..ekf | "
+              "s | p|t 0.1..0.9 | f0..f7 Hz | f Hz|0 | g ch dB | "
+              "cpu [0|N|q N]\r\n");
+}
+
+/** Hex slot char for replies (0..15 → '0'..'9','a'..'f'). */
+static char Console_NoteSlotChar(uint8_t note)
+{
+  if (note < 10u)
+  {
+    return (char)('0' + note);
+  }
+  return (char)('a' + (note - 10u));
+}
+
+/** Parse up to NOTE_ENV_SEGMENTS_MAX*3 floats from rest. Returns count or -1. */
+static int Console_ParseFloatList(const char *rest, float *vals, int max_n)
+{
+  const char *p = rest;
+  int n = 0;
+
+  while (n < max_n)
+  {
+    double tmp;
+    int consumed = 0;
+
+    while (*p == ' ')
+    {
+      p++;
+    }
+    if (*p == '\0')
+    {
+      break;
+    }
+    if (sscanf(p, "%lf%n", &tmp, &consumed) != 1 || consumed <= 0)
+    {
+      return -1;
+    }
+    vals[n++] = (float)tmp;
+    p += consumed;
+  }
+  while (*p == ' ')
+  {
+    p++;
+  }
+  if (*p != '\0')
+  {
+    return -1; /* trailing junk or too many */
+  }
+  return n;
+}
+
+static void Console_EnvReply(uint8_t voice)
+{
+  char b[220];
+  int n;
+  uint8_t nseg;
+  uint8_t i;
+
+  nseg = NoteEnv_GetSegmentCount(voice);
+  if (nseg < NOTE_ENV_SEGMENTS_MIN)
+  {
+    snprintf(b, sizeof b, "ok: en%c (none) ek=%.1f\r\n",
+             Console_NoteSlotChar(voice), (double)NoteEnv_GetPitchK(voice));
+    RS485_Reply(b);
+    return;
+  }
+
+  n = snprintf(b, sizeof b, "ok: en%c", Console_NoteSlotChar(voice));
+  for (i = 0; i < nseg && n > 0 && (size_t)n < sizeof b; i++)
+  {
+    NoteEnv_Segment_t seg;
+    if (NoteEnv_GetSegment(voice, i, &seg) != 0)
+    {
+      break;
+    }
+    n += snprintf(b + n, sizeof b - (size_t)n, " %.2f %.2f %.2f",
+                  (double)seg.start_amp, (double)seg.end_amp,
+                  (double)seg.slope);
+  }
+  if (n > 0 && (size_t)n < sizeof b)
+  {
+    snprintf(b + n, sizeof b - (size_t)n, " ek=%.1f\r\n",
+             (double)NoteEnv_GetPitchK(voice));
+  }
+  RS485_Reply(b);
+}
+
+static void Console_EkReply(uint8_t voice)
+{
+  char b[40];
+  snprintf(b, sizeof b, "ok: ek%c %.1f\r\n", Console_NoteSlotChar(voice),
+           (double)NoteEnv_GetPitchK(voice));
+  RS485_Reply(b);
+}
+
+/**
+ * Apply segment floats (nfloats = 3*nseg) to one voice.
+ * Returns 0 ok, -1 syntax/count, -2 range.
+ */
+static int Console_EnvApplyFloats(uint8_t voice, const float *vals, int nfloats)
+{
+  NoteEnv_Segment_t segs[NOTE_ENV_SEGMENTS_MAX];
+  uint8_t nseg;
+  uint8_t i;
+
+  if (nfloats < (int)(NOTE_ENV_SEGMENTS_MIN * 3u) ||
+      nfloats > (int)(NOTE_ENV_SEGMENTS_MAX * 3u) || (nfloats % 3) != 0)
+  {
+    return -1;
+  }
+  nseg = (uint8_t)(nfloats / 3);
+  for (i = 0; i < nseg; i++)
+  {
+    segs[i].start_amp = vals[i * 3u];
+    segs[i].end_amp = vals[i * 3u + 1u];
+    segs[i].slope = vals[i * 3u + 2u];
+  }
+  return NoteEnv_SetSegments(voice, segs, nseg);
 }
 
 static void Console_ShapeReply(void)
@@ -480,6 +600,194 @@ static void Console_Exec(char *line)
     {
       RS485_Reply("err:range\r\n");
     }
+    return;
+  }
+
+  /* ---- en / en0..enf: multi-segment amplitude envelope ---- */
+  if (line[0] == 'e' && line[1] == 'n')
+  {
+    float vals[NOTE_ENV_SEGMENTS_MAX * 3u];
+    int nfloats;
+    const char *rest;
+    int rc;
+
+    if (line[2] == '\0' || line[2] == ' ')
+    {
+      rest = line + 2;
+      while (*rest == ' ')
+      {
+        rest++;
+      }
+      if (*rest == '\0')
+      {
+        /* Compact dump of all programmed voices. */
+        int n = snprintf(b, sizeof b, "ok:");
+        for (uint8_t i = 0; i < NOTE_BANK_VOICES && n > 0 &&
+                            (size_t)n < sizeof b;
+             i++)
+        {
+          if (NoteEnv_IsProgrammed(i) != 0u)
+          {
+            n += snprintf(b + n, sizeof b - (size_t)n, " en%c",
+                          Console_NoteSlotChar(i));
+          }
+        }
+        if (n == (int)strlen("ok:"))
+        {
+          snprintf(b, sizeof b, "ok: en (none)\r\n");
+        }
+        else if ((size_t)n < sizeof b - 2u)
+        {
+          snprintf(b + n, sizeof b - (size_t)n, "\r\n");
+        }
+        RS485_Reply(b);
+        return;
+      }
+      nfloats = Console_ParseFloatList(rest, vals, (int)(NOTE_ENV_SEGMENTS_MAX * 3u));
+      if (nfloats < 0)
+      {
+        RS485_Reply("err:syntax\r\n");
+        return;
+      }
+      for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
+      {
+        rc = Console_EnvApplyFloats(i, vals, nfloats);
+        if (rc == -1)
+        {
+          RS485_Reply("err:syntax\r\n");
+          return;
+        }
+        if (rc != 0)
+        {
+          RS485_Reply("err:range\r\n");
+          return;
+        }
+      }
+      snprintf(b, sizeof b, "ok: en (%u seg)\r\n",
+               (unsigned)(nfloats / 3));
+      RS485_Reply(b);
+      return;
+    }
+
+    note = Console_ParseNoteSlot(line[2]);
+    if (note == 0xFFu || (line[3] != '\0' && line[3] != ' '))
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    rest = line + 3;
+    while (*rest == ' ')
+    {
+      rest++;
+    }
+    if (*rest == '\0')
+    {
+      Console_EnvReply(note);
+      return;
+    }
+    nfloats = Console_ParseFloatList(rest, vals, (int)(NOTE_ENV_SEGMENTS_MAX * 3u));
+    if (nfloats < 0)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    rc = Console_EnvApplyFloats(note, vals, nfloats);
+    if (rc == -1)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    if (rc != 0)
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+    Console_EnvReply(note);
+    return;
+  }
+
+  /* ---- ek / ek0..ekf: pitch-track constant ---- */
+  if (line[0] == 'e' && line[1] == 'k')
+  {
+    const char *rest;
+    double kd;
+    float k;
+    int rc;
+
+    if (line[2] == '\0' || line[2] == ' ')
+    {
+      rest = line + 2;
+      while (*rest == ' ')
+      {
+        rest++;
+      }
+      if (*rest == '\0')
+      {
+        int n = snprintf(b, sizeof b, "ok:");
+        for (uint8_t i = 0; i < NOTE_BANK_VOICES && n > 0 &&
+                            (size_t)n < sizeof b;
+             i++)
+        {
+          n += snprintf(b + n, sizeof b - (size_t)n, " ek%c=%.1f",
+                        Console_NoteSlotChar(i),
+                        (double)NoteEnv_GetPitchK(i));
+        }
+        if ((size_t)n < sizeof b - 2u)
+        {
+          snprintf(b + n, sizeof b - (size_t)n, "\r\n");
+        }
+        RS485_Reply(b);
+        return;
+      }
+      if (sscanf(rest, "%lf", &kd) != 1)
+      {
+        RS485_Reply("err:syntax\r\n");
+        return;
+      }
+      k = (float)kd;
+      for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
+      {
+        rc = NoteEnv_SetPitchK(i, k);
+        if (rc != 0)
+        {
+          RS485_Reply("err:range\r\n");
+          return;
+        }
+      }
+      snprintf(b, sizeof b, "ok: ek %.1f\r\n", (double)k);
+      RS485_Reply(b);
+      return;
+    }
+
+    note = Console_ParseNoteSlot(line[2]);
+    if (note == 0xFFu || (line[3] != '\0' && line[3] != ' '))
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    rest = line + 3;
+    while (*rest == ' ')
+    {
+      rest++;
+    }
+    if (*rest == '\0')
+    {
+      Console_EkReply(note);
+      return;
+    }
+    if (sscanf(rest, "%lf", &kd) != 1)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    k = (float)kd;
+    rc = NoteEnv_SetPitchK(note, k);
+    if (rc != 0)
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+    Console_EkReply(note);
     return;
   }
 

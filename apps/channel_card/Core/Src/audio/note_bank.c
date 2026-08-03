@@ -3,20 +3,23 @@
  * @file    note_bank.c
  * @brief   16-voice additive DDS bank for Channel Card CH1 (N0–NF).
  *
- * Global shape (sine LUT / runtime pulse / runtime triangle) → Q15 amp →
- * 4-pole LPF → mix.
+ * Global shape (sine LUT / runtime pulse / runtime triangle) → Q15 amp ×
+ * optional multi-segment envelope → 4-pole LPF → mix.
  ******************************************************************************
  */
 
 #include "note_bank.h"
 
 #include "audio_rate.h"
+#include "note_envelope.h"
 #include "note_filter.h"
 
 #include <stdint.h>
 
 _Static_assert(NOTE_FILTER_VOICES == NOTE_BANK_VOICES,
                "note_filter voice count must match note_bank");
+_Static_assert(NOTE_ENV_VOICES == NOTE_BANK_VOICES,
+               "note_envelope voice count must match note_bank");
 
 
 /* Must match I2S / CS4304 sample rate (see audio_rate.h). */
@@ -268,16 +271,47 @@ static inline int32_t NoteBank_OscSample(uint32_t ph)
 }
 
 /**
- * One voice: shape osc → Q15 amplitude → LPF.
+ * One voice: shape osc → Q15 (scale × envelope) → LPF.
+ * Programmed envelopes: keep osc alive through release; clear inc when idle.
  */
 static inline int32_t NoteBank_VoiceSample(uint8_t note)
 {
   uint32_t ph = note_phase[note];
   int32_t s = NoteBank_OscSample(ph);
   int32_t amp;
+  float env;
+  int32_t env_q15;
+  int32_t gain_q15;
 
   note_phase[note] = ph + note_inc[note];
-  amp = (int32_t)(((int64_t)s * (int64_t)note_amp_q15[note]) >> 15);
+
+  if (NoteEnv_IsProgrammed(note) != 0u)
+  {
+    env = NoteEnv_Process(note);
+    if (NoteEnv_IsActive(note) == 0u)
+    {
+      note_inc[note] = 0u;
+      NoteFilter_Reset(note);
+      return 0;
+    }
+  }
+  else
+  {
+    env = 1.0f;
+  }
+
+  env_q15 = (int32_t)(env * (float)NOTE_AMP_Q15_MAX + 0.5f);
+  if (env_q15 > NOTE_AMP_Q15_MAX)
+  {
+    env_q15 = NOTE_AMP_Q15_MAX;
+  }
+  if (env_q15 < 0)
+  {
+    env_q15 = 0;
+  }
+  gain_q15 =
+      (int32_t)(((int64_t)note_amp_q15[note] * (int64_t)env_q15) >> 15);
+  amp = (int32_t)(((int64_t)s * (int64_t)gain_q15) >> 15);
   return NoteFilter_Process(note, amp);
 }
 
@@ -302,6 +336,13 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
   }
 
   if (freq_hz <= 0.0) {
+    /* Programmed + active → release; else hard stop (legacy). */
+    if (NoteEnv_IsProgrammed(note) != 0u && NoteEnv_IsActive(note) != 0u) {
+      NoteEnv_NoteOff(note);
+      note_freq_hz[note] = 0.0;
+      /* Keep note_inc until NoteEnv_Process finishes release. */
+      return;
+    }
     note_freq_hz[note] = 0.0;
     note_inc[note] = 0;
     NoteFilter_Reset(note);
@@ -318,6 +359,7 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
   note_scale[note] = scale;
   note_inc[note] = NoteBank_PhaseIncFromHz(freq_hz);
   note_amp_q15[note] = NoteBank_ScaleToQ15(scale);
+  NoteEnv_NoteOn(note, (float)freq_hz);
 }
 
 double NoteBank_GetFreq(uint8_t note)

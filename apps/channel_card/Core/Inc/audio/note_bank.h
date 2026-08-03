@@ -4,10 +4,11 @@
  * @brief   16-voice (N0–NF) additive oscillator bank for Channel Card CH1.
  *
  * Each voice is an independent fixed-point phase-accumulator oscillator with
- * its own amplitude scale (0.0..1.0) and optional 4-pole Butterworth LPF
- * (see note_filter.h). All voices share one global shape (sine / pulse /
- * triangle). Hot-path samples are amplitude-scaled, filtered, summed, and
- * saturated into one Q31 sample for the CH1 (I2S1 left) slot.
+ * its own amplitude scale (0.0..1.0), optional multi-segment envelope
+ * (note_envelope.h), and optional 4-pole Butterworth LPF (note_filter.h).
+ * All voices share one global shape (sine / pulse / triangle). Hot-path
+ * samples are amplitude-scaled, filtered, summed, and saturated into one
+ * Q31 sample for the CH1 (I2S1 left) slot.
  * Cold-path frequency/scale/shape use double only to compute phase inc /
  * Q15 amp / duty thresholds — never in DMA/ISR code.
  ******************************************************************************
@@ -35,7 +36,9 @@ typedef enum {
 /**
  * Set one note's frequency (Hz) and amplitude scale (0.0..1.0).
  * note: 0..15 (N0..NF). Out-of-range note is ignored.
- * freq_hz <= 0 turns that note off (inc = 0); scale is ignored when off.
+ * freq_hz <= 0 turns that note off. If a multi-segment envelope is programmed
+ * and active, this triggers release (osc keeps running until release ends);
+ * otherwise hard-stops (inc = 0). scale is ignored when off.
  * scale is clamped to 0.0..1.0; 1.0 = full table amplitude.
  * Caller should bounds-check audible Hz (e.g. 20..19999.9) before calling.
  */
