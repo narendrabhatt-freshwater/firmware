@@ -61,7 +61,9 @@ void PrintUsage()
          "Wire: host lines end with CR only; replies are [C]/[E]…\\r\\n.\n"
          "With device echo off, enable local echo in your terminal.\n"
          "Any serial terminal can type the same commands (e.g. e:echo off).\n"
-         "Channel Card also accepts: cutoff <0..f|*> <Hz> (4-pole LPF).\n";
+         "Channel Card also accepts:\n"
+         "  cutoff <0..f|*> <Hz>   4-pole Butterworth LPF (20000=bypass)\n"
+         "  pass lp                filter mode (hp/bp not yet)\n";
 }
 
 struct Options
@@ -278,6 +280,10 @@ std::string NormalizeN0Command(std::string line)
 
   if (lower.rfind("cutoff", 0) == 0 &&
       (lower.size() == 6 || lower[6] == ' '))
+    return lower;
+
+  if (lower.rfind("pass", 0) == 0 &&
+      (lower.size() == 4 || lower[4] == ' '))
     return lower;
 
   char *end = nullptr;

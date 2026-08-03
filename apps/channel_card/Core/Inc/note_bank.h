@@ -3,12 +3,10 @@
  * @file    note_bank.h
  * @brief   16-voice (N0–NF) additive sine bank for Channel Card CH1.
  *
- * Each voice is an independent fixed-point phase-accumulator oscillator with
- * its own amplitude scale (0.0..1.0) and optional 4-pole Butterworth LPF
+ * Each voice is an independent fixed-point phase-accumulator sine with its
+ * own amplitude scale (0.0..1.0) and optional 4-pole Butterworth LPF
  * (see note_filter.h). Hot-path samples are amplitude-scaled, filtered,
  * summed, and saturated into one Q31 sample for the CH1 (I2S1 left) slot.
- * Hosts should pick a fixed per-voice scale (e.g. 1/8) so chords get louder
- * additively; saturate is the last-resort clip rail.
  * Cold-path frequency/scale use double only to compute phase inc / Q15 amp —
  * never in DMA/ISR code.
  ******************************************************************************
@@ -46,7 +44,7 @@ uint8_t NoteBank_AnyActive(void);
 
 /**
  * Next mixed Q31 sample: sum amplitude-scaled active voices, saturate.
- * Hot path — integer only. Safe to call from DMA callbacks.
+ * Hot path — integer osc + float LPF boundary. Safe from DMA callbacks.
  */
 int32_t NoteBank_NextSample(void);
 

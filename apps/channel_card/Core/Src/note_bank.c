@@ -1,7 +1,9 @@
 /**
  ******************************************************************************
  * @file    note_bank.c
- * @brief   16-voice additive DDS bank for Channel Card CH1 (N0–NF).
+ * @brief   16-voice additive DDS sine bank for Channel Card CH1 (N0–NF).
+ *
+ * Sine table + linear interp → Q15 amp → 4-pole LPF → mix.
  ******************************************************************************
  */
 
@@ -19,12 +21,8 @@ _Static_assert(NOTE_FILTER_VOICES == NOTE_BANK_VOICES,
 #define NOTE_BANK_SAMPLE_RATE 96000u
 
 /*
- * Dedicated 128-entry Q31 sine table for the note bank (same table formerly
- * used by the monophonic CH1 test tone). Independent of the 256-entry table
- * used by CH2–4 in audio_bridge.c.
- *
- * Table size sets interpolation error only; the 32-bit phase accumulator
- * gives ~0.0000223 Hz resolution at 96 kHz regardless.
+ * Dedicated 128-entry Q31 sine table. Table size sets interpolation error
+ * only; the 32-bit phase accumulator gives ~0.0000223 Hz resolution at 96 kHz.
  */
 #define NOTE_SINE_TABLE_SIZE 128u
 static const int32_t note_sine_table[NOTE_SINE_TABLE_SIZE] = {
@@ -188,8 +186,7 @@ static int32_t NoteBank_ScaleToQ15(double scale)
 }
 
 /**
- * One voice: 128-entry table, linear interp, Q15 amplitude, then 4-pole LPF.
- * Pure integer; fine inside the DMA half refill.
+ * One voice: 128-entry sine table, linear interp, Q15 amplitude, then LPF.
  */
 static inline int32_t NoteBank_VoiceSample(uint8_t note)
 {
@@ -199,7 +196,8 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
   int32_t s1 =
       note_sine_table[(uint8_t)((idx + 1u) & (NOTE_SINE_TABLE_SIZE - 1u))];
   uint32_t frac = (ph >> 9) & 0xFFFFu;
-  int32_t s = s0 + (int32_t)(((int64_t)(s1 - s0) * (int64_t)frac) >> 16);
+  int64_t delta = (int64_t)s1 - (int64_t)s0;
+  int32_t s = s0 + (int32_t)((delta * (int64_t)frac) >> 16);
   int32_t amp;
 
   note_phase[note] = ph + note_inc[note];
@@ -231,7 +229,6 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
     note_freq_hz[note] = 0.0;
     note_inc[note] = 0;
     NoteFilter_Reset(note);
-    /* Leave stored scale so a later on-command can reuse GetScale if needed. */
     return;
   }
 

@@ -229,7 +229,8 @@ static const SwitchDef_t switches[] = {
  *   n0                — session defaults: bypass ON + gain 1 0
  *   n0..nf <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 0.125)
  *   cutoff <0..f|*> <Hz> — per-voice 4-pole Butterworth LPF (20..20000;
- *                        20000 = bypass / transparent)
+ *                        20000 = bypass / transparent; float DF4 / FPU)
+ *   pass [0..f|*] lp     — filter mode (LP only in v1; hp/bp → err:range)
  *   gain <ch> <dB>    — CS4304 per-channel DAC atten (0..127 dB), ch 1..4
  *   cpuload off|on|dma|queue — LED_Y (PB9) CPU-load probe (see README) */
 #define N0_DEFAULT_ATTEN_DB 0u
@@ -405,6 +406,27 @@ static uint8_t Console_CpuLoad_Parse(const char *arg, uint8_t *mode_out,
   return 0u;
 }
 
+/** Parse lp|hp|bp → NoteFilter_Pass_t. Returns 0 on success, -1 on unknown. */
+static int Console_ParsePassName(const char *name, NoteFilter_Pass_t *out)
+{
+  if (strcmp(name, "lp") == 0)
+  {
+    *out = NOTE_FILTER_PASS_LP;
+    return 0;
+  }
+  if (strcmp(name, "hp") == 0)
+  {
+    *out = NOTE_FILTER_PASS_HP;
+    return 0;
+  }
+  if (strcmp(name, "bp") == 0)
+  {
+    *out = NOTE_FILTER_PASS_BP;
+    return 0;
+  }
+  return -1;
+}
+
 static void Console_Exec(char *line)
 {
   char b[120];
@@ -477,7 +499,7 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- cutoff <0..f|*> <Hz>: per-voice 4-pole Butterworth LPF ---- */
+  /* ---- cutoff <0..f|*> <Hz>: per-voice 4-pole Butterworth ---- */
   if (strncmp(line, "cutoff", 6) == 0 &&
       (line[6] == '\0' || line[6] == ' '))
   {
@@ -521,7 +543,8 @@ static void Console_Exec(char *line)
       }
       note = Console_ParseNoteSlot(slot);
       fc = NoteFilter_GetCutoff(note);
-      snprintf(b, sizeof b, "ok: cutoff %c %.1f Hz%s\r\n", slot, fc,
+      snprintf(b, sizeof b, "ok: cutoff %c %.1f Hz %s%s\r\n", slot, fc,
+               NoteFilter_PassName(NoteFilter_GetPass(note)),
                (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "");
       RS485_Reply(b);
       return;
@@ -544,7 +567,8 @@ static void Console_Exec(char *line)
           return;
         }
       }
-      snprintf(b, sizeof b, "ok: cutoff * %.1f Hz%s\r\n", fc,
+      snprintf(b, sizeof b, "ok: cutoff * %.1f Hz %s%s\r\n", fc,
+               NoteFilter_PassName(NoteFilter_GetPass(0)),
                (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "");
       RS485_Reply(b);
       return;
@@ -557,8 +581,110 @@ static void Console_Exec(char *line)
       RS485_Reply("err:range\r\n");
       return;
     }
-    snprintf(b, sizeof b, "ok: cutoff %c %.1f Hz%s\r\n", slot, fc,
+    snprintf(b, sizeof b, "ok: cutoff %c %.1f Hz %s%s\r\n", slot, fc,
+             NoteFilter_PassName(NoteFilter_GetPass(note)),
              (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "");
+    RS485_Reply(b);
+    return;
+  }
+
+  /* ---- pass [0..f|*] lp: Butterworth mode (LP only in v1) ---- */
+  if (strncmp(line, "pass", 4) == 0 &&
+      (line[4] == '\0' || line[4] == ' '))
+  {
+    const char *arg = line + 4;
+    NoteFilter_Pass_t pmode;
+    char slot;
+    const char *rest;
+    int rc;
+
+    while (*arg == ' ')
+    {
+      arg++;
+    }
+
+    if (*arg == '\0')
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+
+    /* Lab shortcut: pass lp|hp|bp → all voices. */
+    if (Console_ParsePassName(arg, &pmode) == 0)
+    {
+      for (uint8_t i = 0; i < NOTE_FILTER_VOICES; i++)
+      {
+        rc = NoteFilter_SetPass(i, pmode);
+        if (rc != 0)
+        {
+          RS485_Reply("err:range\r\n");
+          return;
+        }
+      }
+      snprintf(b, sizeof b, "ok: pass * %s\r\n", NoteFilter_PassName(pmode));
+      RS485_Reply(b);
+      return;
+    }
+
+    slot = arg[0];
+    rest = arg + 1;
+    while (*rest == ' ')
+    {
+      rest++;
+    }
+
+    if (slot != '*' && Console_ParseNoteSlot(slot) == 0xFFu)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+
+    /* Bare "pass <slot>" → query. */
+    if (*rest == '\0')
+    {
+      if (slot == '*')
+      {
+        RS485_Reply("err:syntax\r\n");
+        return;
+      }
+      note = Console_ParseNoteSlot(slot);
+      snprintf(b, sizeof b, "ok: pass %c %s\r\n", slot,
+               NoteFilter_PassName(NoteFilter_GetPass(note)));
+      RS485_Reply(b);
+      return;
+    }
+
+    if (Console_ParsePassName(rest, &pmode) != 0)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+
+    if (slot == '*')
+    {
+      for (uint8_t i = 0; i < NOTE_FILTER_VOICES; i++)
+      {
+        rc = NoteFilter_SetPass(i, pmode);
+        if (rc != 0)
+        {
+          RS485_Reply("err:range\r\n");
+          return;
+        }
+      }
+      snprintf(b, sizeof b, "ok: pass * %s\r\n", NoteFilter_PassName(pmode));
+      RS485_Reply(b);
+      return;
+    }
+
+    note = Console_ParseNoteSlot(slot);
+    rc = NoteFilter_SetPass(note, pmode);
+    if (rc != 0)
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+    snprintf(b, sizeof b, "ok: pass %c %s\r\n", slot,
+             NoteFilter_PassName(pmode));
     RS485_Reply(b);
     return;
   }
@@ -911,9 +1037,10 @@ void ChannelConsole_Init(void)
   }
   Console_ApplySessionDefaults();
 
-  /* Default: transparent LPF (20000 Hz = bypass) on every voice. */
+  /* Default: transparent filter (20000 Hz = bypass), mode LP. */
   for (uint8_t i = 0; i < NOTE_FILTER_VOICES; i++)
   {
+    (void)NoteFilter_SetPass(i, NOTE_FILTER_PASS_LP);
     (void)NoteFilter_SetCutoff(i, NOTE_FILTER_CUTOFF_MAX_HZ);
   }
 
@@ -921,7 +1048,7 @@ void ChannelConsole_Init(void)
               "**************************************************\r\n"
               "*  Channel Card [C] ready  (multi-drop RS485)    *\r\n"
               "*  n0..nf <Hz> [scale] | gain <ch> <dB>          *\r\n"
-              "*  cutoff <0..f|*> <Hz>  — 4-pole LPF / voice   *\r\n"
+              "*  cutoff ... | pass lp (Butterworth LPF)      *\r\n"
               "*  silence | quiet on|off | cpuload ...          *\r\n"
               "*  replies: [C]ok / [C]err:<code>  (CRLF)        *\r\n"
               "*  enter/boot: bypass ON, gain 1 0               *\r\n"

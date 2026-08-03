@@ -1,11 +1,13 @@
 /**
  ******************************************************************************
  * @file    note_filter.c
- * @brief   Per-voice 4-pole Butterworth LPF as two cascaded SOS biquads.
+ * @brief   Per-voice 4-pole Butterworth LPF (boss four_pole_filter_t port).
  *
- * Sample rate matches the note bank / CS4304 (96 kHz). Coeffs are designed
- * with the bilinear-transform RBJ low-pass cookbook form; Q values are the
- * standard Butterworth pair for order 4.
+ * Algorithm from butterworth.cpp (init_low_pass / filter / cutoff_to_omega).
+ * Coeffs, delays, and per-sample math are double (FPU). Q31 convert only at
+ * Process() edges. Intentional hot-path float exception for this module.
+ *
+ * g = 1.0 (v1). init_high_pass kept as static for a later HP pass.
  ******************************************************************************
  */
 
@@ -14,118 +16,194 @@
 #include <math.h>
 #include <stdint.h>
 
-/* Must match I2S / CS4304 / note_bank (see audio-dsp-conventions.mdc). */
+/* Must match I2S / CS4304 / note_bank. */
 #define NOTE_FILTER_SAMPLE_RATE 96000.0
 
-/* Coeffs in Q28 so |a1|~2 still fits in int32 with headroom. */
-#define NOTE_FILTER_Q 28
-#define NOTE_FILTER_ONE (1 << NOTE_FILTER_Q)
+/** Damping parameter in boss formulation; 1.0 ≈ Butterworth-like. */
+#define NOTE_FILTER_G 1.0
 
 typedef struct {
-  int32_t b0;
-  int32_t b1;
-  int32_t b2;
-  int32_t a1;
-  int32_t a2;
-} NoteFilter_Sos;
-
-typedef struct {
-  int32_t z1;
-  int32_t z2;
-} NoteFilter_State;
+  double coef[9];
+  double d[4];
+} NoteFilter_FourPole;
 
 static double s_cutoff_hz[NOTE_FILTER_VOICES];
 static uint8_t s_bypass[NOTE_FILTER_VOICES];
-static NoteFilter_Sos s_sos[NOTE_FILTER_VOICES][2];
-static NoteFilter_State s_st[NOTE_FILTER_VOICES][2];
+static NoteFilter_FourPole s_filt[NOTE_FILTER_VOICES];
 
-/* Order-4 Butterworth section Q = 1/(2*sin((2k-1)*pi/(2*4))), k=1,2.
- * Cascade lower-Q first for better fixed-point headroom. */
-static const double k_butter_q[2] = {
-    0.5411961001461969, /* k=2 */
-    1.3065629648763766, /* k=1 */
-};
+/* ---- boss helpers (C port) ---------------------------------------------- */
 
-static int32_t NoteFilter_SaturateQ31(int64_t v)
+static double NoteFilter_CutoffToOmega(double cutoff, double sample_rate)
 {
-  if (v > (int64_t)0x7FFFFFFF) {
+  const double pi = 3.14159265358979323846;
+  double nyquist;
+
+  if (cutoff < 0.0) {
+    cutoff = 0.0;
+  }
+  nyquist = 0.5 * sample_rate;
+  if (cutoff > 0.999 * nyquist) {
+    cutoff = 0.999 * nyquist;
+  }
+  return 2.0 * pi * cutoff / sample_rate;
+}
+
+/** Port of four_pole_filter_t::init_low_pass — clears delays. */
+static void NoteFilter_InitLowPass(NoteFilter_FourPole *f, double omega,
+                                   double g)
+{
+  double k;
+  double p;
+  double q;
+  double a;
+  double a0;
+  double a1;
+  double a2;
+  double a3;
+  double a4;
+
+  k = (4.0 * g - 3.0) / (g + 1.0);
+  p = 1.0 - 0.25 * k;
+  p *= p;
+
+  a = 1.0 / (tan(0.5 * omega) * (1.0 + p));
+  p = 1.0 + a;
+  q = 1.0 - a;
+
+  a0 = 1.0 / (k + p * p * p * p);
+  a1 = 4.0 * (k + p * p * p * q);
+  a2 = 6.0 * (k + p * p * q * q);
+  a3 = 4.0 * (k + p * q * q * q);
+  a4 = (k + q * q * q * q);
+  p = a0 * (k + 1.0);
+
+  f->coef[0] = p;
+  f->coef[1] = 4.0 * p;
+  f->coef[2] = 6.0 * p;
+  f->coef[3] = 4.0 * p;
+  f->coef[4] = p;
+  f->coef[5] = -a1 * a0;
+  f->coef[6] = -a2 * a0;
+  f->coef[7] = -a3 * a0;
+  f->coef[8] = -a4 * a0;
+
+  f->d[0] = 0.0;
+  f->d[1] = 0.0;
+  f->d[2] = 0.0;
+  f->d[3] = 0.0;
+}
+
+#if 0 /* reserved for later HP wiring — same as boss init_high_pass */
+static void NoteFilter_InitHighPass(NoteFilter_FourPole *f, double omega,
+                                    double g)
+{
+  double k, p, q, a, a0, a1, a2, a3, a4;
+
+  k = (4.0 * g - 3.0) / (g + 1.0);
+  p = 1.0 - 0.25 * k;
+  p *= p;
+
+  a = tan(0.5 * omega) / (1.0 + p);
+  p = a + 1.0;
+  q = a - 1.0;
+
+  a0 = 1.0 / (p * p * p * p + k);
+  a1 = 4.0 * (p * p * p * q - k);
+  a2 = 6.0 * (p * p * q * q + k);
+  a3 = 4.0 * (p * q * q * q - k);
+  a4 = (q * q * q * q + k);
+  p = a0 * (k + 1.0);
+
+  f->coef[0] = p;
+  f->coef[1] = -4.0 * p;
+  f->coef[2] = 6.0 * p;
+  f->coef[3] = -4.0 * p;
+  f->coef[4] = p;
+  f->coef[5] = -a1 * a0;
+  f->coef[6] = -a2 * a0;
+  f->coef[7] = -a3 * a0;
+  f->coef[8] = -a4 * a0;
+
+  f->d[0] = f->d[1] = f->d[2] = f->d[3] = 0.0;
+}
+#endif
+
+/** Port of four_pole_filter_t::filter. */
+static double NoteFilter_FilterSample(NoteFilter_FourPole *f, double in)
+{
+  double out = f->coef[0] * in + f->d[0];
+  f->d[0] = f->coef[1] * in + f->coef[5] * out + f->d[1];
+  f->d[1] = f->coef[2] * in + f->coef[6] * out + f->d[2];
+  f->d[2] = f->coef[3] * in + f->coef[7] * out + f->d[3];
+  f->d[3] = f->coef[4] * in + f->coef[8] * out;
+  return out;
+}
+
+static int32_t NoteFilter_DoubleToQ31(double x)
+{
+  if (x >= 1.0) {
     return (int32_t)0x7FFFFFFF;
   }
-  if (v < (int64_t)(int32_t)0x80000000) {
-    return (int32_t)0x80000000;
+  if (x <= -1.0) {
+    return (int32_t)0x80000001;
   }
-  return (int32_t)v;
+  return (int32_t)(x * 2147483647.0);
 }
 
-static int32_t NoteFilter_FloatToQ28(double x)
-{
-  double s = x * (double)NOTE_FILTER_ONE;
-  if (s >= (double)0x7FFFFFFF) {
-    return (int32_t)0x7FFFFFFF;
-  }
-  if (s <= (double)(int32_t)0x80000000) {
-    return (int32_t)0x80000000;
-  }
-  return (int32_t)(s + (s >= 0.0 ? 0.5 : -0.5));
-}
-
-/**
- * One RBJ low-pass biquad at cutoff_hz with quality Q → Q28 SOS.
- * Cold path only (sin/cos).
- */
-static void NoteFilter_DesignSos(double cutoff_hz, double q, NoteFilter_Sos *out)
-{
-  const double w0 = 2.0 * 3.14159265358979323846 * cutoff_hz / NOTE_FILTER_SAMPLE_RATE;
-  const double cos_w0 = cos(w0);
-  const double sin_w0 = sin(w0);
-  const double alpha = sin_w0 / (2.0 * q);
-  const double a0 = 1.0 + alpha;
-  const double b0 = ((1.0 - cos_w0) * 0.5) / a0;
-  const double b1 = (1.0 - cos_w0) / a0;
-  const double b2 = ((1.0 - cos_w0) * 0.5) / a0;
-  const double a1 = (-2.0 * cos_w0) / a0;
-  const double a2 = (1.0 - alpha) / a0;
-
-  out->b0 = NoteFilter_FloatToQ28(b0);
-  out->b1 = NoteFilter_FloatToQ28(b1);
-  out->b2 = NoteFilter_FloatToQ28(b2);
-  out->a1 = NoteFilter_FloatToQ28(a1);
-  out->a2 = NoteFilter_FloatToQ28(a2);
-}
-
-/** Transposed DF-II; coeffs Q28, sample Q31. ~tens of cycles. */
-static int32_t NoteFilter_ProcessSos(const NoteFilter_Sos *c, NoteFilter_State *st,
-                                     int32_t x)
-{
-  const int64_t y64 =
-      (((int64_t)c->b0 * (int64_t)x) >> NOTE_FILTER_Q) + (int64_t)st->z1;
-  const int32_t y = NoteFilter_SaturateQ31(y64);
-
-  const int64_t z1 =
-      (((int64_t)c->b1 * (int64_t)x) >> NOTE_FILTER_Q) -
-      (((int64_t)c->a1 * (int64_t)y) >> NOTE_FILTER_Q) + (int64_t)st->z2;
-  const int64_t z2 =
-      (((int64_t)c->b2 * (int64_t)x) >> NOTE_FILTER_Q) -
-      (((int64_t)c->a2 * (int64_t)y) >> NOTE_FILTER_Q);
-
-  st->z1 = NoteFilter_SaturateQ31(z1);
-  st->z2 = NoteFilter_SaturateQ31(z2);
-  return y;
-}
+/* ---- public API --------------------------------------------------------- */
 
 void NoteFilter_Reset(uint8_t voice)
 {
   if (voice >= NOTE_FILTER_VOICES) {
     return;
   }
-  s_st[voice][0].z1 = 0;
-  s_st[voice][0].z2 = 0;
-  s_st[voice][1].z1 = 0;
-  s_st[voice][1].z2 = 0;
+  s_filt[voice].d[0] = 0.0;
+  s_filt[voice].d[1] = 0.0;
+  s_filt[voice].d[2] = 0.0;
+  s_filt[voice].d[3] = 0.0;
+}
+
+const char *NoteFilter_PassName(NoteFilter_Pass_t pass)
+{
+  if (pass == NOTE_FILTER_PASS_LP) {
+    return "lp";
+  }
+  if (pass == NOTE_FILTER_PASS_HP) {
+    return "hp";
+  }
+  if (pass == NOTE_FILTER_PASS_BP) {
+    return "bp";
+  }
+  return "?";
+}
+
+NoteFilter_Pass_t NoteFilter_GetPass(uint8_t voice)
+{
+  (void)voice;
+  return NOTE_FILTER_PASS_LP;
+}
+
+int NoteFilter_SetPass(uint8_t voice, NoteFilter_Pass_t pass)
+{
+  if (voice >= NOTE_FILTER_VOICES) {
+    return -1;
+  }
+  /* v1: LPF only (boss said LPF for now). */
+  if (pass != NOTE_FILTER_PASS_LP) {
+    return -2;
+  }
+  /* Already LP; re-apply cutoff design if active. */
+  if (s_cutoff_hz[voice] >= NOTE_FILTER_CUTOFF_MIN_HZ &&
+      s_cutoff_hz[voice] < NOTE_FILTER_CUTOFF_MAX_HZ) {
+    return NoteFilter_SetCutoff(voice, s_cutoff_hz[voice]);
+  }
+  return 0;
 }
 
 int NoteFilter_SetCutoff(uint8_t voice, double cutoff_hz)
 {
+  double omega;
+
   if (voice >= NOTE_FILTER_VOICES) {
     return -1;
   }
@@ -135,17 +213,16 @@ int NoteFilter_SetCutoff(uint8_t voice, double cutoff_hz)
   }
 
   s_cutoff_hz[voice] = cutoff_hz;
-  NoteFilter_Reset(voice);
 
-  /* Max cutoff = transparent: skip MACs so default matches pre-filter bank. */
   if (cutoff_hz >= NOTE_FILTER_CUTOFF_MAX_HZ) {
     s_bypass[voice] = 1u;
+    NoteFilter_Reset(voice);
     return 0;
   }
 
   s_bypass[voice] = 0u;
-  NoteFilter_DesignSos(cutoff_hz, k_butter_q[0], &s_sos[voice][0]);
-  NoteFilter_DesignSos(cutoff_hz, k_butter_q[1], &s_sos[voice][1]);
+  omega = NoteFilter_CutoffToOmega(cutoff_hz, NOTE_FILTER_SAMPLE_RATE);
+  NoteFilter_InitLowPass(&s_filt[voice], omega, NOTE_FILTER_G);
   return 0;
 }
 
@@ -154,7 +231,6 @@ double NoteFilter_GetCutoff(uint8_t voice)
   if (voice >= NOTE_FILTER_VOICES) {
     return 0.0;
   }
-  /* Uninitialized BSS is 0; treat as bypass max so getters match boot. */
   if (s_cutoff_hz[voice] < NOTE_FILTER_CUTOFF_MIN_HZ) {
     return NOTE_FILTER_CUTOFF_MAX_HZ;
   }
@@ -163,17 +239,17 @@ double NoteFilter_GetCutoff(uint8_t voice)
 
 int32_t NoteFilter_Process(uint8_t voice, int32_t x)
 {
-  int32_t y;
+  double in;
+  double out;
 
   if (voice >= NOTE_FILTER_VOICES || s_bypass[voice] != 0u) {
     return x;
   }
-  /* BSS starts bypass=0 and cutoff=0 — treat never-configured as bypass. */
   if (s_cutoff_hz[voice] < NOTE_FILTER_CUTOFF_MIN_HZ) {
     return x;
   }
 
-  y = NoteFilter_ProcessSos(&s_sos[voice][0], &s_st[voice][0], x);
-  y = NoteFilter_ProcessSos(&s_sos[voice][1], &s_st[voice][1], y);
-  return y;
+  in = (double)x / 2147483647.0;
+  out = NoteFilter_FilterSample(&s_filt[voice], in);
+  return NoteFilter_DoubleToQ31(out);
 }

@@ -191,7 +191,9 @@ that note’s amplitude. Frequency/scale changes do not touch gain or bypass.
 | `N0`…`NF` `0` | Turn that note off (gain/bypass unchanged) |
 | `N0`…`NF` `<Hz>` | Note at Hz, scale **1.0** (max); voices sum on CH1 |
 | `N0`…`NF` `<Hz> <scale>` | Note at Hz with amplitude 0.0..1.0 (e.g. `n0 440 0.5`) |
-| `cutoff <0..f\|*> <Hz>` | Per-voice 4-pole Butterworth LPF (20..20000; **20000 = bypass**). See [`docs/note_filter_butterworth.md`](../../docs/note_filter_butterworth.md). |
+| `cutoff <0..f\|*> <Hz>` | Per-voice 4-pole Butterworth **LPF** (20..20000; **20000 = bypass**). Boss DF4 float algorithm. See [`docs/note_filter_butterworth.md`](../../docs/note_filter_butterworth.md). |
+| `pass lp` | Filter mode (LP only in v1; `hp`/`bp` → `err:range`) |
+| `pass <0..f\|*> lp` | Per-voice / all (LP only) |
 | `gain <ch> <dB>` | DAC atten 0..127 on ch 1..4 (e.g. `gain 1 40`) |
 | `cpuload` / `on` `[1..16]` | N voices + LED_Y (PB9) DMA load probe (default 16) |
 | `cpuload queue` `[1..16]` | Same, soft-queue producer mode |
