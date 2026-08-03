@@ -32,7 +32,6 @@ extern UART_HandleTypeDef huart5;
 #define RS485_BUS_TIMEOUT_MS 250
 #define RS485_ECHO 0
 
-
 /** RS485 bus-aware transmit.
  *
  * Multi-drop protocol: two MCUs share the same transceiver (SN65HVD75).
@@ -144,9 +143,9 @@ static int __attribute__((unused)) RS485_Send(const char *s)
 static uint8_t console_via_usb = 0;
 
 /* RS485 path counters (internal; no console cmd). */
-static uint32_t rs485_cmd_count;  /**< commands executed from the bus */
-static uint32_t rs485_tx_fail;    /**< HAL_UART_Transmit did not return OK */
-static uint32_t rs485_tx_trunc;   /**< reply longer than the frame buffer */
+static uint32_t rs485_cmd_count; /**< commands executed from the bus */
+static uint32_t rs485_tx_fail;   /**< HAL_UART_Transmit did not return OK */
+static uint32_t rs485_tx_trunc;  /**< reply longer than the frame buffer */
 
 /** Send a tagged response: prefixes the string with [C] so the host knows
  * which card replied.
@@ -218,7 +217,7 @@ static const SwitchDef_t switches[] = {
  *   n0                — session defaults: bypass ON + g 1 0
  *   n0..nf <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 0.125)
  *   n <Hz> [sc]       — all 16 notes (n 0 = silence)
- *   en0..enf / en     — multi-seg amp envelope (2..10 × start end slope)
+ *   en0..enf / en     — envelope: end slope [end slope ...] release_slope
  *   ek0..ekf / ek     — pitch-track k (0..10, rate ∝ (f/C4)^k)
  *   f0..f7 <Hz> / f <Hz> — LPF on first 8 voices (0 or 20000 = bypass)
  *   g <ch> <dB>       — CS4304 DAC atten (0..127), ch 1..4
@@ -385,7 +384,8 @@ static uint8_t Console_CpuLoad_Parse(const char *arg, uint8_t *mode_out,
 static void Console_Help(void)
 {
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
-  RS485_Reply("ok: n0 | n0..nf Hz [sc] | n Hz|0 | en0..enf | ek0..ekf | "
+  RS485_Reply("ok: n0 | n0..nf Hz [sc] | n Hz|0 | "
+              "en0..enf end slope ... rel_slope | ek0..ekf k | "
               "s | p|t 0.1..0.9 | f0..f7 Hz | f Hz|0 | g ch dB | "
               "cpu [0|N|q N]\r\n");
 }
@@ -400,7 +400,7 @@ static char Console_NoteSlotChar(uint8_t note)
   return (char)('a' + (note - 10u));
 }
 
-/** Parse up to NOTE_ENV_SEGMENTS_MAX*3 floats from rest. Returns count or -1. */
+/** Parse up to max_n floats from rest. Returns count or -1. */
 static int Console_ParseFloatList(const char *rest, float *vals, int max_n)
 {
   const char *p = rest;
@@ -443,6 +443,7 @@ static void Console_EnvReply(uint8_t voice)
   int n;
   uint8_t nseg;
   uint8_t i;
+  uint8_t release_idx;
 
   nseg = NoteEnv_GetSegmentCount(voice);
   if (nseg < NOTE_ENV_SEGMENTS_MIN)
@@ -453,17 +454,26 @@ static void Console_EnvReply(uint8_t voice)
     return;
   }
 
+  /* Echo console form: end slope … release_slope (no starts). */
   n = snprintf(b, sizeof b, "ok: en%c", Console_NoteSlotChar(voice));
-  for (i = 0; i < nseg && n > 0 && (size_t)n < sizeof b; i++)
+  release_idx = (uint8_t)(nseg - 1u);
+  for (i = 0; i < release_idx && n > 0 && (size_t)n < sizeof b; i++)
   {
     NoteEnv_Segment_t seg;
     if (NoteEnv_GetSegment(voice, i, &seg) != 0)
     {
       break;
     }
-    n += snprintf(b + n, sizeof b - (size_t)n, " %.2f %.2f %.2f",
-                  (double)seg.start_amp, (double)seg.end_amp,
-                  (double)seg.slope);
+    n += snprintf(b + n, sizeof b - (size_t)n, " %.2f %.2f",
+                  (double)seg.end_amp, (double)seg.slope);
+  }
+  if (n > 0 && (size_t)n < sizeof b)
+  {
+    NoteEnv_Segment_t rel;
+    if (NoteEnv_GetSegment(voice, release_idx, &rel) == 0)
+    {
+      n += snprintf(b + n, sizeof b - (size_t)n, " %.2f", (double)rel.slope);
+    }
   }
   if (n > 0 && (size_t)n < sizeof b)
   {
@@ -482,27 +492,36 @@ static void Console_EkReply(uint8_t voice)
 }
 
 /**
- * Apply segment floats (nfloats = 3*nseg) to one voice.
+ * Apply chained floats: end slope [end slope ...] release_slope.
+ * nfloats odd, 3..NOTE_ENV_CONSOLE_FLOATS_MAX → nseg = (nfloats+1)/2.
  * Returns 0 ok, -1 syntax/count, -2 range.
  */
 static int Console_EnvApplyFloats(uint8_t voice, const float *vals, int nfloats)
 {
   NoteEnv_Segment_t segs[NOTE_ENV_SEGMENTS_MAX];
+  uint8_t n_pre;
   uint8_t nseg;
   uint8_t i;
 
-  if (nfloats < (int)(NOTE_ENV_SEGMENTS_MIN * 3u) ||
-      nfloats > (int)(NOTE_ENV_SEGMENTS_MAX * 3u) || (nfloats % 3) != 0)
+  if (nfloats < 3 || nfloats > (int)NOTE_ENV_CONSOLE_FLOATS_MAX ||
+      (nfloats % 2) == 0)
   {
     return -1;
   }
-  nseg = (uint8_t)(nfloats / 3);
-  for (i = 0; i < nseg; i++)
+  /* (nfloats - 1) / 2 pre-release pairs + 1 release. */
+  n_pre = (uint8_t)((nfloats - 1) / 2);
+  nseg = (uint8_t)(n_pre + 1u);
+  if (nseg < NOTE_ENV_SEGMENTS_MIN || nseg > NOTE_ENV_SEGMENTS_MAX)
   {
-    segs[i].start_amp = vals[i * 3u];
-    segs[i].end_amp = vals[i * 3u + 1u];
-    segs[i].slope = vals[i * 3u + 2u];
+    return -1;
   }
+  for (i = 0; i < n_pre; i++)
+  {
+    segs[i].end_amp = vals[i * 2u];
+    segs[i].slope = vals[i * 2u + 1u];
+  }
+  segs[n_pre].end_amp = 0.0f;
+  segs[n_pre].slope = vals[nfloats - 1];
   return NoteEnv_SetSegments(voice, segs, nseg);
 }
 
@@ -606,7 +625,7 @@ static void Console_Exec(char *line)
   /* ---- en / en0..enf: multi-segment amplitude envelope ---- */
   if (line[0] == 'e' && line[1] == 'n')
   {
-    float vals[NOTE_ENV_SEGMENTS_MAX * 3u];
+    float vals[NOTE_ENV_CONSOLE_FLOATS_MAX];
     int nfloats;
     const char *rest;
     int rc;
@@ -643,7 +662,8 @@ static void Console_Exec(char *line)
         RS485_Reply(b);
         return;
       }
-      nfloats = Console_ParseFloatList(rest, vals, (int)(NOTE_ENV_SEGMENTS_MAX * 3u));
+      nfloats =
+          Console_ParseFloatList(rest, vals, (int)NOTE_ENV_CONSOLE_FLOATS_MAX);
       if (nfloats < 0)
       {
         RS485_Reply("err:syntax\r\n");
@@ -664,7 +684,7 @@ static void Console_Exec(char *line)
         }
       }
       snprintf(b, sizeof b, "ok: en (%u seg)\r\n",
-               (unsigned)(nfloats / 3));
+               (unsigned)((nfloats + 1) / 2));
       RS485_Reply(b);
       return;
     }
@@ -685,7 +705,8 @@ static void Console_Exec(char *line)
       Console_EnvReply(note);
       return;
     }
-    nfloats = Console_ParseFloatList(rest, vals, (int)(NOTE_ENV_SEGMENTS_MAX * 3u));
+    nfloats =
+        Console_ParseFloatList(rest, vals, (int)NOTE_ENV_CONSOLE_FLOATS_MAX);
     if (nfloats < 0)
     {
       RS485_Reply("err:syntax\r\n");
@@ -1261,7 +1282,6 @@ static void LED_Task(void)
     HAL_GPIO_WritePin((GPIO_TypeDef *)ports[step], pins[step], GPIO_PIN_SET);
   }
 }
-
 
 void ChannelConsole_Init(void)
 {

@@ -2,6 +2,9 @@
  ******************************************************************************
  * @file    note_envelope.c
  * @brief   Multi-segment linear amp envelope (gate + pitch-scaled rate).
+ *
+ * Segments are (end, slope) chains; first note-on starts at 0. Last segment
+ * is release to 0.
  ******************************************************************************
  */
 
@@ -12,14 +15,16 @@
 #include <math.h>
 #include <string.h>
 
-typedef enum {
+typedef enum
+{
   NOTE_ENV_IDLE = 0,
   NOTE_ENV_RUNNING = 1,
   NOTE_ENV_HOLD = 2,
   NOTE_ENV_RELEASE = 3
 } NoteEnv_State_t;
 
-typedef struct {
+typedef struct
+{
   NoteEnv_Segment_t segs[NOTE_ENV_SEGMENTS_MAX];
   uint8_t n_segs;
   float k;
@@ -33,15 +38,14 @@ typedef struct {
 
 static NoteEnv_Voice_t s_voices[NOTE_ENV_VOICES];
 
-static uint8_t NoteEnv_ValidateSeg(const NoteEnv_Segment_t *s)
+static uint8_t NoteEnv_ValidatePre(const NoteEnv_Segment_t *s)
 {
-  if (s->start_amp < 0.0f || s->start_amp > 1.0f) {
+  if (s->end_amp < 0.0f || s->end_amp > 1.0f)
+  {
     return 0u;
   }
-  if (s->end_amp < 0.0f || s->end_amp > 1.0f) {
-    return 0u;
-  }
-  if (!(s->slope > 0.0f)) {
+  if (!(s->slope > 0.0f))
+  {
     return 0u;
   }
   return 1u;
@@ -58,11 +62,16 @@ static void NoteEnv_Arm(NoteEnv_Voice_t *v, uint8_t idx, float from_amp)
   v->amp = from_amp;
   v->target = seg->end_amp;
 
-  if (v->amp < v->target) {
+  if (v->amp < v->target)
+  {
     v->step = step_mag;
-  } else if (v->amp > v->target) {
+  }
+  else if (v->amp > v->target)
+  {
     v->step = -step_mag;
-  } else {
+  }
+  else
+  {
     v->step = 0.0f;
   }
 }
@@ -72,13 +81,15 @@ static void NoteEnv_EnterNextOrHold(NoteEnv_Voice_t *v)
   uint8_t release_idx = (uint8_t)(v->n_segs - 1u);
   uint8_t next = (uint8_t)(v->seg_idx + 1u);
 
-  if (next >= release_idx) {
+  if (next >= release_idx)
+  {
     v->state = NOTE_ENV_HOLD;
     v->step = 0.0f;
     return;
   }
 
-  NoteEnv_Arm(v, next, v->segs[next].start_amp);
+  /* Continue from current amp (= previous segment end). */
+  NoteEnv_Arm(v, next, v->amp);
   v->state = NOTE_ENV_RUNNING;
 }
 
@@ -86,14 +97,17 @@ static float NoteEnv_ComputePitchRate(float freq_hz, float k)
 {
   float ratio;
 
-  if (k == 0.0f) {
+  if (k == 0.0f)
+  {
     return 1.0f;
   }
-  if (!(freq_hz > 0.0f)) {
+  if (!(freq_hz > 0.0f))
+  {
     return 1.0f;
   }
   ratio = freq_hz / NOTE_ENV_F_REF_HZ;
-  if (ratio <= 0.0f) {
+  if (ratio <= 0.0f)
+  {
     return 1.0f;
   }
   return powf(ratio, k);
@@ -105,23 +119,35 @@ int NoteEnv_SetSegments(uint8_t voice, const NoteEnv_Segment_t *segs, uint8_t n)
 {
   NoteEnv_Voice_t *v;
   uint8_t i;
+  uint8_t release_idx;
 
-  if (voice >= NOTE_ENV_VOICES || segs == NULL) {
+  if (voice >= NOTE_ENV_VOICES || segs == NULL)
+  {
     return -1;
   }
-  if (n < NOTE_ENV_SEGMENTS_MIN || n > NOTE_ENV_SEGMENTS_MAX) {
+  if (n < NOTE_ENV_SEGMENTS_MIN || n > NOTE_ENV_SEGMENTS_MAX)
+  {
     return -2;
   }
-  for (i = 0; i < n; i++) {
-    if (!NoteEnv_ValidateSeg(&segs[i])) {
+
+  release_idx = (uint8_t)(n - 1u);
+  for (i = 0; i < release_idx; i++)
+  {
+    if (!NoteEnv_ValidatePre(&segs[i]))
+    {
       return -2;
     }
+  }
+  if (!(segs[release_idx].slope > 0.0f))
+  {
+    return -2;
   }
 
   v = &s_voices[voice];
   memcpy(v->segs, segs, (size_t)n * sizeof(NoteEnv_Segment_t));
+  /* Release always targets silence. */
+  v->segs[release_idx].end_amp = 0.0f;
   v->n_segs = n;
-  /* Keep k; drop any in-flight gate so new shape starts clean on next NoteOn. */
   v->state = NOTE_ENV_IDLE;
   v->seg_idx = 0u;
   v->amp = 0.0f;
@@ -134,7 +160,8 @@ void NoteEnv_Clear(uint8_t voice)
 {
   NoteEnv_Voice_t *v;
 
-  if (voice >= NOTE_ENV_VOICES) {
+  if (voice >= NOTE_ENV_VOICES)
+  {
     return;
   }
   v = &s_voices[voice];
@@ -149,7 +176,8 @@ void NoteEnv_Clear(uint8_t voice)
 
 uint8_t NoteEnv_IsProgrammed(uint8_t voice)
 {
-  if (voice >= NOTE_ENV_VOICES) {
+  if (voice >= NOTE_ENV_VOICES)
+  {
     return 0u;
   }
   return (s_voices[voice].n_segs >= NOTE_ENV_SEGMENTS_MIN) ? 1u : 0u;
@@ -157,7 +185,8 @@ uint8_t NoteEnv_IsProgrammed(uint8_t voice)
 
 uint8_t NoteEnv_GetSegmentCount(uint8_t voice)
 {
-  if (voice >= NOTE_ENV_VOICES) {
+  if (voice >= NOTE_ENV_VOICES)
+  {
     return 0u;
   }
   return s_voices[voice].n_segs;
@@ -165,10 +194,12 @@ uint8_t NoteEnv_GetSegmentCount(uint8_t voice)
 
 int NoteEnv_GetSegment(uint8_t voice, uint8_t idx, NoteEnv_Segment_t *out)
 {
-  if (voice >= NOTE_ENV_VOICES || out == NULL) {
+  if (voice >= NOTE_ENV_VOICES || out == NULL)
+  {
     return -1;
   }
-  if (idx >= s_voices[voice].n_segs) {
+  if (idx >= s_voices[voice].n_segs)
+  {
     return -1;
   }
   *out = s_voices[voice].segs[idx];
@@ -177,10 +208,12 @@ int NoteEnv_GetSegment(uint8_t voice, uint8_t idx, NoteEnv_Segment_t *out)
 
 int NoteEnv_SetPitchK(uint8_t voice, float k)
 {
-  if (voice >= NOTE_ENV_VOICES) {
+  if (voice >= NOTE_ENV_VOICES)
+  {
     return -1;
   }
-  if (k < NOTE_ENV_K_MIN || k > NOTE_ENV_K_MAX) {
+  if (k < NOTE_ENV_K_MIN || k > NOTE_ENV_K_MAX)
+  {
     return -2;
   }
   s_voices[voice].k = k;
@@ -189,7 +222,8 @@ int NoteEnv_SetPitchK(uint8_t voice, float k)
 
 float NoteEnv_GetPitchK(uint8_t voice)
 {
-  if (voice >= NOTE_ENV_VOICES) {
+  if (voice >= NOTE_ENV_VOICES)
+  {
     return 0.0f;
   }
   return s_voices[voice].k;
@@ -199,20 +233,23 @@ void NoteEnv_NoteOn(uint8_t voice, float freq_hz)
 {
   NoteEnv_Voice_t *v;
 
-  if (voice >= NOTE_ENV_VOICES) {
+  if (voice >= NOTE_ENV_VOICES)
+  {
     return;
   }
   v = &s_voices[voice];
-  if (v->n_segs < NOTE_ENV_SEGMENTS_MIN) {
+  if (v->n_segs < NOTE_ENV_SEGMENTS_MIN)
+  {
     return;
   }
 
   v->pitch_rate = NoteEnv_ComputePitchRate(freq_hz, v->k);
-  NoteEnv_Arm(v, 0u, v->segs[0].start_amp);
+  /* First segment always starts from silence. */
+  NoteEnv_Arm(v, 0u, 0.0f);
   v->state = NOTE_ENV_RUNNING;
 
-  /* Zero-length first segment (start==end): advance immediately. */
-  if (v->step == 0.0f) {
+  if (v->step == 0.0f)
+  {
     NoteEnv_EnterNextOrHold(v);
   }
 }
@@ -222,14 +259,17 @@ void NoteEnv_NoteOff(uint8_t voice)
   NoteEnv_Voice_t *v;
   uint8_t release_idx;
 
-  if (voice >= NOTE_ENV_VOICES) {
+  if (voice >= NOTE_ENV_VOICES)
+  {
     return;
   }
   v = &s_voices[voice];
-  if (v->n_segs < NOTE_ENV_SEGMENTS_MIN) {
+  if (v->n_segs < NOTE_ENV_SEGMENTS_MIN)
+  {
     return;
   }
-  if (v->state == NOTE_ENV_IDLE) {
+  if (v->state == NOTE_ENV_IDLE)
+  {
     return;
   }
 
@@ -237,7 +277,8 @@ void NoteEnv_NoteOff(uint8_t voice)
   NoteEnv_Arm(v, release_idx, v->amp);
   v->state = NOTE_ENV_RELEASE;
 
-  if (v->step == 0.0f) {
+  if (v->step == 0.0f)
+  {
     v->amp = v->target;
     v->state = NOTE_ENV_IDLE;
   }
@@ -245,10 +286,12 @@ void NoteEnv_NoteOff(uint8_t voice)
 
 uint8_t NoteEnv_IsActive(uint8_t voice)
 {
-  if (voice >= NOTE_ENV_VOICES) {
+  if (voice >= NOTE_ENV_VOICES)
+  {
     return 0u;
   }
-  if (s_voices[voice].n_segs < NOTE_ENV_SEGMENTS_MIN) {
+  if (s_voices[voice].n_segs < NOTE_ENV_SEGMENTS_MIN)
+  {
     return 0u;
   }
   return (s_voices[voice].state != NOTE_ENV_IDLE) ? 1u : 0u;
@@ -259,49 +302,65 @@ float NoteEnv_Process(uint8_t voice)
   NoteEnv_Voice_t *v;
   float next;
 
-  if (voice >= NOTE_ENV_VOICES) {
+  if (voice >= NOTE_ENV_VOICES)
+  {
     return 1.0f;
   }
   v = &s_voices[voice];
-  if (v->n_segs < NOTE_ENV_SEGMENTS_MIN) {
+  if (v->n_segs < NOTE_ENV_SEGMENTS_MIN)
+  {
     return 1.0f;
   }
 
-  if (v->state == NOTE_ENV_IDLE) {
+  if (v->state == NOTE_ENV_IDLE)
+  {
     return 0.0f;
   }
-  if (v->state == NOTE_ENV_HOLD) {
+  if (v->state == NOTE_ENV_HOLD)
+  {
     return v->amp;
   }
 
-  /* RUNNING or RELEASE */
-  if (v->step == 0.0f) {
+  if (v->step == 0.0f)
+  {
     v->amp = v->target;
-  } else {
+  }
+  else
+  {
     next = v->amp + v->step;
-    if (v->step > 0.0f) {
-      if (next >= v->target) {
+    if (v->step > 0.0f)
+    {
+      if (next >= v->target)
+      {
         v->amp = v->target;
         v->step = 0.0f;
-      } else {
+      }
+      else
+      {
         v->amp = next;
       }
-    } else {
-      if (next <= v->target) {
+    }
+    else
+    {
+      if (next <= v->target)
+      {
         v->amp = v->target;
         v->step = 0.0f;
-      } else {
+      }
+      else
+      {
         v->amp = next;
       }
     }
   }
 
-  if (v->step == 0.0f && v->amp == v->target) {
-    if (v->state == NOTE_ENV_RELEASE) {
+  if (v->step == 0.0f && v->amp == v->target)
+  {
+    if (v->state == NOTE_ENV_RELEASE)
+    {
       v->state = NOTE_ENV_IDLE;
       return 0.0f;
     }
-    /* Finished a pre-release segment. */
     NoteEnv_EnterNextOrHold(v);
   }
 
