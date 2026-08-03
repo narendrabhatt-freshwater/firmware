@@ -2,6 +2,8 @@
 
 #include "voice_bank.hpp"
 
+#include "rs485/session.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -10,12 +12,8 @@ namespace midi_host
 {
 
 /**
- * Channel Card note bank over RS485.
- *
- * Transport is one absolute binary bank frame per sync (16×uint16 Hz),
- * not per-slot ASCII. Latest snapshot wins on a background thread so a
- * dropped frame is healed on the next key event. Session open still uses
- * ASCII (`c:quiet on` + `e:echo off`); note TX is the binary frame.
+ * Channel Card notes over RS485 — one ASCII nX command per event, strict ACK.
+ * VoiceBank allocation stays on the host; the card only receives per-slot Hz.
  */
 class ChannelRs485Out
 {
@@ -23,31 +21,29 @@ public:
   ChannelRs485Out();
   ~ChannelRs485Out();
 
-  ChannelRs485Out(const ChannelRs485Out&) = delete;
-  ChannelRs485Out& operator=(const ChannelRs485Out&) = delete;
+  ChannelRs485Out(const ChannelRs485Out &) = delete;
+  ChannelRs485Out &operator=(const ChannelRs485Out &) = delete;
 
   /**
-   * Open adapter, bare n0, gain 1 <atten_db>, silence N0–NF, quiet+echo
-   * setup when possible, start TX worker.
-   * atten_db: CS4304 CH1 atten in dB (0..127), default 6.
+   * Open adapter, bootstrap (quiet off, optional echo, n0, gain, silence),
+   * start TX worker. atten_db: CS4304 CH1 atten 0..127.
+   * effect_echo: Off (default), On, or Leave (no e:echo command).
    */
-  void Open(const std::string& serial_path,
+  void Open(const std::string &serial_path,
             uint32_t baud = 115200,
-            uint32_t atten_db = 6);
+            uint32_t atten_db = 6,
+            rs485::EffectEcho effect_echo = rs485::EffectEcho::Off);
 
   void Close();
 
-  /** Publish the current VoiceBank as the next absolute RS485 snapshot. */
-  void ApplyBankEvent(const BankEvent& event, const VoiceBank& bank);
+  /** Queue On/Off/Retrig as one-by-one SetNote/NoteOff with ACK. */
+  void ApplyBankEvent(const BankEvent &event, const VoiceBank &bank);
 
   std::string Path() const { return path_; }
   uint32_t AttenDb() const { return atten_db_; }
-  /** True when note TX uses binary bank frames (always after Open). */
-  bool BurstNotes() const;
-  /** True when this session got ok: to e:echo off. */
   bool EffectEchoDisabled() const;
-  /** True when this session issued a successful c:quiet on. */
-  bool QuietReplies() const;
+  /** True after missing ACK / I/O — note output has stopped. */
+  bool BusFault() const;
 
 private:
   struct Impl;

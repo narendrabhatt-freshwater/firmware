@@ -40,10 +40,15 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${TARGET_FLAGS}")
 set(CMAKE_ASM_FLAGS "${CMAKE_C_FLAGS} -x assembler-with-cpp -MP")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -fdata-sections -ffunction-sections -ftls-model=local-exec -fstack-usage")
 
-set(CMAKE_C_FLAGS_DEBUG "-Og -g3")
-set(CMAKE_C_FLAGS_RELEASE "-Oz -g0")
-set(CMAKE_CXX_FLAGS_DEBUG "-Og -g3")
-set(CMAKE_CXX_FLAGS_RELEASE "-Oz -g0")
+# Match gcc toolchain: speed for Release; keep Debug debuggable.
+set(CMAKE_C_FLAGS_DEBUG          "-Og -g3" CACHE STRING "Debug C flags" FORCE)
+set(CMAKE_C_FLAGS_RELEASE        "-O3 -g0" CACHE STRING "Release C flags" FORCE)
+set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O3 -g3" CACHE STRING "RelWithDebInfo C flags" FORCE)
+set(CMAKE_C_FLAGS_MINSIZEREL     "-Oz -g0" CACHE STRING "MinSizeRel C flags" FORCE)
+set(CMAKE_CXX_FLAGS_DEBUG          "-Og -g3" CACHE STRING "Debug CXX flags" FORCE)
+set(CMAKE_CXX_FLAGS_RELEASE        "-O3 -g0" CACHE STRING "Release CXX flags" FORCE)
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g3" CACHE STRING "RelWithDebInfo CXX flags" FORCE)
+set(CMAKE_CXX_FLAGS_MINSIZEREL     "-Oz -g0" CACHE STRING "MinSizeRel CXX flags" FORCE)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -fno-rtti -fno-exceptions -fno-threadsafe-statics")
 

@@ -16,14 +16,17 @@ multi-drop and USB CDC). When adding a new command:
   `Console_ExecFromUSB()` (USB CDC) without a separate code path.
 - **Respect card-address prefixes** — `c:` (Channel), `e:` (Effect), `*:`/no
   prefix (broadcast). Don't bypass `RS485_IsForMe()`.
-- **Reply with `ok: ...` / `err: ...`** tags, consistent with every existing
-  command.
-- **Prefer `<cmd> <value>` where `0` = off** (see `scf <kHz>` / `scf 0`) over
+- **Reply with `ok` / `err:<code>`** (compact on RS485) — stable tokens
+  `syntax`, `range`, `unknown`, `rxdrop`. Never silently clamp a bad value.
+- Host tools terminate commands with a **single CR**; cards reply with
+  tagged CRLF (`[C]ok\r\n`). Any serial terminal can speak the same ASCII.
+- Prefer `<cmd> <value>` where `0` = off (see `scf <kHz>` / `scf 0`) over
   inventing separate `on`/`off` subcommands for a new generator or output
   toggle — it's the established idiom in this codebase.
 - **Console polling must stay non-blocking** — no blocking reads or
   `HAL_Delay()` loops in the main loop; follow the `Console_Poll()` pattern
-  of draining one byte at a time per iteration.
+  of draining one byte at a time per iteration. Do not add artificial
+  reply holdoffs; production requires Effect `echo off`.
 - If a command changes something the operator needs to hear/see the effect
   of, say so in the reply (e.g. remind them which switch to flip) rather than
   silently toggling other state on their behalf.

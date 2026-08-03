@@ -1,8 +1,9 @@
 # midi_host — MIDI keyboard → speakers or Channel Card
 
-PC-side C++17 app: MIDI in (RtMidi), 16-voice FIFO note bank, equal-temperament
-pitch (A4 = 440 Hz). Output is either Mac speakers (RtAudio) or the Channel
-Card note bank over RS485 (`n0`…`nf`).
+PC-side C++17 app: MIDI in (RtMidi), 16-voice FIFO note bank on the **host**,
+equal-temperament pitch (A4 = 440 Hz). Output is either Mac speakers (RtAudio)
+or the Channel Card over RS485 — **one ASCII `nX` command per event** with
+strict ACK (shared [`libs/rs485`](../../libs/rs485)).
 
 ## MIDI input — any controller
 
@@ -43,22 +44,21 @@ fw midi build
 
 Velocity is ignored. Pitch: \(f = 440 \times 2^{(n-69)/12}\).
 
-On Channel Card mode, session start sends `n0` (bypass + defaults), then
-**`gain 1 6`** (−6 dB on CH1), then `n0`…`nf 0` to clear leftover tones.
-Each note event publishes the desired bank; the TX worker sends a **delta**:
-only slots that changed (`nX 0` or `nX <Hz> 0.12`). A full release paces
-all 16 offs (4 ms apart — each dead voice frees UART CPU) then `silence`
-twice. UART5 IRQ priority was raised so 16-voice audio cannot starve the
-clear frames. `DrainOutput` waits for USB-serial TX to finish so a silence
-cannot sit behind a stale chord in the driver queue.
+### Channel Card RS485 session
 
-Scale **1/8** keeps single notes quiet and lets chords get louder
-additively until ~8 voices approach full-scale.
+1. `c:quiet off` (recover sticky quiet)
+2. Effect echo per flag: `--echo-off` (default), `--echo-on`, or `--echo-leave`
+3. `c:n0`, `c:gain 1 <dB>`, `c:silence`
+4. Each On/Off/Retrig → one `c:nX <Hz>` or `c:nX 0`, wait for `[C]ok`
+5. On quit: best-effort `silence` + `quiet off`
 
-RS485 defaults to **115200** baud. Note sync is one **binary bank frame**
-(16×uint16 Hz) per update — not 16 ASCII `nX` lines. At session start the
-host sends **`c:quiet on`** and **`e:echo off`**. On quit it restores
-`quiet off` and leaves Effect echo off.
+Voice allocation stays in host `VoiceBank`. Card default scale is **0.125**
+when Hz is sent without a scale argument. No binary bank frames; no `quiet on`
+on the production path. Timeouts trigger soft recovery (`silence`); a latched
+bus fault stops further note TX until reopen.
+
+RS485 defaults to **115200** baud. Same ASCII works from `screen` /
+`rs485_console` — see [`docs/rs485_console_architecture.md`](../../docs/rs485_console_architecture.md).
 
 Example (speakers):
 

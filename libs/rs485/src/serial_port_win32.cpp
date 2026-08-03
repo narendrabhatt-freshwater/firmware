@@ -8,7 +8,7 @@
  * real hardware once a Windows dev machine + adapter are available.
  */
 
-#include "serial_port.hpp"
+#include "rs485/serial_port.hpp"
 
 #include <windows.h>
 

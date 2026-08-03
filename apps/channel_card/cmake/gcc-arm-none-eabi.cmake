@@ -32,10 +32,16 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -fdata-sections -ffunction-sections -f
 # However, most GCC toolchains do not support this option, which causes a compilation error; for this reason, the feature is disabled by default.
 # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fcyclomatic-complexity")
 
-set(CMAKE_C_FLAGS_DEBUG "-O0 -g3")
-set(CMAKE_C_FLAGS_RELEASE "-Os -g0")
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3")
-set(CMAKE_CXX_FLAGS_RELEASE "-Os -g0")
+# H7 flash is plentiful; prefer speed for I2S/USB hot paths over -Os size opts.
+# CACHE FORCE so these win over CMake's defaults (-O3/-g) after reconfigure.
+set(CMAKE_C_FLAGS_DEBUG          "-O0 -g3" CACHE STRING "Debug C flags" FORCE)
+set(CMAKE_C_FLAGS_RELEASE        "-O3 -g0" CACHE STRING "Release C flags" FORCE)
+set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O3 -g3" CACHE STRING "RelWithDebInfo C flags" FORCE)
+set(CMAKE_C_FLAGS_MINSIZEREL     "-Os -g0" CACHE STRING "MinSizeRel C flags" FORCE)
+set(CMAKE_CXX_FLAGS_DEBUG          "-O0 -g3" CACHE STRING "Debug CXX flags" FORCE)
+set(CMAKE_CXX_FLAGS_RELEASE        "-O3 -g0" CACHE STRING "Release CXX flags" FORCE)
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g3" CACHE STRING "RelWithDebInfo CXX flags" FORCE)
+set(CMAKE_CXX_FLAGS_MINSIZEREL     "-Os -g0" CACHE STRING "MinSizeRel CXX flags" FORCE)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -fno-rtti -fno-exceptions -fno-threadsafe-statics")
 

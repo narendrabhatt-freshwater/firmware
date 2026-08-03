@@ -11,8 +11,6 @@ endif()
 
 include(FetchContent)
 
-# RtMidi — Launchkey (and other) MIDI input via CoreMIDI on macOS.
-# URL tarballs avoid a CMake+git detection issue seen with GIT_REPOSITORY here.
 set(RTMIDI_BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
 set(RTMIDI_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(RTMIDI_TARGETNAME_UNINSTALL "rtmidi_uninstall" CACHE STRING "" FORCE)
@@ -24,7 +22,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(rtmidi)
 
-# RtAudio — default speaker output via CoreAudio on macOS.
 set(RTAUDIO_BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
 set(RTAUDIO_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(RTAUDIO_TARGETNAME_UNINSTALL "rtaudio_uninstall" CACHE STRING "" FORCE)
@@ -36,13 +33,8 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(rtaudio)
 
-# Reuse the RS485 wire protocol from apps/console (Channel Card n0..nf).
-set(CONSOLE_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../console/src")
-if(WIN32)
-  set(SERIAL_BACKEND "${CONSOLE_SRC_DIR}/serial_port_win32.cpp")
-else()
-  set(SERIAL_BACKEND "${CONSOLE_SRC_DIR}/serial_port_posix.cpp")
-endif()
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../libs/rs485"
+                 "${CMAKE_CURRENT_BINARY_DIR}/rs485")
 
 add_executable(midi_host
   src/main.cpp
@@ -51,13 +43,11 @@ add_executable(midi_host
   src/voice_bank.cpp
   src/audio_engine.cpp
   src/channel_rs485.cpp
-  "${CONSOLE_SRC_DIR}/rs485_link.cpp"
-  ${SERIAL_BACKEND}
 )
 
-target_include_directories(midi_host PRIVATE src "${CONSOLE_SRC_DIR}")
+target_include_directories(midi_host PRIVATE src)
 
-target_link_libraries(midi_host PRIVATE rtmidi rtaudio)
+target_link_libraries(midi_host PRIVATE rtmidi rtaudio rs485)
 
 if(APPLE)
   find_library(COREMIDI_FRAMEWORK CoreMIDI REQUIRED)

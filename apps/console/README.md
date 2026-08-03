@@ -1,11 +1,12 @@
 # RS485 Console — `rs485_console`
 
-PC-side front-end for the Channel Card’s **`N0`…`NF`** note bank (and
-`gain`) over a USB↔RS485 adapter (no board USB CDC required).
+Optional PC client for the Channel/Effect RS485 bus. **Any serial terminal**
+at 115200 8N1 can speak the same ASCII protocol (`screen`, `minicom`, PuTTY);
+this tool adds targeting, retries, colors, and `--echo-off`.
 
-Protocol / bus details:
-[`../../docs/rs485_console_architecture.md`](../../docs/rs485_console_architecture.md).
-Usually driven as `fw rs485 …` (top-level [`../../README.md`](../../README.md) §6).
+Protocol: [`../../docs/rs485_console_architecture.md`](../../docs/rs485_console_architecture.md).
+Shared library: [`../../libs/rs485`](../../libs/rs485).
+Usually driven as `fw rs485 …` (top-level README §6).
 
 ## Build
 
@@ -15,23 +16,33 @@ cmake -S . -B build
 cmake --build build
 ```
 
-## Command
+## Options
+
+| Flag | Meaning |
+|------|---------|
+| `--port PATH` | USB↔RS485 adapter |
+| `--target channel\|effect\|all` | Default address prefix |
+| `--echo-off` | Send `e:echo off` at start |
+| `--timeout-ms` / `--retries` | Strict ACK wait / retries on timeout |
+
+With device echo off, enable **local** echo in a plain terminal.
+
+## Commands (typeable from any terminal too)
 
 | Input | Meaning |
-|---|---|
-| (REPL start) / `N0` | bypass on + gain 1 0 |
-| `N0`…`NF` `0` | that note off (gain/bypass unchanged) |
-| `N0 440` / `440` | note 0 @ 440 Hz, scale **1.0** (bare number → n0) |
-| `N0 440 0.5` | note 0 @ 440 Hz, amplitude 0.5 |
-| `N1 550` | note 1 @ 550 Hz, scale 1.0 (summed with other notes) |
-| `N2 660 0.1` | note 2 @ 660 Hz, amplitude 0.1 |
-| `gain 1 40` | CH1 DAC atten −40 dB (any ch 1..4, 0..127 dB) |
+|-------|---------|
+| `e:echo off` | Disable Effect keystroke bus echo |
+| `c:n0` | Session defaults (bypass + gain 1 0; clears quiet) |
+| `c:n3 440` | Note 3 @ 440 Hz (scale 0.125 if omitted) |
+| `c:n3 0` | Note 3 off |
+| `c:silence` | All notes off |
+| `c:gain 1 6` | CH1 atten −6 dB |
+| `c:quiet off` | Restore RS485 replies if a prior session left quiet on |
+
+Replies are compact: `[C]ok` / `[C]err:range` (CRLF).
 
 ```bash
 fw rs485 list
-fw rs485 send channel "N0 440 0.5" --port /dev/cu.usbserial-XXXX
-fw rs485 channel --port /dev/cu.usbserial-XXXX
+fw rs485 --port /dev/cu.usbserial-XXXX --echo-off
+fw rs485 send channel "n0 440" --port /dev/cu.usbserial-XXXX --echo-off
 ```
-
-Default target is **channel**. Effect Card still has its own console if you
-`card effect` / `--target effect`.

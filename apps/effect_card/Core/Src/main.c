@@ -180,23 +180,29 @@ static int RS485_Send(const char *s) {
  * for the duration of the command. */
 static uint8_t console_via_usb = 0;
 
-/** Send a tagged response: prefixes the string with [E] so the host knows
- * which card replied. */
+/** Send a tagged response — see Channel RS485_Reply (1 ms DE turnaround). */
 static void RS485_Reply(const char *s) {
+  char frame[96];
+  size_t tag_len;
+  size_t body_len;
+  size_t n;
+
   if (console_via_usb) {
     USB_CDC_WriteStr(s);
     return;
   }
-  if (!RS485_WaitBusFree(RS485_BUS_TIMEOUT_MS))
+
+  tag_len = strlen(RS485_TAG);
+  body_len = strlen(s);
+  if (tag_len + body_len >= sizeof(frame)) {
     return;
+  }
+  memcpy(frame, RS485_TAG, tag_len);
+  memcpy(frame + tag_len, s, body_len);
+  n = tag_len + body_len;
 
   RS485_BusAcquire();
-
-  /* Send tag + payload in one DE assertion to keep the bus atomically */
-  HAL_UART_Transmit(&huart4, (const uint8_t *)RS485_TAG,
-                    (uint16_t)strlen(RS485_TAG), 50);
-  HAL_UART_Transmit(&huart4, (const uint8_t *)s, (uint16_t)strlen(s), 200);
-
+  (void)HAL_UART_Transmit(&huart4, (const uint8_t *)frame, (uint16_t)n, 30);
   RS485_BusRelease();
 }
 
@@ -500,13 +506,13 @@ static void Console_Exec(char *line) {
     }
     RS485_Reply(b);
   }
-  /* ---- echo on|off  (RS485 keystroke bus echo; midi_host uses off) ---- */
+  /* ---- echo on|off  (RS485 keystroke bus echo; production uses off) ---- */
   else if (strcmp(line, "echo on") == 0) {
     rs485_echo = 1;
-    RS485_Reply("ok: RS485 echo on\r\n");
+    RS485_Reply("ok\r\n");
   } else if (strcmp(line, "echo off") == 0) {
     rs485_echo = 0;
-    RS485_Reply("ok: RS485 echo off\r\n");
+    RS485_Reply("ok\r\n");
   } else if (strcmp(line, "echo") == 0) {
     snprintf(b, sizeof b, "RS485 echo: %s  (usage: echo on|off)\r\n",
              rs485_echo ? "on" : "off");
@@ -514,8 +520,9 @@ static void Console_Exec(char *line) {
   }
   /* ---- unknown ---- */
   else {
-    snprintf(b, sizeof b, "unknown: '%s' (try 'help')\r\n", line);
-    RS485_Reply(b);
+    RS485_Reply("err:unknown\r\n");
+    (void)line;
+    (void)b;
   }
 }
 
@@ -570,12 +577,7 @@ static void Console_Poll(void) {
 
       /* Card-address filtering: only execute if addressed to us */
       if (RS485_IsForMe(cmd)) {
-        if (!rs485_echo) {
-          /* When we are not echoing, another card might still be the
-           * echo master — hold off so our reply doesn't collide with
-           * its "\r\n" (both would sample "bus free" simultaneously). */
-          HAL_Delay(3);
-        }
+        /* No artificial holdoff — production requires echo off on this card. */
         Console_Exec(cmd);
       }
       /* else: message for another card — silently ignore */
@@ -628,7 +630,10 @@ static void LED_Task(void) {
 int main(void) {
 
   /* USER CODE BEGIN 1 */
-
+  /* Same as Channel Card: fetch from flash at high SYSCLK without I-cache
+   * burns cycles in USB/SAI ISRs. I-cache only — D-cache needs non-cacheable
+   * MPU regions for DMA/AXI buffers, which this MPU_Config does not set up. */
+  SCB_EnableICache();
   /* USER CODE END 1 */
 
   /* MPU Configuration--------------------------------------------------------*/

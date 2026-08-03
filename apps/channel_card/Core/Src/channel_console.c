@@ -24,6 +24,8 @@
 
 extern CS4304_HandleTypeDef hcs4304;
 extern UART_HandleTypeDef huart5;
+/** I2S2 self-heal restarts — nonzero means the audio path is erroring. */
+extern volatile uint32_t g_i2s2_err_restarts;
 
 /* ---- Multi-drop RS485 card addressing ---- */
 #define RS485_CARD_ID 'c'
@@ -146,10 +148,26 @@ static uint8_t console_via_usb = 0;
  * stuck voices — quiet must mute the bus completely, not just ok:. */
 static uint8_t rs485_quiet = 0;
 
+/* RS485 path counters — read back with "diag" (works over USB CDC while the
+ * bus itself is unresponsive, which is the only way to see these). */
+static uint32_t rs485_cmd_count;  /**< commands executed from the bus */
+static uint32_t rs485_tx_fail;    /**< HAL_UART_Transmit did not return OK */
+static uint32_t rs485_tx_trunc;   /**< reply longer than the frame buffer */
+
 /** Send a tagged response: prefixes the string with [C] so the host knows
- * which card replied. No-op on RS485 while quiet (USB CDC still replies). */
+ * which card replied. No-op on RS485 while quiet (USB CDC still replies).
+ *
+ * Frame must hold the longest reply (cpuload/status are ~110 chars) — a
+ * short buffer silently swallowed those ACKs and looked like a dead bus.
+ * Truncate rather than drop: a clipped line still terminates the host's
+ * exchange, silence does not. */
 static void RS485_Reply(const char *s)
 {
+  char frame[160];
+  size_t tag_len;
+  size_t body_len;
+  size_t max_body;
+
   if (console_via_usb)
   {
     USB_CDC_WriteStr(s);
@@ -159,16 +177,24 @@ static void RS485_Reply(const char *s)
   {
     return;
   }
-  if (!RS485_WaitBusFree(RS485_BUS_TIMEOUT_MS))
-    return;
+
+  tag_len = strlen(RS485_TAG);
+  body_len = strlen(s);
+  max_body = sizeof(frame) - tag_len - 1u;
+  if (body_len > max_body)
+  {
+    body_len = max_body;
+    rs485_tx_trunc++;
+  }
+  memcpy(frame, RS485_TAG, tag_len);
+  memcpy(frame + tag_len, s, body_len);
 
   RS485_BusAcquire();
-
-  /* Send tag + payload in one DE assertion to keep the bus atomically */
-  HAL_UART_Transmit(&huart5, (const uint8_t *)RS485_TAG,
-                    (uint16_t)strlen(RS485_TAG), 50);
-  HAL_UART_Transmit(&huart5, (const uint8_t *)s, (uint16_t)strlen(s), 200);
-
+  if (HAL_UART_Transmit(&huart5, (const uint8_t *)frame,
+                        (uint16_t)(tag_len + body_len), 50) != HAL_OK)
+  {
+    rs485_tx_fail++;
+  }
   RS485_BusRelease();
 }
 
@@ -201,7 +227,7 @@ static const SwitchDef_t switches[] = {
  * arrive as "n0"/"gain".
  *
  *   n0                — session defaults: bypass ON + gain 1 0
- *   n0..nf <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 1.0)
+ *   n0..nf <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 0.125)
  *   cutoff <0..f|*> <Hz> — per-voice 4-pole Butterworth LPF (20..20000;
  *                        20000 = bypass / transparent)
  *   gain <ch> <dB>    — CS4304 per-channel DAC atten (0..127 dB), ch 1..4
@@ -239,39 +265,33 @@ static uint8_t Console_ParseNoteSlot(char hex_digit)
   return 0xFFu;
 }
 
-/** Apply nX <Hz> [scale]. Scale defaults to 1.0 when omitted by caller. */
+/** Production MIDI scale when the host omits [scale] (byte-minimal nX Hz). */
+#define NOTE_DEFAULT_SCALE 0.125
+
+/** Apply nX <Hz> [scale]. Compact ACK: ok / err:<code>. */
 static void Console_SetNoteFreq(uint8_t note, double hz, double scale)
 {
-  char b[80];
-  char tag = (note < 10u) ? (char)('0' + note) : (char)('a' + (note - 10u));
-
   if (hz <= 0.0)
   {
     NoteBank_SetFreq(note, 0.0, 0.0);
-    snprintf(b, sizeof b, "ok: N%c off\r\n", tag);
-    RS485_Reply(b); /* no-op when quiet */
+    RS485_Reply("ok\r\n");
     return;
   }
 
   if (hz < 20.0 || hz >= 20000.0)
   {
-    snprintf(b, sizeof b,
-             "err: n%c <Hz> [scale] (0=off, else 20..19999.9, scale 0..1)\r\n",
-             tag);
-    RS485_Reply(b); /* no-op when quiet — never collide with MIDI TX */
+    RS485_Reply("err:range\r\n");
     return;
   }
 
   if (scale < 0.0 || scale > 1.0)
   {
-    snprintf(b, sizeof b, "err: n%c scale must be 0.0..1.0\r\n", tag);
-    RS485_Reply(b);
+    RS485_Reply("err:range\r\n");
     return;
   }
 
   NoteBank_SetFreq(note, hz, scale);
-  snprintf(b, sizeof b, "ok: N%c %.1f Hz scale %.2f\r\n", tag, hz, scale);
-  RS485_Reply(b);
+  RS485_Reply("ok\r\n");
 }
 
 /** Deterministic N-voice load: fixed freqs; equal scale so sum ≈ 1.0 FS. */
@@ -405,28 +425,27 @@ static void Console_Exec(char *line)
     if (ch >= 1 && ch <= 4 && val <= 127)
     {
       CS4304_SetChannelTrim(&hcs4304, (char)('0' + ch), (uint8_t)(val * 2u));
-      snprintf(b, sizeof b, "ok: CH%u attenuation -%u dB\r\n", ch, val);
-      RS485_Reply(b);
+      RS485_Reply("ok\r\n");
     }
     else
     {
-      RS485_Reply("err: gain <ch 1..4> <dB 0..127>\r\n");
+      RS485_Reply("err:range\r\n");
     }
     return;
   }
 
-  /* ---- quiet on|off: mute ALL RS485 replies during MIDI bursts ---- */
+  /* ---- quiet on|off: mute ALL RS485 replies (lab / legacy; not for MIDI) ---- */
   if (strcmp(line, "quiet on") == 0)
   {
     /* Reply before arming quiet — RS485_Reply is a no-op once set. */
-    RS485_Reply("ok: quiet on\r\n");
+    RS485_Reply("ok\r\n");
     rs485_quiet = 1;
     return;
   }
   if (strcmp(line, "quiet off") == 0)
   {
     rs485_quiet = 0;
-    RS485_Reply("ok: quiet off\r\n");
+    RS485_Reply("ok\r\n");
     return;
   }
   if (strcmp(line, "quiet") == 0)
@@ -437,11 +456,24 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- silence: turn off every note-bank voice (one short MIDI frame) ---- */
+  /* ---- diag: RS485 path counters (read over USB CDC when bus is dead) ---- */
+  if (strcmp(line, "diag") == 0)
+  {
+    snprintf(b, sizeof b,
+             "ok: rxdrop=%lu cmd=%lu txfail=%lu trunc=%lu i2serr=%lu\r\n",
+             (unsigned long)Uart5Rx_DroppedCount(),
+             (unsigned long)rs485_cmd_count, (unsigned long)rs485_tx_fail,
+             (unsigned long)rs485_tx_trunc,
+             (unsigned long)g_i2s2_err_restarts);
+    RS485_Reply(b);
+    return;
+  }
+
+  /* ---- silence: turn off every note-bank voice ---- */
   if (strcmp(line, "silence") == 0)
   {
     Console_CpuLoad_DisableVoices();
-    RS485_Reply("ok: silence\r\n"); /* no-op when quiet */
+    RS485_Reply("ok\r\n");
     return;
   }
 
@@ -462,8 +494,7 @@ static void Console_Exec(char *line)
 
     if (*arg == '\0')
     {
-      RS485_Reply(
-          "err: cutoff <0..f|*> <Hz>  (20..20000; 20000=bypass)\r\n");
+      RS485_Reply("err:syntax\r\n");
       return;
     }
 
@@ -476,8 +507,7 @@ static void Console_Exec(char *line)
 
     if (slot != '*' && Console_ParseNoteSlot(slot) == 0xFFu)
     {
-      RS485_Reply(
-          "err: cutoff <0..f|*> <Hz>  (20..20000; 20000=bypass)\r\n");
+      RS485_Reply("err:syntax\r\n");
       return;
     }
 
@@ -486,8 +516,7 @@ static void Console_Exec(char *line)
     {
       if (slot == '*')
       {
-        RS485_Reply(
-            "err: cutoff * needs <Hz>  (or cutoff <0..f> to query)\r\n");
+        RS485_Reply("err:syntax\r\n");
         return;
       }
       note = Console_ParseNoteSlot(slot);
@@ -500,8 +529,7 @@ static void Console_Exec(char *line)
 
     if (sscanf(rest, "%lf", &fc) != 1)
     {
-      RS485_Reply(
-          "err: cutoff <0..f|*> <Hz>  (20..20000; 20000=bypass)\r\n");
+      RS485_Reply("err:syntax\r\n");
       return;
     }
 
@@ -512,8 +540,7 @@ static void Console_Exec(char *line)
         rc = NoteFilter_SetCutoff(i, fc);
         if (rc != 0)
         {
-          RS485_Reply(
-              "err: cutoff <0..f|*> <Hz>  (20..20000; 20000=bypass)\r\n");
+          RS485_Reply("err:range\r\n");
           return;
         }
       }
@@ -527,8 +554,7 @@ static void Console_Exec(char *line)
     rc = NoteFilter_SetCutoff(note, fc);
     if (rc != 0)
     {
-      RS485_Reply(
-          "err: cutoff <0..f|*> <Hz>  (20..20000; 20000=bypass)\r\n");
+      RS485_Reply("err:range\r\n");
       return;
     }
     snprintf(b, sizeof b, "ok: cutoff %c %.1f Hz%s\r\n", slot, fc,
@@ -552,9 +578,7 @@ static void Console_Exec(char *line)
 
     if (!Console_CpuLoad_Parse(arg, &mode, &nvoices))
     {
-      RS485_Reply(
-          "err: cpuload [off|on|dma|queue] [1..16]  "
-          "(e.g. cpuload on 4, cpuload 1)\r\n");
+      RS485_Reply("err:syntax\r\n");
       return;
     }
 
@@ -595,18 +619,14 @@ static void Console_Exec(char *line)
   /* ---- n0..nf: 16-voice note bank on CH1 ---- */
   if (line[0] != 'n' || line[1] == '\0')
   {
-    RS485_Reply(
-        "err: commands are n0..nf <Hz> [scale] | cutoff <0..f|*> <Hz> | "
-        "gain <ch> <dB> | cpuload [off|on|dma|queue] [1..16]\r\n");
+    RS485_Reply("err:unknown\r\n");
     return;
   }
 
   note = Console_ParseNoteSlot(line[1]);
   if (note == 0xFFu || (line[2] != '\0' && line[2] != ' '))
   {
-    RS485_Reply(
-        "err: commands are n0..nf <Hz> [scale] | cutoff <0..f|*> <Hz> | "
-        "gain <ch> <dB> | cpuload [off|on|dma|queue] [1..16]\r\n");
+    RS485_Reply("err:syntax\r\n");
     return;
   }
 
@@ -616,13 +636,11 @@ static void Console_Exec(char *line)
     if (note == 0u)
     {
       Console_ApplySessionDefaults();
-      snprintf(b, sizeof b, "ok: bypass on, gain 1 -%u dB\r\n",
-               (unsigned)N0_DEFAULT_ATTEN_DB);
-      RS485_Reply(b);
+      RS485_Reply("ok\r\n");
     }
     else
     {
-      RS485_Reply("err: n1..nf need <Hz> (bare n0 = session defaults)\r\n");
+      RS485_Reply("err:syntax\r\n");
     }
     return;
   }
@@ -630,14 +648,11 @@ static void Console_Exec(char *line)
   nscan = sscanf(line + 3, "%lf %lf", &hz, &scale);
   if (nscan == 1)
   {
-    scale = 1.0; /* default max amplitude */
+    scale = NOTE_DEFAULT_SCALE; /* production MIDI default */
   }
   else if (nscan != 2)
   {
-    snprintf(b, sizeof b,
-             "err: n%c <Hz> [scale] (0=off, else 20..19999.9, scale 0..1)\r\n",
-             line[1]);
-    RS485_Reply(b);
+    RS485_Reply("err:syntax\r\n");
     return;
   }
 
@@ -703,7 +718,7 @@ static void Console_ApplyBinBank(const uint8_t *hz32, uint8_t sum8)
   }
   if (sum != sum8)
   {
-    RS485_Reply("err: binbank\r\n");
+    RS485_Reply("err:syntax\r\n");
     return;
   }
 
@@ -714,7 +729,7 @@ static void Console_ApplyBinBank(const uint8_t *hz32, uint8_t sum8)
         ((uint16_t)hz32[(uint8_t)(2u * i + 1u)] << 8);
     if (v != 0u && (v < 20u || v >= 20000u))
     {
-      RS485_Reply("err: binbank\r\n");
+      RS485_Reply("err:range\r\n");
       return;
     }
     hz[i] = v;
@@ -731,7 +746,7 @@ static void Console_ApplyBinBank(const uint8_t *hz32, uint8_t sum8)
       NoteBank_SetFreq(i, (double)hz[i], BINBANK_SCALE);
     }
   }
-  RS485_Reply("ok: binbank\r\n"); /* no-op when quiet */
+  RS485_Reply("ok\r\n"); /* no-op when quiet */
 }
 
 /** Poll RX, echo typing, run a command on Enter. Non-blocking.
@@ -750,11 +765,8 @@ static void Console_Poll(void)
   const uint32_t dropped = Uart5Rx_DroppedCount();
   if (dropped != dropped_reported && idx == 0u)
   {
-    char b[64];
-    snprintf(b, sizeof b, "err: rs485 rx dropped %lu bytes\r\n",
-             (unsigned long)dropped);
     dropped_reported = dropped;
-    RS485_Reply(b);
+    RS485_Reply("err:rxdrop\r\n");
   }
 
   while (Uart5Rx_Get(&c))
@@ -780,18 +792,13 @@ static void Console_Poll(void)
              cmd[0] == (uint8_t)RS485_BROADCAST_ID) &&
             cmd[2] == BINBANK_MAGIC)
         {
-#if !RS485_ECHO
-          if (!rs485_quiet)
-          {
-            HAL_Delay(3);
-          }
-#endif
+          /* Legacy binary bank — deprecated; prefer ASCII nX one-by-one. */
           Console_ApplyBinBank(&cmd[3], cmd[35]);
         }
         else if (cmd[0] == (uint8_t)RS485_CARD_ID ||
                  cmd[0] == (uint8_t)RS485_BROADCAST_ID)
         {
-          RS485_Reply("err: binbank\r\n");
+          RS485_Reply("err:syntax\r\n");
         }
         bin_mode = 0;
         idx = 0;
@@ -800,18 +807,11 @@ static void Console_Poll(void)
 
       cmd[idx] = '\0';
 
-      /* Card-address filtering: only execute if addressed to us */
+      /* Card-address filtering: only execute if addressed to us.
+       * No artificial post-Enter delay — production requires e:echo off. */
       if (RS485_IsForMe((char *)cmd))
       {
-#if !RS485_ECHO
-        /* Hold off before a reply so we don't collide with Effect's echo of
-         * Enter. Quiet MIDI bursts send no reply — skip the delay so a
-         * 16-note snapshot is applied in one Poll instead of 16×3 ms. */
-        if (!rs485_quiet)
-        {
-          HAL_Delay(3);
-        }
-#endif
+        rs485_cmd_count++;
         Console_Exec((char *)cmd);
       }
       /* else: message for another card — silently ignore */
@@ -922,8 +922,8 @@ void ChannelConsole_Init(void)
               "*  Channel Card [C] ready  (multi-drop RS485)    *\r\n"
               "*  n0..nf <Hz> [scale] | gain <ch> <dB>          *\r\n"
               "*  cutoff <0..f|*> <Hz>  — 4-pole LPF / voice   *\r\n"
-              "*  quiet on|off | silence | binbank (MIDI host)  *\r\n"
-              "*  cpuload [on|off] [1..16]  — yellow LED PB9   *\r\n"
+              "*  silence | quiet on|off | cpuload ...          *\r\n"
+              "*  replies: [C]ok / [C]err:<code>  (CRLF)        *\r\n"
               "*  enter/boot: bypass ON, gain 1 0               *\r\n"
               "**************************************************\r\n");
 }

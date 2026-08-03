@@ -13,6 +13,8 @@
 #include "pitch.hpp"
 #include "voice_bank.hpp"
 
+#include "rs485/session.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -68,6 +70,7 @@ void PrintUsage()
          "Usage:\n"
          "  midi_host [--midi N]                         # speakers (default)\n"
          "  midi_host --target channel --rs485 PATH [--midi N] [--gain DB]\n"
+         "            [--echo-off|--echo-on|--echo-leave]\n"
          "  midi_host --list\n"
          "  midi_host -h | --help\n"
          "\n"
@@ -82,7 +85,9 @@ void PrintUsage()
          "  --rs485 PATH         USB↔RS485 adapter serial path (required with channel)\n"
          "  --baud N             RS485 baud (default 115200)\n"
          "  --gain DB            CH1 DAC atten in dB at session start (0..127, default 6)\n"
-         "                       e.g. --gain 6 → sends \"gain 1 6\" once at open\n"
+         "  --echo-off           Send e:echo off at open (default)\n"
+         "  --echo-on            Send e:echo on at open\n"
+         "  --echo-leave         Do not change Effect echo\n"
          "\n"
          "Velocity is ignored. Up to 16 notes; overflow steals the oldest.\n"
          "Duplicate Note On retriggers the same oscillator slot.\n"
@@ -104,16 +109,18 @@ const char* KindName(BankEventKind kind)
   return "?";
 }
 
-void PrintBankEvent(const BankEvent& ev)
+void PrintBankEvent(const BankEvent& ev, bool via_rs485)
 {
   const std::string name = midi_host::MidiNoteName(ev.midi_key);
-  std::printf("%-6s slot=%-2u note=%-3u %-3s  freq=%7.2f Hz  active=%u/16\n",
+  /* [midi] = VoiceBank only. [C]ok is printed later by ChannelRs485Out. */
+  std::printf("%-6s slot=%-2u note=%-3u %-3s  freq=%7.2f Hz  active=%u/16%s\n",
               KindName(ev.kind),
               static_cast<unsigned>(ev.slot),
               static_cast<unsigned>(ev.midi_key),
               name.c_str(),
               ev.freq_hz,
-              static_cast<unsigned>(ev.active_count));
+              static_cast<unsigned>(ev.active_count),
+              via_rs485 ? "  [midi]" : "");
   // No fflush — under a 16-key mash, flushing every line stalls the MIDI
   // poll loop and delays RS485 Offs (notes hang on the card).
 }
@@ -184,6 +191,7 @@ int main(int argc, char** argv)
   std::string rs485_path;
   uint32_t rs485_baud = 115200;
   uint32_t gain_db = 6;
+  rs485::EffectEcho effect_echo = rs485::EffectEcho::Off;
 
   for (int i = 1; i < argc; ++i) {
     const char* arg = argv[i];
@@ -193,6 +201,18 @@ int main(int argc, char** argv)
     }
     if (std::strcmp(arg, "--list") == 0) {
       list_only = true;
+      continue;
+    }
+    if (std::strcmp(arg, "--echo-off") == 0) {
+      effect_echo = rs485::EffectEcho::Off;
+      continue;
+    }
+    if (std::strcmp(arg, "--echo-on") == 0) {
+      effect_echo = rs485::EffectEcho::On;
+      continue;
+    }
+    if (std::strcmp(arg, "--echo-leave") == 0) {
+      effect_echo = rs485::EffectEcho::Leave;
       continue;
     }
     if (std::strcmp(arg, "--midi") == 0 || std::strcmp(arg, "--port") == 0) {
@@ -325,21 +345,19 @@ int main(int argc, char** argv)
                 << audio->SampleRate() << " Hz)\n";
     } else {
       channel = std::make_unique<ChannelRs485Out>();
-      channel->Open(rs485_path, rs485_baud, gain_db);
+      channel->Open(rs485_path, rs485_baud, gain_db, effect_echo);
       std::cout << "output: channel card via RS485 (" << channel->Path()
                 << " @ " << rs485_baud << ", gain 1 " << channel->AttenDb()
                 << ")\n";
-      std::cout << "bus:    note TX binary bank";
-      if (channel->EffectEchoDisabled()) {
+      std::cout << "bus:    ASCII nX one-by-one (strict ACK)";
+      if (effect_echo == rs485::EffectEcho::Leave) {
+        std::cout << ", effect echo left unchanged";
+      } else if (channel->EffectEchoDisabled()) {
         std::cout << ", effect echo off";
+      } else if (effect_echo == rs485::EffectEcho::On) {
+        std::cout << ", effect echo on";
       } else {
         std::cout << ", effect absent/no echo ack";
-      }
-      if (channel->QuietReplies()) {
-        std::cout << ", channel quiet on";
-      } else {
-        std::cout << ", channel replies on "
-                     "(flash Channel with quiet on|off)";
       }
       std::cout << "\n";
     }
@@ -370,8 +388,14 @@ int main(int argc, char** argv)
         if (channel) {
           channel->ApplyBankEvent(ev, bank);
         }
-        PrintBankEvent(ev);
+        PrintBankEvent(ev, channel != nullptr);
       }
+    }
+
+    if (channel && channel->BusFault()) {
+      std::cerr << "err: RS485 note mode stopped (no ACK) — exiting\n";
+      running = false;
+      continue;
     }
 
     if (ConsumeQuitRequest()) {
@@ -388,5 +412,5 @@ int main(int argc, char** argv)
   if (channel) {
     channel->Close();
   }
-  return 0;
+  return channel && channel->BusFault() ? 2 : 0;
 }
