@@ -178,8 +178,8 @@ HAL_StatusTypeDef CS4304_Init(CS4304_HandleTypeDef *hcs4304)
   }
 
   /* 5. Configure while GLOBAL_EN = 0 (clocking/ASP latch on its rising edge)
-   *    - PLL enabled, MCLK reference @ 24.576 MHz (= 512·fs at 48 kHz)
-   *    - Sample rate 48 kHz (CS4304_SAMPLE_RATE_ACTIVE)
+   *    - PLL enabled, MCLK reference @ 24.576 MHz (= 256·fs at 96 kHz)
+   *    - Sample rate 96 kHz (CS4304_SAMPLE_RATE_ACTIVE)
    *    - ASP Secondary Mode, I2S format, BCLK non-inverted, normal order   */
   status = CS4304_WriteReg(hcs4304, CS4304_REG_CHIP_ENABLE, 0x0000);
   if (status != HAL_OK) { hcs4304->State = CS4304_STATE_ERROR; return status; }

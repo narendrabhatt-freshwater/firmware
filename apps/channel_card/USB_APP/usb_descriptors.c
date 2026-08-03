@@ -1,5 +1,5 @@
 /* USB descriptors — Channel Card composite device
- *   ITF0/1: UAC2 speaker (mono, 32-bit, 48 kHz) + feedback EP
+ *   ITF0/1: UAC2 speaker (mono, 32-bit, 96 kHz) + feedback EP
  *   ITF2/3: CDC-ACM debug console
  */
 
@@ -25,10 +25,10 @@ tusb_desc_device_t const desc_device = {
      * ST's Virtual COM Port ID — must be avoided; using it previously made
      * Windows force the VCP driver onto the audio device. */
     .idVendor = 0xCafe,
-    /* PID history: 0x4012→0x4013 (mute-only FU), 0x4013→0x4014 (48 kHz).
-     * Windows caches UAC descriptors per VID/PID — bump on further
-     * descriptor changes during bring-up. */
-    .idProduct = 0x4014,
+    /* PID history: 0x4012→0x4013 (mute-only FU), 0x4013→0x4014 (48 kHz),
+     * 0x4014→0x4015 (96 kHz). Windows caches UAC descriptors per VID/PID —
+     * bump on further descriptor changes during bring-up. */
+    .idProduct = 0x4015,
     .bcdDevice = 0x0100,
 
     .iManufacturer = 0x01,

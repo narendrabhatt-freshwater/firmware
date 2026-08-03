@@ -17,11 +17,11 @@
   *            - Output active ~1 s after enable (STARTUP_DELAY default).
   *
  *          Board configuration (this project):
- *            PC7  -> DAC_RST, PA8 -> MCLK (MCO1 = 24.576 MHz = 512·fs @ 48 kHz)
+ *            PC7  -> DAC_RST, PA8 -> MCLK (MCO1 = 24.576 MHz = 256·fs @ 96 kHz)
  *            PC10 -> I2C5_SDA / PC11 -> I2C5_SCL
  *            I2S1 (Master TX) -> ASP_DIN1 (Ch1+Ch2)
  *            I2S2 (Slave  TX) -> ASP_DIN2 (Ch3+Ch4)
- *            fs = 48 kHz, BCLK = 64·fs = 3.072 MHz, I2S, ASP Secondary.
+ *            fs = 96 kHz, BCLK = 64·fs = 6.144 MHz, I2S, ASP Secondary.
  *            Clocking: PLL enabled, MCLK reference @ 24.576 MHz.
   ******************************************************************************
   */
@@ -104,7 +104,7 @@ typedef struct {
 #define CS4304_SAMPLE_RATE_96K       0x0002
 #define CS4304_SAMPLE_RATE_AUTO      0x0006
 /** Active bring-up rate — must match AUDIO_SAMPLE_RATE_HZ / I2S AudioFreq. */
-#define CS4304_SAMPLE_RATE_ACTIVE    CS4304_SAMPLE_RATE_48K
+#define CS4304_SAMPLE_RATE_ACTIVE    CS4304_SAMPLE_RATE_96K
 /* ASP_CFG: secondary mode, BCLK non-inverted, BCLK_FREQ = 64 fs (0x01)       */
 #define CS4304_ASP_CFG_SECONDARY_I2S 0x0001
 /* SIGNAL_PATH_CFG: I2S format, normal channel order

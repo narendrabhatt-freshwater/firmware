@@ -5,7 +5,7 @@
  * @version        : v2.0_Channel_Card
  * @brief          : USB Audio to I2S bridge for CS4304 4-channel DAC.
  *
- *                   USB Audio (mono 32-bit 48kHz) → I2S1 (Ch1+Ch2)
+ *                   USB Audio (mono 32-bit 96kHz) → I2S1 (Ch1+Ch2)
  *                   I2S2 (Ch3+Ch4) available for testing.
  *
  *                   Data flow:
@@ -56,11 +56,11 @@
  * DMA buffer is double-buffered: half/full IRQs each refill one half.
  *
  * AUDIO_I2S_BUF_FRAMES: stereo frames in the full DMA ring.
- * 96 frames = 2 ms full ring; half = 48 frames = 1 ms @ 48 kHz.
+ * 192 frames = 2 ms full ring; half = 96 frames = 1 ms @ 96 kHz.
  * (Larger sizes were used for USB↔I2S SOF drift headroom — restore on a
  * dedicated USB branch if needed.)
  */
-#define AUDIO_I2S_BUF_FRAMES 96                       /* 2 ms full; half = 48 = 1 ms @ 48 kHz */
+#define AUDIO_I2S_BUF_FRAMES 192                      /* 2 ms full; half = 96 = 1 ms @ 96 kHz */
 #define AUDIO_I2S_BUF_SIZE (AUDIO_I2S_BUF_FRAMES * 2) /* × 2 for L+R, in 32-bit words */
 
 /* I2S2 (CH3/CH4) enabled. Slave TX on SPI2 requires two workarounds
@@ -114,7 +114,7 @@ void Audio_SetUSBMute(uint8_t mute) { usb_muted = mute ? 1u : 0u; }
  *   high = idle (waiting for DMA / queue drain)
  * Scope duty: CPU% ≈ t_busy / (t_busy + t_idle).
  *
- * Queue mode: soft ring drained by DMA half/full callbacks (48 frames).
+ * Queue mode: soft ring drained by DMA half/full callbacks (96 frames).
  * Capacity is larger than one half so the main-loop producer can stay ahead.
  * LED is idle only while the queue is full; otherwise Poll fills to full
  * (same duty-cycle idea as a ~16-sample low watermark with sample-at-a-time
@@ -122,7 +122,7 @@ void Audio_SetUSBMute(uint8_t mute) { usb_muted = mute ? 1u : 0u; }
  */
 #define CPULOAD_Q_SIZE 256u
 /* Classic sample-at-a-time low watermark is ~16; with DMA half gulps of
- * AUDIO_I2S_BUF_FRAMES/2 (48) we refill whenever the queue is not full instead. */
+ * AUDIO_I2S_BUF_FRAMES/2 (96) we refill whenever the queue is not full instead. */
 
 static volatile Audio_CpuLoadMode_t cpuload_mode = AUDIO_CPULOAD_OFF;
 
@@ -277,7 +277,7 @@ static Audio_ChannelMode_t channel_mode[4] = {AUDIO_MODE_TONE, AUDIO_MODE_TONE,
 static int8_t dc_level_pct[4] = {0, 0, 0, 0};  /* -100..+100 percent (signed!) */
 static int32_t dc_level_tgt[4] = {0, 0, 0, 0}; /* target Q31 sample value */
 static int32_t dc_level_now[4] = {0, 0, 0, 0}; /* slewed current value */
-/* Slew rate: full range (±0.5 FS) in ~42 ms at 48 kHz. An instant step
+/* Slew rate: full range (±0.5 FS) in ~21 ms at 96 kHz. An instant step
  * rings the DAC's interpolation filter → spikes on the control line. */
 #define DC_SLEW_STEP (1L << 19)
 
@@ -851,7 +851,7 @@ void Audio_Bridge_WriteUSB(const uint8_t *pbuf, uint32_t size)
 
     if (!usb_synced)
     {
-      /* Start writing half a buffer (1 ms @ 48 kHz) ahead of the DMA read point */
+      /* Start writing half a buffer (1 ms @ 96 kHz) ahead of the DMA read point */
       usb_wr_idx = ((rd + AUDIO_I2S_BUF_SIZE / 2u) % AUDIO_I2S_BUF_SIZE) & ~1u;
       usb_synced = 1;
     }
@@ -1277,7 +1277,7 @@ static void I2S2_PumpTimerInit(void)
   TIM7->ARR = 9;   /* 1 MHz / 10 = 100 kHz tick        */
   TIM7->DIER = TIM_DIER_UIE;
   HAL_NVIC_SetPriority(TIM7_IRQn, 0, 0); /* must not be starved: the FIFO
-                                            is only ~40 µs deep at 48 kHz */
+                                            is only ~20 µs deep at 96 kHz */
   HAL_NVIC_EnableIRQ(TIM7_IRQn);
   TIM7->CR1 = TIM_CR1_CEN;
 }

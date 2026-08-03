@@ -17,8 +17,8 @@
 extern "C" {
 #endif
 
-/** System sample rate (Hz). Boss bench target: 48 kHz. */
-#define AUDIO_SAMPLE_RATE_HZ 48000u
+/** System sample rate (Hz). Boss bench target: 96 kHz. */
+#define AUDIO_SAMPLE_RATE_HZ 96000u
 
 #ifdef __cplusplus
 }

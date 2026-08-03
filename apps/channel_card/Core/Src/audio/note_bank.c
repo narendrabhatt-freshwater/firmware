@@ -25,7 +25,7 @@ _Static_assert(NOTE_FILTER_VOICES == NOTE_BANK_VOICES,
 /*
  * Dedicated 128-entry Q31 sine table. Table size sets interpolation error
  * only; the 32-bit phase accumulator gives ~0.0000223 Hz resolution at 96 kHz
- * (finer still at 48 kHz).
+ * (finer still at 96 kHz).
  */
 #define NOTE_SINE_TABLE_SIZE 128u
 static const int32_t note_sine_table[NOTE_SINE_TABLE_SIZE] = {
