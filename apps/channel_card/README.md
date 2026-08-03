@@ -108,9 +108,13 @@ Smoke: `cpu 1`, `cpu 16`, `cpu 0`, `n0 440 0.5`, `g 1 0` — LED chaser resumes 
 
 Bare `cpu` starts **16** oscillators (220, 260, … Hz). Pass **`1..16`** for count.
 
+I2S1 half-buffer sample fill runs in the **main loop** (`Audio_I2S1_Poll`);
+the DMA IRQ only sets a pending-half flag. Bare `cpu` / `cpu N` still
+measures NoteBank fill busy-time on LED_Y (now around that main-loop fill).
+
 | Command | Action |
 |---|---|
-| `cpu` / `cpu N` | N voices (default 16) + DMA LED probe |
+| `cpu` / `cpu N` | N voices (default 16) + main-loop fill LED probe |
 | `cpu q` / `cpu q N` | Soft-queue LED probe |
 | `cpu 0` | Clear notes, stop probe, resume LED chaser |
 
@@ -218,6 +222,6 @@ Type `h` / `help` / `?` on the card for the live list.
 | `n <Hz>` `[scale]` / `n 0` | All 16 notes / silence |
 | `f0`…`f7` `<Hz>` / `f` `<Hz>` | LPF on voices **0..7** (20..20000; **20000 = bypass**). See [`docs/note_filter_butterworth.md`](../../docs/note_filter_butterworth.md). |
 | `g <ch> <dB>` | DAC atten 0..127 on ch 1..4 |
-| `cpu` / `cpu N` | N voices + LED_Y DMA load probe (default 16) |
+| `cpu` / `cpu N` | N voices + LED_Y main-loop fill load probe (default 16) |
 | `cpu q` `[N]` | Soft-queue load probe |
 | `cpu 0` | Clear notes; resume LED chaser |

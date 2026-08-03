@@ -658,6 +658,12 @@ extern CS4304_HandleTypeDef hcs4304;
 
 /* USER CODE BEGIN PRIVATE_VARIABLES */
 static volatile uint8_t dma_active_half = 0; /* 0 = playing first half (write to second), 1 = playing second half (write to first) */
+
+/* I2S1 sample fill runs in main (Audio_I2S1_Poll), not in the DMA IRQ.
+ * ISR only updates USB half bookkeeping and posts which half is free. */
+static volatile uint8_t i2s1_fill_pending = 0;
+static volatile uint8_t i2s1_fill_half = 0; /* 0 = first half, 1 = second half */
+volatile uint32_t g_i2s1_fill_late = 0;     /* ISR saw pending still set (debugger) */
 /* USER CODE END PRIVATE_VARIABLES */
 
 /**
@@ -935,7 +941,7 @@ static void Audio_FillToneSlot(int32_t *buf, uint32_t num_frames,
 
 /**
  * @brief  Fill ONE slot with the mixed N0–NF note bank. Only called while
- *         NoteBank_AnyActive() (see SPI1 DMA callbacks) — otherwise CH1's
+ *         NoteBank_AnyActive() (see Audio_I2S1_Poll) — otherwise CH1's
  *         slot is left for Audio_Bridge_WriteUSB() to fill from USB.
  *
  *         In AUDIO_CPULOAD_DMA mode, LED_Y is driven low for the duration of
@@ -1330,9 +1336,56 @@ static HAL_StatusTypeDef I2S2_Start(void)
 }
 
 /**
+ * Fill one free half of i2s1_tx_buf (CH2 right + CH1 left). Called from
+ * Audio_I2S1_Poll in the main loop — never from the DMA IRQ.
+ */
+static void Audio_I2S1_FillHalf(uint8_t half)
+{
+  int32_t *buf =
+      (half == 0u) ? &i2s1_tx_buf[0] : &i2s1_tx_buf[AUDIO_I2S_BUF_FRAMES];
+  const uint32_t frames = AUDIO_I2S_BUF_FRAMES / 2u;
+
+  Audio_FillToneSlot(buf, frames, 1, 1);
+  Audio_RefillCh1Slot(buf, frames);
+}
+
+/**
+ * @brief  Service a pending I2S1 half-buffer refill. Call first in while(1).
+ */
+void Audio_I2S1_Poll(void)
+{
+  uint8_t half;
+  uint32_t primask;
+
+  if (i2s1_fill_pending == 0u)
+  {
+    return;
+  }
+
+  /* Claim half under IRQ mask so a DMA edge cannot overwrite mid-read. */
+  primask = __get_PRIMASK();
+  __disable_irq();
+  if (i2s1_fill_pending == 0u)
+  {
+    if (!primask)
+    {
+      __enable_irq();
+    }
+    return;
+  }
+  half = i2s1_fill_half;
+  i2s1_fill_pending = 0u;
+  if (!primask)
+  {
+    __enable_irq();
+  }
+
+  Audio_I2S1_FillHalf(half);
+}
+
+/**
  * @brief  I2S1 DMA half transfer complete callback.
- *         Called when DMA has transmitted the first half of i2s1_tx_buf.
- *         If test tone is enabled, fill the first half with test data.
+ *         Bookkeeping + post first-half fill to main; do not generate samples.
  */
 void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 {
@@ -1340,16 +1393,18 @@ void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
   {
     /*
      * DMA now plays the second half → first half is free for writing.
-     * Must be called every half-period: it updates dma_active_half and
-     * updates dma_active_half (buffer-half bookkeeping).
-     * Without this the USB↔I2S handoff never advances.
+     * Must run every half-period for USB↔I2S handoff (dma_active_half).
+     * Sample fill is deferred to Audio_I2S1_Poll() so NoteBank does not
+     * starve the main loop from IRQ context.
      */
     HalfTransfer_CallBack_HS();
 
-    /* CH2 tone/DC in the RIGHT slot only — CH1 (left slot) belongs to USB
-     * or the note bank (see Audio_RefillCh1Slot). */
-    Audio_FillToneSlot(&i2s1_tx_buf[0], AUDIO_I2S_BUF_FRAMES / 2, 1, 1);
-    Audio_RefillCh1Slot(&i2s1_tx_buf[0], AUDIO_I2S_BUF_FRAMES / 2);
+    if (i2s1_fill_pending != 0u)
+    {
+      g_i2s1_fill_late++;
+    }
+    i2s1_fill_half = 0u;
+    i2s1_fill_pending = 1u;
   }
   else if (hi2s->Instance == SPI2)
   {
@@ -1359,8 +1414,7 @@ void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 
 /**
  * @brief  I2S DMA full transfer complete callback.
- *         Called when DMA has transmitted the second half of the buffer.
- *         Fill the second half with new data.
+ *         SPI1: bookkeeping + post second-half fill to main.
  */
 void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s)
 {
@@ -1369,9 +1423,12 @@ void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s)
     /* DMA wrapped: now playing the first half → second half is writable. */
     TransferComplete_CallBack_HS();
 
-    /* CH2 tone/DC in the RIGHT slot only — CH1 (left) via Audio_RefillCh1Slot. */
-    Audio_FillToneSlot(&i2s1_tx_buf[AUDIO_I2S_BUF_FRAMES], AUDIO_I2S_BUF_FRAMES / 2, 1, 1);
-    Audio_RefillCh1Slot(&i2s1_tx_buf[AUDIO_I2S_BUF_FRAMES], AUDIO_I2S_BUF_FRAMES / 2);
+    if (i2s1_fill_pending != 0u)
+    {
+      g_i2s1_fill_late++;
+    }
+    i2s1_fill_half = 1u;
+    i2s1_fill_pending = 1u;
   }
   else if (hi2s->Instance == SPI2)
   {

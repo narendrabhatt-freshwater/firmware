@@ -105,7 +105,7 @@ extern "C"
   typedef enum
   {
     AUDIO_CPULOAD_OFF = 0,   /**< Normal path; LED_Y free for chaser */
-    AUDIO_CPULOAD_DMA = 1,   /**< Busy=low around NoteBank DMA half fill */
+    AUDIO_CPULOAD_DMA = 1,   /**< Busy=low around NoteBank half fill in main */
     AUDIO_CPULOAD_QUEUE = 2, /**< Soft queue (256) filled in main, drained by DMA */
   } Audio_CpuLoadMode_t;
 
@@ -117,6 +117,13 @@ extern "C"
 
   /** Queue-mode producer: call from main loop. No-op unless QUEUE mode. */
   void Audio_CpuLoad_Poll(void);
+
+  /**
+   * I2S1 half-buffer refill from main loop. DMA callbacks only set a
+   * pending flag; call this first in while(1) so NoteBank work does not
+   * run in IRQ context.
+   */
+  void Audio_I2S1_Poll(void);
 
 #ifdef __cplusplus
 }

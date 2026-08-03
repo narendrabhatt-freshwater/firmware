@@ -17,13 +17,16 @@ before touching hot-path code — don't guess:
   (`I2S2_PumpTimerInit()` in `audio_bridge.c`) fires every **10 µs** and must
   clear the SPI2 underrun flag before the slave wedges. Use this as the
   reference example for "must complete in microseconds."
-- The I2S1 half/full DMA callbacks have a **~1 ms** budget (48 frames
-  @ 48 kHz) to refill half the ring buffer — enough for table lookups +
-  interpolation at 16 voices, but no longer a multi-millisecond soft window.
+- I2S1 sample refill runs in the **main loop** (`Audio_I2S1_Poll`), flagged
+  by the half/full DMA callbacks. The main loop has a **~1 ms** budget
+  (48 frames @ 48 kHz) to service that pending half — enough for table
+  lookups + interpolation at 16 voices. The DMA IRQ itself must stay
+  bookkeeping-only (USB half pointer + pending flag).
 
 ## Hot path = ISRs, DMA callbacks, per-sample generators
 
-(`Tone_NextSineSample()`, any new per-channel generator, `Audio_I2S2_Pump()`.)
+(`Tone_NextSineSample()`, any new per-channel generator, `Audio_I2S2_Pump()`,
+and the I2S1 half fill inside `Audio_I2S1_Poll`.)
 In these:
 
 - No heap allocation, no blocking HAL calls (`HAL_Delay`, blocking I2C/SPI
