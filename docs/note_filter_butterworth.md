@@ -17,13 +17,14 @@ Each of the 16 note-bank oscillators (N0–NF) gets its own **4-pole
 Butterworth low-pass** before the voices are mixed onto DAC CH1.
 
 ```text
-  voice i:  DDS sine → × amp → 4-pole LPF → ─┐
-  ...                                        ├─ sum → saturate Q31 → I2S CH1
-  voice 15: DDS sine → × amp → 4-pole LPF → ─┘
+  voice i:  DDS osc → × amp → 4-pole LPF → ─┐
+  ...                                       ├─ sum → saturate Q31 → I2S CH1
+  voice 15: DDS osc → × amp → 4-pole LPF → ─┘
 ```
 
-On a pure sine the LPF mostly changes level (and phase). Harmonic-rich
-waveforms are not selectable from the console in this build.
+Oscillator shape is global for N0–NF: `s` (sine), `p <0.1..0.9>` (pulse
+duty), `t <0.1..0.9>` (triangle asymmetry). On a pure sine the LPF mostly
+changes level (and phase); pulse/tri give harmonics for filter sweeps.
 
 The digital filter is a **4-pole Butterworth LPF** (boss `four_pole_filter_t`
 direct-form algorithm). `cutoff` sets the corner; **20000 Hz** is transparent
@@ -283,8 +284,8 @@ Commands:
 Also show fc in {200, 300, 500, 1000, 2000, 5000} at f=1000.
 
 ### Harmonic / noise demo
-Sine-only bank: use amplitude drop vs bypass for verification (see primary
-test case). Richer waveforms are not console-selectable in this build.
+Use `p 0.5` or `t 0.5` then sweep `f0` for an audible/filterable harmonic
+demo. Sine (`s`) still verifies amplitude drop vs bypass (primary test case).
 
 ### Pass modes (LP only in v1)
 

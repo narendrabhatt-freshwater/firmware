@@ -382,8 +382,28 @@ static uint8_t Console_CpuLoad_Parse(const char *arg, uint8_t *mode_out,
 static void Console_Help(void)
 {
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
-  RS485_Reply("ok: n0 | n0..nf Hz [sc] | n Hz|0 | f0..f7 Hz | f Hz | "
-              "g ch dB | cpu [0|N|q N]\r\n");
+  RS485_Reply("ok: n0 | n0..nf Hz [sc] | n Hz|0 | s | p|t 0.1..0.9 | "
+              "f0..f7 Hz | f Hz | g ch dB | cpu [0|N|q N]\r\n");
+}
+
+static void Console_ShapeReply(void)
+{
+  char b[40];
+  NoteBank_Shape_t sh = NoteBank_GetShape();
+
+  if (sh == NOTE_SHAPE_PULSE)
+  {
+    snprintf(b, sizeof b, "ok: p %.2f\r\n", NoteBank_GetShapeParam());
+  }
+  else if (sh == NOTE_SHAPE_TRI)
+  {
+    snprintf(b, sizeof b, "ok: t %.2f\r\n", NoteBank_GetShapeParam());
+  }
+  else
+  {
+    snprintf(b, sizeof b, "ok: s\r\n");
+  }
+  RS485_Reply(b);
 }
 
 static void Console_FilterReply(uint8_t voice, double fc)
@@ -413,6 +433,38 @@ static void Console_Exec(char *line)
       strcmp(line, "?") == 0)
   {
     Console_Help();
+    return;
+  }
+
+  /* ---- s / p <0.1..0.9> / t <0.1..0.9>: global note-bank shape ---- */
+  if (strcmp(line, "s") == 0)
+  {
+    (void)NoteBank_SetShape(NOTE_SHAPE_SINE, 0.0);
+    Console_ShapeReply();
+    return;
+  }
+  if (line[0] == 'p' || line[0] == 't')
+  {
+    double param;
+    NoteBank_Shape_t sh =
+        (line[0] == 'p') ? NOTE_SHAPE_PULSE : NOTE_SHAPE_TRI;
+
+    if (line[1] != ' ')
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    if (sscanf(line + 2, "%lf", &param) != 1)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    if (NoteBank_SetShape(sh, param) != 0)
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+    Console_ShapeReply();
     return;
   }
 

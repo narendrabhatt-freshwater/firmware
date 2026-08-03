@@ -164,7 +164,7 @@ Hand-written modules live under `Core/Src/<domain>/` (and matching
 | `Core/Src/console/channel_console.c` | RS485 + USB CDC console, `cpu`, LED chaser |
 | `Core/Src/console/uart5_rx.c` | Interrupt-driven UART5 RX ring buffer |
 | `Core/Src/audio/audio_bridge.c` | **USB→I2S audio engine** — ring buffer, tone/DC, I2S2 workarounds |
-| `Core/Src/audio/note_bank.c` | N0–NF additive sine bank |
+| `Core/Src/audio/note_bank.c` | N0–NF additive bank (sine / pulse / tri) |
 | `Core/Src/filters/note_filter.c` | Per-voice LPF wrapper (cutoff/bypass/Q31) |
 | `Core/Src/filters/butterworth_four_pole.c` | Reusable 4-pole DF4 Butterworth kernel |
 | `Core/Src/drivers/cs4304.c` | CS4304 DAC driver (I2C) |
@@ -205,8 +205,10 @@ without re-testing the full slider range on Windows.
 
 **`n0`** applies **bypass ON** and **`g 1 0`** (0 dB CH1 DAC trim) at
 boot and on bare `n0`. **`n0`…`nf`** are 16 independent phase-accumulator
-sines summed onto CH1. Optional **`[scale]`** (0.0..1.0, default **0.125**) sets
-that note’s amplitude. Frequency/scale changes do not touch gain or bypass.
+voices summed onto CH1. Optional **`[scale]`** (0.0..1.0, default **0.125**) sets
+that note’s amplitude. Global shape: **`s`** (sine, default), **`p <0.1..0.9>`**
+(pulse duty), **`t <0.1..0.9>`** (triangle asymmetry; 0.5 = symmetric).
+Frequency/scale/shape changes do not touch gain or bypass.
 **`g`** changes DAC atten on any channel.
 
 ## Console quick reference
@@ -220,8 +222,14 @@ Type `h` / `help` / `?` on the card for the live list.
 | `n0`…`nf` `0` | Turn that note off |
 | `n0`…`nf` `<Hz>` `[scale]` | Note (default scale **0.125**) |
 | `n <Hz>` `[scale]` / `n 0` | All 16 notes / silence |
+| `s` | Note-bank shape: sine |
+| `p <0.1..0.9>` | Note-bank shape: pulse (duty) |
+| `t <0.1..0.9>` | Note-bank shape: triangle (asymmetry) |
 | `f0`…`f7` `<Hz>` / `f` `<Hz>` | LPF on voices **0..7** (20..20000; **20000 = bypass**). See [`docs/note_filter_butterworth.md`](../../docs/note_filter_butterworth.md). |
 | `g <ch> <dB>` | DAC atten 0..127 on ch 1..4 |
 | `cpu` / `cpu N` | N voices + LED_Y main-loop fill load probe (default 16) |
 | `cpu q` `[N]` | Soft-queue load probe |
 | `cpu 0` | Clear notes; resume LED chaser |
+
+Shape smoke (scope on CH1): `n0 440`, `s`, `p 0.5`, `t 0.5`, `p 0.1`,
+then `f0` sweep — pulse/tri should show harmonics; LPF still responds.

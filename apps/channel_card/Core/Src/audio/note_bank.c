@@ -1,9 +1,10 @@
 /**
  ******************************************************************************
  * @file    note_bank.c
- * @brief   16-voice additive DDS sine bank for Channel Card CH1 (N0–NF).
+ * @brief   16-voice additive DDS bank for Channel Card CH1 (N0–NF).
  *
- * Sine table + linear interp → Q15 amp → 4-pole LPF → mix.
+ * Global shape (sine LUT / runtime pulse / runtime triangle) → Q15 amp →
+ * 4-pole LPF → mix.
  ******************************************************************************
  */
 
@@ -167,6 +168,18 @@ static uint32_t note_inc[NOTE_BANK_VOICES];
 static int32_t note_amp_q15[NOTE_BANK_VOICES];
 
 #define NOTE_AMP_Q15_MAX 32767
+#define NOTE_SHAPE_PEAK ((int32_t)0x7FFFFFFF)
+#define NOTE_SHAPE_PARAM_MIN 0.1
+#define NOTE_SHAPE_PARAM_MAX 0.9
+
+/* Global shape — all voices share one oscillator family. */
+static NoteBank_Shape_t note_shape = NOTE_SHAPE_SINE;
+static double note_shape_param = 0.5;
+/* Pulse: phase < thresh → +peak. Tri: rise [0, rise_end), fall after. */
+static uint32_t note_pulse_thresh = 0x80000000u;
+static uint32_t note_tri_rise_end = 0x80000000u;
+static uint32_t note_tri_rise_inv = 2u; /* Q32 recip: floor(2^32 / rise_end) */
+static uint32_t note_tri_fall_inv = 2u;
 
 /** Cold path only — convert Hz to 32-bit phase increment at NOTE_BANK_SAMPLE_RATE. */
 static uint32_t NoteBank_PhaseIncFromHz(double freq_hz)
@@ -187,19 +200,78 @@ static int32_t NoteBank_ScaleToQ15(double scale)
   return (int32_t)(scale * (double)NOTE_AMP_Q15_MAX + 0.5);
 }
 
+/** Cold path — param 0.1..0.9 → pulse duty / tri breakpoint + Q32 recip. */
+static void NoteBank_UpdateShapeThresholds(double param)
+{
+  uint32_t rise_end;
+  uint32_t fall_len;
+
+  note_shape_param = param;
+  rise_end = (uint32_t)(param * 4294967296.0);
+  if (rise_end == 0u) {
+    rise_end = 1u;
+  }
+  fall_len = 0u - rise_end; /* 2^32 - rise_end */
+  if (fall_len == 0u) {
+    fall_len = 1u;
+  }
+
+  note_pulse_thresh = rise_end;
+  note_tri_rise_end = rise_end;
+  note_tri_rise_inv = (uint32_t)(0x100000000ULL / (uint64_t)rise_end);
+  note_tri_fall_inv = (uint32_t)(0x100000000ULL / (uint64_t)fall_len);
+}
+
+/** Map Q32 fraction 0..~1 → bipolar Q31 (-peak .. +peak). Hot path OK. */
+static inline int32_t NoteBank_FracToQ31(uint32_t frac)
+{
+  int64_t x = ((int64_t)frac << 1) - (int64_t)4294967296LL;
+  return (int32_t)((x * (int64_t)NOTE_SHAPE_PEAK) >> 32);
+}
+
+/** Q31 sample from current global shape at phase ph (no amp/LPF). */
+static inline int32_t NoteBank_OscSample(uint32_t ph)
+{
+  switch (note_shape)
+  {
+  case NOTE_SHAPE_PULSE:
+    return (ph < note_pulse_thresh) ? NOTE_SHAPE_PEAK : (int32_t)0x80000001;
+
+  case NOTE_SHAPE_TRI:
+    if (ph < note_tri_rise_end)
+    {
+      uint32_t frac =
+          (uint32_t)(((uint64_t)ph * (uint64_t)note_tri_rise_inv) >> 32);
+      return NoteBank_FracToQ31(frac);
+    }
+    {
+      uint32_t pos = ph - note_tri_rise_end;
+      uint32_t frac =
+          (uint32_t)(((uint64_t)pos * (uint64_t)note_tri_fall_inv) >> 32);
+      return -NoteBank_FracToQ31(frac);
+    }
+
+  case NOTE_SHAPE_SINE:
+  default:
+  {
+    uint8_t idx = (uint8_t)(ph >> 25); /* 7-bit index, 0..127 */
+    int32_t s0 = note_sine_table[idx];
+    int32_t s1 =
+        note_sine_table[(uint8_t)((idx + 1u) & (NOTE_SINE_TABLE_SIZE - 1u))];
+    uint32_t frac = (ph >> 9) & 0xFFFFu;
+    int64_t delta = (int64_t)s1 - (int64_t)s0;
+    return s0 + (int32_t)((delta * (int64_t)frac) >> 16);
+  }
+  }
+}
+
 /**
- * One voice: 128-entry sine table, linear interp, Q15 amplitude, then LPF.
+ * One voice: shape osc → Q15 amplitude → LPF.
  */
 static inline int32_t NoteBank_VoiceSample(uint8_t note)
 {
   uint32_t ph = note_phase[note];
-  uint8_t idx = (uint8_t)(ph >> 25); /* 7-bit index, 0..127 */
-  int32_t s0 = note_sine_table[idx];
-  int32_t s1 =
-      note_sine_table[(uint8_t)((idx + 1u) & (NOTE_SINE_TABLE_SIZE - 1u))];
-  uint32_t frac = (ph >> 9) & 0xFFFFu;
-  int64_t delta = (int64_t)s1 - (int64_t)s0;
-  int32_t s = s0 + (int32_t)((delta * (int64_t)frac) >> 16);
+  int32_t s = NoteBank_OscSample(ph);
   int32_t amp;
 
   note_phase[note] = ph + note_inc[note];
@@ -260,6 +332,39 @@ double NoteBank_GetScale(uint8_t note)
     return 0.0;
   }
   return note_scale[note];
+}
+
+int NoteBank_SetShape(NoteBank_Shape_t shape, double param)
+{
+  if (shape == NOTE_SHAPE_SINE)
+  {
+    note_shape = NOTE_SHAPE_SINE;
+    return 0;
+  }
+
+  if (shape != NOTE_SHAPE_PULSE && shape != NOTE_SHAPE_TRI)
+  {
+    return -1;
+  }
+
+  if (param < NOTE_SHAPE_PARAM_MIN || param > NOTE_SHAPE_PARAM_MAX)
+  {
+    return -1;
+  }
+
+  note_shape = shape;
+  NoteBank_UpdateShapeThresholds(param);
+  return 0;
+}
+
+NoteBank_Shape_t NoteBank_GetShape(void)
+{
+  return note_shape;
+}
+
+double NoteBank_GetShapeParam(void)
+{
+  return note_shape_param;
 }
 
 uint8_t NoteBank_AnyActive(void)
