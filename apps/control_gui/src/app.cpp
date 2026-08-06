@@ -1,15 +1,23 @@
 #include "app.hpp"
 
+#include "anim.hpp"
 #include "env_editor.hpp"
 #include "note_event.hpp"
 #include "rs485/serial_port.hpp"
 #include "rs485/types.hpp"
+#include "theme.hpp"
+#include "widgets.hpp"
 
 #include "imgui.h"
 
 #include <cstdio>
 #include <cstring>
 #include <string>
+
+namespace
+{
+using fw::theme::kPalette;
+} // namespace
 
 void App::RefreshPortLists()
 {
@@ -159,19 +167,32 @@ void App::Draw()
                    ImGuiWindowFlags_NoSavedSettings |
                    ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-  // ── Transport ──────────────────────────────────────────────────────────
-  ImGui::TextUnformatted("Freshwater Control");
-  ImGui::SameLine();
-  ImGui::TextDisabled("Dear ImGui + GLFW · Preview ≠ card DSP");
-  ImGui::Separator();
+  // ── Header ─────────────────────────────────────────────────────────────
+  ImGui::PushFont(fw::theme::g_fonts.large);
+  ImGui::TextColored(kPalette.accent, "FRESHWATER");
+  ImGui::PopFont();
+  ImGui::TextDisabled(
+      "Control · Dear ImGui + GLFW + OpenGL3 · Preview scope ≠ card DSP");
+  ImGui::Spacing();
 
-  if (ImGui::Button("Refresh ports")) {
+  // ── Connection / output cards ─────────────────────────────────────────
+  const float gap = 10.f;
+  const float card_w = (ImGui::GetContentRegionAvail().x - gap * 2.f) / 3.f;
+  const float card_h = 190.f;
+
+  ImGui::BeginChild("card_bus", ImVec2(card_w, card_h),
+                    ImGuiChildFlags_Borders);
+  fw::ui::SectionHeader("RS485 BUS", "bus_pill",
+                        bus.IsOpen() ? (bus.BusFault() ? "fault" : "connected")
+                                    : "offline",
+                        bus.IsOpen(), bus.BusFault());
+  if (ImGui::SmallButton("Refresh")) {
     RefreshPortLists();
   }
   ImGui::SameLine();
-  ImGui::SetNextItemWidth(280);
-  if (ImGui::BeginCombo("RS485", serial_path_buf[0] ? serial_path_buf
-                                                    : "(none)")) {
+  ImGui::SetNextItemWidth(-1);
+  if (ImGui::BeginCombo("##rs485", serial_path_buf[0] ? serial_path_buf
+                                                      : "(none)")) {
     for (std::size_t i = 0; i < serial_ports.size(); ++i) {
       const bool sel =
           (std::strcmp(serial_path_buf, serial_ports[i].c_str()) == 0);
@@ -186,42 +207,24 @@ void App::Draw()
     }
     ImGui::EndCombo();
   }
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(200);
-  ImGui::InputText("Path", serial_path_buf, sizeof(serial_path_buf));
-
+  ImGui::SetNextItemWidth(-1);
+  ImGui::InputText("##path", serial_path_buf, sizeof(serial_path_buf));
   if (!bus.IsOpen()) {
-    if (ImGui::Button("Connect bus")) {
+    if (fw::ui::GlowButton("Connect bus", ImVec2(-1, 0))) {
       ConnectBus();
     }
   } else {
-    if (ImGui::Button("Disconnect bus")) {
+    if (fw::ui::GlowButton("Disconnect", ImVec2(-1, 0), true)) {
       DisconnectBus();
     }
   }
-  ImGui::SameLine();
-  if (bus.IsOpen()) {
-    ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.f), "BUS OK");
-  } else {
-    ImGui::TextDisabled("bus closed");
-  }
-  if (bus.BusFault()) {
-    ImGui::SameLine();
-    ImGui::TextColored(ImVec4(1.f, 0.3f, 0.3f, 1.f), "FAULT");
-  }
+  ImGui::TextDisabled("timeouts %u  errs %u", bus.TimeoutCount(),
+                      bus.ErrCount());
+  ImGui::EndChild();
 
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(160);
-  const char *out_items[] = {"Speakers", "Card", "Both"};
-  int om = static_cast<int>(out_mode);
-  if (ImGui::Combo("Output", &om, out_items, 3)) {
-    out_mode = static_cast<OutMode>(om);
-    if (out_mode == OutMode::Card) {
-      ShutdownAudio();
-    }
-  }
-
-  ImGui::SetNextItemWidth(220);
+  ImGui::SameLine(0.f, gap);
+  ImGui::BeginChild("card_midi", ImVec2(card_w, card_h),
+                    ImGuiChildFlags_Borders);
   std::string midi_preview = "(auto Launchkey)";
   if (midi_port_index >= 0 &&
       midi_port_index < static_cast<int>(midi_ports.size())) {
@@ -231,7 +234,11 @@ void App::Draw()
                    ": " +
                    midi_ports[static_cast<std::size_t>(midi_port_index)].name;
   }
-  if (ImGui::BeginCombo("MIDI", midi_preview.c_str())) {
+  fw::ui::SectionHeader("MIDI", "midi_pill",
+                        midi_open ? midi.PortName().c_str() : "closed",
+                        midi_open);
+  ImGui::SetNextItemWidth(-1);
+  if (ImGui::BeginCombo("##midi", midi_preview.c_str())) {
     const bool auto_sel = (midi_port_index < 0);
     if (ImGui::Selectable("(auto Launchkey)", auto_sel)) {
       midi_port_index = -1;
@@ -245,109 +252,174 @@ void App::Draw()
     }
     ImGui::EndCombo();
   }
-  ImGui::SameLine();
   if (!midi_open) {
-    if (ImGui::Button("Open MIDI")) {
+    if (fw::ui::GlowButton("Open MIDI", ImVec2(-1, 0))) {
       ConnectMidi();
     }
   } else {
-    if (ImGui::Button("Close MIDI")) {
+    if (fw::ui::GlowButton("Close MIDI", ImVec2(-1, 0), true)) {
       DisconnectMidi();
     }
-    ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.f), "%s",
-                       midi.PortName().c_str());
   }
+  ImGui::EndChild();
 
-  ImGui::SetNextItemWidth(120);
-  if (ImGui::SliderInt("Gain dB", &gain_db, 0, 127)) {
+  ImGui::SameLine(0.f, gap);
+  ImGui::BeginChild("card_out", ImVec2(card_w, card_h),
+                    ImGuiChildFlags_Borders);
+  ImGui::TextUnformatted("OUTPUT");
+  ImGui::Spacing();
+  {
+    const char *out_items[] = {"Speakers", "Card", "Both"};
+    int om = static_cast<int>(out_mode);
+    fw::ui::SegmentedControl("##outmode", out_items, 3, &om);
+    if (static_cast<OutMode>(om) != out_mode) {
+      out_mode = static_cast<OutMode>(om);
+      if (out_mode == OutMode::Card) {
+        ShutdownAudio();
+      }
+    }
+  }
+  ImGui::Spacing();
+  ImGui::SetNextItemWidth(-1);
+  if (ImGui::SliderInt("##gain", &gain_db, 0, 127, "Gain %d dB")) {
     if (bus.IsOpen()) {
       bus.QueueGain(static_cast<uint8_t>(gain_db));
     }
   }
-  ImGui::SameLine();
-  if (ImGui::Button("Silence")) {
+  const float half_w =
+      (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) *
+      0.5f;
+  if (fw::ui::GlowButton("Silence", ImVec2(half_w, 0), true)) {
     AllNotesOff();
   }
   ImGui::SameLine();
-  if (ImGui::Button("Soft recover")) {
+  if (fw::ui::GlowButton("Recover", ImVec2(half_w, 0))) {
     bus.RequestRecover(log);
   }
-  ImGui::SameLine();
-  ImGui::Text("timeouts %u  errs %u", bus.TimeoutCount(), bus.ErrCount());
+  ImGui::EndChild();
 
-  ImGui::Separator();
+  ImGui::Spacing();
 
   // ── View tabs ──────────────────────────────────────────────────────────
-  if (ImGui::BeginTabBar("views")) {
-    if (ImGui::BeginTabItem("Perform")) {
-      view = GuiView::Perform;
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("Tone")) {
-      view = GuiView::Tone;
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("Effect")) {
-      view = GuiView::Effect;
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("Lab")) {
-      view = GuiView::Lab;
-      ImGui::EndTabItem();
-    }
-    ImGui::EndTabBar();
-  }
+  const char *view_items[] = {"Perform", "Tone", "Effect", "Lab"};
+  int vi = static_cast<int>(view);
+  fw::ui::AnimatedTabBar("views", view_items, 4, &vi);
+  view = static_cast<GuiView>(vi);
+  ImGui::Spacing();
 
-  const float log_h = 140.f;
+  const float log_h = 118.f;
   const float body_h = ImGui::GetContentRegionAvail().y - log_h - 8.f;
 
   ImGui::BeginChild("body", ImVec2(0, body_h), ImGuiChildFlags_Borders);
 
   if (view == GuiView::Perform) {
-    ImGui::BeginChild("voices", ImVec2(ImGui::GetContentRegionAvail().x * 0.55f,
-                                       0),
-                      ImGuiChildFlags_Borders);
-    ImGui::TextUnformatted("16 voices (host VoiceBank)");
-    ImGui::Separator();
     const auto &slots = bank.Slots();
-    for (uint8_t i = 0; i < midi_host::kVoiceCount; ++i) {
-      const auto &s = slots[i];
-      ImGui::PushID(static_cast<int>(i));
-      char hex = "0123456789abcdef"[i];
-      if (s.active) {
-        ImGui::TextColored(ImVec4(0.4f, 1.f, 0.5f, 1.f), "n%c  %s  %.3f Hz",
-                           hex, midi_host::MidiNoteName(s.midi_key).c_str(),
-                           s.freq_hz);
-      } else {
-        ImGui::TextDisabled("n%c  —", hex);
-      }
-      if (ImGui::IsItemClicked()) {
-        selected_voice = static_cast<int>(i);
-      }
-      ImGui::PopID();
-    }
-    ImGui::Text("active %u / 16", bank.ActiveCount());
-    ImGui::EndChild();
-
-    ImGui::SameLine();
-    ImGui::BeginChild("scope", ImVec2(0, 0), ImGuiChildFlags_Borders);
-    ImGui::TextUnformatted("Preview scope");
-    ImGui::TextDisabled("Local sine mix — not Channel DSP / DAC");
-    ImGui::PlotLines("##wf", preview.Samples().data(), PreviewScope::kDisplaySamples,
-                     0, nullptr, -1.f, 1.f, ImVec2(-1, 180));
-    ImGui::ProgressBar(preview.Peak(), ImVec2(-1, 0), "peak");
-
-    ImGui::Separator();
-    ImGui::TextUnformatted("On-screen keys (C4–B4)");
     static const uint8_t kKeys[] = {60, 62, 64, 65, 67, 69, 71, 72};
     static const char *kNames[] = {"C4", "D4", "E4", "F4",
                                    "G4", "A4", "B4", "C5"};
+
+    const float hero_h = 110.f;
+    const float piano_h = 106.f;
+    const float mid_h = std::max(
+        ImGui::GetContentRegionAvail().y - hero_h - piano_h -
+            ImGui::GetStyle().ItemSpacing.y * 2.f,
+        0.f);
+
+    // ── Hero scope ─────────────────────────────────────────────────────
+    ImGui::BeginChild("scope_hero", ImVec2(0, hero_h), ImGuiChildFlags_Borders);
+    ImGui::TextUnformatted("PREVIEW SCOPE");
+    ImGui::SameLine();
+    ImGui::TextDisabled("Local sine mix — not Channel DSP / DAC");
+    fw::ui::GlowWaveform("scope_wave", preview.Samples().data(),
+                         PreviewScope::kDisplaySamples, ImVec2(-1, 36));
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Peak");
+    ImGui::SameLine();
+    fw::ui::LevelMeter("peak_meter", preview.Peak(), ImVec2(-1, 14));
+    ImGui::EndChild();
+
+    ImGui::Spacing();
+
+    // ── Voice grid + selected-voice detail ───────────────────────────────
+    ImGui::BeginChild("voices",
+                      ImVec2(ImGui::GetContentRegionAvail().x * 0.5f, mid_h),
+                      ImGuiChildFlags_Borders, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+    ImGui::TextUnformatted("VOICES");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%u / 16 active)", bank.ActiveCount());
+    const float dt = ImGui::GetIO().DeltaTime;
+    for (uint8_t i = 0; i < midi_host::kVoiceCount; ++i) {
+      const auto &s = slots[i];
+      voice_glow[i] = fw::anim::ExpApproach(voice_glow[i], s.active ? 1.f : 0.f,
+                                            dt, s.active ? 18.f : 4.f);
+      ImGui::PushID(static_cast<int>(i));
+      char label[4];
+      std::snprintf(label, sizeof(label), "n%c", "0123456789abcdef"[i]);
+      char sub[16] = {};
+      if (s.active) {
+        std::snprintf(sub, sizeof(sub), "%s",
+                      midi_host::MidiNoteName(s.midi_key).c_str());
+      }
+      fw::ui::VoiceSlotBadge("badge", label, s.active, voice_glow[i],
+                             s.active ? sub : nullptr);
+      if (ImGui::IsItemClicked()) {
+        selected_voice = static_cast<int>(i);
+      }
+      if ((i % 8) != 7) {
+        ImGui::SameLine();
+      }
+      ImGui::PopID();
+    }
+    ImGui::EndChild();
+
+    ImGui::SameLine();
+    ImGui::BeginChild("voice_detail", ImVec2(0, mid_h), ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_AlwaysVerticalScrollbar);
+    ImGui::TextUnformatted("SELECTED VOICE");
+    {
+      const int sv = std::clamp(selected_voice, 0, 15);
+      const auto &s = slots[static_cast<std::size_t>(sv)];
+      ImGui::PushFont(fw::theme::g_fonts.large);
+      ImGui::TextColored(kPalette.accent, "n%x", sv);
+      ImGui::PopFont();
+      ImGui::SameLine();
+      ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6.f);
+      if (s.active) {
+        ImGui::Text("  %s  ·  %.3f Hz", midi_host::MidiNoteName(s.midi_key).c_str(),
+                    static_cast<double>(s.freq_hz));
+      } else {
+        ImGui::TextDisabled("  silent");
+      }
+      fw::ui::StatusPill("voice_pill", s.active ? "sounding" : "idle", s.active);
+      if (fw::ui::GlowButton("Edit envelope for this voice ->", ImVec2(-1, 32))) {
+        view = GuiView::Tone;
+      }
+    }
+    ImGui::EndChild();
+
+    ImGui::Spacing();
+
+    // ── Piano ─────────────────────────────────────────────────────────
+    ImGui::BeginChild("piano", ImVec2(0, piano_h), ImGuiChildFlags_Borders);
+    ImGui::TextUnformatted("KEYBOARD (C4–C5)");
+    ImGui::SameLine();
+    ImGui::TextDisabled("Hold mouse on a key, or use a MIDI keyboard");
+    const float key_gap = ImGui::GetStyle().ItemSpacing.x;
+    const float key_w = (ImGui::GetContentRegionAvail().x - key_gap * 7.f) / 8.f;
+    const float key_h = ImGui::GetContentRegionAvail().y;
     for (int i = 0; i < 8; ++i) {
       if (i) {
         ImGui::SameLine();
       }
-      ImGui::Button(kNames[i], ImVec2(48, 40));
+      ImGui::PushID(i);
+      bool sounding = false;
+      for (const auto &s : slots) {
+        if (s.active && s.midi_key == kKeys[i]) {
+          sounding = true;
+          break;
+        }
+      }
+      fw::ui::PianoKey("key", kNames[i], ImVec2(key_w, key_h), sounding);
       if (ImGui::IsItemActivated()) {
         auto evs = bank.NoteOn(kKeys[i]);
         ApplyBankEvents(evs);
@@ -356,17 +428,27 @@ void App::Draw()
         auto evs = bank.NoteOff(kKeys[i]);
         ApplyBankEvents(evs);
       }
+      ImGui::PopID();
     }
-    ImGui::TextDisabled("Hold mouse on key; or use a MIDI keyboard");
     ImGui::EndChild();
   } else if (view == GuiView::Tone) {
     if (!bus.IsOpen()) {
-      ImGui::TextColored(ImVec4(1.f, 0.6f, 0.2f, 1.f),
+      ImGui::TextColored(kPalette.warning,
                          "Connect RS485 bus to send tone / envelope commands.");
     }
-    ImGui::BeginChild("tone_scroll", ImVec2(0, 0), ImGuiChildFlags_None,
+    const float col_gap = 10.f;
+    const float left_w = ImGui::GetContentRegionAvail().x * 0.34f;
+
+    ImGui::BeginChild("tone_left", ImVec2(left_w, 0), ImGuiChildFlags_None,
                       ImGuiWindowFlags_AlwaysVerticalScrollbar);
-    DrawToneShapeAndFilter(*this);
+    DrawOscillatorCard(*this);
+    ImGui::Spacing();
+    DrawFilterCard(*this);
+    ImGui::EndChild();
+
+    ImGui::SameLine(0.f, col_gap);
+    ImGui::BeginChild("tone_right", ImVec2(0, 0), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_AlwaysVerticalScrollbar);
     DrawEnvelopeEditor(*this);
     ImGui::EndChild();
   } else if (view == GuiView::Effect) {
@@ -377,7 +459,7 @@ void App::Draw()
     ImGui::Combo("Target", &raw_target, targets, 3);
     ImGui::InputText("Command", raw_cmd, sizeof(raw_cmd));
     ImGui::SameLine();
-    if (ImGui::Button("Send") && raw_cmd[0]) {
+    if (fw::ui::GlowButton("Send") && raw_cmd[0]) {
       const rs485::Target t = (raw_target == 1)   ? rs485::Target::Effect
                               : (raw_target == 2) ? rs485::Target::All
                                                   : rs485::Target::Channel;
@@ -408,7 +490,7 @@ void App::Draw()
 
   // ── Log ────────────────────────────────────────────────────────────────
   ImGui::BeginChild("log", ImVec2(0, log_h), ImGuiChildFlags_Borders);
-  ImGui::TextUnformatted("Bus log");
+  ImGui::TextUnformatted("BUS LOG");
   ImGui::SameLine();
   ImGui::Checkbox("auto-scroll", &log_auto_scroll);
   ImGui::SameLine();
@@ -423,7 +505,7 @@ void App::Draw()
                      line.find("FAULT") != std::string::npos ||
                      line.find("***") != std::string::npos;
     if (err) {
-      ImGui::TextColored(ImVec4(1.f, 0.45f, 0.35f, 1.f), "%s", line.c_str());
+      ImGui::TextColored(kPalette.danger, "%s", line.c_str());
     } else {
       ImGui::TextUnformatted(line.c_str());
     }

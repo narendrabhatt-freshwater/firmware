@@ -10,6 +10,7 @@
 #include "pitch.hpp"
 #include "voice_bank.hpp"
 
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -68,6 +69,8 @@ struct App
 
   std::deque<std::string> log_view;
   bool log_auto_scroll = true;
+
+  std::array<float, midi_host::kVoiceCount> voice_glow{};
 
   void RefreshPortLists();
   void Tick();

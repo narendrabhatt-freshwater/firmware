@@ -81,10 +81,18 @@ add_executable(control_gui
   src/bus_controller.cpp
   src/preview_scope.cpp
   src/env_editor.cpp
+  src/theme.cpp
+  src/widgets.cpp
   ${MIDI_HOST_SRC}/midi_input.cpp
   ${MIDI_HOST_SRC}/pitch.cpp
   ${MIDI_HOST_SRC}/voice_bank.cpp
   ${MIDI_HOST_SRC}/audio_engine.cpp
+)
+
+# Roboto-Medium.ttf ships with the vendored Dear ImGui source tree — reuse it
+# for the UI theme instead of adding a new font dependency.
+target_compile_definitions(control_gui PRIVATE
+  FW_FONT_DIR="${imgui_SOURCE_DIR}/misc/fonts"
 )
 
 target_include_directories(control_gui PRIVATE

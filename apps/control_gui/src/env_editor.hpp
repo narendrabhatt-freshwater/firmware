@@ -60,8 +60,11 @@ struct EnvProgram
 /** Draw Tone-tab envelope UI; queues Apply via app.bus when user commits. */
 void DrawEnvelopeEditor(App &app);
 
-/** Oscillator shape + filter strip for Tone tab. */
-void DrawToneShapeAndFilter(App &app);
+/** Oscillator shape card for Tone tab. */
+void DrawOscillatorCard(App &app);
+
+/** Digital LPF card for Tone tab. */
+void DrawFilterCard(App &app);
 
 /** Richer Effect card panel. */
 void DrawEffectPanel(App &app);

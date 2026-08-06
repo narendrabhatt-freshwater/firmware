@@ -7,6 +7,7 @@
  */
 
 #include "app.hpp"
+#include "theme.hpp"
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -62,7 +63,7 @@ int main(int argc, char **argv)
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 #endif
 
-  GLFWwindow *window = glfwCreateWindow(1280, 800, "Freshwater Control",
+  GLFWwindow *window = glfwCreateWindow(1360, 900, "Freshwater Control",
                                         nullptr, nullptr);
   if (!window) {
     std::fprintf(stderr, "glfwCreateWindow failed\n");
@@ -78,6 +79,8 @@ int main(int argc, char **argv)
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
   ImGui::StyleColorsDark();
+  fw::theme::Apply();
+  fw::theme::LoadFonts(io);
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init(glsl_version);
 
@@ -105,7 +108,8 @@ int main(int argc, char **argv)
     int fb_h = 0;
     glfwGetFramebufferSize(window, &fb_w, &fb_h);
     glViewport(0, 0, fb_w, fb_h);
-    glClearColor(0.08f, 0.09f, 0.11f, 1.f);
+    glClearColor(fw::theme::kPalette.bg.x, fw::theme::kPalette.bg.y,
+                fw::theme::kPalette.bg.z, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     glfwSwapBuffers(window);

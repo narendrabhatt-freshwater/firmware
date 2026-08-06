@@ -1,6 +1,8 @@
 #include "env_editor.hpp"
 
 #include "app.hpp"
+#include "theme.hpp"
+#include "widgets.hpp"
 
 #include "imgui.h"
 
@@ -38,7 +40,7 @@ void DrawEnvelopeCurve(const EnvProgram &prog, ImVec2 size)
   float dur = 0.f;
   prog.SampleCurve(samples, 256, &dur);
 
-  ImGui::PlotLines("##envcurve", samples, 256, 0, nullptr, 0.f, 1.f, size);
+  fw::ui::GlowWaveform("envcurve", samples, 256, size, 0.f, 1.f);
 
   ImDrawList *dl = ImGui::GetWindowDrawList();
   const ImVec2 p0 = ImGui::GetItemRectMin();
@@ -250,14 +252,29 @@ std::string EnvProgram::FormatCommand(int voice) const
   return std::string(prefix) + FormatTokens();
 }
 
-void DrawToneShapeAndFilter(App &app)
+void DrawOscillatorCard(App &app)
 {
-  ImGui::SeparatorText("Oscillator shape (global)");
-  const char *shapes[] = {"Sine (s)", "Pulse (p)", "Triangle (t)"};
-  ImGui::SetNextItemWidth(160);
-  ImGui::Combo("##shape", &app.shape_mode, shapes, 3);
-  ImGui::SameLine();
-  if (ImGui::Button("Apply shape")) {
+  ImGui::BeginChild("osc_card", ImVec2(0, 176), ImGuiChildFlags_Borders);
+  fw::ui::SectionHeader("OSCILLATOR");
+  ImGui::Spacing();
+
+  const char *shapes[] = {"Sine", "Pulse", "Triangle"};
+  fw::ui::SegmentedControl("##shape", shapes, 3, &app.shape_mode);
+  ImGui::Spacing();
+
+  if (app.shape_mode == 1) {
+    ImGui::TextDisabled("Pulse duty");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::SliderFloat("##pulseduty", &app.shape_param, 0.1f, 0.9f, "%.3f");
+  } else if (app.shape_mode == 2) {
+    ImGui::TextDisabled("Triangle asymmetry (0.5 = symmetric)");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::SliderFloat("##triasym", &app.shape_param, 0.1f, 0.9f, "%.3f");
+  } else {
+    ImGui::TextDisabled("s — no shape parameter");
+  }
+
+  if (fw::ui::GlowButton("Apply shape", ImVec2(-1, 0))) {
     if (app.shape_mode == 0) {
       app.bus.QueueExec(rs485::Target::Channel, "s");
     } else if (app.shape_mode == 1) {
@@ -272,38 +289,44 @@ void DrawToneShapeAndFilter(App &app)
       app.bus.QueueExec(rs485::Target::Channel, cmd);
     }
   }
-  if (app.shape_mode == 1) {
-    ImGui::SetNextItemWidth(220);
-    ImGui::SliderFloat("Pulse duty", &app.shape_param, 0.1f, 0.9f, "%.3f");
-  } else if (app.shape_mode == 2) {
-    ImGui::SetNextItemWidth(220);
-    ImGui::SliderFloat("Triangle asymmetry", &app.shape_param, 0.1f, 0.9f,
-                       "%.3f");
-    ImGui::TextDisabled("0.5 = symmetric");
-  }
+  ImGui::EndChild();
+}
 
-  ImGui::SeparatorText("Digital LPF (voices 0–7)");
-  ImGui::SetNextItemWidth(80);
-  ImGui::SliderInt("Voice##filt", &app.selected_voice, 0, 15, "n%x");
+void DrawFilterCard(App &app)
+{
+  ImGui::BeginChild("filter_card", ImVec2(0, 320), ImGuiChildFlags_Borders);
+  fw::ui::SectionHeader("DIGITAL LPF (voices 0–7)");
+  ImGui::Spacing();
+
+  ImGui::TextDisabled("Voice");
+  ImGui::SetNextItemWidth(-1);
+  ImGui::SliderInt("##filtvoice", &app.selected_voice, 0, 15, "n%x");
   const bool filt_ok = (app.selected_voice >= 0 && app.selected_voice <= 7);
   if (!filt_ok) {
-    ImGui::TextColored(ImVec4(1.f, 0.55f, 0.3f, 1.f),
+    ImGui::TextColored(fw::theme::kPalette.warning,
                        "Filter applies to n0–n7 only (selected is n%x)",
                        app.selected_voice);
   }
   ImGui::Checkbox("Bypass (f=20000)", &app.filter_bypass);
   if (!app.filter_bypass) {
-    ImGui::SetNextItemWidth(220);
-    ImGui::SliderFloat("Cutoff Hz", &app.filter_hz_f, 20.f, 20000.f, "%.1f",
+    ImGui::TextDisabled("Cutoff Hz");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::SliderFloat("##cutoff", &app.filter_hz_f, 20.f, 20000.f, "%.1f",
                        ImGuiSliderFlags_Logarithmic);
-    ImGui::SetNextItemWidth(220);
-    ImGui::SliderFloat("q (DF4 g)", &app.filter_q_f, 0.5f, 10.f, "%.2f");
+    ImGui::TextDisabled("q (DF4 g)");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::SliderFloat("##q", &app.filter_q_f, 0.5f, 10.f, "%.2f");
   }
-  ImGui::SetNextItemWidth(220);
-  ImGui::SliderFloat("Filter pitch-track fk", &app.filter_k_f, 0.f, 10.f,
-                     "%.2f");
+  ImGui::TextDisabled("Filter pitch-track fk");
+  ImGui::SetNextItemWidth(-1);
+  ImGui::SliderFloat("##fk", &app.filter_k_f, 0.f, 10.f, "%.2f");
+  ImGui::Spacing();
+
   ImGui::BeginDisabled(!filt_ok || !app.bus.IsOpen());
-  if (ImGui::Button("Apply filter")) {
+  char label1[32];
+  std::snprintf(label1, sizeof(label1), "Apply to n%x",
+               app.selected_voice & 7);
+  if (fw::ui::GlowButton(label1, ImVec2(-1, 0))) {
     const int v = app.selected_voice & 7;
     char cmd[64];
     if (app.filter_bypass) {
@@ -318,8 +341,7 @@ void DrawToneShapeAndFilter(App &app)
                   static_cast<double>(app.filter_k_f));
     app.bus.QueueExec(rs485::Target::Channel, cmd);
   }
-  ImGui::SameLine();
-  if (ImGui::Button("Apply filter 0–7")) {
+  if (fw::ui::GlowButton("Apply to all n0–n7", ImVec2(-1, 0))) {
     char cmd[64];
     if (app.filter_bypass) {
       std::snprintf(cmd, sizeof(cmd), "f 20000");
@@ -335,6 +357,7 @@ void DrawToneShapeAndFilter(App &app)
   }
   ImGui::EndDisabled();
   ImGui::TextDisabled("fc = fbase × (note_Hz / C4)^fk");
+  ImGui::EndChild();
 }
 
 void DrawEnvelopeEditor(App &app)
@@ -342,9 +365,9 @@ void DrawEnvelopeEditor(App &app)
   EnvProgram &prog = app.env;
   prog.EnsureValid();
 
-  ImGui::SeparatorText("Amplitude envelope");
+  fw::ui::SectionHeader("ENVELOPE");
   ImGui::TextDisabled(
-      "Linear segments → hold at last end → release to 0. Per-segment k: "
+      "Linear segments -> hold at last end -> release to 0. Per-segment k: "
       "rate × (f/C4)^k");
 
   ImGui::SetNextItemWidth(80);
@@ -352,23 +375,23 @@ void DrawEnvelopeEditor(App &app)
   ImGui::SameLine();
   ImGui::Checkbox("Apply to all 16", &app.env_apply_all);
 
-  if (ImGui::Button("Pluck")) {
+  if (fw::ui::GlowButton("Pluck")) {
     prog.ResetPluck();
   }
   ImGui::SameLine();
-  if (ImGui::Button("Pad")) {
+  if (fw::ui::GlowButton("Pad")) {
     prog.ResetPad();
   }
   ImGui::SameLine();
-  if (ImGui::Button("Organ")) {
+  if (fw::ui::GlowButton("Organ")) {
     prog.ResetOrgan();
   }
   ImGui::SameLine();
-  if (ImGui::Button("Snappy")) {
+  if (fw::ui::GlowButton("Snappy")) {
     prog.ResetSnappy();
   }
   ImGui::SameLine();
-  if (ImGui::Button("+ segment") && prog.AddSegmentBeforeRelease()) {
+  if (fw::ui::GlowButton("+ segment") && prog.AddSegmentBeforeRelease()) {
   }
   ImGui::SameLine();
   ImGui::TextDisabled("%d / %d segs (incl. release)",
@@ -397,14 +420,14 @@ void DrawEnvelopeEditor(App &app)
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
       if (is_rel) {
-        ImGui::TextColored(ImVec4(1.f, 0.75f, 0.35f, 1.f), "Release");
+        ImGui::TextColored(fw::theme::kPalette.warning, "Release");
       } else {
         ImGui::Text("Seg %d", i);
       }
 
       ImGui::TableNextColumn();
       if (is_rel) {
-        ImGui::TextDisabled("→ 0 (fixed)");
+        ImGui::TextDisabled("-> 0 (fixed)");
       } else {
         ImGui::SetNextItemWidth(-1);
         ImGui::SliderFloat("##end", &seg.end_amp, 0.f, 1.f, "%.3f");
@@ -453,7 +476,7 @@ void DrawEnvelopeEditor(App &app)
   const float r_c3 = EnvProgram::PitchRate(130.812782f, pk);
   const float r_c4 = EnvProgram::PitchRate(EnvProgram::kC4Hz, pk);
   const float r_c5 = EnvProgram::PitchRate(523.251131f, pk);
-  ImGui::Text("k=%+.2f → rate @ C3 %.3f · C4 %.3f · C5 %.3f",
+  ImGui::Text("k=%+.2f -> rate @ C3 %.3f · C4 %.3f · C5 %.3f",
               static_cast<double>(pk), static_cast<double>(r_c3),
               static_cast<double>(r_c4), static_cast<double>(r_c5));
   ImGui::TextDisabled("k>0: higher notes faster; k<0: higher notes slower");
@@ -463,9 +486,9 @@ void DrawEnvelopeEditor(App &app)
       app.env_apply_all ? -1 : (app.selected_voice & 15));
   ImGui::TextWrapped("%s", cmd.c_str());
   ImGui::BeginDisabled(!app.bus.IsOpen());
-  if (ImGui::Button("Apply envelope to card", ImVec2(-1, 36))) {
+  if (fw::ui::GlowButton("Apply envelope to card", ImVec2(-1, 36))) {
     app.bus.QueueExec(rs485::Target::Channel, cmd);
-    app.log.Push(std::string("→ ") + cmd);
+    app.log.Push(std::string("-> ") + cmd);
   }
   ImGui::EndDisabled();
   if (ImGui::Button("Query enN")) {
@@ -488,52 +511,52 @@ void DrawEffectPanel(App &app)
 {
   ImGui::SeparatorText("Effect card");
   if (!app.bus.IsOpen()) {
-    ImGui::TextColored(ImVec4(1.f, 0.6f, 0.2f, 1.f),
+    ImGui::TextColored(fw::theme::kPalette.warning,
                        "Connect RS485 bus — Effect shares the multi-drop line.");
   }
 
   ImGui::BeginChild("eff_power", ImVec2(ImGui::GetContentRegionAvail().x * 0.48f,
-                                        160),
+                                        168),
                     ImGuiChildFlags_Borders);
-  ImGui::TextUnformatted("Power / audio");
-  if (ImGui::Button("Refresh status  e:s", ImVec2(-1, 0))) {
+  ImGui::TextUnformatted("POWER / AUDIO");
+  if (fw::ui::GlowButton("Refresh status  e:s", ImVec2(-1, 0))) {
     app.bus.QueueExec(rs485::Target::Effect, "s");
   }
-  if (ImGui::Button("48V phantom ON", ImVec2(-1, 0))) {
+  if (fw::ui::GlowButton("48V phantom ON", ImVec2(-1, 0))) {
     app.bus.QueueExec(rs485::Target::Effect, "v 1");
   }
-  if (ImGui::Button("48V phantom OFF", ImVec2(-1, 0))) {
+  if (fw::ui::GlowButton("48V phantom OFF", ImVec2(-1, 0), true)) {
     app.bus.QueueExec(rs485::Target::Effect, "v 0");
   }
-  if (ImGui::Button("AUDIO_EN ON", ImVec2(-1, 0))) {
+  if (fw::ui::GlowButton("AUDIO_EN ON", ImVec2(-1, 0))) {
     app.bus.QueueExec(rs485::Target::Effect, "a 1");
   }
-  if (ImGui::Button("AUDIO_EN OFF", ImVec2(-1, 0))) {
+  if (fw::ui::GlowButton("AUDIO_EN OFF", ImVec2(-1, 0), true)) {
     app.bus.QueueExec(rs485::Target::Effect, "a 0");
   }
   ImGui::EndChild();
 
   ImGui::SameLine();
-  ImGui::BeginChild("eff_leds", ImVec2(0, 160), ImGuiChildFlags_Borders);
-  ImGui::TextUnformatted("LEDs");
-  if (ImGui::Button("Auto flash ON", ImVec2(-1, 0))) {
+  ImGui::BeginChild("eff_leds", ImVec2(0, 168), ImGuiChildFlags_Borders);
+  ImGui::TextUnformatted("LEDS");
+  if (fw::ui::GlowButton("Auto flash ON", ImVec2(-1, 0))) {
     app.bus.QueueExec(rs485::Target::Effect, "l 1");
   }
-  if (ImGui::Button("Auto flash OFF", ImVec2(-1, 0))) {
+  if (fw::ui::GlowButton("Auto flash OFF", ImVec2(-1, 0), true)) {
     app.bus.QueueExec(rs485::Target::Effect, "l 0");
   }
-  if (ImGui::Button("Red ON", ImVec2(-1, 0))) {
+  if (fw::ui::GlowButton("Red ON", ImVec2((ImGui::GetContentRegionAvail().x - 8.f) * 0.5f, 0))) {
     app.bus.QueueExec(rs485::Target::Effect, "lr 1");
   }
   ImGui::SameLine();
-  if (ImGui::Button("Red OFF")) {
+  if (fw::ui::GlowButton("Red OFF", ImVec2(-1, 0), true)) {
     app.bus.QueueExec(rs485::Target::Effect, "lr 0");
   }
-  if (ImGui::Button("Yellow ON", ImVec2(-1, 0))) {
+  if (fw::ui::GlowButton("Yellow ON", ImVec2((ImGui::GetContentRegionAvail().x - 8.f) * 0.5f, 0))) {
     app.bus.QueueExec(rs485::Target::Effect, "ly 1");
   }
   ImGui::SameLine();
-  if (ImGui::Button("Yellow OFF")) {
+  if (fw::ui::GlowButton("Yellow OFF", ImVec2(-1, 0), true)) {
     app.bus.QueueExec(rs485::Target::Effect, "ly 0");
   }
   ImGui::EndChild();
