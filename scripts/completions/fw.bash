@@ -37,7 +37,7 @@ _fw_complete() {
       fi
       return
       ;;
-    --baud) COMPREPLY=( $(compgen -W "115200 230400 9600" -- "${cur}") ); return ;;
+    --baud) COMPREPLY=( $(compgen -W "921600 115200 230400 9600" -- "${cur}") ); return ;;
     --timeout-ms) COMPREPLY=( $(compgen -W "300" -- "${cur}") ); return ;;
     --retries) COMPREPLY=( $(compgen -W "2" -- "${cur}") ); return ;;
   esac
