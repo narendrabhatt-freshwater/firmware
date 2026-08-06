@@ -30,7 +30,7 @@ SEND_WAIT_SECS="${FW_SEND_WAIT:-1.5}"
 
 # RS485 console (apps/console — talks to the shared bus, no USB CDC needed)
 RS485_PORT="${FW_RS485_PORT:-}"       # e.g. /dev/cu.usbserial-XXXX (the adapter, not a card)
-RS485_BAUD="${FW_RS485_BAUD:-115200}"
+RS485_BAUD="${FW_RS485_BAUD:-921600}"
 RS485_TARGET="${FW_RS485_TARGET:-channel}" # channel | effect | all
 RS485_MANUAL_RTS=0
 RS485_ECHO_OFF=0
@@ -1256,7 +1256,7 @@ list_midi_ports() {
 # Optional MIDI index and/or channel RS485 routing.
 MIDI_PORT_INDEX=""
 MIDI_RS485_PATH="${FW_RS485_PORT:-}"
-MIDI_RS485_BAUD="${FW_RS485_BAUD:-115200}"
+MIDI_RS485_BAUD="${FW_RS485_BAUD:-921600}"
 MIDI_GAIN_DB="${FW_MIDI_GAIN:-6}"
 MIDI_TARGET=""  # empty = speaker; channel = Channel Card over RS485
 MIDI_ECHO="off" # off | on | leave

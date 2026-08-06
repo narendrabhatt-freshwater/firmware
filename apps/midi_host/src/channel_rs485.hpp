@@ -30,7 +30,7 @@ public:
    * effect_echo: Off (default), On, or Leave (no e:ec command).
    */
   void Open(const std::string &serial_path,
-            uint32_t baud = 115200,
+            uint32_t baud = 921600,
             uint32_t atten_db = 6,
             rs485::EffectEcho effect_echo = rs485::EffectEcho::Off);
 

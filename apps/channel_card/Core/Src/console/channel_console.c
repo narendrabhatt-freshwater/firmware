@@ -90,7 +90,7 @@ static void RS485_BusAcquire(void)
   gi.Pin = GPIO_PIN_12; /* PC12 = UART5_TX */
   gi.Mode = GPIO_MODE_AF_PP;
   gi.Pull = GPIO_NOPULL;
-  gi.Speed = GPIO_SPEED_FREQ_LOW;
+  gi.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   gi.Alternate = GPIO_AF8_UART5;
   HAL_GPIO_Init(GPIOC, &gi);
 
@@ -98,7 +98,7 @@ static void RS485_BusAcquire(void)
   gi.Pin = RS485_CTL_Pin;
   gi.Mode = GPIO_MODE_OUTPUT_PP;
   gi.Pull = GPIO_NOPULL;
-  gi.Speed = GPIO_SPEED_FREQ_LOW;
+  gi.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   gi.Alternate = 0;
   HAL_GPIO_Init(RS485_CTL_GPIO_Port, &gi);
 

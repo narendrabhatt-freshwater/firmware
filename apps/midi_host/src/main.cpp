@@ -95,7 +95,7 @@ void PrintUsage()
          "  (default)            Play sines on the Mac default speakers\n"
          "  --target channel     Drive Channel Card N0–NF over RS485 (no local speaker)\n"
          "  --rs485 PATH         USB↔RS485 adapter serial path (required with channel)\n"
-         "  --baud N             RS485 baud (default 115200)\n"
+         "  --baud N             RS485 baud (default 921600)\n"
          "  --gain DB            CH1 DAC atten in dB at session start (0..127, default 6)\n"
          "  --echo-off           Send e:ec 0 at open (default)\n"
          "  --echo-on            Send e:ec 1 at open\n"
@@ -219,7 +219,7 @@ int main(int argc, char** argv)
   std::optional<unsigned> midi_index;
   OutTarget out_target = OutTarget::Speaker;
   std::string rs485_path;
-  uint32_t rs485_baud = 115200;
+  uint32_t rs485_baud = 921600;
   uint32_t gain_db = 6;
   rs485::EffectEcho effect_echo = rs485::EffectEcho::Off;
 
