@@ -21,6 +21,7 @@
 #include "usb_app.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 extern UART_HandleTypeDef huart5;
@@ -224,8 +225,8 @@ static const SwitchDef_t switches[] = {
  *   n0                — session defaults: bypass ON + g 1 0
  *   n0..nf <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 0.125)
  *   n <Hz> [sc]       — all 16 notes (n 0 = silence)
- *   en0..enf / en     — envelope: end slope [end slope ...] release_slope
- *   ek0..ekf / ek     — env pitch-track k (0..10, rate ∝ (f/C4)^k)
+ *   en0..enf / en     — envelope: end slope[±k] … release_slope[±k]
+ *   ek0..ekf / ek     — env pitch-track bulk k (−10..10, rate ∝ (f/C4)^k)
  *   f0..f7 <Hz> [q] / f <Hz> [q] — LPF on first 8 voices (0 or 20000 = bypass;
  *                        q = DF4 g 0.5..10, default 1.0; higher = more peak)
  *   fk0..fk7 / fk     — filter pitch-track k (0..10, fc = fbase*(f/C4)^k)
@@ -397,7 +398,7 @@ static void Console_Help(void)
 {
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   RS485_Reply("ok: n0 | n0..nf Hz [sc] | n Hz|0 | "
-              "en0..enf end slope ... rel_slope | ek0..ekf k | "
+              "en0..enf end slope[±k] ... rel[±k] | ek0..ekf k | "
               "s | p|t 0.1..0.9 | f0..f7 Hz [q] | f Hz|0 [q] | "
               "fk0..fk7 k | fk k | g ch dB | "
               "cpu [0|N|q N]\r\n");
@@ -413,46 +414,24 @@ static char Console_NoteSlotChar(uint8_t note)
   return (char)('a' + (note - 10u));
 }
 
-/** Parse up to max_n floats from rest. Returns count or -1. */
-static int Console_ParseFloatList(const char *rest, float *vals, int max_n)
+/** Append " %.2f" or " %.2f%+.2f" when k != 0. */
+static int Console_AppendSlopeK(char *b, size_t bsz, int n, float slope, float k)
 {
-  const char *p = rest;
-  int n = 0;
-
-  while (n < max_n)
+  if (n < 0 || (size_t)n >= bsz)
   {
-    double tmp;
-    int consumed = 0;
-
-    while (*p == ' ')
-    {
-      p++;
-    }
-    if (*p == '\0')
-    {
-      break;
-    }
-    if (sscanf(p, "%lf%n", &tmp, &consumed) != 1 || consumed <= 0)
-    {
-      return -1;
-    }
-    vals[n++] = (float)tmp;
-    p += consumed;
+    return n;
   }
-  while (*p == ' ')
+  if (k != 0.0f)
   {
-    p++;
+    return n + snprintf(b + n, bsz - (size_t)n, " %.2f%+.2f", (double)slope,
+                        (double)k);
   }
-  if (*p != '\0')
-  {
-    return -1; /* trailing junk or too many */
-  }
-  return n;
+  return n + snprintf(b + n, bsz - (size_t)n, " %.2f", (double)slope);
 }
 
 static void Console_EnvReply(uint8_t voice)
 {
-  char b[220];
+  char b[280];
   int n;
   uint8_t nseg;
   uint8_t i;
@@ -461,13 +440,12 @@ static void Console_EnvReply(uint8_t voice)
   nseg = NoteEnv_GetSegmentCount(voice);
   if (nseg < NOTE_ENV_SEGMENTS_MIN)
   {
-    snprintf(b, sizeof b, "ok: en%c (none) ek=%.1f\r\n",
-             Console_NoteSlotChar(voice), (double)NoteEnv_GetPitchK(voice));
+    snprintf(b, sizeof b, "ok: en%c (none)\r\n", Console_NoteSlotChar(voice));
     RS485_Reply(b);
     return;
   }
 
-  /* Echo console form: end slope … release_slope (no starts). */
+  /* Echo console form: end slope[±k] … release_slope[±k]. */
   n = snprintf(b, sizeof b, "ok: en%c", Console_NoteSlotChar(voice));
   release_idx = (uint8_t)(nseg - 1u);
   for (i = 0; i < release_idx && n > 0 && (size_t)n < sizeof b; i++)
@@ -477,65 +455,267 @@ static void Console_EnvReply(uint8_t voice)
     {
       break;
     }
-    n += snprintf(b + n, sizeof b - (size_t)n, " %.2f %.2f",
-                  (double)seg.end_amp, (double)seg.slope);
+    n += snprintf(b + n, sizeof b - (size_t)n, " %.2f", (double)seg.end_amp);
+    n = Console_AppendSlopeK(b, sizeof b, n, seg.slope, seg.k);
   }
   if (n > 0 && (size_t)n < sizeof b)
   {
     NoteEnv_Segment_t rel;
     if (NoteEnv_GetSegment(voice, release_idx, &rel) == 0)
     {
-      n += snprintf(b + n, sizeof b - (size_t)n, " %.2f", (double)rel.slope);
+      n = Console_AppendSlopeK(b, sizeof b, n, rel.slope, rel.k);
     }
   }
   if (n > 0 && (size_t)n < sizeof b)
   {
-    snprintf(b + n, sizeof b - (size_t)n, " ek=%.1f\r\n",
-             (double)NoteEnv_GetPitchK(voice));
+    snprintf(b + n, sizeof b - (size_t)n, "\r\n");
   }
   RS485_Reply(b);
 }
 
 static void Console_EkReply(uint8_t voice)
 {
-  char b[40];
-  snprintf(b, sizeof b, "ok: ek%c %.1f\r\n", Console_NoteSlotChar(voice),
-           (double)NoteEnv_GetPitchK(voice));
+  char b[120];
+  uint8_t nseg;
+  uint8_t i;
+  int n;
+  float k0;
+  uint8_t same;
+
+  nseg = NoteEnv_GetSegmentCount(voice);
+  if (nseg < NOTE_ENV_SEGMENTS_MIN)
+  {
+    snprintf(b, sizeof b, "ok: ek%c %.1f\r\n", Console_NoteSlotChar(voice),
+             (double)NoteEnv_GetPitchK(voice));
+    RS485_Reply(b);
+    return;
+  }
+
+  same = 1u;
+  {
+    NoteEnv_Segment_t seg0;
+    if (NoteEnv_GetSegment(voice, 0u, &seg0) != 0)
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+    k0 = seg0.k;
+    for (i = 1u; i < nseg; i++)
+    {
+      NoteEnv_Segment_t seg;
+      if (NoteEnv_GetSegment(voice, i, &seg) != 0 || seg.k != k0)
+      {
+        same = 0u;
+        break;
+      }
+    }
+  }
+  if (same != 0u)
+  {
+    snprintf(b, sizeof b, "ok: ek%c %.1f\r\n", Console_NoteSlotChar(voice),
+             (double)k0);
+    RS485_Reply(b);
+    return;
+  }
+
+  n = snprintf(b, sizeof b, "ok: ek%c", Console_NoteSlotChar(voice));
+  for (i = 0u; i < nseg && n > 0 && (size_t)n < sizeof b; i++)
+  {
+    NoteEnv_Segment_t seg;
+    if (NoteEnv_GetSegment(voice, i, &seg) != 0)
+    {
+      break;
+    }
+    n += snprintf(b + n, sizeof b - (size_t)n, " %.1f", (double)seg.k);
+  }
+  if (n > 0 && (size_t)n < sizeof b)
+  {
+    snprintf(b + n, sizeof b - (size_t)n, "\r\n");
+  }
   RS485_Reply(b);
 }
 
 /**
- * Apply chained floats: end slope [end slope ...] release_slope.
- * nfloats odd, 3..NOTE_ENV_CONSOLE_FLOATS_MAX → nseg = (nfloats+1)/2.
- * Returns 0 ok, -1 syntax/count, -2 range.
+ * Parse one whitespace-delimited token as a plain float (no trailing junk).
+ * Returns 0 ok, -1 syntax.
  */
-static int Console_EnvApplyFloats(uint8_t voice, const float *vals, int nfloats)
+static int Console_ParsePlainFloatToken(const char *tok, float *out)
 {
-  NoteEnv_Segment_t segs[NOTE_ENV_SEGMENTS_MAX];
-  uint8_t n_pre;
-  uint8_t nseg;
-  uint8_t i;
+  char *end = NULL;
+  double v;
 
-  if (nfloats < 3 || nfloats > (int)NOTE_ENV_CONSOLE_FLOATS_MAX ||
-      (nfloats % 2) == 0)
+  if (tok == NULL || *tok == '\0' || out == NULL)
   {
     return -1;
   }
-  /* (nfloats - 1) / 2 pre-release pairs + 1 release. */
-  n_pre = (uint8_t)((nfloats - 1) / 2);
+  v = strtod(tok, &end);
+  if (end == tok || *end != '\0')
+  {
+    return -1;
+  }
+  *out = (float)v;
+  return 0;
+}
+
+/**
+ * Parse slope[±k]: "10", "10+2", "2.0-1.5". No spaces inside the token.
+ * Returns 0 ok, -1 syntax.
+ */
+static int Console_ParseSlopeKToken(const char *tok, float *slope_out,
+                                    float *k_out)
+{
+  char *end = NULL;
+  double slope;
+  float k = 0.0f;
+
+  if (tok == NULL || *tok == '\0' || slope_out == NULL || k_out == NULL)
+  {
+    return -1;
+  }
+  slope = strtod(tok, &end);
+  if (end == tok)
+  {
+    return -1;
+  }
+  if (*end == '+' || *end == '-')
+  {
+    char *kend = NULL;
+    double kd = strtod(end, &kend);
+    if (kend == end || *kend != '\0')
+    {
+      return -1;
+    }
+    k = (float)kd;
+  }
+  else if (*end != '\0')
+  {
+    return -1;
+  }
+  *slope_out = (float)slope;
+  *k_out = k;
+  return 0;
+}
+
+/**
+ * Copy next whitespace-delimited token into tok. Advances *pp past it.
+ * Returns 0 ok, -1 if no token or token too long.
+ */
+static int Console_NextToken(const char **pp, char *tok, size_t tok_sz)
+{
+  const char *p;
+  size_t len = 0u;
+
+  if (pp == NULL || *pp == NULL || tok == NULL || tok_sz < 2u)
+  {
+    return -1;
+  }
+  p = *pp;
+  while (*p == ' ')
+  {
+    p++;
+  }
+  if (*p == '\0')
+  {
+    return -1;
+  }
+  while (p[len] != '\0' && p[len] != ' ')
+  {
+    len++;
+  }
+  if (len >= tok_sz)
+  {
+    return -1;
+  }
+  memcpy(tok, p, len);
+  tok[len] = '\0';
+  *pp = p + len;
+  return 0;
+}
+
+/**
+ * Parse en program: end slope[±k] [end slope[±k] ...] release_slope[±k].
+ * Odd token count 3..NOTE_ENV_CONSOLE_FLOATS_MAX.
+ * Returns 0 ok, -1 syntax/count, -2 range (SetSegments).
+ */
+static int Console_EnvApplyProgram(uint8_t voice, const char *rest,
+                                   uint8_t *nseg_out)
+{
+  NoteEnv_Segment_t segs[NOTE_ENV_SEGMENTS_MAX];
+  char tok[32];
+  const char *p = rest;
+  const char *count_p = rest;
+  uint8_t ntok = 0u;
+  uint8_t n_pre;
+  uint8_t nseg;
+  uint8_t i;
+  int rc;
+
+  /* Count tokens first (odd, 3..MAX). */
+  while (Console_NextToken(&count_p, tok, sizeof tok) == 0)
+  {
+    ntok++;
+    if (ntok > NOTE_ENV_CONSOLE_FLOATS_MAX)
+    {
+      return -1;
+    }
+  }
+  while (*count_p == ' ')
+  {
+    count_p++;
+  }
+  if (*count_p != '\0')
+  {
+    return -1; /* token too long or junk */
+  }
+  if (ntok < 3u || (ntok % 2u) == 0u)
+  {
+    return -1;
+  }
+
+  n_pre = (uint8_t)((ntok - 1u) / 2u);
   nseg = (uint8_t)(n_pre + 1u);
   if (nseg < NOTE_ENV_SEGMENTS_MIN || nseg > NOTE_ENV_SEGMENTS_MAX)
   {
     return -1;
   }
-  for (i = 0; i < n_pre; i++)
+
+  for (i = 0u; i < n_pre; i++)
   {
-    segs[i].end_amp = vals[i * 2u];
-    segs[i].slope = vals[i * 2u + 1u];
+    if (Console_NextToken(&p, tok, sizeof tok) != 0 ||
+        Console_ParsePlainFloatToken(tok, &segs[i].end_amp) != 0)
+    {
+      return -1;
+    }
+    if (Console_NextToken(&p, tok, sizeof tok) != 0 ||
+        Console_ParseSlopeKToken(tok, &segs[i].slope, &segs[i].k) != 0)
+    {
+      return -1;
+    }
+  }
+  if (Console_NextToken(&p, tok, sizeof tok) != 0)
+  {
+    return -1;
   }
   segs[n_pre].end_amp = 0.0f;
-  segs[n_pre].slope = vals[nfloats - 1];
-  return NoteEnv_SetSegments(voice, segs, nseg);
+  if (Console_ParseSlopeKToken(tok, &segs[n_pre].slope, &segs[n_pre].k) != 0)
+  {
+    return -1;
+  }
+  while (*p == ' ')
+  {
+    p++;
+  }
+  if (*p != '\0')
+  {
+    return -1;
+  }
+
+  rc = NoteEnv_SetSegments(voice, segs, nseg);
+  if (rc == 0 && nseg_out != NULL)
+  {
+    *nseg_out = nseg;
+  }
+  return rc;
 }
 
 static void Console_ShapeReply(void)
@@ -611,11 +791,10 @@ static void Console_CmdGain(char *line)
 /** en / en0..enf: multi-segment amplitude envelope. */
 static void Console_CmdEnv(char *line, char *b, size_t bsz)
 {
-  float vals[NOTE_ENV_CONSOLE_FLOATS_MAX];
-  int nfloats;
   const char *rest;
   int rc;
   uint8_t note;
+  uint8_t nseg = 0u;
 
   if (line[2] == '\0' || line[2] == ' ')
   {
@@ -648,16 +827,9 @@ static void Console_CmdEnv(char *line, char *b, size_t bsz)
       RS485_Reply(b);
       return;
     }
-    nfloats =
-        Console_ParseFloatList(rest, vals, (int)NOTE_ENV_CONSOLE_FLOATS_MAX);
-    if (nfloats < 0)
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
     for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
     {
-      rc = Console_EnvApplyFloats(i, vals, nfloats);
+      rc = Console_EnvApplyProgram(i, rest, &nseg);
       if (rc == -1)
       {
         RS485_Reply("err:syntax\r\n");
@@ -669,7 +841,7 @@ static void Console_CmdEnv(char *line, char *b, size_t bsz)
         return;
       }
     }
-    snprintf(b, bsz, "ok: en (%u seg)\r\n", (unsigned)((nfloats + 1) / 2));
+    snprintf(b, bsz, "ok: en (%u seg)\r\n", (unsigned)nseg);
     RS485_Reply(b);
     return;
   }
@@ -690,14 +862,7 @@ static void Console_CmdEnv(char *line, char *b, size_t bsz)
     Console_EnvReply(note);
     return;
   }
-  nfloats =
-      Console_ParseFloatList(rest, vals, (int)NOTE_ENV_CONSOLE_FLOATS_MAX);
-  if (nfloats < 0)
-  {
-    RS485_Reply("err:syntax\r\n");
-    return;
-  }
-  rc = Console_EnvApplyFloats(note, vals, nfloats);
+  rc = Console_EnvApplyProgram(note, rest, &nseg);
   if (rc == -1)
   {
     RS485_Reply("err:syntax\r\n");
