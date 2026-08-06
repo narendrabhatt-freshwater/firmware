@@ -12,6 +12,7 @@ terminal can type (`screen`, `minicom`, PuTTY at **460800 8N1**).
 | USB↔RS485 adapter + any terminal                    | Maintenance / bring-up                                    | Enough for lab |
 | [`apps/console`](../apps/console) (`rs485_console`) | Convenience REPL, retries, `--echo-off`                   | No             |
 | [`apps/midi_host`](../apps/midi_host)               | MIDI → one-by-one notes via [`libs/rs485`](../libs/rs485) | No             |
+| [`apps/control_gui`](../apps/control_gui)           | Dear ImGui + GLFW: MIDI + full console + preview scope  | No             |
 | [`libs/rs485`](../libs/rs485)                       | Shared C++17 automation client                            | Host apps only |
 
 **Implication:** do not invent framing a terminal cannot type. Voice commands
@@ -22,12 +23,14 @@ flowchart LR
   Term[Any serial terminal]
   Con[apps/console]
   Midi[apps/midi_host]
+  Gui[apps/control_gui]
   Lib[libs/rs485]
   Bus[RS485 adapter 460800 8N1]
   CC[Channel Card]
   EC[Effect Card]
   Con --> Lib
   Midi --> Lib
+  Gui --> Lib
   Lib --> Bus
   Term --> Bus
   Bus --> CC

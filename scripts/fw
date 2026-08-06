@@ -93,6 +93,7 @@ usage() {
     "  fw midi     [run|play] [--midi N]"
     "  fw midi     channel --rs485 PATH [--midi N]"
     "  fw midi     build | list"
+    "  fw control  [run] | build"
     "  fw clean    [channel|effect|all]"
     "  fw status"
     "  fw help"
@@ -136,6 +137,10 @@ usage() {
     "  --port /dev/...                   RS485 adapter path (with channel)"
     "  FW_RS485_PORT / FW_MIDI_GAIN      channel-mode defaults"
     ""
+    "Control GUI (apps/control_gui — Dear ImGui + GLFW, macOS/Linux/Windows)"
+    "  fw control build                  build apps/control_gui (FetchContent once)"
+    "  fw control                        run GUI (builds if needed)"
+    ""
     "Cards"
     "  channel    channel_MCU   STM32H725   /dev/cu.usbmodemCHCARD*"
     "  effect     effect_card   STM32H743   /dev/cu.usbmodemEFCARD*"
@@ -155,6 +160,7 @@ usage() {
     "  fw midi list"
     "  fw midi"
     "  fw midi channel --rs485 /dev/cu.usbserial-XXXX --midi 0"
+    "  fw control"
     "  fw flash channel --port USB1"
     "  fw build all --release"
   )
@@ -1448,6 +1454,51 @@ _set_port_arg() {
   fi
 }
 
+# ── Control GUI (apps/control_gui — Dear ImGui + GLFW) ─────────────────────
+
+control_dir() { echo "$ROOT/apps/control_gui"; }
+control_bin() { echo "$(control_dir)/build/control_gui"; }
+
+cmd_control_build() {
+  local dir bin
+  dir="$(control_dir)"
+  bin="$(control_bin)"
+  need_cmd cmake
+  info "build control_gui (Dear ImGui + GLFW)"
+  (
+    cd "$dir"
+    cmake -S . -B build
+    cmake --build build
+  )
+  ok "$(relpath "$bin")"
+}
+
+ensure_control_built() {
+  local bin
+  bin="$(control_bin)"
+  if [[ ! -x "$bin" ]]; then
+    warn "control_gui not built yet — building"
+    cmd_control_build
+  fi
+}
+
+cmd_control() {
+  local sub="${1:-run}"
+  if [[ "$sub" == "build" ]]; then
+    cmd_control_build
+    return
+  fi
+  if [[ "$sub" == "-h" || "$sub" == "--help" || "$sub" == "help" ]]; then
+    usage
+    return
+  fi
+  if [[ "$sub" == "run" ]]; then
+    shift || true
+  fi
+  ensure_control_built
+  exec "$(control_bin)" "$@"
+}
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 main() {
@@ -1468,6 +1519,7 @@ main() {
     send|cmd) cmd_send "$@" ;;
     rs485) cmd_rs485 "$@" ;;
     midi) cmd_midi "$@" ;;
+    control|gui) cmd_control "$@" ;;
     clean)  cmd_clean "$@" ;;
     status|info) cmd_status "$@" ;;
     help|-h|--help) usage ;;

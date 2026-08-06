@@ -236,6 +236,15 @@ fw midi channel --rs485 /dev/cu.usbserial-XXXX --midi 0
 
 See [`apps/midi_host/README.md`](apps/midi_host/README.md).
 
+**Control GUI** (Dear ImGui + GLFW — MIDI + console + preview scope; macOS / Linux / Windows) —
+
+```bash
+fw control build
+fw control
+```
+
+See [`apps/control_gui/README.md`](apps/control_gui/README.md).
+
 ---
 
 ## 7. USB descriptor changes — bump the PID
@@ -272,6 +281,8 @@ hardware:
   real RS485↔PC adapter (not connected as of this writing).
 - **`apps/midi_host`** — Launchkey MIDI → 16-voice FIFO sine bank → Mac
   speakers (RtMidi + RtAudio). See [`apps/midi_host/README.md`](apps/midi_host/README.md).
+- **`apps/control_gui`** — Dear ImGui + GLFW control surface (MIDI, RS485
+  console, local preview scope). See [`apps/control_gui/README.md`](apps/control_gui/README.md).
 
 > **Not under version control yet.** Initialising a git repo at
 > `firmware/` and committing this baseline is strongly recommended
