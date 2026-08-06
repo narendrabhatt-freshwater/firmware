@@ -14,7 +14,7 @@ _fw_complete() {
   local serial_flags="--port -p --baud"
   local rs485_flags="--port -p --baud --manual-rts --timeout-ms --retries --echo-off"
   local rs485_subs="console build list send channel effect all"
-  local midi_flags="--midi --port -p --rs485 --baud --gain --echo-off --echo-on --echo-leave"
+  local midi_flags="--midi --port -p --rs485 --baud --gain --echo-off --echo-on --echo-leave --auto"
   local midi_subs="build list run play channel"
 
   if [[ ${COMP_CWORD} -eq 1 ]]; then

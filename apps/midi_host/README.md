@@ -20,8 +20,10 @@ fw midi --midi 0          # any device at index 0 → speakers
 | Command | Where sound goes |
 | --- | --- |
 | `fw midi` | Mac speakers (default) |
+| `fw midi --auto` | Speakers; looping demo until first key, then live |
 | `fw midi channel --rs485 PATH --gain 6` | Channel Card; CH1 atten −6 dB at start |
 | `fw midi channel --rs485 PATH --midi 0 --gain 12` | same, MIDI port 0, −12 dB |
+| `fw midi channel --rs485 PATH --auto` | Channel Card with autoplay → live handoff |
 
 `--gain DB` is session-start only (`g 1 <DB>` once). Default **6** (or `FW_MIDI_GAIN`).
 `--port N` is an alias for `--midi N`. With `channel`, `--port /dev/...` means
@@ -43,6 +45,20 @@ fw midi build
 | `STEAL` | Bank full (16); oldest note dropped before new `ON` |
 
 Velocity is ignored. Pitch: \(f = 440 \times 2^{(n-69)/12}\).
+
+### Autoplay (`--auto`)
+
+```bash
+fw midi --auto
+fw midi channel --rs485 PATH --auto
+```
+
+Starts a looping A-minor demo (Am–F–C–G broken chords + melody at 96 BPM)
+through the same 16-voice bank. The first MIDI **Note On** (or All Notes Off)
+silences the demo and switches to normal live MIDI for the rest of the
+session. Restart with `--auto` to hear the demo again.
+
+Without `--auto`, behaviour is live MIDI only (wait for keys).
 
 ### Channel Card RS485 session
 

@@ -64,6 +64,7 @@ _fw() {
     '--echo-off[Send e:echo off at open (default)]'
     '--echo-on[Send e:echo on at open]'
     '--echo-leave[Do not change Effect echo]'
+    '--auto[Looping Am demo until first Note On, then live MIDI]'
   )
 
   _arguments -C \

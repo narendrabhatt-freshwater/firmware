@@ -128,6 +128,7 @@ usage() {
     "  fw midi list                      list MIDI input ports"
     "  fw midi                           speakers (auto-pick Launchkey MIDI Out)"
     "  fw midi --midi 0                  speakers, MIDI port index 0 (any device)"
+    "  fw midi --auto                    looping Am demo until first key → live MIDI"
     "  fw midi channel --rs485 PATH      Channel Card N0–NF over RS485 (no speakers)"
     "  fw midi channel --rs485 PATH --midi 0 --gain 6"
     "  --gain DB                         CH1 atten dB at start (0..127, default 6)"
@@ -1259,6 +1260,7 @@ MIDI_RS485_BAUD="${FW_RS485_BAUD:-115200}"
 MIDI_GAIN_DB="${FW_MIDI_GAIN:-6}"
 MIDI_TARGET=""  # empty = speaker; channel = Channel Card over RS485
 MIDI_ECHO="off" # off | on | leave
+MIDI_AUTO=0     # 1 = --auto demo until first Note On
 
 parse_midi_flags() {
   while [[ $# -gt 0 ]]; do
@@ -1305,6 +1307,7 @@ parse_midi_flags() {
       --echo-off) MIDI_ECHO="off" ;;
       --echo-on) MIDI_ECHO="on" ;;
       --echo-leave) MIDI_ECHO="leave" ;;
+      --auto) MIDI_AUTO=1 ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown midi option: $1" ;;
     esac
@@ -1352,12 +1355,18 @@ cmd_midi() {
 
   local args=()
   [[ -n "$MIDI_PORT_INDEX" ]] && args+=( --midi "$MIDI_PORT_INDEX" )
+  [[ "$MIDI_AUTO" -eq 1 ]] && args+=( --auto )
 
   hdr "MIDI host"
   if [[ -n "$MIDI_PORT_INDEX" ]]; then
     row "midi" "$MIDI_PORT_INDEX"
   else
     row "midi" "auto (Launchkey MIDI Out preferred)"
+  fi
+  if [[ "$MIDI_AUTO" -eq 1 ]]; then
+    row "mode" "autoplay → live on key"
+  else
+    row "mode" "live MIDI"
   fi
 
   if [[ "$MIDI_TARGET" == "channel" ]]; then

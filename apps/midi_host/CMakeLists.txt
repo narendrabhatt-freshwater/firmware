@@ -41,6 +41,7 @@ add_executable(midi_host
   src/midi_input.cpp
   src/pitch.cpp
   src/voice_bank.cpp
+  src/auto_player.cpp
   src/audio_engine.cpp
   src/channel_rs485.cpp
 )

@@ -7,6 +7,7 @@
  */
 
 #include "audio_engine.hpp"
+#include "auto_player.hpp"
 #include "channel_rs485.hpp"
 #include "midi_input.hpp"
 #include "note_event.hpp"
@@ -34,6 +35,7 @@
 #endif
 
 using midi_host::AudioEngine;
+using midi_host::AutoPlayer;
 using midi_host::BankEvent;
 using midi_host::BankEventKind;
 using midi_host::ChannelRs485Out;
@@ -62,14 +64,20 @@ enum class OutTarget
   Channel,
 };
 
+enum class PlayMode
+{
+  Live,
+  Auto,
+};
+
 void PrintUsage()
 {
   std::cout
       << "midi_host - MIDI → 16-voice FIFO bank → speakers or Channel Card\n"
          "\n"
          "Usage:\n"
-         "  midi_host [--midi N]                         # speakers (default)\n"
-         "  midi_host --target channel --rs485 PATH [--midi N] [--gain DB]\n"
+         "  midi_host [--midi N] [--auto]                # speakers (default)\n"
+         "  midi_host --target channel --rs485 PATH [--midi N] [--gain DB] [--auto]\n"
          "            [--echo-off|--echo-on|--echo-leave]\n"
          "  midi_host --list\n"
          "  midi_host -h | --help\n"
@@ -78,6 +86,10 @@ void PrintUsage()
          "  --midi N, --port N   MIDI input port index (see --list)\n"
          "  --list               List MIDI input ports and exit\n"
          "  (default)            Prefer Launchkey \"… MIDI Out\" (not DAW Out)\n"
+         "\n"
+         "Play mode:\n"
+         "  (default)            Live MIDI only — wait for keys\n"
+         "  --auto               Looping Am demo until first Note On, then live MIDI\n"
          "\n"
          "Output:\n"
          "  (default)            Play sines on the Mac default speakers\n"
@@ -123,6 +135,23 @@ void PrintBankEvent(const BankEvent& ev, bool via_rs485)
               via_rs485 ? "  [midi]" : "");
   // No fflush — under a 16-key mash, flushing every line stalls the MIDI
   // poll loop and delays RS485 Offs (notes hang on the card).
+}
+
+void ApplyBankEvents(const std::vector<BankEvent>& events,
+                     AudioEngine* audio,
+                     ChannelRs485Out* channel,
+                     VoiceBank& bank)
+{
+  for (const BankEvent& ev : events) {
+    /* RS485 / speakers first — never stall the bus behind terminal I/O. */
+    if (audio) {
+      audio->ApplyBankEvent(ev);
+    }
+    if (channel) {
+      channel->ApplyBankEvent(ev, bank);
+    }
+    PrintBankEvent(ev, channel != nullptr);
+  }
 }
 
 #if !defined(_WIN32)
@@ -186,6 +215,7 @@ int main(int argc, char** argv)
   std::signal(SIGTERM, OnQuitSignal);
 #endif
   bool list_only = false;
+  bool auto_play = false;
   std::optional<unsigned> midi_index;
   OutTarget out_target = OutTarget::Speaker;
   std::string rs485_path;
@@ -201,6 +231,10 @@ int main(int argc, char** argv)
     }
     if (std::strcmp(arg, "--list") == 0) {
       list_only = true;
+      continue;
+    }
+    if (std::strcmp(arg, "--auto") == 0) {
+      auto_play = true;
       continue;
     }
     if (std::strcmp(arg, "--echo-off") == 0) {
@@ -331,6 +365,8 @@ int main(int argc, char** argv)
 
   MidiInput midi;
   VoiceBank bank;
+  AutoPlayer auto_player;
+  PlayMode play_mode = auto_play ? PlayMode::Auto : PlayMode::Live;
   std::unique_ptr<AudioEngine> audio;
   std::unique_ptr<ChannelRs485Out> channel;
 
@@ -361,6 +397,12 @@ int main(int argc, char** argv)
       }
       std::cout << "\n";
     }
+    if (play_mode == PlayMode::Auto) {
+      std::cout << "mode:   autoplay (key → live MIDI)\n";
+      auto_player.Start(AutoPlayer::Clock::now());
+    } else {
+      std::cout << "mode:   live MIDI\n";
+    }
     std::cout << "playing… (Enter to quit)\n";
   } catch (const std::exception& ex) {
     std::cerr << "err: " << ex.what() << "\n";
@@ -371,24 +413,42 @@ int main(int argc, char** argv)
   bool running = true;
   while (running) {
     midi.Poll(notes);
-    for (const NoteEvent& ne : notes) {
-      std::vector<BankEvent> events;
-      if (ne.action == NoteAction::On) {
-        events = bank.NoteOn(ne.key);
-      } else if (ne.action == NoteAction::AllOff) {
-        events = bank.AllOff();
-      } else {
-        events = bank.NoteOff(ne.key);
+
+    bool handoff_to_live = false;
+    if (play_mode == PlayMode::Auto) {
+      for (const NoteEvent& ne : notes) {
+        if (ne.action == NoteAction::On || ne.action == NoteAction::AllOff) {
+          handoff_to_live = true;
+          break;
+        }
       }
-      for (const BankEvent& ev : events) {
-        // RS485 / speakers first — never stall the bus behind terminal I/O.
-        if (audio) {
-          audio->ApplyBankEvent(ev);
+    }
+
+    if (handoff_to_live) {
+      auto_player.Stop();
+      ApplyBankEvents(bank.AllOff(), audio.get(), channel.get(), bank);
+      play_mode = PlayMode::Live;
+      std::cout << "mode:   live MIDI\n";
+      /* Fall through: process this poll's notes as live so the key sounds. */
+    }
+
+    if (play_mode == PlayMode::Auto) {
+      /* Ignore Note Off while autoplaying — demo owns the bank. */
+      ApplyBankEvents(auto_player.Tick(bank, AutoPlayer::Clock::now()),
+                      audio.get(),
+                      channel.get(),
+                      bank);
+    } else {
+      for (const NoteEvent& ne : notes) {
+        std::vector<BankEvent> events;
+        if (ne.action == NoteAction::On) {
+          events = bank.NoteOn(ne.key);
+        } else if (ne.action == NoteAction::AllOff) {
+          events = bank.AllOff();
+        } else {
+          events = bank.NoteOff(ne.key);
         }
-        if (channel) {
-          channel->ApplyBankEvent(ev, bank);
-        }
-        PrintBankEvent(ev, channel != nullptr);
+        ApplyBankEvents(events, audio.get(), channel.get(), bank);
       }
     }
 
