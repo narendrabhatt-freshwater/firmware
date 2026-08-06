@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    butterworth_four_pole.c
- * @brief   4-pole DF4 Butterworth kernel — C port of boss four_pole_filter_t.
+ * @brief   4-pole DF4 Butterworth kernel — C port of reference four_pole_filter.
  ******************************************************************************
  */
 
@@ -14,11 +14,13 @@ double ButterFourPole_CutoffToOmega(double cutoff_hz, double sample_rate)
   const double pi = 3.14159265358979323846;
   double nyquist;
 
-  if (cutoff_hz < 0.0) {
+  if (cutoff_hz < 0.0)
+  {
     cutoff_hz = 0.0;
   }
   nyquist = 0.5 * sample_rate;
-  if (cutoff_hz > 0.999 * nyquist) {
+  if (cutoff_hz > 0.999 * nyquist)
+  {
     cutoff_hz = 0.999 * nyquist;
   }
   return 2.0 * pi * cutoff_hz / sample_rate;
@@ -26,6 +28,10 @@ double ButterFourPole_CutoffToOmega(double cutoff_hz, double sample_rate)
 
 void ButterFourPole_Reset(ButterFourPole_t *f)
 {
+  if (f == 0)
+  {
+    return;
+  }
   f->d[0] = 0.0;
   f->d[1] = 0.0;
   f->d[2] = 0.0;
@@ -43,6 +49,11 @@ void ButterFourPole_InitLowPass(ButterFourPole_t *f, double omega, double g)
   double a2;
   double a3;
   double a4;
+
+  if (f == 0)
+  {
+    return;
+  }
 
   k = (4.0 * g - 3.0) / (g + 1.0);
   p = 1.0 - 0.25 * k;
@@ -84,6 +95,11 @@ void ButterFourPole_InitHighPass(ButterFourPole_t *f, double omega, double g)
   double a3;
   double a4;
 
+  if (f == 0)
+  {
+    return;
+  }
+
   k = (4.0 * g - 3.0) / (g + 1.0);
   p = 1.0 - 0.25 * k;
   p *= p;
@@ -114,7 +130,14 @@ void ButterFourPole_InitHighPass(ButterFourPole_t *f, double omega, double g)
 
 double ButterFourPole_Process(ButterFourPole_t *f, double in)
 {
-  double out = f->coef[0] * in + f->d[0];
+  double out;
+
+  if (f == 0)
+  {
+    return in;
+  }
+
+  out = f->coef[0] * in + f->d[0];
   f->d[0] = f->coef[1] * in + f->coef[5] * out + f->d[1];
   f->d[1] = f->coef[2] * in + f->coef[6] * out + f->d[2];
   f->d[2] = f->coef[3] * in + f->coef[7] * out + f->d[3];

@@ -3,8 +3,8 @@
  * @file    channel_console.c
  * @brief   Channel Card RS485 + USB CDC console (short cmds), cpu probe, LED.
  *
- * Extracted from main.c (behavior-preserving). main.c owns bring-up +
- * hcs4304; this file owns the interactive console surface.
+ * Extracted from main.c (behavior-preserving). main.c owns bring-up and the
+ * DAC handle; this file owns the interactive console surface.
  ******************************************************************************
  */
 
@@ -23,8 +23,15 @@
 #include <stdio.h>
 #include <string.h>
 
-extern CS4304_HandleTypeDef hcs4304;
 extern UART_HandleTypeDef huart5;
+
+/* Bound from main via ChannelConsole_SetDacHandle(). */
+static CS4304_HandleTypeDef *s_dac;
+
+void ChannelConsole_SetDacHandle(CS4304_HandleTypeDef *h)
+{
+  s_dac = h;
+}
 
 /* ---- Multi-drop RS485 card addressing ---- */
 #define RS485_CARD_ID 'c'
@@ -238,7 +245,10 @@ static void Console_SetBypassOn(void)
 static void Console_ApplySessionDefaults(void)
 {
   Console_SetBypassOn();
-  CS4304_SetChannelTrim(&hcs4304, '1', (uint8_t)(N0_DEFAULT_ATTEN_DB * 2u));
+  if (s_dac != NULL)
+  {
+    CS4304_SetChannelTrim(s_dac, '1', (uint8_t)(N0_DEFAULT_ATTEN_DB * 2u));
+  }
 }
 
 /** Map hex digit '0'..'9','a'..'f' → 0..15; else 0xFF. */
@@ -555,14 +565,476 @@ static void Console_FilterReply(uint8_t voice, double fc)
   RS485_Reply(b);
 }
 
+/** g <ch> <dB>: CS4304 DAC atten. Caller already matched sscanf. */
+static void Console_CmdGain(char *line)
+{
+  unsigned int ch, val;
+
+  (void)sscanf(line, "g %u %u", &ch, &val);
+  if (ch >= 1 && ch <= 4 && val <= 127 && s_dac != NULL)
+  {
+    CS4304_SetChannelTrim(s_dac, (char)('0' + ch), (uint8_t)(val * 2u));
+    RS485_Reply("ok\r\n");
+  }
+  else
+  {
+    RS485_Reply("err:range\r\n");
+  }
+}
+
+/** en / en0..enf: multi-segment amplitude envelope. */
+static void Console_CmdEnv(char *line, char *b, size_t bsz)
+{
+  float vals[NOTE_ENV_CONSOLE_FLOATS_MAX];
+  int nfloats;
+  const char *rest;
+  int rc;
+  uint8_t note;
+
+  if (line[2] == '\0' || line[2] == ' ')
+  {
+    rest = line + 2;
+    while (*rest == ' ')
+    {
+      rest++;
+    }
+    if (*rest == '\0')
+    {
+      /* Compact dump of all programmed voices. */
+      int n = snprintf(b, bsz, "ok:");
+      for (uint8_t i = 0; i < NOTE_BANK_VOICES && n > 0 && (size_t)n < bsz;
+           i++)
+      {
+        if (NoteEnv_IsProgrammed(i) != 0u)
+        {
+          n += snprintf(b + n, bsz - (size_t)n, " en%c",
+                        Console_NoteSlotChar(i));
+        }
+      }
+      if (n == (int)strlen("ok:"))
+      {
+        snprintf(b, bsz, "ok: en (none)\r\n");
+      }
+      else if ((size_t)n < bsz - 2u)
+      {
+        snprintf(b + n, bsz - (size_t)n, "\r\n");
+      }
+      RS485_Reply(b);
+      return;
+    }
+    nfloats =
+        Console_ParseFloatList(rest, vals, (int)NOTE_ENV_CONSOLE_FLOATS_MAX);
+    if (nfloats < 0)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
+    {
+      rc = Console_EnvApplyFloats(i, vals, nfloats);
+      if (rc == -1)
+      {
+        RS485_Reply("err:syntax\r\n");
+        return;
+      }
+      if (rc != 0)
+      {
+        RS485_Reply("err:range\r\n");
+        return;
+      }
+    }
+    snprintf(b, bsz, "ok: en (%u seg)\r\n", (unsigned)((nfloats + 1) / 2));
+    RS485_Reply(b);
+    return;
+  }
+
+  note = Console_ParseNoteSlot(line[2]);
+  if (note == 0xFFu || (line[3] != '\0' && line[3] != ' '))
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+  rest = line + 3;
+  while (*rest == ' ')
+  {
+    rest++;
+  }
+  if (*rest == '\0')
+  {
+    Console_EnvReply(note);
+    return;
+  }
+  nfloats =
+      Console_ParseFloatList(rest, vals, (int)NOTE_ENV_CONSOLE_FLOATS_MAX);
+  if (nfloats < 0)
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+  rc = Console_EnvApplyFloats(note, vals, nfloats);
+  if (rc == -1)
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+  if (rc != 0)
+  {
+    RS485_Reply("err:range\r\n");
+    return;
+  }
+  Console_EnvReply(note);
+}
+
+/** ek / ek0..ekf: pitch-track constant. */
+static void Console_CmdEk(char *line, char *b, size_t bsz)
+{
+  const char *rest;
+  double kd;
+  float k;
+  int rc;
+  uint8_t note;
+
+  if (line[2] == '\0' || line[2] == ' ')
+  {
+    rest = line + 2;
+    while (*rest == ' ')
+    {
+      rest++;
+    }
+    if (*rest == '\0')
+    {
+      int n = snprintf(b, bsz, "ok:");
+      for (uint8_t i = 0; i < NOTE_BANK_VOICES && n > 0 && (size_t)n < bsz;
+           i++)
+      {
+        n += snprintf(b + n, bsz - (size_t)n, " ek%c=%.1f",
+                      Console_NoteSlotChar(i), (double)NoteEnv_GetPitchK(i));
+      }
+      if ((size_t)n < bsz - 2u)
+      {
+        snprintf(b + n, bsz - (size_t)n, "\r\n");
+      }
+      RS485_Reply(b);
+      return;
+    }
+    if (sscanf(rest, "%lf", &kd) != 1)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    k = (float)kd;
+    for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
+    {
+      rc = NoteEnv_SetPitchK(i, k);
+      if (rc != 0)
+      {
+        RS485_Reply("err:range\r\n");
+        return;
+      }
+    }
+    snprintf(b, bsz, "ok: ek %.1f\r\n", (double)k);
+    RS485_Reply(b);
+    return;
+  }
+
+  note = Console_ParseNoteSlot(line[2]);
+  if (note == 0xFFu || (line[3] != '\0' && line[3] != ' '))
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+  rest = line + 3;
+  while (*rest == ' ')
+  {
+    rest++;
+  }
+  if (*rest == '\0')
+  {
+    Console_EkReply(note);
+    return;
+  }
+  if (sscanf(rest, "%lf", &kd) != 1)
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+  k = (float)kd;
+  rc = NoteEnv_SetPitchK(note, k);
+  if (rc != 0)
+  {
+    RS485_Reply("err:range\r\n");
+    return;
+  }
+  Console_EkReply(note);
+}
+
+/** f0..f7 / f: LPF on first 8 voices; optional q = DF4 g. */
+static void Console_CmdFilter(char *line, char *b, size_t bsz)
+{
+  const char *rest;
+  double fc;
+  double q;
+  int rc;
+  int nscan;
+  uint8_t note;
+
+  if (line[1] >= '0' && line[1] <= '7' &&
+      (line[2] == '\0' || line[2] == ' '))
+  {
+    note = (uint8_t)(line[1] - '0');
+    rest = line + 2;
+    while (*rest == ' ')
+    {
+      rest++;
+    }
+    if (*rest == '\0')
+    {
+      Console_FilterReply(note, NoteFilter_GetCutoff(note));
+      return;
+    }
+    nscan = sscanf(rest, "%lf %lf", &fc, &q);
+    if (nscan < 1)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    if (nscan == 2)
+    {
+      rc = NoteFilter_SetQ(note, q);
+      if (rc != 0)
+      {
+        RS485_Reply("err:range\r\n");
+        return;
+      }
+    }
+    rc = NoteFilter_SetCutoff(note, fc);
+    if (rc != 0)
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+    Console_FilterReply(note, NoteFilter_GetCutoff(note));
+    return;
+  }
+
+  if ((line[1] >= '8' && line[1] <= '9') ||
+      (line[1] >= 'a' && line[1] <= 'f'))
+  {
+    if (line[2] == '\0' || line[2] == ' ')
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+
+  if (line[1] == '\0' || line[1] == ' ')
+  {
+    rest = line + 1;
+    while (*rest == ' ')
+    {
+      rest++;
+    }
+    if (*rest == '\0')
+    {
+      /* Compact dump of f0..f7 cutoff/q. */
+      int n = snprintf(b, bsz, "ok:");
+      for (uint8_t i = 0; i < NOTE_FILTER_CONSOLE_VOICES && n > 0 &&
+                          (size_t)n < bsz;
+           i++)
+      {
+        fc = NoteFilter_GetCutoff(i);
+        n += snprintf(b + n, bsz - (size_t)n, " f%u=%.0f/%.2f", (unsigned)i,
+                      fc, NoteFilter_GetQ(i));
+      }
+      if ((size_t)n < bsz - 2u)
+      {
+        snprintf(b + n, bsz - (size_t)n, "\r\n");
+      }
+      RS485_Reply(b);
+      return;
+    }
+    nscan = sscanf(rest, "%lf %lf", &fc, &q);
+    if (nscan < 1)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    for (uint8_t i = 0; i < NOTE_FILTER_CONSOLE_VOICES; i++)
+    {
+      if (nscan == 2)
+      {
+        rc = NoteFilter_SetQ(i, q);
+        if (rc != 0)
+        {
+          RS485_Reply("err:range\r\n");
+          return;
+        }
+      }
+      rc = NoteFilter_SetCutoff(i, fc);
+      if (rc != 0)
+      {
+        RS485_Reply("err:range\r\n");
+        return;
+      }
+    }
+    snprintf(b, bsz, "ok: f %.1f Hz%s q %.2f\r\n", fc,
+             (fc == 0.0 || fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "",
+             NoteFilter_GetQ(0));
+    RS485_Reply(b);
+    return;
+  }
+
+  RS485_Reply("err:unknown\r\n");
+}
+
+/** cpu [0|N|q [N]]: LED_Y busy/idle probe. */
+static void Console_CmdCpu(char *line, char *b, size_t bsz)
+{
+  const char *arg = line + 3;
+  uint8_t mode;
+  uint8_t nvoices;
+
+  while (*arg == ' ')
+  {
+    arg++;
+  }
+
+  if (!Console_CpuLoad_Parse(arg, &mode, &nvoices))
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+
+  if (mode == 0u)
+  {
+    Audio_CpuLoad_SetMode(AUDIO_CPULOAD_OFF);
+    Console_CpuLoad_DisableVoices();
+    led_show_on = 1;
+    RS485_Reply("ok: cpu 0\r\n");
+    return;
+  }
+
+  Console_ApplySessionDefaults();
+  Audio_StartPlayback();
+  Console_CpuLoad_EnableVoices(nvoices);
+  led_show_on = 0;
+
+  if (mode == 2u)
+  {
+    Audio_CpuLoad_SetMode(AUDIO_CPULOAD_QUEUE);
+    snprintf(b, bsz, "ok: cpu q %u\r\n", (unsigned)nvoices);
+  }
+  else
+  {
+    Audio_CpuLoad_SetMode(AUDIO_CPULOAD_DMA);
+    snprintf(b, bsz, "ok: cpu %u\r\n", (unsigned)nvoices);
+  }
+  RS485_Reply(b);
+}
+
+/** n <Hz> [scale]: all 16 voices (n 0 = silence). */
+static void Console_CmdNoteAll(char *line)
+{
+  const char *rest = line + 1;
+  double hz;
+  double scale;
+  int nscan;
+
+  while (*rest == ' ')
+  {
+    rest++;
+  }
+  if (*rest == '\0')
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+
+  nscan = sscanf(rest, "%lf %lf", &hz, &scale);
+  if (nscan == 1)
+  {
+    scale = NOTE_DEFAULT_SCALE;
+  }
+  else if (nscan != 2)
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+
+  if (hz <= 0.0)
+  {
+    Console_CpuLoad_DisableVoices();
+    RS485_Reply("ok\r\n");
+    return;
+  }
+  if (hz < 20.0 || hz >= 20000.0 || scale < 0.0 || scale > 1.0)
+  {
+    RS485_Reply("err:range\r\n");
+    return;
+  }
+  for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
+  {
+    NoteBank_SetFreq(i, hz, scale);
+  }
+  RS485_Reply("ok\r\n");
+}
+
+/** n0..nf: 16-voice note bank on CH1 (also answers unknown). */
+static void Console_CmdNoteSlot(char *line)
+{
+  double hz;
+  double scale;
+  uint8_t note;
+  int nscan;
+
+  if (line[0] != 'n' || line[1] == '\0')
+  {
+    RS485_Reply("err:unknown\r\n");
+    return;
+  }
+
+  note = Console_ParseNoteSlot(line[1]);
+  if (note == 0xFFu || (line[2] != '\0' && line[2] != ' '))
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+
+  /* Bare "n0" = session defaults only. Bare n1..nf are not session cmds. */
+  if (line[2] == '\0')
+  {
+    if (note == 0u)
+    {
+      Console_ApplySessionDefaults();
+      RS485_Reply("ok\r\n");
+    }
+    else
+    {
+      RS485_Reply("err:syntax\r\n");
+    }
+    return;
+  }
+
+  nscan = sscanf(line + 3, "%lf %lf", &hz, &scale);
+  if (nscan == 1)
+  {
+    scale = NOTE_DEFAULT_SCALE; /* production MIDI default */
+  }
+  else if (nscan != 2)
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+
+  Console_SetNoteFreq(note, hz, scale);
+}
+
 static void Console_Exec(char *line)
 {
   char b[160];
-  double hz;
-  double scale;
   unsigned int ch, val;
-  uint8_t note;
-  int nscan;
 
   if (line[0] == '\0')
   {
@@ -612,461 +1084,49 @@ static void Console_Exec(char *line)
   /* ---- g <ch> <dB>: CS4304 DAC atten ---- */
   if (sscanf(line, "g %u %u", &ch, &val) == 2)
   {
-    if (ch >= 1 && ch <= 4 && val <= 127)
-    {
-      CS4304_SetChannelTrim(&hcs4304, (char)('0' + ch), (uint8_t)(val * 2u));
-      RS485_Reply("ok\r\n");
-    }
-    else
-    {
-      RS485_Reply("err:range\r\n");
-    }
+    (void)ch;
+    (void)val;
+    Console_CmdGain(line);
     return;
   }
 
   /* ---- en / en0..enf: multi-segment amplitude envelope ---- */
   if (line[0] == 'e' && line[1] == 'n')
   {
-    float vals[NOTE_ENV_CONSOLE_FLOATS_MAX];
-    int nfloats;
-    const char *rest;
-    int rc;
-
-    if (line[2] == '\0' || line[2] == ' ')
-    {
-      rest = line + 2;
-      while (*rest == ' ')
-      {
-        rest++;
-      }
-      if (*rest == '\0')
-      {
-        /* Compact dump of all programmed voices. */
-        int n = snprintf(b, sizeof b, "ok:");
-        for (uint8_t i = 0; i < NOTE_BANK_VOICES && n > 0 &&
-                            (size_t)n < sizeof b;
-             i++)
-        {
-          if (NoteEnv_IsProgrammed(i) != 0u)
-          {
-            n += snprintf(b + n, sizeof b - (size_t)n, " en%c",
-                          Console_NoteSlotChar(i));
-          }
-        }
-        if (n == (int)strlen("ok:"))
-        {
-          snprintf(b, sizeof b, "ok: en (none)\r\n");
-        }
-        else if ((size_t)n < sizeof b - 2u)
-        {
-          snprintf(b + n, sizeof b - (size_t)n, "\r\n");
-        }
-        RS485_Reply(b);
-        return;
-      }
-      nfloats =
-          Console_ParseFloatList(rest, vals, (int)NOTE_ENV_CONSOLE_FLOATS_MAX);
-      if (nfloats < 0)
-      {
-        RS485_Reply("err:syntax\r\n");
-        return;
-      }
-      for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
-      {
-        rc = Console_EnvApplyFloats(i, vals, nfloats);
-        if (rc == -1)
-        {
-          RS485_Reply("err:syntax\r\n");
-          return;
-        }
-        if (rc != 0)
-        {
-          RS485_Reply("err:range\r\n");
-          return;
-        }
-      }
-      snprintf(b, sizeof b, "ok: en (%u seg)\r\n",
-               (unsigned)((nfloats + 1) / 2));
-      RS485_Reply(b);
-      return;
-    }
-
-    note = Console_ParseNoteSlot(line[2]);
-    if (note == 0xFFu || (line[3] != '\0' && line[3] != ' '))
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-    rest = line + 3;
-    while (*rest == ' ')
-    {
-      rest++;
-    }
-    if (*rest == '\0')
-    {
-      Console_EnvReply(note);
-      return;
-    }
-    nfloats =
-        Console_ParseFloatList(rest, vals, (int)NOTE_ENV_CONSOLE_FLOATS_MAX);
-    if (nfloats < 0)
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-    rc = Console_EnvApplyFloats(note, vals, nfloats);
-    if (rc == -1)
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-    if (rc != 0)
-    {
-      RS485_Reply("err:range\r\n");
-      return;
-    }
-    Console_EnvReply(note);
+    Console_CmdEnv(line, b, sizeof b);
     return;
   }
 
   /* ---- ek / ek0..ekf: pitch-track constant ---- */
   if (line[0] == 'e' && line[1] == 'k')
   {
-    const char *rest;
-    double kd;
-    float k;
-    int rc;
-
-    if (line[2] == '\0' || line[2] == ' ')
-    {
-      rest = line + 2;
-      while (*rest == ' ')
-      {
-        rest++;
-      }
-      if (*rest == '\0')
-      {
-        int n = snprintf(b, sizeof b, "ok:");
-        for (uint8_t i = 0; i < NOTE_BANK_VOICES && n > 0 &&
-                            (size_t)n < sizeof b;
-             i++)
-        {
-          n += snprintf(b + n, sizeof b - (size_t)n, " ek%c=%.1f",
-                        Console_NoteSlotChar(i),
-                        (double)NoteEnv_GetPitchK(i));
-        }
-        if ((size_t)n < sizeof b - 2u)
-        {
-          snprintf(b + n, sizeof b - (size_t)n, "\r\n");
-        }
-        RS485_Reply(b);
-        return;
-      }
-      if (sscanf(rest, "%lf", &kd) != 1)
-      {
-        RS485_Reply("err:syntax\r\n");
-        return;
-      }
-      k = (float)kd;
-      for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
-      {
-        rc = NoteEnv_SetPitchK(i, k);
-        if (rc != 0)
-        {
-          RS485_Reply("err:range\r\n");
-          return;
-        }
-      }
-      snprintf(b, sizeof b, "ok: ek %.1f\r\n", (double)k);
-      RS485_Reply(b);
-      return;
-    }
-
-    note = Console_ParseNoteSlot(line[2]);
-    if (note == 0xFFu || (line[3] != '\0' && line[3] != ' '))
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-    rest = line + 3;
-    while (*rest == ' ')
-    {
-      rest++;
-    }
-    if (*rest == '\0')
-    {
-      Console_EkReply(note);
-      return;
-    }
-    if (sscanf(rest, "%lf", &kd) != 1)
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-    k = (float)kd;
-    rc = NoteEnv_SetPitchK(note, k);
-    if (rc != 0)
-    {
-      RS485_Reply("err:range\r\n");
-      return;
-    }
-    Console_EkReply(note);
+    Console_CmdEk(line, b, sizeof b);
     return;
   }
 
   /* ---- f0..f7 / f: LPF on first 8 voices; optional q = DF4 g ---- */
   if (line[0] == 'f')
   {
-    const char *rest;
-    double fc;
-    double q;
-    int rc;
-
-    if (line[1] >= '0' && line[1] <= '7' &&
-        (line[2] == '\0' || line[2] == ' '))
-    {
-      note = (uint8_t)(line[1] - '0');
-      rest = line + 2;
-      while (*rest == ' ')
-      {
-        rest++;
-      }
-      if (*rest == '\0')
-      {
-        Console_FilterReply(note, NoteFilter_GetCutoff(note));
-        return;
-      }
-      nscan = sscanf(rest, "%lf %lf", &fc, &q);
-      if (nscan < 1)
-      {
-        RS485_Reply("err:syntax\r\n");
-        return;
-      }
-      if (nscan == 2)
-      {
-        rc = NoteFilter_SetQ(note, q);
-        if (rc != 0)
-        {
-          RS485_Reply("err:range\r\n");
-          return;
-        }
-      }
-      rc = NoteFilter_SetCutoff(note, fc);
-      if (rc != 0)
-      {
-        RS485_Reply("err:range\r\n");
-        return;
-      }
-      Console_FilterReply(note, NoteFilter_GetCutoff(note));
-      return;
-    }
-
-    if ((line[1] >= '8' && line[1] <= '9') ||
-        (line[1] >= 'a' && line[1] <= 'f'))
-    {
-      if (line[2] == '\0' || line[2] == ' ')
-      {
-        RS485_Reply("err:range\r\n");
-        return;
-      }
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-
-    if (line[1] == '\0' || line[1] == ' ')
-    {
-      rest = line + 1;
-      while (*rest == ' ')
-      {
-        rest++;
-      }
-      if (*rest == '\0')
-      {
-        /* Compact dump of f0..f7 cutoff/q. */
-        int n = snprintf(b, sizeof b, "ok:");
-        for (uint8_t i = 0; i < NOTE_FILTER_CONSOLE_VOICES && n > 0 &&
-                            (size_t)n < sizeof b;
-             i++)
-        {
-          fc = NoteFilter_GetCutoff(i);
-          n += snprintf(b + n, sizeof b - (size_t)n, " f%u=%.0f/%.2f",
-                        (unsigned)i, fc, NoteFilter_GetQ(i));
-        }
-        if ((size_t)n < sizeof b - 2u)
-        {
-          snprintf(b + n, sizeof b - (size_t)n, "\r\n");
-        }
-        RS485_Reply(b);
-        return;
-      }
-      nscan = sscanf(rest, "%lf %lf", &fc, &q);
-      if (nscan < 1)
-      {
-        RS485_Reply("err:syntax\r\n");
-        return;
-      }
-      for (uint8_t i = 0; i < NOTE_FILTER_CONSOLE_VOICES; i++)
-      {
-        if (nscan == 2)
-        {
-          rc = NoteFilter_SetQ(i, q);
-          if (rc != 0)
-          {
-            RS485_Reply("err:range\r\n");
-            return;
-          }
-        }
-        rc = NoteFilter_SetCutoff(i, fc);
-        if (rc != 0)
-        {
-          RS485_Reply("err:range\r\n");
-          return;
-        }
-      }
-      snprintf(b, sizeof b, "ok: f %.1f Hz%s q %.2f\r\n", fc,
-               (fc == 0.0 || fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)"
-                                                              : "",
-               NoteFilter_GetQ(0));
-      RS485_Reply(b);
-      return;
-    }
-
-    RS485_Reply("err:unknown\r\n");
+    Console_CmdFilter(line, b, sizeof b);
     return;
   }
 
   /* ---- cpu [0|N|q [N]]: LED_Y busy/idle probe ---- */
   if (strncmp(line, "cpu", 3) == 0 && (line[3] == '\0' || line[3] == ' '))
   {
-    const char *arg = line + 3;
-    uint8_t mode;
-    uint8_t nvoices;
-
-    while (*arg == ' ')
-    {
-      arg++;
-    }
-
-    if (!Console_CpuLoad_Parse(arg, &mode, &nvoices))
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-
-    if (mode == 0u)
-    {
-      Audio_CpuLoad_SetMode(AUDIO_CPULOAD_OFF);
-      Console_CpuLoad_DisableVoices();
-      led_show_on = 1;
-      RS485_Reply("ok: cpu 0\r\n");
-      return;
-    }
-
-    Console_ApplySessionDefaults();
-    Audio_StartPlayback();
-    Console_CpuLoad_EnableVoices(nvoices);
-    led_show_on = 0;
-
-    if (mode == 2u)
-    {
-      Audio_CpuLoad_SetMode(AUDIO_CPULOAD_QUEUE);
-      snprintf(b, sizeof b, "ok: cpu q %u\r\n", (unsigned)nvoices);
-    }
-    else
-    {
-      Audio_CpuLoad_SetMode(AUDIO_CPULOAD_DMA);
-      snprintf(b, sizeof b, "ok: cpu %u\r\n", (unsigned)nvoices);
-    }
-    RS485_Reply(b);
+    Console_CmdCpu(line, b, sizeof b);
     return;
   }
 
   /* ---- n <Hz> [scale]: all 16 voices (n 0 = silence). n0..nf below. ---- */
   if (line[0] == 'n' && (line[1] == '\0' || line[1] == ' '))
   {
-    const char *rest = line + 1;
-
-    while (*rest == ' ')
-    {
-      rest++;
-    }
-    if (*rest == '\0')
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-
-    nscan = sscanf(rest, "%lf %lf", &hz, &scale);
-    if (nscan == 1)
-    {
-      scale = NOTE_DEFAULT_SCALE;
-    }
-    else if (nscan != 2)
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-
-    if (hz <= 0.0)
-    {
-      Console_CpuLoad_DisableVoices();
-      RS485_Reply("ok\r\n");
-      return;
-    }
-    if (hz < 20.0 || hz >= 20000.0 || scale < 0.0 || scale > 1.0)
-    {
-      RS485_Reply("err:range\r\n");
-      return;
-    }
-    for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
-    {
-      NoteBank_SetFreq(i, hz, scale);
-    }
-    RS485_Reply("ok\r\n");
+    Console_CmdNoteAll(line);
     return;
   }
 
   /* ---- n0..nf: 16-voice note bank on CH1 ---- */
-  if (line[0] != 'n' || line[1] == '\0')
-  {
-    RS485_Reply("err:unknown\r\n");
-    return;
-  }
-
-  note = Console_ParseNoteSlot(line[1]);
-  if (note == 0xFFu || (line[2] != '\0' && line[2] != ' '))
-  {
-    RS485_Reply("err:syntax\r\n");
-    return;
-  }
-
-  /* Bare "n0" = session defaults only. Bare n1..nf are not session cmds. */
-  if (line[2] == '\0')
-  {
-    if (note == 0u)
-    {
-      Console_ApplySessionDefaults();
-      RS485_Reply("ok\r\n");
-    }
-    else
-    {
-      RS485_Reply("err:syntax\r\n");
-    }
-    return;
-  }
-
-  nscan = sscanf(line + 3, "%lf %lf", &hz, &scale);
-  if (nscan == 1)
-  {
-    scale = NOTE_DEFAULT_SCALE; /* production MIDI default */
-  }
-  else if (nscan != 2)
-  {
-    RS485_Reply("err:syntax\r\n");
-    return;
-  }
-
-  Console_SetNoteFreq(note, hz, scale);
+  Console_CmdNoteSlot(line);
 }
 
 /** Check if a received line is addressed to this card.
@@ -1102,6 +1162,10 @@ static uint8_t RS485_IsForMe(char *line)
  * Same parser and commands as RS485; replies are routed back to CDC. */
 void Console_ExecFromUSB(char *line)
 {
+  if (line == NULL)
+  {
+    return;
+  }
   if (!RS485_IsForMe(line)) /* accept "c:", "*:" or bare commands */
     return;
   console_via_usb = 1;
@@ -1225,13 +1289,9 @@ void ChannelConsole_Init(void)
   }
   Console_ApplySessionDefaults();
 
-  /* Default: transparent filter (20000 Hz = bypass), mode LP, q = Butterworth. */
-  for (uint8_t i = 0; i < NOTE_FILTER_VOICES; i++)
-  {
-    (void)NoteFilter_SetPass(i, NOTE_FILTER_PASS_LP);
-    (void)NoteFilter_SetQ(i, NOTE_FILTER_Q_DEFAULT);
-    (void)NoteFilter_SetCutoff(i, NOTE_FILTER_CUTOFF_MAX_HZ);
-  }
+  NoteFilter_InitAll();
+  NoteEnv_Init();
+  NoteBank_Init();
 
   RS485_Reply("ok: ready — h for cmds\r\n");
 }

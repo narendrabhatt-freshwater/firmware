@@ -54,6 +54,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/drivers/cs4304.c
     Core/Src/audio/note_bank.c
     Core/Src/audio/note_envelope.c
+    Core/Src/audio/audio_cpuload.c
+    Core/Src/audio/audio_tone_dc.c
     Core/Src/filters/butterworth_four_pole.c
     Core/Src/filters/note_filter.c
     Core/Src/console/channel_console.c

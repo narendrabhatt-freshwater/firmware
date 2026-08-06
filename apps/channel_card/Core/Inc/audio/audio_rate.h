@@ -14,10 +14,11 @@
 #define __AUDIO_RATE_H__
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-/** System sample rate (Hz). Boss bench target: 96 kHz. */
+/** System sample rate (Hz). Bring-up / product target: 96 kHz. */
 #define AUDIO_SAMPLE_RATE_HZ 96000u
 
 #ifdef __cplusplus

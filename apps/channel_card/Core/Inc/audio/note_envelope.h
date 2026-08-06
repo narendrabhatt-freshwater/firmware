@@ -52,10 +52,19 @@ extern "C"
   } NoteEnv_Segment_t;
 
   /**
-   * Program segments for one voice (copies into static storage).
-   * n in [NOTE_ENV_SEGMENTS_MIN, NOTE_ENV_SEGMENTS_MAX]; last = release
-   * (end_amp forced to 0). Pre-release ends must be 0..1; all slopes > 0.
-   * Returns 0 on success, -1 voice OOR, -2 bad count/amps/slope.
+   * @brief Clear all voices to unprogrammed / idle (env bypass = 1.0).
+   * @note Call once at bring-up before NoteBank_Init.
+   */
+  void NoteEnv_Init(void);
+
+  /**
+   * @brief Program segments for one voice (copies into static storage).
+   * @param voice Voice 0..15.
+   * @param segs  Segment array; last is release (end_amp forced to 0).
+   * @param n     Count in [NOTE_ENV_SEGMENTS_MIN, NOTE_ENV_SEGMENTS_MAX].
+   * @retval 0 Success.
+   * @retval -1 voice OOR or NULL segs.
+   * @retval -2 bad count / amps / slope.
    */
   int NoteEnv_SetSegments(uint8_t voice, const NoteEnv_Segment_t *segs,
                           uint8_t n);

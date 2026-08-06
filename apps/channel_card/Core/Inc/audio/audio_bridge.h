@@ -1,12 +1,14 @@
 /**
  ******************************************************************************
  * @file    audio_bridge.h
- * @brief   USB audio -> I2S bridge for the CS4304 4-channel DAC.
+ * @brief   USB audio / note-bank → I2S bridge for the CS4304 4-channel DAC.
  *
- * Relocated from USB_DEVICE/App/usbd_audio_if.c when the card moved from
- * ST's USB Device Library to TinyUSB.  Everything below the USB boundary
- * (I2S DMA ring buffers, tone/DC generators, CS4304 handling) is
- * unchanged; only the stack that feeds Audio_Bridge_WriteUSB() differs.
+ * Owns I2S DMA ring buffers, USB packet ingest, CH1 note-bank refill,
+ * and the TIM7 I2S2 underrun pump. Tone/DC generators and the CPU-load
+ * probe live in audio_tone_dc.h / audio_cpuload.h (re-exported here so
+ * existing callers that include only audio_bridge.h keep working).
+ * The USB stack (TinyUSB in USB_APP/) feeds Audio_Bridge_WriteUSB() and
+ * volume/mute hooks.
  ******************************************************************************
  */
 
@@ -20,57 +22,82 @@ extern "C"
 
 #include <stdint.h>
 
+#include "cs4304.h"
+#include "audio_cpuload.h"
+#include "audio_tone_dc.h"
+
+  /* ---------------- DAC handle (bound from main) --------------------------- */
+
+  /**
+   * @brief Bind the CS4304 handle used for UAC volume/mute.
+   * @param h DAC handle owned by main (non-NULL before Start / SetVolume).
+   */
+  void Audio_Bridge_SetDacHandle(CS4304_HandleTypeDef *h);
+
   /* ---------------- USB stack facing API (called by USB_APP) ---------------- */
 
-  /** Clear the I2S buffers and start I2S1 (+I2S2) DMA.  Safe to call from
-   * USB interrupt context: it busy-waits rather than using HAL_Delay. */
+  /**
+   * @brief Clear I2S buffers and start I2S1 (+I2S2) DMA.
+   * @note Safe from USB IRQ context: busy-waits instead of HAL_Delay.
+   */
   void Audio_Bridge_Start(void);
 
-  /** Stop I2S DMA and reset the stream state. */
+  /** @brief Stop I2S DMA and reset stream state. */
   void Audio_Bridge_Stop(void);
 
-  /** Host closed the streaming interface: silence the buffer and force the
-   * write pointer to re-acquire its lead on the next stream. */
+  /**
+   * @brief Host closed the streaming interface.
+   * @note Silences the buffer and forces the write pointer to re-acquire
+   *       its lead on the next stream.
+   */
   void Audio_Bridge_StreamStop(void);
 
-  /** Feed one USB isochronous OUT packet (mono 32-bit PCM) into the I2S1
-   * ring buffer.  `size` is in bytes. */
+  /**
+   * @brief Feed one USB isochronous OUT packet (mono 32-bit PCM) into I2S1.
+   * @param pbuf Packet bytes (may be NULL only when size is 0).
+   * @param size Length in bytes.
+   */
   void Audio_Bridge_WriteUSB(const uint8_t *pbuf, uint32_t size);
 
-  /** UAC volume/mute forwarded to the DAC. */
+  /**
+   * @brief Apply UAC master volume to the bound DAC handle.
+   * @param vol Attenuation code (0.5 dB steps; see CS4304_SetVolume).
+   */
   void Audio_Bridge_SetVolume(uint8_t vol);
+
+  /**
+   * @brief Apply UAC mute to the bound DAC handle.
+   * @param mute Non-zero to mute.
+   */
   void Audio_Bridge_SetMute(uint8_t mute);
 
-  /** Mute the USB playback channel (CH1).  Volume is applied by Windows in
-   * software (mute-only feature unit); this only gates CH1 to silence.
-   * Never affects the CH2..CH4 tone/DC generators or the DAC 'gain'
-   * command. */
+  /**
+   * @brief Soft-mute USB playback on CH1 only (host volume is software-side).
+   * @param mute Non-zero gates CH1 to silence.
+   * @note Never affects CH2..CH4 generators or the console `gain` command.
+   */
   void Audio_SetUSBMute(uint8_t mute);
 
   /* ---------------- I2S DMA callbacks (internal, kept public) -------------- */
 
+  /** @brief I2S1 DMA full-transfer callback (sets main-loop refill flag). */
   void TransferComplete_CallBack_HS(void);
+
+  /** @brief I2S1 DMA half-transfer callback (sets main-loop refill flag). */
   void HalfTransfer_CallBack_HS(void);
 
   /* ---------------- Console / application API ------------------------------ */
 
-  /** Start I2S playback outside of USB streaming (test tones). */
+  /**
+   * @brief Start I2S playback outside of USB streaming (test tones / bank).
+   */
   void Audio_StartPlayback(void);
 
-  void Audio_SetToneFreq(uint8_t channel, uint32_t freq_hz);
-  uint32_t Audio_GetToneFreq(uint8_t channel);
-
-  /** TIM7 fallback pump for the I2S2 slave (UDR guard). */
+  /**
+   * @brief TIM7 fallback pump for the I2S2 slave (underrun guard).
+   * @note Called from TIM7 IRQ; must complete in microseconds.
+   */
   void Audio_I2S2_Pump(void);
-
-  typedef enum
-  {
-    AUDIO_MODE_TONE = 0, /**< Sine wave (default) */
-    AUDIO_MODE_DC = 1,   /**< Constant DC level   */
-  } Audio_ChannelMode_t;
-
-  void Audio_SetChannelMode(uint8_t channel, Audio_ChannelMode_t mode);
-  Audio_ChannelMode_t Audio_GetChannelMode(uint8_t channel);
 
   /* ---------------- CH1 source select (USB vs N0–NF note bank) ------------- */
 
@@ -81,47 +108,16 @@ extern "C"
                                       USB samples are ignored while active */
   } Audio_CH1_Source_t;
 
-  /** Current CH1 source: note bank when NoteBank_AnyActive(), else USB.
-   * Frequency control lives in note_bank.h (NoteBank_SetFreq). */
+  /**
+   * @brief Current CH1 source: note bank when NoteBank_AnyActive(), else USB.
+   * @return AUDIO_CH1_SRC_TEST_TONE or AUDIO_CH1_SRC_USB.
+   */
   Audio_CH1_Source_t Audio_GetCh1Source(void);
 
-  void Audio_SetDCLevel(uint8_t channel, int8_t percent);
-  int8_t Audio_GetDCLevel(uint8_t channel);
-
-  void Audio_SetDCLimit(uint8_t pct_fs);
-  uint8_t Audio_GetDCLimit(void);
-
-  void Audio_SetDCInvert(uint8_t channel, uint8_t invert);
-  uint8_t Audio_GetDCInvert(uint8_t channel);
-
-  void Audio_SetDCZero(uint8_t channel, int8_t zero_pct);
-  int8_t Audio_GetDCZero(uint8_t channel);
-
-  void Audio_SetDCTrim(uint8_t channel, int16_t trim_x100);
-  int16_t Audio_GetDCTrim(uint8_t channel);
-
-  /* ---------------- CPU load probe (LED_Y / PB9) --------------------------- */
-
-  typedef enum
-  {
-    AUDIO_CPULOAD_OFF = 0,   /**< Normal path; LED_Y free for chaser */
-    AUDIO_CPULOAD_DMA = 1,   /**< Busy=low around NoteBank half fill in main */
-    AUDIO_CPULOAD_QUEUE = 2, /**< Soft queue (256) filled in main, drained by DMA */
-  } Audio_CpuLoadMode_t;
-
-  void Audio_CpuLoad_SetMode(Audio_CpuLoadMode_t mode);
-  Audio_CpuLoadMode_t Audio_CpuLoad_GetMode(void);
-
-  /** Non-zero while DMA or queue probe owns LED_Y (pause LED chaser). */
-  uint8_t Audio_CpuLoad_IsActive(void);
-
-  /** Queue-mode producer: call from main loop. No-op unless QUEUE mode. */
-  void Audio_CpuLoad_Poll(void);
-
   /**
-   * I2S1 half-buffer refill from main loop. DMA callbacks only set a
-   * pending flag; call this first in while(1) so NoteBank work does not
-   * run in IRQ context.
+   * @brief I2S1 half-buffer refill from main loop.
+   * @note DMA callbacks only set a pending flag; call this first in while(1)
+   *       so NoteBank work does not run in IRQ context.
    */
   void Audio_I2S1_Poll(void);
 

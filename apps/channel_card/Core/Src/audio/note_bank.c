@@ -21,7 +21,6 @@ _Static_assert(NOTE_FILTER_VOICES == NOTE_BANK_VOICES,
 _Static_assert(NOTE_ENV_VOICES == NOTE_BANK_VOICES,
                "note_envelope voice count must match note_bank");
 
-
 /* Must match I2S / CS4304 sample rate (see audio_rate.h). */
 #define NOTE_BANK_SAMPLE_RATE AUDIO_SAMPLE_RATE_HZ
 
@@ -196,10 +195,12 @@ static uint32_t NoteBank_PhaseIncFromHz(double freq_hz)
 /** Cold path — linear scale 0.0..1.0 → Q15. */
 static int32_t NoteBank_ScaleToQ15(double scale)
 {
-  if (scale <= 0.0) {
+  if (scale <= 0.0)
+  {
     return 0;
   }
-  if (scale >= 1.0) {
+  if (scale >= 1.0)
+  {
     return NOTE_AMP_Q15_MAX;
   }
   return (int32_t)(scale * (double)NOTE_AMP_Q15_MAX + 0.5);
@@ -213,11 +214,13 @@ static void NoteBank_UpdateShapeThresholds(double param)
 
   note_shape_param = param;
   rise_end = (uint32_t)(param * 4294967296.0);
-  if (rise_end == 0u) {
+  if (rise_end == 0u)
+  {
     rise_end = 1u;
   }
   fall_len = 0u - rise_end; /* 2^32 - rise_end */
-  if (fall_len == 0u) {
+  if (fall_len == 0u)
+  {
     fall_len = 1u;
   }
 
@@ -329,15 +332,36 @@ static inline int32_t NoteBank_Saturate(int64_t sum)
   return (int32_t)sum;
 }
 
+void NoteBank_Init(void)
+{
+  uint8_t i;
+
+  note_shape = NOTE_SHAPE_SINE;
+  note_shape_param = 0.5;
+  NoteBank_UpdateShapeThresholds(0.5);
+
+  for (i = 0u; i < NOTE_BANK_VOICES; i++)
+  {
+    note_freq_hz[i] = 0.0;
+    note_scale[i] = 0.0;
+    note_phase[i] = 0u;
+    note_inc[i] = 0u;
+    note_amp_q15[i] = 0;
+  }
+}
+
 void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
 {
-  if (note >= NOTE_BANK_VOICES) {
+  if (note >= NOTE_BANK_VOICES)
+  {
     return;
   }
 
-  if (freq_hz <= 0.0) {
+  if (freq_hz <= 0.0)
+  {
     /* Programmed + active → release; else hard stop (legacy). */
-    if (NoteEnv_IsProgrammed(note) != 0u && NoteEnv_IsActive(note) != 0u) {
+    if (NoteEnv_IsProgrammed(note) != 0u && NoteEnv_IsActive(note) != 0u)
+    {
       NoteEnv_NoteOff(note);
       note_freq_hz[note] = 0.0;
       /* Keep note_inc until NoteEnv_Process finishes release. */
@@ -349,9 +373,12 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
     return;
   }
 
-  if (scale < 0.0) {
+  if (scale < 0.0)
+  {
     scale = 0.0;
-  } else if (scale > 1.0) {
+  }
+  else if (scale > 1.0)
+  {
     scale = 1.0;
   }
 
@@ -364,7 +391,8 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
 
 double NoteBank_GetFreq(uint8_t note)
 {
-  if (note >= NOTE_BANK_VOICES) {
+  if (note >= NOTE_BANK_VOICES)
+  {
     return 0.0;
   }
   return note_freq_hz[note];
@@ -372,7 +400,8 @@ double NoteBank_GetFreq(uint8_t note)
 
 double NoteBank_GetScale(uint8_t note)
 {
-  if (note >= NOTE_BANK_VOICES) {
+  if (note >= NOTE_BANK_VOICES)
+  {
     return 0.0;
   }
   return note_scale[note];

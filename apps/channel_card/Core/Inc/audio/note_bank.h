@@ -18,7 +18,8 @@
 #define __NOTE_BANK_H__
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 #include <stdint.h>
@@ -26,52 +27,58 @@ extern "C" {
 /** Number of simultaneous notes: N0..NF (hex slots 0..15). */
 #define NOTE_BANK_VOICES 16u
 
-/** Global oscillator shape for all N0–NF voices. */
-typedef enum {
-  NOTE_SHAPE_SINE = 0,
-  NOTE_SHAPE_PULSE = 1,
-  NOTE_SHAPE_TRI = 2
-} NoteBank_Shape_t;
+  /** Global oscillator shape for all N0–NF voices. */
+  typedef enum
+  {
+    NOTE_SHAPE_SINE = 0,
+    NOTE_SHAPE_PULSE = 1,
+    NOTE_SHAPE_TRI = 2
+  } NoteBank_Shape_t;
 
-/**
- * Set one note's frequency (Hz) and amplitude scale (0.0..1.0).
- * note: 0..15 (N0..NF). Out-of-range note is ignored.
- * freq_hz <= 0 turns that note off. If a multi-segment envelope is programmed
- * and active, this triggers release (osc keeps running until release ends);
- * otherwise hard-stops (inc = 0). scale is ignored when off.
- * scale is clamped to 0.0..1.0; 1.0 = full table amplitude.
- * Caller should bounds-check audible Hz (e.g. 20..19999.9) before calling.
- */
-void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale);
+  /**
+   * @brief Establish known-off state for all voices (sine shape, zero freq).
+   * @note Call once at bring-up after NoteFilter_InitAll / NoteEnv_Init.
+   */
+  void NoteBank_Init(void);
 
-/** Last frequency set for `note`, in Hz. 0 if off or note invalid. */
-double NoteBank_GetFreq(uint8_t note);
+  /**
+   * @brief Set one note's frequency (Hz) and amplitude scale (0.0..1.0).
+   * @param note    Voice 0..15 (N0..NF). Out-of-range is ignored.
+   * @param freq_hz Frequency Hz; <= 0 turns the note off (release if env active).
+   * @param scale   Amplitude 0.0..1.0 (clamped). Ignored when off.
+   * @note Unchecked internal API for Hz range — console must reject OOR first.
+   *       scale clamp is intentional for this cold-path setter.
+   */
+  void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale);
 
-/** Last amplitude scale for `note` (0.0..1.0). 0 if note invalid. */
-double NoteBank_GetScale(uint8_t note);
+  /** Last frequency set for `note`, in Hz. 0 if off or note invalid. */
+  double NoteBank_GetFreq(uint8_t note);
 
-/**
- * Select global shape for all voices.
- * Sine ignores `param`. Pulse/tri require param in [0.1, 0.9] (duty /
- * triangle asymmetry). Returns 0 on success, -1 on bad shape/param.
- * Does not touch frequency, scale, gain, or filter cutoff.
- */
-int NoteBank_SetShape(NoteBank_Shape_t shape, double param);
+  /** Last amplitude scale for `note` (0.0..1.0). 0 if note invalid. */
+  double NoteBank_GetScale(uint8_t note);
 
-/** Current global shape (default sine). */
-NoteBank_Shape_t NoteBank_GetShape(void);
+  /**
+   * Select global shape for all voices.
+   * Sine ignores `param`. Pulse/tri require param in [0.1, 0.9] (duty /
+   * triangle asymmetry). Returns 0 on success, -1 on bad shape/param.
+   * Does not touch frequency, scale, gain, or filter cutoff.
+   */
+  int NoteBank_SetShape(NoteBank_Shape_t shape, double param);
 
-/** Last pulse/tri param (0.1..0.9). Meaningful when those shapes are active. */
-double NoteBank_GetShapeParam(void);
+  /** Current global shape (default sine). */
+  NoteBank_Shape_t NoteBank_GetShape(void);
 
-/** Non-zero if any note has a non-zero phase increment (CH1 should play bank). */
-uint8_t NoteBank_AnyActive(void);
+  /** Last pulse/tri param (0.1..0.9). Meaningful when those shapes are active. */
+  double NoteBank_GetShapeParam(void);
 
-/**
- * Next mixed Q31 sample: sum amplitude-scaled active voices, saturate.
- * Hot path — integer osc + float LPF boundary. Safe from DMA callbacks.
- */
-int32_t NoteBank_NextSample(void);
+  /** Non-zero if any note has a non-zero phase increment (CH1 should play bank). */
+  uint8_t NoteBank_AnyActive(void);
+
+  /**
+   * Next mixed Q31 sample: sum amplitude-scaled active voices, saturate.
+   * Hot path — integer osc + float LPF boundary. Safe from DMA callbacks.
+   */
+  int32_t NoteBank_NextSample(void);
 
 #ifdef __cplusplus
 }

@@ -174,6 +174,17 @@ void NoteEnv_Clear(uint8_t voice)
   v->pitch_rate = 1.0f;
 }
 
+void NoteEnv_Init(void)
+{
+  uint8_t i;
+
+  for (i = 0u; i < NOTE_ENV_VOICES; i++)
+  {
+    NoteEnv_Clear(i);
+    s_voices[i].k = 0.0f;
+  }
+}
+
 uint8_t NoteEnv_IsProgrammed(uint8_t voice)
 {
   if (voice >= NOTE_ENV_VOICES)

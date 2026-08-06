@@ -56,7 +56,7 @@
 
 /* USER CODE BEGIN PV */
 
-/* CS4304 DAC handle — shared with usbd_audio_if.c */
+/* CS4304 DAC handle — owned here; bound into bridge + console after Init. */
 CS4304_HandleTypeDef hcs4304;
 
 /* USER CODE END PV */
@@ -169,6 +169,10 @@ int main(void)
    * tones) stay at full scale (0 dB + their Trim, if any). */
   hcs4304.MasterMask = 0x01;
   CS4304_SetVolume(&hcs4304, hcs4304.Volume); /* re-apply with the mask */
+
+  /* Bind DAC handle for UAC volume/mute (Audio_Bridge_SetVolume/SetMute). */
+  Audio_Bridge_SetDacHandle(&hcs4304);
+  ChannelConsole_SetDacHandle(&hcs4304);
 
   /* DAC is ready. USB audio will start when host begins streaming. */
   /* I2S DMA is started in AUDIO_Init_HS() when USB audio is activated. */

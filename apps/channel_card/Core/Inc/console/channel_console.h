@@ -1,7 +1,15 @@
 /**
  ******************************************************************************
  * @file    channel_console.h
- * @brief   Channel Card RS485 + USB CDC console, cpuload probe, LED chaser.
+ * @brief   Channel Card RS485 + USB CDC console, LED chaser, session defaults.
+ *
+ * One command parser serves both transports. RS485 uses card address prefixes
+ * (`c:` / `*:` / bare) and tagged replies (`[C]ok` / `[C]err:<token>`).
+ * Stable error tokens: syntax, range, unknown, rxdrop.
+ *
+ * Bring-up: call ChannelConsole_SetDacHandle() then ChannelConsole_Init()
+ * after UART5 and the DAC handle are ready. Poll from the main loop after
+ * Audio_I2S1_Poll().
  ******************************************************************************
  */
 
@@ -13,14 +21,31 @@ extern "C"
 {
 #endif
 
-  /** Tri-state RS485, default switches + session defaults, print ready banner. */
+#include "cs4304.h"
+
+  /**
+   * @brief Bind the CS4304 handle used by gain / trim console commands.
+   * @param h DAC handle owned by main (non-NULL before Init / Poll).
+   */
+  void ChannelConsole_SetDacHandle(CS4304_HandleTypeDef *h);
+
+  /**
+   * @brief Tri-state RS485 idle, default switches, session defaults, ready banner.
+   * @note Also initializes note filter / bank / envelope cold state.
+   */
   void ChannelConsole_Init(void);
 
-  /** Non-blocking RS485 RX poll + LED chaser step. */
+  /**
+   * @brief Non-blocking RS485 RX drain + LED chaser step.
+   * @note Call every main-loop iteration; never blocks.
+   */
   void ChannelConsole_Poll(void);
 
-  /** USB CDC command entry (same parser as RS485). Declared here and used
-   * from USB_APP — keep this symbol name stable. */
+  /**
+   * @brief Run one console command line that arrived over USB CDC.
+   * @param line NUL-terminated command (mutated by the parser). May be NULL
+   *             (no-op). Replies are routed to CDC for the duration of the call.
+   */
   void Console_ExecFromUSB(char *line);
 
 #ifdef __cplusplus

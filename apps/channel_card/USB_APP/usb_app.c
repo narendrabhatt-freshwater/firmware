@@ -10,6 +10,7 @@
 
 #include "usb_app.h"
 #include "audio_bridge.h"
+#include "channel_console.h"
 #include "main.h"
 #include "tusb.h"
 
@@ -34,7 +35,8 @@ static audio_control_range_4_n_t(1) sampleFreqRng;
  * Mirrors what ST's HAL_PCD_MspInit() used to do (PLL3 -> 48 MHz USB
  * kernel clock, USB voltage detector, peripheral clock, OTG_HS IRQ);
  * TinyUSB itself only touches the core registers. */
-static void USB_LowLevel_Init(void) {
+static void USB_LowLevel_Init(void)
+{
   RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
 
   PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_USB;
@@ -47,7 +49,8 @@ static void USB_LowLevel_Init(void) {
   PeriphClkInitStruct.PLL3.PLL3VCOSEL = RCC_PLL3VCOWIDE;
   PeriphClkInitStruct.PLL3.PLL3FRACN = 0;
   PeriphClkInitStruct.UsbClockSelection = RCC_USBCLKSOURCE_PLL3;
-  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK) {
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
+  {
     Error_Handler();
   }
 
@@ -61,7 +64,8 @@ static void USB_LowLevel_Init(void) {
   HAL_NVIC_EnableIRQ(OTG_HS_IRQn);
 }
 
-void USB_App_Init(void) {
+void USB_App_Init(void)
+{
   sampleFreqRng.wNumSubRanges = 1;
   sampleFreqRng.subrange[0].bMin = CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE;
   sampleFreqRng.subrange[0].bMax = CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE;
@@ -72,19 +76,22 @@ void USB_App_Init(void) {
 }
 
 //--------------------------------------------------------------------+
-// CDC console: line-buffered bridge into Console_Exec (main.c)
+// CDC console: line-buffered bridge into Console_ExecFromUSB
 //--------------------------------------------------------------------+
 
-void USB_CDC_WriteStr(const char *s) {
-  if (!tud_cdc_connected())
+void USB_CDC_WriteStr(const char *s)
+{
+  if (s == NULL || !tud_cdc_connected())
     return;
   uint32_t len = (uint32_t)strlen(s);
   uint32_t sent = 0;
-  while (sent < len) {
+  while (sent < len)
+  {
     uint32_t n = tud_cdc_write(s + sent, len - sent);
     sent += n;
     tud_cdc_write_flush();
-    if (n == 0) {
+    if (n == 0)
+    {
       /* host not draining — service the stack once, then give up rather
        * than blocking the main loop (and the audio path) forever */
       tud_task();
@@ -94,28 +101,37 @@ void USB_CDC_WriteStr(const char *s) {
   }
 }
 
-static void CDC_Console_Poll(void) {
+static void CDC_Console_Poll(void)
+{
   static char line[64];
   static uint8_t len = 0;
 
-  while (tud_cdc_available()) {
+  while (tud_cdc_available())
+  {
     char c;
     if (tud_cdc_read(&c, 1) == 0)
       break;
 
-    if (c == '\r' || c == '\n') {
+    if (c == '\r' || c == '\n')
+    {
       USB_CDC_WriteStr("\r\n");
-      if (len > 0) {
+      if (len > 0)
+      {
         line[len] = '\0';
         len = 0;
         Console_ExecFromUSB(line);
       }
-    } else if (c == 0x08 || c == 0x7F) { /* backspace */
-      if (len > 0) {
+    }
+    else if (c == 0x08 || c == 0x7F)
+    { /* backspace */
+      if (len > 0)
+      {
         len--;
         USB_CDC_WriteStr("\b \b");
       }
-    } else if (len < sizeof(line) - 1 && c >= 0x20 && c < 0x7F) {
+    }
+    else if (len < sizeof(line) - 1 && c >= 0x20 && c < 0x7F)
+    {
       /* lowercase to match the RS485 console behaviour */
       if (c >= 'A' && c <= 'Z')
         c = (char)(c + 32);
@@ -126,7 +142,8 @@ static void CDC_Console_Poll(void) {
   }
 }
 
-void USB_App_Task(void) {
+void USB_App_Task(void)
+{
   tud_task();
   CDC_Console_Poll();
 }
@@ -140,7 +157,8 @@ void USB_App_Task(void) {
 
 bool tud_audio_set_req_ep_cb(uint8_t rhport,
                              tusb_control_request_t const *p_request,
-                             uint8_t *pBuff) {
+                             uint8_t *pBuff)
+{
   (void)rhport;
   (void)p_request;
   (void)pBuff;
@@ -149,7 +167,8 @@ bool tud_audio_set_req_ep_cb(uint8_t rhport,
 
 bool tud_audio_set_req_itf_cb(uint8_t rhport,
                               tusb_control_request_t const *p_request,
-                              uint8_t *pBuff) {
+                              uint8_t *pBuff)
+{
   (void)rhport;
   (void)p_request;
   (void)pBuff;
@@ -158,7 +177,8 @@ bool tud_audio_set_req_itf_cb(uint8_t rhport,
 
 bool tud_audio_set_req_entity_cb(uint8_t rhport,
                                  tusb_control_request_t const *p_request,
-                                 uint8_t *pBuff) {
+                                 uint8_t *pBuff)
+{
   (void)rhport;
   uint8_t channelNum = TU_U16_LOW(p_request->wValue);
   uint8_t ctrlSel = TU_U16_HIGH(p_request->wValue);
@@ -166,8 +186,10 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport,
 
   TU_VERIFY(p_request->bRequest == AUDIO_CS_REQ_CUR);
 
-  if (entityID == 2) { /* feature unit */
-    switch (ctrlSel) {
+  if (entityID == 2)
+  { /* feature unit */
+    switch (ctrlSel)
+    {
     case AUDIO_FU_CTRL_MUTE:
       TU_VERIFY(p_request->wLength == sizeof(audio_control_cur_1_t));
       mute[channelNum] = ((audio_control_cur_1_t *)pBuff)->bCur;
@@ -183,27 +205,32 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport,
 }
 
 bool tud_audio_get_req_ep_cb(uint8_t rhport,
-                             tusb_control_request_t const *p_request) {
+                             tusb_control_request_t const *p_request)
+{
   (void)rhport;
   (void)p_request;
   return false;
 }
 
 bool tud_audio_get_req_itf_cb(uint8_t rhport,
-                              tusb_control_request_t const *p_request) {
+                              tusb_control_request_t const *p_request)
+{
   (void)rhport;
   (void)p_request;
   return false;
 }
 
 bool tud_audio_get_req_entity_cb(uint8_t rhport,
-                                 tusb_control_request_t const *p_request) {
+                                 tusb_control_request_t const *p_request)
+{
   uint8_t channelNum = TU_U16_LOW(p_request->wValue);
   uint8_t ctrlSel = TU_U16_HIGH(p_request->wValue);
   uint8_t entityID = TU_U16_HIGH(p_request->wIndex);
 
-  if (entityID == 1) { /* input terminal */
-    if (ctrlSel == AUDIO_TE_CTRL_CONNECTOR) {
+  if (entityID == 1)
+  { /* input terminal */
+    if (ctrlSel == AUDIO_TE_CTRL_CONNECTOR)
+    {
       audio_desc_channel_cluster_t ret;
       ret.bNrChannels = CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX;
       ret.bmChannelConfig = (audio_channel_config_t)0;
@@ -214,8 +241,10 @@ bool tud_audio_get_req_entity_cb(uint8_t rhport,
     return false;
   }
 
-  if (entityID == 2) { /* feature unit */
-    switch (ctrlSel) {
+  if (entityID == 2)
+  { /* feature unit */
+    switch (ctrlSel)
+    {
     case AUDIO_FU_CTRL_MUTE:
       return tud_control_xfer(rhport, p_request, &mute[channelNum], 1);
 
@@ -224,10 +253,13 @@ bool tud_audio_get_req_entity_cb(uint8_t rhport,
     }
   }
 
-  if (entityID == 4) { /* clock source */
-    switch (ctrlSel) {
+  if (entityID == 4)
+  { /* clock source */
+    switch (ctrlSel)
+    {
     case AUDIO_CS_CTRL_SAM_FREQ:
-      switch (p_request->bRequest) {
+      switch (p_request->bRequest)
+      {
       case AUDIO_CS_REQ_CUR:
         return tud_control_xfer(rhport, p_request, &sampFreq, sizeof(sampFreq));
       case AUDIO_CS_REQ_RANGE:
@@ -248,11 +280,13 @@ bool tud_audio_get_req_entity_cb(uint8_t rhport,
 
 /** Host opened the streaming interface (alt != 0) -> start I2S. */
 bool tud_audio_set_itf_cb(uint8_t rhport,
-                          tusb_control_request_t const *p_request) {
+                          tusb_control_request_t const *p_request)
+{
   (void)rhport;
   uint8_t const alt = (uint8_t)tu_le16toh(p_request->wValue);
 
-  if (alt != 0) {
+  if (alt != 0)
+  {
     Audio_Bridge_Start();
     /* Nominal feedback: 96 samples per 1 ms frame, 16.16 format (TinyUSB
      * converts to 10.14 for full speed because FEEDBACK_FORMAT_CORRECTION
@@ -264,7 +298,8 @@ bool tud_audio_set_itf_cb(uint8_t rhport,
 
 /** Host closed the streaming interface -> silence and re-arm. */
 bool tud_audio_set_itf_close_EP_cb(uint8_t rhport,
-                                   tusb_control_request_t const *p_request) {
+                                   tusb_control_request_t const *p_request)
+{
   (void)rhport;
   (void)p_request;
   Audio_Bridge_StreamStop();
@@ -280,7 +315,8 @@ bool tud_audio_set_itf_close_EP_cb(uint8_t rhport,
  * FIFO_COUNT would fight that loop.  Report the nominal rate instead and
  * let the proven ring-buffer guard absorb drift. */
 void tud_audio_feedback_params_cb(uint8_t func_id, uint8_t alt_itf,
-                                  audio_feedback_params_t *feedback_param) {
+                                  audio_feedback_params_t *feedback_param)
+{
   (void)func_id;
   (void)alt_itf;
   feedback_param->method = AUDIO_FEEDBACK_METHOD_DISABLED;
@@ -291,7 +327,8 @@ void tud_audio_feedback_params_cb(uint8_t func_id, uint8_t alt_itf,
  * straight into the I2S ring buffer. */
 bool tud_audio_rx_done_post_read_cb(uint8_t rhport, uint16_t n_bytes_received,
                                     uint8_t func_id, uint8_t ep_out,
-                                    uint8_t cur_alt_setting) {
+                                    uint8_t cur_alt_setting)
+{
   (void)rhport;
   (void)func_id;
   (void)ep_out;
@@ -302,7 +339,8 @@ bool tud_audio_rx_done_post_read_cb(uint8_t rhport, uint16_t n_bytes_received,
     n_bytes_received = sizeof(pkt);
 
   uint16_t n = tud_audio_read(pkt, n_bytes_received);
-  if (n) {
+  if (n)
+  {
     Audio_Bridge_WriteUSB(pkt, n);
   }
   return true;

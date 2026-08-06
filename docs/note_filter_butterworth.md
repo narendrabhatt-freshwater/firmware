@@ -26,12 +26,12 @@ Oscillator shape is global for N0–NF: `s` (sine), `p <0.1..0.9>` (pulse
 duty), `t <0.1..0.9>` (triangle asymmetry). On a pure sine the LPF mostly
 changes level (and phase); pulse/tri give harmonics for filter sweeps.
 
-The digital filter is a **4-pole Butterworth LPF** (boss `four_pole_filter_t`
-direct-form algorithm). `cutoff` sets the corner; **20000 Hz** (or console
-**`0`**) is transparent bypass. Optional console **`q`** is boss DF4 **`g`**
-(**0.5..10**, default **1.0** ≈ Butterworth); **higher q → more peaking near
-fc** — not RBJ biquad Q, and not analog VCF resonance (`dc 4`). HP/BP from that
-reference are **not wired yet** (no `pass` console command in this build).
+The digital filter is a **4-pole Butterworth LPF** (reference DF4
+`four_pole_filter` direct-form algorithm). `cutoff` sets the corner; **20000 Hz**
+(or console **`0`**) is transparent bypass. Optional console **`q`** is DF4
+**`g`** (**0.5..10**, default **1.0** ≈ Butterworth); **higher q → more peaking
+near fc** — not RBJ biquad Q, and not analog VCF resonance (`dc 4`). HP/BP from
+that reference are **not wired yet** (no `pass` console command in this build).
 
 Why per-oscillator (not one filter after the mix): independent cutoff per
 note. The analog VCF/SCF on the board still filter the **summed** path and
@@ -45,14 +45,14 @@ exception to the usual “no float on the audio hot path” rule for this module
 
 ## 2. How we chose the structure
 
-| Choice                          | Reason                                                       |
-| ------------------------------- | ------------------------------------------------------------ |
-| Boss DF4 (`coef[9]`, `d[4]`)    | Match provided `butterworth.cpp` reference bit-for-algorithm |
-| `g` / console `q` (default 1.0) | Boss shape param; 1.0 ≈ Butterworth; higher → more peak      |
-| `double` hot path               | FPU present; stay faithful to reference                      |
-| LPF only in v1                  | Boss: implement LPF first; HP init kept for later            |
-| Bypass at 20 kHz                | Default = transparent; matches pre-filter bank behaviour     |
-| Reset delays on cutoff/q change | Avoids clicks from stale state                               |
+| Choice                            | Reason                                                   |
+| --------------------------------- | -------------------------------------------------------- |
+| Reference DF4 (`coef[9]`, `d[4]`) | Match `butterworth.cpp` reference bit-for-algorithm      |
+| `g` / console `q` (default 1.0)   | Shape param; 1.0 ≈ Butterworth; higher → more peak       |
+| `double` hot path                 | FPU present; stay faithful to reference                  |
+| LPF only in v1                    | Ship LPF first; HP init kept in kernel for later         |
+| Bypass at 20 kHz                  | Default = transparent; matches pre-filter bank behaviour |
+| Reset delays on cutoff/q change   | Avoids clicks from stale state                           |
 
 ---
 

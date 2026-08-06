@@ -1,4 +1,12 @@
-/* USB application layer — TinyUSB UAC2 speaker (mono 32-bit/96k) + CDC */
+/**
+ ******************************************************************************
+ * @file    usb_app.h
+ * @brief   TinyUSB application layer: UAC2 speaker + CDC console glue.
+ *
+ * Owns clocks/PHY/NVIC bring-up for the HS device, UAC2 → audio_bridge
+ * callbacks, and CDC line assembly that feeds Console_ExecFromUSB().
+ ******************************************************************************
+ */
 
 #ifndef USB_APP_H
 #define USB_APP_H
@@ -6,22 +14,28 @@
 #include <stdint.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-/** Enable USB clocks/NVIC and start the TinyUSB device stack.
- * Replaces MX_USB_DEVICE_Init(); call once during startup. */
-void USB_App_Init(void);
+    /**
+     * @brief Enable USB clocks/NVIC and start the TinyUSB device stack.
+     * @note Replaces CubeMX MX_USB_DEVICE_Init(); call once during startup,
+     *       inside a USER CODE block so regeneration preserves it.
+     */
+    void USB_App_Init(void);
 
-/** Service TinyUSB + the CDC console; call every main-loop iteration. */
-void USB_App_Task(void);
+    /**
+     * @brief Service TinyUSB and the CDC console line buffer.
+     * @note Call every main-loop iteration after ChannelConsole_Poll().
+     */
+    void USB_App_Task(void);
 
-/** Write a string out the CDC console (no-op if port closed). */
-void USB_CDC_WriteStr(const char *s);
-
-/** Implemented in main.c: run one console command line arriving from CDC;
- * replies are routed back to CDC for the duration of the call. */
-void Console_ExecFromUSB(char *line);
+    /**
+     * @brief Write a NUL-terminated string to the CDC console.
+     * @param s String to send; NULL or closed port is a no-op.
+     */
+    void USB_CDC_WriteStr(const char *s);
 
 #ifdef __cplusplus
 }
