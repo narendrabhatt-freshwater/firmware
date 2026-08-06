@@ -634,6 +634,7 @@ static int Console_NextToken(const char **pp, char *tok, size_t tok_sz)
 
 /**
  * Parse en program: end slope[±k] [end slope[±k] ...] release_slope[±k].
+ * Single token 0 → NoteEnv_Clear (unprogrammed bypass, *nseg_out = 0).
  * Odd token count 3..NOTE_ENV_CONSOLE_FLOATS_MAX.
  * Returns 0 ok, -1 syntax/count, -2 range (SetSegments).
  */
@@ -650,7 +651,7 @@ static int Console_EnvApplyProgram(uint8_t voice, const char *rest,
   uint8_t i;
   int rc;
 
-  /* Count tokens first (odd, 3..MAX). */
+  /* Count tokens first. */
   while (Console_NextToken(&count_p, tok, sizeof tok) == 0)
   {
     ntok++;
@@ -667,6 +668,33 @@ static int Console_EnvApplyProgram(uint8_t voice, const char *rest,
   {
     return -1; /* token too long or junk */
   }
+
+  /* en 0 / en0 0 → clear to bypass. */
+  if (ntok == 1u)
+  {
+    float clear_v;
+
+    if (Console_NextToken(&p, tok, sizeof tok) != 0 ||
+        Console_ParsePlainFloatToken(tok, &clear_v) != 0 || clear_v != 0.0f)
+    {
+      return -1;
+    }
+    while (*p == ' ')
+    {
+      p++;
+    }
+    if (*p != '\0')
+    {
+      return -1;
+    }
+    NoteEnv_Clear(voice);
+    if (nseg_out != NULL)
+    {
+      *nseg_out = 0u;
+    }
+    return 0;
+  }
+
   if (ntok < 3u || (ntok % 2u) == 0u)
   {
     return -1;
@@ -841,7 +869,14 @@ static void Console_CmdEnv(char *line, char *b, size_t bsz)
         return;
       }
     }
-    snprintf(b, bsz, "ok: en (%u seg)\r\n", (unsigned)nseg);
+    if (nseg == 0u)
+    {
+      snprintf(b, bsz, "ok: en (none)\r\n");
+    }
+    else
+    {
+      snprintf(b, bsz, "ok: en (%u seg)\r\n", (unsigned)nseg);
+    }
     RS485_Reply(b);
     return;
   }

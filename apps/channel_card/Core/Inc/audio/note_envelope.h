@@ -11,6 +11,7 @@
  * bypass (env = 1). No heap.
  *
  * Console: en0 <end> <slope[±k]> [<end> <slope[±k]> ...] <release_slope[±k]>
+ *          en0 0 / en 0 clears (unprogrammed bypass).
  ******************************************************************************
  */
 
