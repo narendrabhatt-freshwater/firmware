@@ -25,12 +25,10 @@ tusb_desc_device_t const desc_device = {
      * ST's Virtual COM Port ID — must be avoided; using it previously made
      * Windows force the VCP driver onto the audio device. */
     .idVendor = 0xCafe,
-    /* PID bumped 0x4012 -> 0x4013 to escape Windows' USB-audio descriptor
-     * cache: reflashing different descriptors (volume-control vs mute-only)
-     * under one PID leaves Windows serving stale, mismatched endpoint state
-     * ("worked this morning, broke on replug").  A new PID forces a clean
-     * re-read.  Bump again on any further descriptor change during bring-up. */
-    .idProduct = 0x4013,
+    /* PID history: 0x4012→0x4013 (mute-only FU), 0x4013→0x4014 (48 kHz),
+     * 0x4014→0x4015 (96 kHz). Windows caches UAC descriptors per VID/PID —
+     * bump on further descriptor changes during bring-up. */
+    .idProduct = 0x4015,
     .bcdDevice = 0x0100,
 
     .iManufacturer = 0x01,

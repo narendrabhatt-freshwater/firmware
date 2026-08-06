@@ -1,9 +1,13 @@
 ---
-description: Core C/C++ embedded coding standards for the Channel/Effect Card firmware
+description: Core C embedded coding standards for Channel/Effect Card firmware (C++ migration is future; see firmware-modules-and-robustness)
 alwaysApply: true
 ---
 
-# Embedded C/C++ Style
+# Embedded C Style (firmware)
+
+MCU firmware is **C today**. Host `apps/console` is C++. A future C++ firmware
+migration is intentional but must be an explicit project — see
+`firmware-modules-and-robustness.mdc`. Until then, write and extract in C.
 
 - Use fixed-width types (`uint32_t`, `int32_t`, `int8_t`, ...) everywhere — never
   bare `int`/`long` for register values, sample data, or sizes.
@@ -14,7 +18,8 @@ alwaysApply: true
   `audio_bridge.c`, which busy-waits instead specifically because it can run in
   USB IRQ context.
 - Comment the **why**, not the **what** — match the existing style (e.g. the
-  RS485 bus-turnaround comments in `main.c`).
+  RS485 bus-turnaround comments in `main.c`). Tone and what belongs in
+  production docs: `comments-and-docs.mdc`.
 - Bounds-check all console/register inputs; reply `ok: ...` / `err: ...` —
   never silently clamp a bad value.
 
@@ -33,7 +38,7 @@ a well-named helper (`Console_PrintSwitches()`, `Pwm_Apply()`,
 
 ## SOLID, adapted for embedded C
 
-No classes here, but the ideas still apply:
+No classes here (yet), but the ideas still apply:
 
 - **Single Responsibility** — one file = one concern (`cs4304.c` = DAC
   register access, `audio_bridge.c` = sample pipeline, `main.c` = console +
@@ -48,3 +53,6 @@ No classes here, but the ideas still apply:
   (`Audio_SetToneFreq`, `Audio_SetDCLevel`) — never pokes `SPI2->TXDR` or a
   GPIO register directly from `main.c`; that belongs in the driver/bridge
   layer.
+
+Deliberate file extractions and robustness checklist:
+`firmware-modules-and-robustness.mdc`.

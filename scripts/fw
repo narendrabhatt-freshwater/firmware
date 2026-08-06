@@ -30,9 +30,10 @@ SEND_WAIT_SECS="${FW_SEND_WAIT:-1.5}"
 
 # RS485 console (apps/console — talks to the shared bus, no USB CDC needed)
 RS485_PORT="${FW_RS485_PORT:-}"       # e.g. /dev/cu.usbserial-XXXX (the adapter, not a card)
-RS485_BAUD="${FW_RS485_BAUD:-115200}"
-RS485_TARGET="${FW_RS485_TARGET:-all}" # channel | effect | all
+RS485_BAUD="${FW_RS485_BAUD:-460800}"
+RS485_TARGET="${FW_RS485_TARGET:-channel}" # channel | effect | all
 RS485_MANUAL_RTS=0
+RS485_ECHO_OFF=0
 RS485_TIMEOUT_MS=""
 RS485_RETRIES=""
 
@@ -89,6 +90,9 @@ usage() {
     "  fw send     [channel|effect] <command...> [--port PATH]"
     "  fw rs485    console [channel|effect|all] [--port PATH] [--baud N]"
     "  fw rs485    build | list | send <channel|effect|all> <command...>"
+    "  fw midi     [run|play] [--midi N]"
+    "  fw midi     channel --rs485 PATH [--midi N]"
+    "  fw midi     build | list"
     "  fw clean    [channel|effect|all]"
     "  fw status"
     "  fw help"
@@ -119,6 +123,19 @@ usage() {
     "  --manual-rts   toggle RTS around TX (dongles without auto-direction)"
     "  --timeout-ms N / --retries N      reply-wait tuning (defaults 300 / 2)"
     ""
+    "MIDI host (apps/midi_host — any MIDI keyboard → speakers or Channel Card)"
+    "  fw midi build                     build apps/midi_host (FetchContent once)"
+    "  fw midi list                      list MIDI input ports"
+    "  fw midi                           speakers (auto-pick Launchkey MIDI Out)"
+    "  fw midi --midi 0                  speakers, MIDI port index 0 (any device)"
+    "  fw midi --auto                    looping Am demo until first key → live MIDI"
+    "  fw midi channel --rs485 PATH      Channel Card N0–NF over RS485 (no speakers)"
+    "  fw midi channel --rs485 PATH --midi 0 --gain 6"
+    "  --gain DB                         CH1 atten dB at start (0..127, default 6)"
+    "  --port N                          same as --midi N (numeric)"
+    "  --port /dev/...                   RS485 adapter path (with channel)"
+    "  FW_RS485_PORT / FW_MIDI_GAIN      channel-mode defaults"
+    ""
     "Cards"
     "  channel    channel_MCU   STM32H725   /dev/cu.usbmodemCHCARD*"
     "  effect     effect_card   STM32H743   /dev/cu.usbmodemEFCARD*"
@@ -135,6 +152,9 @@ usage() {
     "  fw send channel help"
     "  fw rs485 list"
     "  fw rs485 send channel help --port /dev/cu.usbserial-XXXX"
+    "  fw midi list"
+    "  fw midi"
+    "  fw midi channel --rs485 /dev/cu.usbserial-XXXX --midi 0"
     "  fw flash channel --port USB1"
     "  fw build all --release"
   )
@@ -1059,6 +1079,7 @@ parse_rs485_flags() {
         ;;
       --baud=*) RS485_BAUD="${1#--baud=}" ;;
       --manual-rts) RS485_MANUAL_RTS=1 ;;
+      --echo-off) RS485_ECHO_OFF=1 ;;
       --timeout-ms)
         [[ $# -ge 2 ]] || die "--timeout-ms needs a value"
         RS485_TIMEOUT_MS="$2"; shift
@@ -1083,7 +1104,7 @@ parse_rs485_flags() {
 # Validates --port and fills the CALLER's 'common' array (must already be
 # declared, e.g. 'local common') with the rs485_console flags shared by
 # REPL/send: --port/--baud plus whichever of --manual-rts/--timeout-ms/
-# --retries were set.
+# --retries/--echo-off were set.
 #
 # Deliberately a plain function call, not '< <(...)' / '$(...)': bash's
 # 'die' just calls exit, and exit inside a command-substitution/process-
@@ -1097,6 +1118,7 @@ require_rs485_common_args() {
   [[ -n "$RS485_PORT" ]] || die "fw rs485 needs --port PATH (see: fw rs485 list)"
   common=( --port "$RS485_PORT" --baud "$RS485_BAUD" )
   [[ "$RS485_MANUAL_RTS" -eq 1 ]] && common+=( --manual-rts )
+  [[ "$RS485_ECHO_OFF" -eq 1 ]] && common+=( --echo-off )
   [[ -n "$RS485_TIMEOUT_MS" ]] && common+=( --timeout-ms "$RS485_TIMEOUT_MS" )
   [[ -n "$RS485_RETRIES" ]] && common+=( --retries "$RS485_RETRIES" )
   # Without this, when RS485_RETRIES (the last check above) is unset, the
@@ -1178,6 +1200,189 @@ cmd_rs485() {
   [[ "$RS485_MANUAL_RTS" -eq 1 ]] && row "rts" "manual (toggled around TX)"
   outn
   exec "$(console_bin)" "${common[@]}" --target "$target"
+}
+
+# ── MIDI host (apps/midi_host — Launchkey → speakers) ──────────────────────
+
+midi_dir() { echo "$ROOT/apps/midi_host"; }
+midi_bin() { echo "$(midi_dir)/build/midi_host"; }
+
+cmd_midi_build() {
+  local dir bin
+  dir="$(midi_dir)"
+  bin="$(midi_bin)"
+  need_cmd cmake
+  info "build midi_host"
+  (
+    cd "$dir"
+    cmake -S . -B build
+    cmake --build build
+  )
+  ok "$(relpath "$bin")"
+}
+
+# Builds apps/midi_host only if the binary is missing — 'fw midi build' is
+# the explicit rebuild-after-editing path.
+ensure_midi_built() {
+  local bin
+  bin="$(midi_bin)"
+  if [[ ! -x "$bin" ]]; then
+    warn "midi_host not built yet — building"
+    cmd_midi_build
+  fi
+}
+
+list_midi_ports() {
+  hdr "MIDI input ports"
+  ensure_midi_built
+  local out
+  out="$("$(midi_bin)" --list)" || true
+  if [[ -z "$out" || "$out" == "(no MIDI input ports)" ]]; then
+    row "-" "(none — plug in the Launchkey, or pass --port explicitly)"
+  else
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      # midi_host prints "N: name"
+      if [[ "$line" =~ ^([0-9]+):\ (.*)$ ]]; then
+        row "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+      else
+        row "-" "$line"
+      fi
+    done <<< "$out"
+  fi
+  return 0
+}
+
+# Optional MIDI index and/or channel RS485 routing.
+MIDI_PORT_INDEX=""
+MIDI_RS485_PATH="${FW_RS485_PORT:-}"
+MIDI_RS485_BAUD="${FW_RS485_BAUD:-460800}"
+MIDI_GAIN_DB="${FW_MIDI_GAIN:-6}"
+MIDI_TARGET=""  # empty = speaker; channel = Channel Card over RS485
+MIDI_ECHO="off" # off | on | leave
+MIDI_AUTO=0     # 1 = --auto demo until first Note On
+
+parse_midi_flags() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --midi)
+        [[ $# -ge 2 ]] || die "--midi needs a MIDI port index (see: fw midi list)"
+        MIDI_PORT_INDEX="$2"; shift
+        ;;
+      --midi=*) MIDI_PORT_INDEX="${1#--midi=}" ;;
+      --port|-p)
+        [[ $# -ge 2 ]] || die "--port needs a MIDI index or RS485 serial path"
+        local v="$2"; shift
+        if [[ "$v" == /dev/* || "$v" == cu.* || "$v" == tty.* || "$v" == COM* ]]; then
+          [[ "$v" == cu.* || "$v" == tty.* ]] && v="/dev/$v"
+          MIDI_RS485_PATH="$v"
+        else
+          MIDI_PORT_INDEX="$v"
+        fi
+        ;;
+      --port=*)
+        local v="${1#--port=}"
+        if [[ "$v" == /dev/* || "$v" == cu.* || "$v" == tty.* || "$v" == COM* ]]; then
+          [[ "$v" == cu.* || "$v" == tty.* ]] && v="/dev/$v"
+          MIDI_RS485_PATH="$v"
+        else
+          MIDI_PORT_INDEX="$v"
+        fi
+        ;;
+      --rs485)
+        [[ $# -ge 2 ]] || die "--rs485 needs a serial path (see: fw rs485 list)"
+        MIDI_RS485_PATH="$2"; shift
+        ;;
+      --rs485=*) MIDI_RS485_PATH="${1#--rs485=}" ;;
+      --baud)
+        [[ $# -ge 2 ]] || die "--baud needs a value"
+        MIDI_RS485_BAUD="$2"; shift
+        ;;
+      --baud=*) MIDI_RS485_BAUD="${1#--baud=}" ;;
+      --gain)
+        [[ $# -ge 2 ]] || die "--gain needs dB 0..127"
+        MIDI_GAIN_DB="$2"; shift
+        ;;
+      --gain=*) MIDI_GAIN_DB="${1#--gain=}" ;;
+      --echo-off) MIDI_ECHO="off" ;;
+      --echo-on) MIDI_ECHO="on" ;;
+      --echo-leave) MIDI_ECHO="leave" ;;
+      --auto) MIDI_AUTO=1 ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "unknown midi option: $1" ;;
+    esac
+    shift
+  done
+  return 0
+}
+
+cmd_midi() {
+  local sub="${1:-}"
+  local a
+  for a in "$@"; do
+    if [[ "$a" == "-h" || "$a" == "--help" ]]; then
+      usage
+      exit 0
+    fi
+  done
+
+  if [[ "$sub" == "build" ]]; then
+    cmd_midi_build
+    return
+  fi
+  if [[ "$sub" == "list" ]]; then
+    list_midi_ports
+    return
+  fi
+
+  # 'run' / 'play' → speakers; 'channel' → Channel Card over RS485.
+  if [[ "$sub" == "run" || "$sub" == "play" ]]; then
+    shift
+    MIDI_TARGET=""
+  elif [[ "$sub" == "channel" ]]; then
+    shift
+    MIDI_TARGET="channel"
+  elif [[ -n "$sub" && "$sub" != --* ]]; then
+    die "usage: fw midi [build|list|run|play|channel] [--midi N] [--rs485 PATH]"
+  fi
+
+  ensure_midi_built
+  parse_midi_flags "$@"
+
+  if [[ "$MIDI_TARGET" == "channel" ]]; then
+    [[ -n "$MIDI_RS485_PATH" ]] || die "fw midi channel needs --rs485 PATH (or FW_RS485_PORT / --port /dev/...)"
+  fi
+
+  local args=()
+  [[ -n "$MIDI_PORT_INDEX" ]] && args+=( --midi "$MIDI_PORT_INDEX" )
+  [[ "$MIDI_AUTO" -eq 1 ]] && args+=( --auto )
+
+  hdr "MIDI host"
+  if [[ -n "$MIDI_PORT_INDEX" ]]; then
+    row "midi" "$MIDI_PORT_INDEX"
+  else
+    row "midi" "auto (Launchkey MIDI Out preferred)"
+  fi
+  if [[ "$MIDI_AUTO" -eq 1 ]]; then
+    row "mode" "autoplay → live on key"
+  else
+    row "mode" "live MIDI"
+  fi
+
+  if [[ "$MIDI_TARGET" == "channel" ]]; then
+    row "output" "channel (RS485)"
+    row "rs485" "$MIDI_RS485_PATH"
+    row "baud" "$MIDI_RS485_BAUD"
+    row "gain" "1 ${MIDI_GAIN_DB}"
+    row "echo" "$MIDI_ECHO"
+    args+=( --target channel --rs485 "$MIDI_RS485_PATH" --baud "$MIDI_RS485_BAUD" --gain "$MIDI_GAIN_DB" )
+    args+=( --echo-"$MIDI_ECHO" )
+  else
+    row "output" "speakers"
+  fi
+  outn
+
+  exec "$(midi_bin)" "${args[@]}"
 }
 
 # ── flag parsing ─────────────────────────────────────────────────────────────
@@ -1262,6 +1467,7 @@ main() {
     log|logs|follow|tail) cmd_log "$@" ;;
     send|cmd) cmd_send "$@" ;;
     rs485) cmd_rs485 "$@" ;;
+    midi) cmd_midi "$@" ;;
     clean)  cmd_clean "$@" ;;
     status|info) cmd_status "$@" ;;
     help|-h|--help) usage ;;

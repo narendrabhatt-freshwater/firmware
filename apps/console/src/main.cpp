@@ -1,15 +1,14 @@
 /**
  * @file main.cpp
- * @brief rs485_console — standalone PC-side console for the Channel/Effect
- *        Card RS485 bus. See docs/rs485_console_architecture.md §3.
- *
- * Talks to either/both cards purely over RS485 through a PC-side adapter
- * (ADAM-4520 or a generic USB-RS485 dongle) — no dependency on either
- * card's own USB CDC connection.
+ * @brief rs485_console — optional PC-side client for the Channel/Effect
+ *        RS485 bus. Any serial terminal at 460800 8N1 can speak the same
+ *        ASCII protocol; this tool adds targeting, retries, and --echo-off.
+ *        See docs/rs485_console_architecture.md.
  */
 
-#include "rs485_link.hpp"
-#include "serial_port.hpp"
+#include "rs485/link.hpp"
+#include "rs485/serial_port.hpp"
+#include "rs485/types.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -27,131 +26,163 @@
 #endif
 
 using rs485::ExchangeResult;
+using rs485::Link;
 using rs485::LinkOptions;
 using rs485::ParseTarget;
-using rs485::RS485Link;
 using rs485::SerialPort;
+using rs485::Status;
 using rs485::Target;
 using rs485::TargetName;
 
-namespace {
+namespace
+{
 
-void PrintUsage() {
-  std::cout <<
-      "rs485_console - standalone RS485 console for the Channel/Effect Card bus\n"
-      "\n"
-      "Usage:\n"
-      "  rs485_console --list\n"
-      "  rs485_console --port <path> [options]\n"
-      "  rs485_console --port <path> [options] send <channel|effect|all> <command...>\n"
-      "\n"
-      "Options:\n"
-      "  --port PATH        Serial device for the RS485 adapter (required unless --list)\n"
-      "  --baud N            Baud rate (default 115200, matches both cards' UART5/UART4)\n"
-      "  --target TARGET     Default target for the REPL: channel|effect|all (default all)\n"
-      "  --timeout-ms N      Per-attempt reply wait, ms (default 500)\n"
-      "  --retries N         Extra send attempts if no reply arrives (default 2)\n"
-      "  --manual-rts        Toggle RTS around each transmit (only for USB-RS485\n"
-      "                      dongles without auto-direction; most don't need this)\n"
-      "  --list              List likely serial ports for this OS and exit\n"
-      "  -h, --help          This help\n"
-      "\n"
-      "Interactive REPL commands (not sent to the bus):\n"
-      "  card channel|effect|all   change the default target\n"
-      "  quit / exit                leave the REPL\n"
-      "\n"
-      "Any other line is sent as a console command, e.g. 'help', 'status',\n"
-      "'sw bypass on'. An explicit 'c:'/'e:'/'*:' prefix on a line overrides\n"
-      "the current default target for that line only.\n";
+void PrintUsage()
+{
+  std::cout
+      << "rs485_console - optional RS485 client (same ASCII as screen/minicom)\n"
+         "\n"
+         "Usage:\n"
+         "  rs485_console --list\n"
+         "  rs485_console --port <path> [options]\n"
+         "  rs485_console --port <path> [options] send channel <command>\n"
+         "\n"
+         "Options:\n"
+         "  --port PATH        Serial device for the RS485 adapter\n"
+         "  --baud N           Baud rate (default 460800)\n"
+         "  --target TARGET    Default: channel|effect|all (default channel)\n"
+         "  --timeout-ms N     Per-attempt reply wait, ms (default 500)\n"
+         "  --retries N        Extra attempts on timeout (default 2)\n"
+         "  --echo-off         Send e:ec 0 at start (burst / half-duplex)\n"
+         "  --manual-rts       Toggle RTS around each transmit\n"
+         "  --list             List likely serial ports and exit\n"
+         "  -h, --help         This help\n"
+         "\n"
+         "Wire: host lines end with CR only; replies are [C]/[E]…\\r\\n.\n"
+         "With device echo off, enable local echo in your terminal.\n"
+         "Any serial terminal can type the same commands (e.g. e:ec 0).\n"
+         "Channel Card also accepts:\n"
+         "  f0..f7 <Hz> / f <Hz>   LPF slots 0..7 (20000=bypass)\n"
+         "  g / n 0 / cpu           gain, silence-all, load probe\n"
+         "  h                      list Channel commands\n";
 }
 
-struct Options {
+struct Options
+{
   std::string port;
-  uint32_t baud = 115200;
-  Target target = Target::All;
+  uint32_t baud = 460800;
+  Target target = Target::Channel;
   uint32_t timeout_ms = 500;
   int retries = 2;
   bool manual_rts = false;
+  bool echo_off = false;
   bool list = false;
   bool help = false;
   std::vector<std::string> positional;
 };
 
-bool ParseArgs(int argc, char **argv, Options &opts, std::string &err) {
-  for (int i = 1; i < argc; i++) {
+bool ParseArgs(int argc, char **argv, Options &opts, std::string &err)
+{
+  for (int i = 1; i < argc; i++)
+  {
     std::string a = argv[i];
-    auto need_value = [&](const char *name) -> const char * {
-      if (i + 1 >= argc) {
+    auto need_value = [&](const char *name) -> const char *
+    {
+      if (i + 1 >= argc)
+      {
         err = std::string(name) + " needs a value";
         return nullptr;
       }
       return argv[++i];
     };
 
-    if (a == "--port") {
+    if (a == "--port")
+    {
       const char *v = need_value("--port");
       if (!v)
         return false;
       opts.port = v;
-    } else if (a == "--baud") {
+    }
+    else if (a == "--baud")
+    {
       const char *v = need_value("--baud");
       if (!v)
         return false;
       opts.baud = static_cast<uint32_t>(std::strtoul(v, nullptr, 10));
-    } else if (a == "--target") {
+    }
+    else if (a == "--target")
+    {
       const char *v = need_value("--target");
       if (!v)
         return false;
-      if (!ParseTarget(v, opts.target)) {
+      if (!ParseTarget(v, opts.target))
+      {
         err = std::string("unknown --target '") + v + "' (use channel|effect|all)";
         return false;
       }
-    } else if (a == "--timeout-ms") {
+    }
+    else if (a == "--timeout-ms")
+    {
       const char *v = need_value("--timeout-ms");
       if (!v)
         return false;
       opts.timeout_ms = static_cast<uint32_t>(std::strtoul(v, nullptr, 10));
-    } else if (a == "--retries") {
+    }
+    else if (a == "--retries")
+    {
       const char *v = need_value("--retries");
       if (!v)
         return false;
       opts.retries = std::atoi(v);
-    } else if (a == "--manual-rts") {
+    }
+    else if (a == "--manual-rts")
+    {
       opts.manual_rts = true;
-    } else if (a == "--list") {
+    }
+    else if (a == "--echo-off")
+    {
+      opts.echo_off = true;
+    }
+    else if (a == "--list")
+    {
       opts.list = true;
-    } else if (a == "-h" || a == "--help") {
+    }
+    else if (a == "-h" || a == "--help")
+    {
       opts.help = true;
-    } else if (!a.empty() && a[0] == '-') {
+    }
+    else if (!a.empty() && a[0] == '-')
+    {
       err = "unknown option: " + a;
       return false;
-    } else {
+    }
+    else
+    {
       opts.positional.push_back(a);
     }
   }
   return true;
 }
 
-/** True if `s` is mostly console text (printable ASCII + CR/LF/TAB).
- * A single high-bit framing/noise byte must not be treated as a real
- * card reply — those print as the Unicode replacement glyph and hide
- * the real problem. */
-bool LooksLikeTextReply(const std::string &s) {
+bool LooksLikeTextReply(const std::string &s)
+{
   if (s.empty())
     return false;
   size_t printable = 0;
-  for (unsigned char c : s) {
+  for (unsigned char c : s)
+  {
     if (c == '\r' || c == '\n' || c == '\t' || (c >= 0x20 && c < 0x7f))
       printable++;
   }
-  return printable * 4 >= s.size() * 3; /* >= 75% printable */
+  return printable * 4 >= s.size() * 3;
 }
 
-void PrintHexDump(const std::string &raw) {
+void PrintHexDump(const std::string &raw)
+{
   std::cerr << "(rx noise/garbage, " << raw.size()
-            << " byte(s) — not a card reply; check A/B polarity, GND, "
-               "termination)\n  hex:";
-  for (unsigned char c : raw) {
+            << " byte(s) — not a card reply)\n  hex:";
+  for (unsigned char c : raw)
+  {
     char buf[8];
     std::snprintf(buf, sizeof(buf), " %02x", c);
     std::cerr << buf;
@@ -159,57 +190,119 @@ void PrintHexDump(const std::string &raw) {
   std::cerr << "\n";
 }
 
-/** Prints a reply, colorizing the [C]/[E] card tag when stdout is a TTY.
- * Non-text bytes (bus noise) get a hex dump on stderr instead of a
- * replacement glyph. */
-void PrintReply(const std::string &reply) {
-  if (!LooksLikeTextReply(reply)) {
+void PrintReply(const ExchangeResult &result)
+{
+  std::string reply = result.raw;
+  if (reply.empty())
+    return;
+  if (!LooksLikeTextReply(reply))
+  {
     PrintHexDump(reply);
     return;
   }
 #if defined(_WIN32)
-  std::cout << reply;
+  std::cout << reply << "\n";
 #else
   static const bool is_tty = ::isatty(1);
-  if (!is_tty) {
-    std::cout << reply;
+  if (!is_tty)
+  {
+    std::cout << reply << "\n";
     return;
   }
-  std::istringstream iss(reply);
-  std::string line;
-  while (std::getline(iss, line)) {
-    if (line.rfind("[C]", 0) == 0) {
-      std::cout << "\x1b[36m" << line << "\x1b[0m\n"; /* cyan */
-    } else if (line.rfind("[E]", 0) == 0) {
-      std::cout << "\x1b[33m" << line << "\x1b[0m\n"; /* yellow */
-    } else {
-      std::cout << line << "\n";
-    }
-  }
+  if (reply.rfind("[C]", 0) == 0)
+    std::cout << "\x1b[36m" << reply << "\x1b[0m\n";
+  else if (reply.rfind("[E]", 0) == 0)
+    std::cout << "\x1b[33m" << reply << "\x1b[0m\n";
+  else
+    std::cout << reply << "\n";
 #endif
 }
 
-int RunSendOnce(RS485Link &link, Target target, const std::string &command) {
-  ExchangeResult result = link.Send(target, command);
-  if (!result.got_reply) {
-    std::cerr << "(no reply — bus busy or no card listening; "
-                 "check wiring/target/port)\n";
-    return 1;
+void PrintStatus(const ExchangeResult &result)
+{
+  switch (result.status)
+  {
+  case Status::Ok:
+    PrintReply(result);
+    break;
+  case Status::Err:
+    std::cerr << "(card err:" << result.err_code << ") ";
+    PrintReply(result);
+    break;
+  case Status::Timeout:
+    std::cerr << "(timeout — bus busy or no card listening)\n";
+    break;
+  case Status::BadReply:
+    std::cerr << "(bad reply) ";
+    PrintReply(result);
+    break;
+  case Status::IoError:
+    std::cerr << "(I/O error) " << result.raw << "\n";
+    break;
+  case Status::BusBusy:
+    std::cerr << "(bus busy)\n";
+    break;
   }
-  PrintReply(result.reply);
-  return 0;
 }
 
-/** Put the keyboard TTY into cooked line-edit mode for the REPL (Enter
- * submits, Backspace deletes) and restore whatever it was on exit.
- *
- * getline() relies on the OS line discipline — if something left the
- * session in raw mode (or echo-without-ICANON), Enter/Backspace print as
- * literal ^M/^H instead of submitting/erasing. The RS485 serial port's
- * own termios is separate; this only touches stdin when it is a TTY. */
-class TtyCookedGuard {
+int RunSendOnce(Link &link, Target target, const std::string &command)
+{
+  ExchangeResult result = link.Send(target, command);
+  PrintStatus(result);
+  return result.ok() ? 0 : 1;
+}
+
+std::string NormalizeN0Command(std::string line)
+{
+  while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
+    line.erase(line.begin());
+  while (!line.empty() && (line.back() == ' ' || line.back() == '\t'))
+    line.pop_back();
+  if (line.empty())
+    return line;
+
+  std::string lower = line;
+  for (char &c : lower)
+  {
+    if (c >= 'A' && c <= 'Z')
+      c = static_cast<char>(c - 'A' + 'a');
+  }
+
+  if (lower.size() >= 2 && lower[0] == 'n')
+  {
+    char d = lower[1];
+    bool hex = (d >= '0' && d <= '9') || (d >= 'a' && d <= 'f');
+    if (hex && (lower.size() == 2 || lower[2] == ' '))
+      return lower;
+  }
+
+  if (lower.rfind("g ", 0) == 0)
+    return lower;
+
+  /* f / f0..f7 filter cmds */
+  if (lower[0] == 'f' &&
+      (lower.size() == 1 || lower[1] == ' ' ||
+       ((lower[1] >= '0' && lower[1] <= '7') &&
+        (lower.size() == 2 || lower[2] == ' '))))
+    return lower;
+
+  if (lower.rfind("n ", 0) == 0 || lower == "n" ||
+      lower.rfind("cpu", 0) == 0)
+    return lower;
+
+  char *end = nullptr;
+  std::strtod(line.c_str(), &end);
+  if (end != line.c_str() && end != nullptr && *end == '\0')
+    return std::string("n0 ") + line;
+
+  return lower;
+}
+
+class TtyCookedGuard
+{
 public:
-  TtyCookedGuard() {
+  TtyCookedGuard()
+  {
 #if defined(_WIN32)
     HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
     if (h == INVALID_HANDLE_VALUE || h == nullptr)
@@ -230,16 +323,15 @@ public:
     cooked.c_lflag |= static_cast<tcflag_t>(ICANON | ECHO | ECHOE | ECHOK | ISIG);
     cooked.c_iflag |= static_cast<tcflag_t>(ICRNL);
     cooked.c_oflag |= static_cast<tcflag_t>(OPOST);
-    /* Prefer the usual erase/kill so Backspace deletes instead of
-     * printing ^H — leave VERASE alone if the session already set one. */
     if (cooked.c_cc[VERASE] == 0 || cooked.c_cc[VERASE] == _POSIX_VDISABLE)
-      cooked.c_cc[VERASE] = 0177; /* DEL — common macOS/Terminal default */
+      cooked.c_cc[VERASE] = 0177;
     if (tcsetattr(STDIN_FILENO, TCSANOW, &cooked) == 0)
       active_ = true;
 #endif
   }
 
-  ~TtyCookedGuard() {
+  ~TtyCookedGuard()
+  {
     if (!active_)
       return;
 #if defined(_WIN32)
@@ -262,79 +354,97 @@ private:
 #endif
 };
 
-int RunRepl(RS485Link &link, Target default_target, const std::string &port,
-            uint32_t baud) {
-  TtyCookedGuard tty; /* Enter submits, Backspace deletes — see class note */
+int RunRepl(Link &link, Target default_target, const std::string &port,
+            uint32_t baud, bool did_echo_off)
+{
+  TtyCookedGuard tty;
 
   std::cout << "rs485_console — connected " << port << " @ " << baud
             << " 8N1, target: " << TargetName(default_target) << "\n"
-            << "type a command and press Enter (your terminal echoes as you "
-               "type; the firmware doesn't echo over RS485 itself)\n"
-            << "'card channel|effect|all' to change target, 'quit' to exit\n";
+            << "Same protocol as screen/minicom. 'quit' exits.\n";
+  if (did_echo_off)
+  {
+    std::cout << "(e:ec 0 sent — use local terminal echo if typing manually)\n";
+  }
+
+  if (default_target == Target::Channel || default_target == Target::All)
+  {
+    ExchangeResult init = link.Send(Target::Channel, "n0");
+    if (init.ok() || init.status == Status::Err)
+      PrintStatus(init);
+    else
+      std::cerr << "(warn: could not apply session defaults)\n";
+  }
+
   std::string line;
   Target target = default_target;
-  while (true) {
+  while (true)
+  {
     std::cout << "[" << TargetName(target) << "]> " << std::flush;
     if (!std::getline(std::cin, line))
       break;
 
-    /* Trim trailing \r (in case stdin is piped from a CRLF source). */
     while (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
       line.pop_back();
     if (line.empty())
       continue;
 
-    if (line == "quit" || line == "exit") {
+    if (line == "quit" || line == "exit")
       break;
-    }
-    if (line.rfind("card ", 0) == 0) {
+
+    if (line.rfind("card ", 0) == 0)
+    {
       Target new_target;
-      if (ParseTarget(line.substr(5), new_target)) {
+      if (ParseTarget(line.substr(5), new_target))
+      {
         target = new_target;
         std::cout << "(default target -> " << TargetName(target) << ")\n";
-      } else {
+      }
+      else
+      {
         std::cerr << "err: card <channel|effect|all>\n";
       }
       continue;
     }
 
-    ExchangeResult result = link.Send(target, line);
-    if (!result.got_reply) {
-      std::cerr << "(no reply — bus busy or no card listening)\n";
-    } else {
-      PrintReply(result.reply);
-    }
+    PrintStatus(link.Send(target, NormalizeN0Command(line)));
   }
   return 0;
 }
 
 } // namespace
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
   Options opts;
   std::string err;
-  if (!ParseArgs(argc, argv, opts, err)) {
+  if (!ParseArgs(argc, argv, opts, err))
+  {
     std::cerr << "error: " << err << "\n\n";
     PrintUsage();
     return 2;
   }
-  if (opts.help) {
+  if (opts.help)
+  {
     PrintUsage();
     return 0;
   }
 
-  if (opts.list) {
+  if (opts.list)
+  {
     std::vector<std::string> ports = SerialPort::ListPorts();
-    if (ports.empty()) {
+    if (ports.empty())
       std::cout << "(no likely serial ports found)\n";
-    } else {
+    else
+    {
       for (const auto &p : ports)
         std::cout << p << "\n";
     }
     return 0;
   }
 
-  if (opts.port.empty()) {
+  if (opts.port.empty())
+  {
     std::cerr << "error: --port is required (or use --list)\n\n";
     PrintUsage();
     return 2;
@@ -342,37 +452,57 @@ int main(int argc, char **argv) {
 
   SerialPort port;
   port.SetManualRtsControl(opts.manual_rts);
-  if (!port.Open(opts.port, opts.baud)) {
+  if (!port.Open(opts.port, opts.baud))
+  {
     std::cerr << "error: could not open " << opts.port << ": "
-               << port.LastError() << "\n";
+              << port.LastError() << "\n";
     return 1;
   }
 
   LinkOptions link_opts;
   link_opts.reply_timeout_ms = opts.timeout_ms;
   link_opts.retries = opts.retries;
-  RS485Link link(port, link_opts);
+  Link link(port, link_opts);
 
-  /* `send <target> <command...>` one-shot mode. */
-  if (!opts.positional.empty() && opts.positional[0] == "send") {
-    if (opts.positional.size() < 3) {
-      std::cerr << "usage: rs485_console --port PATH send <channel|effect|all> <command...>\n";
+  bool did_echo_off = false;
+  if (opts.echo_off)
+  {
+    ExchangeResult echo = link.Send(Target::Effect, "ec 0");
+    PrintStatus(echo);
+    if (echo.ok())
+    {
+      did_echo_off = true;
+    }
+    else
+    {
+      std::cerr << "(warn: e:ec 0 failed — turn echo off manually if needed)\n";
+    }
+  }
+
+  if (!opts.positional.empty() && opts.positional[0] == "send")
+  {
+    if (opts.positional.size() < 3)
+    {
+      std::cerr << "usage: rs485_console --port PATH send <channel|effect|all> "
+                   "<command...>\n";
       return 2;
     }
     Target target;
-    if (!ParseTarget(opts.positional[1], target)) {
+    if (!ParseTarget(opts.positional[1], target))
+    {
       std::cerr << "unknown target '" << opts.positional[1]
                 << "' (use channel|effect|all)\n";
       return 2;
     }
     std::string command;
-    for (size_t i = 2; i < opts.positional.size(); i++) {
+    for (size_t i = 2; i < opts.positional.size(); i++)
+    {
       if (i > 2)
         command += " ";
       command += opts.positional[i];
     }
-    return RunSendOnce(link, target, command);
+    return RunSendOnce(link, target, NormalizeN0Command(command));
   }
 
-  return RunRepl(link, opts.target, opts.port, opts.baud);
+  return RunRepl(link, opts.target, opts.port, opts.baud, did_echo_off);
 }

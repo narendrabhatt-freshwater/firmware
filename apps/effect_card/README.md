@@ -46,7 +46,8 @@ Then flash `build/Debug/effect_card.hex` over DFU — see
 
 | Path | Contents |
 |---|---|
-| `Core/Src/main.c` | Console, RS485, ADC I2C driver, **SAI capture → USB** |
+| `Core/Src/main.c` | Bring-up, **SAI capture → USB**, main loop wiring |
+| `Core/Src/console/effect_console.c` | RS485 + USB CDC console, ADC I2C bring-up, LED flash |
 | `Core/Src/sai.c` | SAI init + critical TDM overrides (see below) |
 | `USB_APP/` | TinyUSB descriptors, `tusb_config.h`, UAC2 + CDC glue |
 

@@ -7,12 +7,12 @@
  * background threads. RS485 is half-duplex and single-transmitter-at-a-time
  * (see docs/rs485_console_architecture.md) — the console only ever has one
  * request in flight, so it doesn't need async I/O. Framing (target prefix,
- * CRLF termination, [C]/[E] reply tags, busy/retry) lives in rs485_link.*,
+ * CR + tagged reply parsing) lives in rs485::Link,,
  * not here — this file only knows about bytes.
  */
 
-#ifndef RS485_CONSOLE_SERIAL_PORT_HPP
-#define RS485_CONSOLE_SERIAL_PORT_HPP
+#ifndef RS485_SERIAL_PORT_HPP
+#define RS485_SERIAL_PORT_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -45,13 +45,18 @@ public:
   /** Reads up to `max_len` bytes, waiting up to `timeout_ms` for the first
    * byte. Returns the number of bytes read; 0 means the timeout elapsed
    * with nothing received (bus busy/no reply — not necessarily an error,
-   * see rs485_link's retry policy). */
+   * see Link retry policy). */
   size_t ReadTimeout(uint8_t *buf, size_t max_len, uint32_t timeout_ms);
 
   /** Discard any bytes already sitting in the OS/driver RX buffer (idle
    * noise, leftover TX-echo, turnaround glitches). Call before each
    * transmit so ReadReply() only sees post-TX traffic. */
   void FlushInput();
+
+  /** Block until the OS has shifted out every byte from the last Write().
+   * Needed before a follow-up frame so a "silence" cannot sit behind a
+   * stale chord still in the USB-serial TX queue. */
+  void DrainOutput();
 
   /** Some USB-RS485 dongles lack auto-direction and need RTS driven high
    * only while transmitting. Off by default (matches ADAM-4520 and most
@@ -80,4 +85,4 @@ private:
 
 } // namespace rs485
 
-#endif // RS485_CONSOLE_SERIAL_PORT_HPP
+#endif // RS485_SERIAL_PORT_HPP

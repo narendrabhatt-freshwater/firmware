@@ -5,8 +5,22 @@ alwaysApply: true
 
 # Git Workflow
 
+## Branching model
+
+- **`main`**: production / known-good release line. Do not land day-to-day
+  feature work here.
+- **`develop`**: integration tip for ongoing development.
+- **Feature / fix branches**: cut from **`develop`**, merge back into
+  **`develop`**. Promote **`develop` → `main`** only for releases (merge or
+  tag), not for every feature.
 - **Branch naming**: `feature/<card>-<short-desc>` (e.g.
   `feature/channel-ch1-sine-test`), `fix/<short-desc>` for bug fixes.
+- **Until a remote exists**: integrate with local `git merge` /
+  cherry-pick (no GitHub/GitLab PR). **When a remote exists**: same flow via
+  PRs into `develop`, then release merges to `main`.
+
+## Commits and generated files
+
 - **Commit messages**: imperative subject line + a short rationale paragraph,
   matching the descriptive style already used in this repo (e.g.
   `Initial commit: known-good Channel and Effect card firmware baseline.`).

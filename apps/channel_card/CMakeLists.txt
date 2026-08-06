@@ -49,11 +49,18 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # additions to it are silently lost (which is exactly how cs4304.c went
 # missing after the USB middleware was removed).
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    # CS4304 DAC driver (hand-written, not CubeMX-generated)
-    Core/Src/cs4304.c
-    # USB audio -> I2S bridge (relocated out of USB_DEVICE/ when the card
-    # moved from ST's USB Device Library to TinyUSB)
-    Core/Src/audio_bridge.c
+    # Hand-written app modules live under Core/Src/<domain>/ — CubeMX
+    # sources stay flat in Core/Src. Never add these to cmake/stm32cubemx/.
+    Core/Src/drivers/cs4304.c
+    Core/Src/audio/note_bank.c
+    Core/Src/audio/note_envelope.c
+    Core/Src/audio/audio_cpuload.c
+    Core/Src/audio/audio_tone_dc.c
+    Core/Src/filters/butterworth_four_pole.c
+    Core/Src/filters/note_filter.c
+    Core/Src/console/channel_console.c
+    Core/Src/console/uart5_rx.c
+    Core/Src/audio/audio_bridge.c
     # TinyUSB core + device stack.  Kept in ThirdParty/ (NOT
     # Middlewares/, which CubeMX manages and prunes on regeneration).
     ThirdParty/tinyusb/src/tusb.c
@@ -70,6 +77,10 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+    Core/Inc/filters
+    Core/Inc/audio
+    Core/Inc/drivers
+    Core/Inc/console
     ThirdParty/tinyusb/src
     USB_APP
 )

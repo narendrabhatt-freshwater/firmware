@@ -8,7 +8,7 @@
  * real hardware once a Windows dev machine + adapter are available.
  */
 
-#include "serial_port.hpp"
+#include "rs485/serial_port.hpp"
 
 #include <windows.h>
 
@@ -155,6 +155,12 @@ void SerialPort::FlushInput() {
   if (!is_open_)
     return;
   PurgeComm(impl_->handle, PURGE_RXCLEAR);
+}
+
+void SerialPort::DrainOutput() {
+  if (!is_open_)
+    return;
+  (void)FlushFileBuffers(impl_->handle);
 }
 
 void SerialPort::SetRts(bool asserted) {

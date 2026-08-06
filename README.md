@@ -3,8 +3,8 @@
 Common quick-start for **both** cards. Per-card detail lives in each
 project's own `README.md` (to be expanded).
 
-| Card | Folder | MCU | CMake target | CubeMX file |
-|---|---|---|---|---|
+| Card         | Folder               | MCU         | CMake target  | CubeMX file       |
+| ------------ | -------------------- | ----------- | ------------- | ----------------- |
 | Channel Card | `apps/channel_card/` | STM32H725xG | `channel_MCU` | `channel_MCU.ioc` |
 | Effect Card  | `apps/effect_card/`  | STM32H743xx | `effect_card` | `effect_card.ioc` |
 
@@ -20,11 +20,11 @@ firmware projects — see §6.
 
 ## 1. Tools to install
 
-| Tool | Why | Notes |
-|---|---|---|
-| **STM32CubeCLT** | CMake + Ninja + `arm-none-eabi-gcc` toolchain | Provides the whole build chain. Easiest single install. |
-| **STM32CubeMX** | Regenerating the HAL/peripheral framework from the `.ioc` | Only needed if you change pinout/peripherals |
-| **STM32CubeProgrammer** | Flashing over USB DFU | Also installs the DFU USB driver |
+| Tool                    | Why                                                       | Notes                                                   |
+| ----------------------- | --------------------------------------------------------- | ------------------------------------------------------- |
+| **STM32CubeCLT**        | CMake + Ninja + `arm-none-eabi-gcc` toolchain             | Provides the whole build chain. Easiest single install. |
+| **STM32CubeMX**         | Regenerating the HAL/peripheral framework from the `.ioc` | Only needed if you change pinout/peripherals            |
+| **STM32CubeProgrammer** | Flashing over USB DFU                                     | Also installs the DFU USB driver                        |
 
 STM32CubeIDE bundles equivalents under
 `…/AppData/Local/stm32cube/bundles/` (`cmake/`, `ninja/`,
@@ -194,44 +194,47 @@ The Effect Card was upgraded for dwc2 isochronous-IN fixes. Do not
 
 ## 6. Consoles — how to talk to the boards
 
-Both cards expose the **same command console** over two transports.
+**Channel Card** (this branch): N0–NF note bank + gain on RS485 and USB CDC —
 
-**RS485 multi-drop** (both cards share one bus, 115200 8N1):
+| Command                        | Meaning                                                       |
+| ------------------------------ | ------------------------------------------------------------- |
+| `N0`                           | Session defaults: **bypass on** + **gain 1 0**                |
+| `N0`…`NF` `0` / `<Hz> [scale]` | Note off/on; optional scale 0..1 (default 1.0); summed on CH1 |
+| `gain <ch> <dB>`               | CS4304 DAC atten on CH1..4 (e.g. `gain 1 40` = −40 dB)        |
 
-| Prefix | Goes to |
-|---|---|
-| `c:` | Channel Card only |
-| `e:` | Effect Card only |
-| `*:` or no prefix | Both |
+Examples: `n0 440 0.5`, `n1 550` (scale 1.0), `n2 660 0.1`.
 
-```
-c:help
-e:status
-```
+Entering `fw rs485` sends bare `n0` once (bypass on + gain 1 0). Boot does the same.
 
-From a PC, reach the RS485 bus directly with the standalone console in
-[`apps/console`](apps/console) (wrapped by `fw rs485`) through an
-ADAM-4520 or a generic USB↔RS-485 dongle — **this has zero dependency on
-either board's own USB CDC connection**, so it keeps working even with
-both boards' USB entirely unplugged:
+Addressing on the shared RS485 bus is unchanged (`c:` / `e:` / `*:`). Effect
+Card still has its own full console.
 
 ```bash
-fw rs485 list                                          # find the adapter's serial port
-fw rs485 send channel status --port /dev/cu.usbserial-XXXX
-fw rs485 console channel --port /dev/cu.usbserial-XXXX # interactive REPL
+fw rs485 list
+fw rs485 send channel "N0 440 0.5" --port /dev/cu.usbserial-XXXX
+fw rs485 channel --port /dev/cu.usbserial-XXXX   # REPL: 440, n1 550, …
 ```
 
-See [`apps/console/README.md`](apps/console/README.md) and
+See [`apps/console/README.md`](apps/console/README.md),
+[`docs/protocol.md`](docs/protocol.md) (host↔card protocol), and
 [`docs/rs485_console_architecture.md`](docs/rs485_console_architecture.md)
-for the full design.
+(bus framing).
+Per-voice digital LPF: [`docs/note_filter_butterworth.md`](docs/note_filter_butterworth.md).
 
-**USB CDC** — each card also enumerates a virtual COM port running the
-same parser. Open it at any baud rate; commands there are addressed to
-that card (a bare `help` works). Use `fw console`/`fw send` for this path
-— unlike `fw rs485` above, it depends on *that specific card's* own USB
-connection.
+**USB CDC** — same Channel Card `N0`…`NF` parser on `/dev/cu.usbmodemCHCARD*`.
+Effect Card CDC is unchanged (`fw console effect`).
 
-Type `help` on either transport for the current command list.
+**MIDI host** (any MIDI keyboard → Mac speakers, or Channel Card over RS485) —
+
+```bash
+fw midi build
+fw midi list
+fw midi                                    # speakers (Launchkey auto-pick)
+fw midi --midi 0                           # speakers, any MIDI device
+fw midi channel --rs485 /dev/cu.usbserial-XXXX --midi 0
+```
+
+See [`apps/midi_host/README.md`](apps/midi_host/README.md).
 
 ---
 
@@ -267,6 +270,8 @@ hardware:
   reaching either board over the shared bus with no USB CDC dependency.
   Verified against a mock firmware responder; not yet run against the
   real RS485↔PC adapter (not connected as of this writing).
+- **`apps/midi_host`** — Launchkey MIDI → 16-voice FIFO sine bank → Mac
+  speakers (RtMidi + RtAudio). See [`apps/midi_host/README.md`](apps/midi_host/README.md).
 
 > **Not under version control yet.** Initialising a git repo at
 > `firmware/` and committing this baseline is strongly recommended

@@ -3,7 +3,7 @@
  * @brief termios-based SerialPort backend for macOS and Linux.
  */
 
-#include "serial_port.hpp"
+#include "rs485/serial_port.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -61,6 +61,14 @@ speed_t StandardSpeed(uint32_t baud) {
 #ifdef B230400
   case 230400:
     return B230400;
+#endif
+#ifdef B460800
+  case 460800:
+    return B460800;
+#endif
+#ifdef B921600
+  case 921600:
+    return B921600;
 #endif
   default:
     return 0;
@@ -184,6 +192,12 @@ void SerialPort::FlushInput() {
   if (!is_open_)
     return;
   tcflush(impl_->fd, TCIFLUSH);
+}
+
+void SerialPort::DrainOutput() {
+  if (!is_open_)
+    return;
+  (void)tcdrain(impl_->fd);
 }
 
 void SerialPort::SetRts(bool asserted) {

@@ -1,0 +1,48 @@
+---
+description: Firmware language policy, deliberate module extraction, and robust coding for Channel/Effect cards
+alwaysApply: true
+---
+
+# Firmware Modules and Robust Coding
+
+## Language (honest status)
+
+- **MCU firmware today is C** (CubeMX + HAL + TinyUSB, `enable_language(C ASM)`).
+  Do not silently rewrite files to `.cpp` mid-feature.
+- **Intended direction is C++** for application/DSP layers when we deliberately
+  migrate (extern "C" at HAL/USB boundaries, no heap, same realtime rules).
+  Until that migration is an explicit task: **extend in C**.
+- **Host tools** (`apps/console`) stay **C++17**. Do not mix that stack into
+  card firmware CMake.
+
+## Extraction — deliberate, not drive-by
+
+Do **not** peel large modules out of `main.c` / `audio_bridge.c` as a side
+effect of an unrelated feature. Extraction is its own small branch/merge:
+
+1. **Helpers first** — move real logic into `static` helpers in the same file
+   (`Console_CpuLoad_EnableVoices`, etc.). Keep `Console_Exec()` a flat
+   dispatcher (see `embedded-cpp-style.mdc`).
+2. **Then a new `.c`/`.h`** — one concern per file (`note_bank`, `cs4304`,
+   future `console_cmd.c`). Public header = only what callers need.
+3. **Register sources** in the card’s **top-level** `CMakeLists.txt`
+   `target_sources` — never in regenerated `cmake/stm32cubemx/CMakeLists.txt`.
+4. **Behavior-preserving** — same console replies, same audio path; no
+   “while we’re here” feature changes in an extraction PR/merge.
+5. **Smoke after every extraction** — build; RS485 `n0` / `gain` / `cpuload on|off`;
+   confirm I2S/USB still run. Prefer local merge to `develop` when green.
+
+Growing files is OK short-term if helpers stay small and concerns stay clear.
+Prefer extraction when a file owns **two domains** (e.g. console + RS485
+framing + LED UI all tangled) or exceeds ~1k lines of hand-written logic.
+
+## Robust coding (always, not only in refactors)
+
+- Bounds-check every console/register input; reply `ok:` / `err:` — never
+  silent clamp or ignore.
+- Fixed-width types; no `malloc`/`new` in firmware; no `HAL_Delay` in ISR/DMA.
+- Hot path: no float, no blocking I/O (see `realtime-audio-performance.mdc`).
+- Fail loud on init errors (e.g. DAC fail → `LED_R`); don’t continue half-configured.
+- Table-driven extension (`switches[]`, enums) over copying if/else blocks.
+- Comment **why** (timing, bus turnaround, scope polarity) — not restating code.
+- Feature work and extraction/rules commits stay **separate** (`git-workflow.mdc`).
