@@ -126,44 +126,51 @@ to integers if you care about equal temperament.
 ### Amplitude envelope
 
 Each voice can have a multi-segment linear envelope: pairs of
-`(end_amp, slope)` then a final `release_slope`. Start of the first
+`(end_amp, slope[±k])` then a final `release_slope[±k]`. Start of the first
 segment is always 0. Last segment is release to 0.
 
 | Command               | Meaning                         |
 | --------------------- | ------------------------------- |
 | `en`                  | List which slots have a program |
-| `en <floats…>`        | Program **all** 16 voices       |
+| `en <tokens…>`        | Program **all** 16 voices       |
 | `en0`…`enf`           | Query one voice                 |
-| `en0`…`enf <floats…>` | Program one voice               |
+| `en0`…`enf <tokens…>` | Program one voice               |
 
-Float list rules:
+Token list rules:
 
-- Odd count, at least 3 numbers, at most 19.
-- Pattern: `end slope [end slope …] release_slope`
+- Odd count, at least 3 tokens, at most 19.
+- Pattern: `end slope[±k] [end slope[±k] …] release_slope[±k]`
 - Each `end` in **[0, 1]**; each `slope` **> 0** (amplitude units per second)
+- Optional pitch-track constant glued to the slope token: `10+1`, `2.0-0.5`
+  (no spaces). Omit the suffix for `k = 0`.
 - Segment count ends up between 2 and 10 (including release)
 
-Example (attack to 1.0, then release):
+Examples:
 
 ```text
 en0 1.0 10  0.2
+en0 1.0 10+1  0.7 5  0.2
+en0 1.0 2.0+2  0.2-1
 ```
 
 Unprogrammed voices leave amplitude at full scale (envelope bypass).
 
 ### Envelope pitch tracking
 
-| Command                       | Meaning               |
-| ----------------------------- | --------------------- |
-| `ek`                          | Dump k for all voices |
-| `ek <k>`                      | Set k on all voices   |
-| `ek0`…`ekf` / `ek0`…`ekf <k>` | Query / set one voice |
+Per-segment `k` is set on the `en` slope token (above). Each segment’s rate
+is scaled by `(note_Hz / C4)^k` with C4 = 261.625565 Hz. Same idea as filter
+`fk` below, but it changes timing, not cutoff. Negative `k` lengthens
+higher notes.
 
-`k` is in **[0, 10]**. Default **0** (no pitch effect).
+| Command                       | Meaning                                      |
+| ----------------------------- | -------------------------------------------- |
+| `ek`                          | Dump k for all voices                        |
+| `ek <k>`                      | Set the same k on all segments of all voices |
+| `ek0`…`ekf` / `ek0`…`ekf <k>` | Query / bulk-set one voice                   |
 
-Envelope rates are scaled by `(note_Hz / C4)^k` with
-C4 = 261.625565 Hz. Same idea as filter `fk` below, but it changes
-timing, not cutoff.
+`k` is in **[−10, 10]**. Default **0** (no pitch effect). `ek` is a bulk
+override; prefer `slope±k` on `en` for per-segment values. Query prints one
+value when all segments share k, otherwise one k per segment.
 
 ### Digital low-pass filter (voices 0–7)
 
@@ -232,8 +239,7 @@ c:p 0.5
 c:f0 300
 c:fk0 1
 c:n0 523.25
-c:en0 1.0 10 0.2
-c:ek0 1
+c:en0 1.0 10+1 0.2
 c:n 0
 ```
 

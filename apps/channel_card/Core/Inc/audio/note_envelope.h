@@ -3,13 +3,14 @@
  * @file    note_envelope.h
  * @brief   Per-voice multi-segment amplitude envelope for the note bank.
  *
- * Chained linear ramps: each segment is (end_amp, slope). Start is always the
- * previous end (first note-on starts at 0). Last segment is release: end is
- * always 0; only slope is programmed. Gate: note-on runs pre-release then
- * holds; note-off releases from current amp. Pitch-track k vs C4 (see .c).
- * Unprogrammed voices bypass (env = 1). No heap.
+ * Chained linear ramps: each segment is (end_amp, slope, k). Start is always
+ * the previous end (first note-on starts at 0). Last segment is release: end
+ * is always 0; only slope (and optional pitch-track k) is programmed. Gate:
+ * note-on runs pre-release then holds; note-off releases from current amp.
+ * Per-segment pitch-track: rate *= (f/C4)^k (see .c). Unprogrammed voices
+ * bypass (env = 1). No heap.
  *
- * Console: en0 <end> <slope> [<end> <slope> ...] <release_slope>
+ * Console: en0 <end> <slope[±k]> [<end> <slope[±k]> ...] <release_slope[±k]>
  ******************************************************************************
  */
 
@@ -36,19 +37,20 @@ extern "C"
 /** Pitch-track reference (middle C / C4), Hz. */
 #define NOTE_ENV_F_REF_HZ 261.625565f
 
-/** Console/API range for pitch-track constant k. */
-#define NOTE_ENV_K_MIN 0.0f
+/** Console/API range for pitch-track constant k (signed key follow). */
+#define NOTE_ENV_K_MIN (-10.0f)
 #define NOTE_ENV_K_MAX 10.0f
 
   /**
-   * One linear ramp target: end_amp 0..1, slope = |Δamp| per second (> 0).
-   * Start is chained (previous end / current amp), not stored.
-   * Release segment: end_amp is always 0.
+   * One linear ramp target: end_amp 0..1, slope = |Δamp| per second (> 0),
+   * k = pitch-track exponent (rate *= (f/C4)^k). Start is chained (previous
+   * end / current amp), not stored. Release segment: end_amp is always 0.
    */
   typedef struct
   {
     float end_amp;
     float slope;
+    float k;
   } NoteEnv_Segment_t;
 
   /**
@@ -64,7 +66,7 @@ extern "C"
    * @param n     Count in [NOTE_ENV_SEGMENTS_MIN, NOTE_ENV_SEGMENTS_MAX].
    * @retval 0 Success.
    * @retval -1 voice OOR or NULL segs.
-   * @retval -2 bad count / amps / slope.
+   * @retval -2 bad count / amps / slope / k.
    */
   int NoteEnv_SetSegments(uint8_t voice, const NoteEnv_Segment_t *segs,
                           uint8_t n);
@@ -84,17 +86,21 @@ extern "C"
   int NoteEnv_GetSegment(uint8_t voice, uint8_t idx, NoteEnv_Segment_t *out);
 
   /**
-   * Pitch-track constant k (duration_scale via rate = (f/f_ref)^k).
-   * Returns 0 on success, -1 voice OOR, -2 k out of [K_MIN, K_MAX].
+   * Pitch-track constant k for all segments (bulk override / default).
+   * Updates default_k and every programmed segment. Returns 0 on success,
+   * -1 voice OOR, -2 k out of [K_MIN, K_MAX].
    */
   int NoteEnv_SetPitchK(uint8_t voice, float k);
 
-  /** Last k for voice (0 if invalid). */
+  /**
+   * Bulk/default k for voice. If programmed and all segment ks match, returns
+   * that shared value; otherwise returns default_k (0 if invalid voice).
+   */
   float NoteEnv_GetPitchK(uint8_t voice);
 
   /**
    * Note-on: restart at segment 0 from amp 0. No-op if unprogrammed.
-   * freq_hz used to cache pitch_rate (cold path; may use powf).
+   * freq_hz cached for per-segment pitch_rate on Arm (cold path; may use powf).
    */
   void NoteEnv_NoteOn(uint8_t voice, float freq_hz);
 
