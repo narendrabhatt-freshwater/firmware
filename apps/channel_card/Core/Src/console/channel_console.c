@@ -226,6 +226,7 @@ static const SwitchDef_t switches[] = {
  *   n0..nf <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 0.125)
  *   n <Hz> [sc]       — all 16 notes (n 0 = silence)
  *   en0..enf / en     — envelope: end slope[±k] … release_slope[±k]
+ *                       (en0 0 / en 0 = clear → unprogrammed bypass)
  *   ek0..ekf / ek     — env pitch-track bulk k (−10..10, rate ∝ (f/C4)^k)
  *   f0..f7 <Hz> [q] / f <Hz> [q] — LPF on first 8 voices (0 or 20000 = bypass;
  *                        q = DF4 g 0.5..10, default 1.0; higher = more peak)
@@ -398,7 +399,7 @@ static void Console_Help(void)
 {
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   RS485_Reply("ok: n0 | n0..nf Hz [sc] | n Hz|0 | "
-              "en0..enf end slope[±k] ... rel[±k] | ek0..ekf k | "
+              "en0..enf end slope[±k] ... rel[±k]|0 | ek0..ekf k | "
               "s | p|t 0.1..0.9 | f0..f7 Hz [q] | f Hz|0 [q] | "
               "fk0..fk7 k | fk k | g ch dB | "
               "cpu [0|N|q N]\r\n");
