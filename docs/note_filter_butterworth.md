@@ -163,14 +163,39 @@ At \(f_c \ge 20000\,\mathrm{Hz}\) the process function **returns `x` unchanged**
 
 ## 6. Console API
 
-| Command                                   | Meaning                                                                         |
-| ----------------------------------------- | ------------------------------------------------------------------------------- |
-| `f0`…`f7` `<Hz>` `[q]` / `f` `<Hz>` `[q]` | Set cutoff (20…20000); optional **q** = DF4 g **0.5..10** (omit → keep current) |
-| `f0`…`f7` / bare `f`                      | Query one voice / all eight (includes q)                                        |
-| `0` or `20000`                            | Bypass (transparent; stored/reported as 20000)                                  |
+| Command                                   | Meaning                                                                  |
+| ----------------------------------------- | ------------------------------------------------------------------------ |
+| `f0`…`f7` `<Hz>` `[q]` / `f` `<Hz>` `[q]` | Set **base** cutoff at C4 (20…20000); optional **q** = DF4 g **0.5..10** |
+| `f0`…`f7` / bare `f`                      | Query one voice / all eight (effective fc, q, k)                         |
+| `fk0`…`fk7` `[k]` / `fk` `[k]`            | Filter pitch-track **k** (0…10, default 0); bare = query                 |
+| `0` or `20000`                            | Bypass (transparent; stored/reported as 20000)                           |
 
 Default **q = 1.0** (Butterworth-like). Higher q → more peak near fc. Replies:
 `ok: …` / `err: …` (never silent clamp).
+
+### 6.1 Pitch-track (CMI-style key follow)
+
+\(f_{\text{base}}\) is the cutoff programmed with `f0` — the corner **at C4**,
+not the key frequency. Pitch-track amount \(k\) (console `fk`) scales it:
+
+\[
+f_c = f_{\text{base}} \cdot 2^{k\, n / 12}
+= f_{\text{base}} \cdot (f_{\text{note}} / C4)^k
+\]
+
+with \(n = 12\log_2(f_{\text{note}}/C4)\) and \(C4 = 261.625565\,\mathrm{Hz}\)
+(same reference as envelope `ek`). \(k = 0\) → absolute (today’s behaviour);
+\(k = 1\) → full 1:1 key follow (octave up doubles \(f_c\)).
+
+Redesign is **cold-path only** (`n*` / `f*` / `fk*` / `q`). Track never
+flips bypass; overflow clamps to just below 20 kHz.
+
+```text
+f0 300
+fk0 1
+n0 261.63 1          # fc ≈ 300 Hz (at C4)
+n0 523.25 1          # fc ≈ 600 Hz (C5)
+```
 
 Requires firmware that includes `note_filter.c`. Old images reply with the
 generic unknown-command error (type `h` for the live list).
@@ -237,15 +262,15 @@ Frequency counter / period cursors: **unchanged**. Peak-to-peak: **down**.
 
 ## 8. Files / integration
 
-| File                                       | Role                                                        |
-| ------------------------------------------ | ----------------------------------------------------------- |
-| `Core/Src/filters/butterworth_four_pole.c` | DF4 design + process kernel                                 |
-| `Core/Inc/filters/butterworth_four_pole.h` | Kernel API                                                  |
-| `Core/Src/filters/note_filter.c`           | Per-voice cutoff/bypass/q + Q31 edges                       |
-| `Core/Inc/filters/note_filter.h`           | Public voice API                                            |
-| `Core/Src/audio/note_bank.c`               | Calls `NoteFilter_Process` after amp; resets on note-off    |
-| `Core/Src/console/channel_console.c`       | `f0`…`f7` / `f` with optional q; init bypass + q=1.0        |
-| Top-level `CMakeLists.txt`                 | Registers filter + audio sources under `Core/Src/<domain>/` |
+| File                                       | Role                                                           |
+| ------------------------------------------ | -------------------------------------------------------------- |
+| `Core/Src/filters/butterworth_four_pole.c` | DF4 design + process kernel                                    |
+| `Core/Inc/filters/butterworth_four_pole.h` | Kernel API                                                     |
+| `Core/Src/filters/note_filter.c`           | Per-voice base/effective cutoff, pitch-k, bypass/q + Q31 edges |
+| `Core/Inc/filters/note_filter.h`           | Public voice API                                               |
+| `Core/Src/audio/note_bank.c`               | Calls `NoteFilter_Process` after amp; resets on note-off       |
+| `Core/Src/console/channel_console.c`       | `f0`…`f7` / `f` with optional q; init bypass + q=1.0           |
+| Top-level `CMakeLists.txt`                 | Registers filter + audio sources under `Core/Src/<domain>/`    |
 
 ---
 

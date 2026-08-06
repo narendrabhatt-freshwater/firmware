@@ -225,9 +225,10 @@ static const SwitchDef_t switches[] = {
  *   n0..nf <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 0.125)
  *   n <Hz> [sc]       — all 16 notes (n 0 = silence)
  *   en0..enf / en     — envelope: end slope [end slope ...] release_slope
- *   ek0..ekf / ek     — pitch-track k (0..10, rate ∝ (f/C4)^k)
+ *   ek0..ekf / ek     — env pitch-track k (0..10, rate ∝ (f/C4)^k)
  *   f0..f7 <Hz> [q] / f <Hz> [q] — LPF on first 8 voices (0 or 20000 = bypass;
  *                        q = DF4 g 0.5..10, default 1.0; higher = more peak)
+ *   fk0..fk7 / fk     — filter pitch-track k (0..10, fc = fbase*(f/C4)^k)
  *   g <ch> <dB>       — CS4304 DAC atten (0..127), ch 1..4
  *   cpu [0|N|q [N]]   — LED_Y load probe (see README) */
 #define N0_DEFAULT_ATTEN_DB 0u
@@ -397,7 +398,8 @@ static void Console_Help(void)
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   RS485_Reply("ok: n0 | n0..nf Hz [sc] | n Hz|0 | "
               "en0..enf end slope ... rel_slope | ek0..ekf k | "
-              "s | p|t 0.1..0.9 | f0..f7 Hz [q] | f Hz|0 [q] | g ch dB | "
+              "s | p|t 0.1..0.9 | f0..f7 Hz [q] | f Hz|0 [q] | "
+              "fk0..fk7 k | fk k | g ch dB | "
               "cpu [0|N|q N]\r\n");
 }
 
@@ -556,12 +558,36 @@ static void Console_ShapeReply(void)
   RS485_Reply(b);
 }
 
-static void Console_FilterReply(uint8_t voice, double fc)
+static void Console_FilterReply(uint8_t voice)
 {
-  char b[96];
-  snprintf(b, sizeof b, "ok: f%u %.1f Hz%s q %.2f\r\n", (unsigned)voice, fc,
-           (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "",
-           NoteFilter_GetQ(voice));
+  char b[128];
+  double base = NoteFilter_GetBaseCutoff(voice);
+  double fc = NoteFilter_GetCutoff(voice);
+  double k = NoteFilter_GetPitchK(voice);
+
+  if (fc >= NOTE_FILTER_CUTOFF_MAX_HZ)
+  {
+    snprintf(b, sizeof b, "ok: f%u %.1f Hz (bypass) k %.2f q %.2f\r\n",
+             (unsigned)voice, base, k, NoteFilter_GetQ(voice));
+  }
+  else if (k > 0.0)
+  {
+    snprintf(b, sizeof b, "ok: f%u base %.1f → %.1f Hz k %.2f q %.2f\r\n",
+             (unsigned)voice, base, fc, k, NoteFilter_GetQ(voice));
+  }
+  else
+  {
+    snprintf(b, sizeof b, "ok: f%u %.1f Hz k %.2f q %.2f\r\n", (unsigned)voice,
+             fc, k, NoteFilter_GetQ(voice));
+  }
+  RS485_Reply(b);
+}
+
+static void Console_FkReply(uint8_t voice)
+{
+  char b[48];
+  snprintf(b, sizeof b, "ok: fk%u %.2f\r\n", (unsigned)voice,
+           NoteFilter_GetPitchK(voice));
   RS485_Reply(b);
 }
 
@@ -789,7 +815,7 @@ static void Console_CmdFilter(char *line, char *b, size_t bsz)
     }
     if (*rest == '\0')
     {
-      Console_FilterReply(note, NoteFilter_GetCutoff(note));
+      Console_FilterReply(note);
       return;
     }
     nscan = sscanf(rest, "%lf %lf", &fc, &q);
@@ -813,7 +839,7 @@ static void Console_CmdFilter(char *line, char *b, size_t bsz)
       RS485_Reply("err:range\r\n");
       return;
     }
-    Console_FilterReply(note, NoteFilter_GetCutoff(note));
+    Console_FilterReply(note);
     return;
   }
 
@@ -838,15 +864,16 @@ static void Console_CmdFilter(char *line, char *b, size_t bsz)
     }
     if (*rest == '\0')
     {
-      /* Compact dump of f0..f7 cutoff/q. */
+      /* Compact dump of f0..f7 effective/q/k. */
       int n = snprintf(b, bsz, "ok:");
       for (uint8_t i = 0; i < NOTE_FILTER_CONSOLE_VOICES && n > 0 &&
                           (size_t)n < bsz;
            i++)
       {
         fc = NoteFilter_GetCutoff(i);
-        n += snprintf(b + n, bsz - (size_t)n, " f%u=%.0f/%.2f", (unsigned)i,
-                      fc, NoteFilter_GetQ(i));
+        n += snprintf(b + n, bsz - (size_t)n, " f%u=%.0f/%.2f/k%.2f",
+                      (unsigned)i, fc, NoteFilter_GetQ(i),
+                      NoteFilter_GetPitchK(i));
       }
       if ((size_t)n < bsz - 2u)
       {
@@ -879,14 +906,106 @@ static void Console_CmdFilter(char *line, char *b, size_t bsz)
         return;
       }
     }
-    snprintf(b, bsz, "ok: f %.1f Hz%s q %.2f\r\n", fc,
+    snprintf(b, bsz, "ok: f %.1f Hz%s k %.2f q %.2f\r\n", fc,
              (fc == 0.0 || fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "",
-             NoteFilter_GetQ(0));
+             NoteFilter_GetPitchK(0), NoteFilter_GetQ(0));
     RS485_Reply(b);
     return;
   }
 
   RS485_Reply("err:unknown\r\n");
+}
+
+/** fk / fk0..fk7: filter pitch-track k (voices 0..7). */
+static void Console_CmdFk(char *line, char *b, size_t bsz)
+{
+  const char *rest;
+  double kd;
+  int rc;
+  uint8_t note;
+
+  if (line[2] == '\0' || line[2] == ' ')
+  {
+    rest = line + 2;
+    while (*rest == ' ')
+    {
+      rest++;
+    }
+    if (*rest == '\0')
+    {
+      int n = snprintf(b, bsz, "ok:");
+      for (uint8_t i = 0; i < NOTE_FILTER_CONSOLE_VOICES && n > 0 &&
+                          (size_t)n < bsz;
+           i++)
+      {
+        n += snprintf(b + n, bsz - (size_t)n, " fk%u=%.2f", (unsigned)i,
+                      NoteFilter_GetPitchK(i));
+      }
+      if ((size_t)n < bsz - 2u)
+      {
+        snprintf(b + n, bsz - (size_t)n, "\r\n");
+      }
+      RS485_Reply(b);
+      return;
+    }
+    if (sscanf(rest, "%lf", &kd) != 1)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    for (uint8_t i = 0; i < NOTE_FILTER_CONSOLE_VOICES; i++)
+    {
+      rc = NoteFilter_SetPitchK(i, kd);
+      if (rc != 0)
+      {
+        RS485_Reply("err:range\r\n");
+        return;
+      }
+    }
+    snprintf(b, bsz, "ok: fk %.2f\r\n", kd);
+    RS485_Reply(b);
+    return;
+  }
+
+  if (line[2] >= '0' && line[2] <= '7' &&
+      (line[3] == '\0' || line[3] == ' '))
+  {
+    note = (uint8_t)(line[2] - '0');
+    rest = line + 3;
+    while (*rest == ' ')
+    {
+      rest++;
+    }
+    if (*rest == '\0')
+    {
+      Console_FkReply(note);
+      return;
+    }
+    if (sscanf(rest, "%lf", &kd) != 1)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    rc = NoteFilter_SetPitchK(note, kd);
+    if (rc != 0)
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+    Console_FkReply(note);
+    return;
+  }
+
+  if ((line[2] >= '8' && line[2] <= '9') ||
+      (line[2] >= 'a' && line[2] <= 'f'))
+  {
+    if (line[3] == '\0' || line[3] == ' ')
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+  }
+  RS485_Reply("err:syntax\r\n");
 }
 
 /** cpu [0|N|q [N]]: LED_Y busy/idle probe. */
@@ -1097,10 +1216,17 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- ek / ek0..ekf: pitch-track constant ---- */
+  /* ---- ek / ek0..ekf: envelope pitch-track constant ---- */
   if (line[0] == 'e' && line[1] == 'k')
   {
     Console_CmdEk(line, b, sizeof b);
+    return;
+  }
+
+  /* ---- fk / fk0..fk7: filter pitch-track (before bare f) ---- */
+  if (line[0] == 'f' && line[1] == 'k')
+  {
+    Console_CmdFk(line, b, sizeof b);
     return;
   }
 

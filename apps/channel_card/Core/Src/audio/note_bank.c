@@ -387,6 +387,7 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
   note_inc[note] = NoteBank_PhaseIncFromHz(freq_hz);
   note_amp_q15[note] = NoteBank_ScaleToQ15(scale);
   NoteEnv_NoteOn(note, (float)freq_hz);
+  NoteFilter_OnNoteFreq(note, freq_hz);
 }
 
 double NoteBank_GetFreq(uint8_t note)
