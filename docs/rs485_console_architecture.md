@@ -6,13 +6,13 @@ terminal can type (`screen`, `minicom`, PuTTY at **115200 8N1**).
 
 ## Shipping model
 
-| Artifact | Role | Required? |
-|----------|------|-----------|
-| Channel / Effect firmware | Product protocol (addressing, commands, `ok`/`err`) | Yes |
-| USB↔RS485 adapter + any terminal | Maintenance / bring-up | Enough for lab |
-| [`apps/console`](../apps/console) (`rs485_console`) | Convenience REPL, retries, `--echo-off` | No |
-| [`apps/midi_host`](../apps/midi_host) | MIDI → one-by-one notes via [`libs/rs485`](../libs/rs485) | No |
-| [`libs/rs485`](../libs/rs485) | Shared C++17 automation client | Host apps only |
+| Artifact                                            | Role                                                      | Required?      |
+| --------------------------------------------------- | --------------------------------------------------------- | -------------- |
+| Channel / Effect firmware                           | Product protocol (addressing, commands, `ok`/`err`)       | Yes            |
+| USB↔RS485 adapter + any terminal                    | Maintenance / bring-up                                    | Enough for lab |
+| [`apps/console`](../apps/console) (`rs485_console`) | Convenience REPL, retries, `--echo-off`                   | No             |
+| [`apps/midi_host`](../apps/midi_host)               | MIDI → one-by-one notes via [`libs/rs485`](../libs/rs485) | No             |
+| [`libs/rs485`](../libs/rs485)                       | Shared C++17 automation client                            | Host apps only |
 
 **Implication:** do not invent framing a terminal cannot type. Voice commands
 are ASCII (`c:n3 440` + Enter). Compact `[C]ok` replies stay human-readable.
@@ -38,35 +38,38 @@ flowchart LR
 
 One shared D+/D- multi-drop bus. Operators:
 
-| Operator | Role |
-|----------|------|
+| Operator                                 | Role                     |
+| ---------------------------------------- | ------------------------ |
 | Rockchip CPU card (future) / `midi_host` | Production voice/control |
-| PC + terminal or `apps/console` | Maintenance |
+| PC + terminal or `apps/console`          | Maintenance              |
 
 Addresses: `c:` Channel, `e:` Effect, `*:` / bare = broadcast.
 
 ## Wire contract
 
-| Direction | Rule |
-|-----------|------|
+| Direction   | Rule                                                                                               |
+| ----------- | -------------------------------------------------------------------------------------------------- |
 | Host → card | One ASCII line, optional `c:`/`e:`/`*:`, **single `\r`** (never `\r\n` — dual EOL double-executes) |
-| Card → host | One terminal reply: `[C]` or `[E]` + body + **`\r\n`** |
-| Success | `[C]ok\r\n` / `[E]ok\r\n` (compact) |
-| Failure | `[C]err:<code>\r\n` — `syntax`, `range`, `unknown`, `rxdrop`, … |
+| Card → host | One terminal reply: `[C]` or `[E]` + body + **`\r\n`**                                             |
+| Success     | `[C]ok\r\n` / `[E]ok\r\n` (compact)                                                                |
+| Failure     | `[C]err:<code>\r\n` — `syntax`, `range`, `unknown`, `rxdrop`, …                                    |
 
 ### Voice dialect (MIDI / realtime)
 
-Integer Hz; on-card default scale **0.125** when `[scale]` omitted.
+**Fractional Hz** (ASCII `double`); never integer-round pitch — that breaks
+equal-temperament octaves (e.g. C4→262 / C5→523 → ~1 Hz beat). On-card
+default scale **0.125** when `[scale]` omitted.
 
-| Intent | Example TX | ACK |
-|--------|------------|-----|
-| Note on | `c:n3 440\r` | `[C]ok\r\n` |
-| Note off | `c:na 0\r` | `[C]ok\r\n` |
-| Silence | `c:n 0\r` | `[C]ok\r\n` |
-| Gain | `c:g 1 6\r` | `[C]ok\r\n` |
+| Intent   | Example TX          | ACK         |
+| -------- | ------------------- | ----------- |
+| Note on  | `c:n3 261.625565\r` | `[C]ok\r\n` |
+| Note off | `c:na 0\r`          | `[C]ok\r\n` |
+| Silence  | `c:n 0\r`           | `[C]ok\r\n` |
+| Gain     | `c:g 1 6\r`         | `[C]ok\r\n` |
 
 Host keeps the 16-slot **VoiceBank**; the card only receives per-slot `nX`.
-No binary bank frames on the production path.
+ASCII only — the old binary bank frame (`c:` + magic `0x01` + `uint16` Hz)
+has been removed.
 
 ### Echo (Effect)
 

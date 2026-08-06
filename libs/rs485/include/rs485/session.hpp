@@ -65,9 +65,10 @@ public:
 
   ExchangeResult Exec(Target target, const std::string &command);
 
-  /** Integer Hz; 0 = off. Slot 0..15. */
-  ExchangeResult SetNote(uint8_t slot, uint16_t hz);
-  ExchangeResult NoteOff(uint8_t slot) { return SetNote(slot, 0); }
+  /** Frequency in Hz (fractional OK); 0 = off. Slot 0..15.
+   *  Integer-only Hz breaks ET octaves (e.g. C4→262 / C5→523 → 1 Hz beat). */
+  ExchangeResult SetNote(uint8_t slot, double hz);
+  ExchangeResult NoteOff(uint8_t slot) { return SetNote(slot, 0.0); }
   ExchangeResult Silence();
   ExchangeResult Gain(uint8_t ch, uint8_t atten_db);
 

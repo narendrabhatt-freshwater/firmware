@@ -4,7 +4,6 @@
 
 #include <array>
 #include <atomic>
-#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -17,19 +16,27 @@ namespace midi_host
 namespace
 {
 
-uint16_t HzToU16(double hz)
+/** Clamp audible range; keep fractional Hz (no integer round — breaks octaves). */
+double ClampNoteHz(double hz)
 {
   if (hz <= 0.0) {
-    return 0;
+    return 0.0;
   }
-  long v = std::lround(hz);
-  if (v < 20) {
-    return 20;
+  if (hz < 20.0) {
+    return 20.0;
   }
-  if (v > 19999) {
-    return 19999;
+  if (hz > 19999.0) {
+    return 19999.0;
   }
-  return static_cast<uint16_t>(v);
+  return hz;
+}
+
+bool HzEqual(double a, double b)
+{
+  if (a <= 0.0 && b <= 0.0) {
+    return true;
+  }
+  return a == b;
 }
 
 } // namespace
@@ -40,9 +47,9 @@ struct ChannelRs485Out::Impl
 
   std::mutex mu_;
   std::condition_variable cv_;
-  std::array<uint16_t, kVoiceCount> desired_hz_{};
+  std::array<double, kVoiceCount> desired_hz_{};
   /** Updated only on [C]ok. */
-  std::array<uint16_t, kVoiceCount> sent_hz_{};
+  std::array<double, kVoiceCount> sent_hz_{};
   std::atomic<bool> run_{false};
   /** Missing ACK / I/O — silence once, stop all further note TX. */
   std::atomic<bool> halted_{false};
@@ -59,8 +66,8 @@ struct ChannelRs485Out::Impl
       for (uint8_t i = 0; i < kVoiceCount; ++i) {
         desired_hz_[i] =
             (slots[i].active && slots[i].freq_hz > 0.0)
-                ? HzToU16(slots[i].freq_hz)
-                : static_cast<uint16_t>(0);
+                ? ClampNoteHz(slots[i].freq_hz)
+                : 0.0;
       }
     }
     cv_.notify_one();
@@ -72,7 +79,7 @@ struct ChannelRs485Out::Impl
       return false;
     }
     for (uint8_t i = 0; i < kVoiceCount; ++i) {
-      if (desired_hz_[i] != sent_hz_[i]) {
+      if (!HzEqual(desired_hz_[i], sent_hz_[i])) {
         return true;
       }
     }
@@ -80,17 +87,17 @@ struct ChannelRs485Out::Impl
   }
 
   /** Offs first, then Ons (lowest index). */
-  bool TakeDirtySlot(uint8_t &slot_out, uint16_t &hz_out)
+  bool TakeDirtySlot(uint8_t &slot_out, double &hz_out)
   {
     for (uint8_t i = 0; i < kVoiceCount; ++i) {
-      if (desired_hz_[i] == 0 && sent_hz_[i] != 0) {
+      if (desired_hz_[i] <= 0.0 && sent_hz_[i] > 0.0) {
         slot_out = i;
-        hz_out = 0;
+        hz_out = 0.0;
         return true;
       }
     }
     for (uint8_t i = 0; i < kVoiceCount; ++i) {
-      if (desired_hz_[i] != sent_hz_[i]) {
+      if (!HzEqual(desired_hz_[i], sent_hz_[i])) {
         slot_out = i;
         hz_out = desired_hz_[i];
         return true;
@@ -99,7 +106,7 @@ struct ChannelRs485Out::Impl
     return false;
   }
 
-  void MarkSent(uint8_t slot, uint16_t hz) { sent_hz_[slot] = hz; }
+  void MarkSent(uint8_t slot, double hz) { sent_hz_[slot] = hz; }
 
   /**
    * Bus dead: one silence attempt, no more notes until process restart.
@@ -114,8 +121,8 @@ struct ChannelRs485Out::Impl
     session.MarkBusFault();
     {
       std::lock_guard<std::mutex> lock(mu_);
-      desired_hz_.fill(0);
-      sent_hz_.fill(0);
+      desired_hz_.fill(0.0);
+      sent_hz_.fill(0.0);
     }
     cv_.notify_all();
 
@@ -132,7 +139,7 @@ struct ChannelRs485Out::Impl
   {
     while (true) {
       uint8_t slot = 0;
-      uint16_t hz = 0;
+      double hz = 0.0;
       {
         std::unique_lock<std::mutex> lock(mu_);
         cv_.wait(lock, [&] {
@@ -154,21 +161,21 @@ struct ChannelRs485Out::Impl
           continue;
         }
         hz = desired_hz_[slot];
-        if (hz == sent_hz_[slot]) {
+        if (HzEqual(hz, sent_hz_[slot])) {
           continue;
         }
       }
 
-      auto print_ok = [&](uint16_t ack_hz) {
-        if (ack_hz == 0) {
+      auto print_ok = [&](double ack_hz) {
+        if (ack_hz <= 0.0) {
           std::printf("ok     slot=%-2u  n%X off\n",
                       static_cast<unsigned>(slot),
                       static_cast<unsigned>(slot));
         } else {
-          std::printf("ok     slot=%-2u  n%X %u Hz\n",
+          std::printf("ok     slot=%-2u  n%X %.2f Hz\n",
                       static_cast<unsigned>(slot),
                       static_cast<unsigned>(slot),
-                      static_cast<unsigned>(ack_hz));
+                      ack_hz);
         }
       };
 
@@ -184,8 +191,8 @@ struct ChannelRs485Out::Impl
 
       if (r.status == rs485::Status::Err) {
         char msg[96];
-        std::snprintf(msg, sizeof(msg), "card err:%s on n%X %u", r.err_code,
-                      static_cast<unsigned>(slot), static_cast<unsigned>(hz));
+        std::snprintf(msg, sizeof(msg), "card err:%s on n%X %.2f", r.err_code,
+                      static_cast<unsigned>(slot), hz);
         TripHalt(msg);
         continue;
       }
@@ -197,8 +204,8 @@ struct ChannelRs485Out::Impl
 
       char msg[192];
       std::snprintf(msg, sizeof(msg),
-                    "no [C]ok for n%X %u — RX: %s",
-                    static_cast<unsigned>(slot), static_cast<unsigned>(hz),
+                    "no [C]ok for n%X %.2f — RX: %s",
+                    static_cast<unsigned>(slot), hz,
                     r.raw[0] != '\0' ? r.raw : "(empty)");
       TripHalt(msg);
     }
@@ -206,8 +213,8 @@ struct ChannelRs485Out::Impl
 
   void StartWorker()
   {
-    desired_hz_.fill(0);
-    sent_hz_.fill(0);
+    desired_hz_.fill(0.0);
+    sent_hz_.fill(0.0);
     halted_ = false;
     run_ = true;
     worker_ = std::thread([this] { WorkerMain(); });
@@ -217,7 +224,7 @@ struct ChannelRs485Out::Impl
   {
     {
       std::lock_guard<std::mutex> lock(mu_);
-      desired_hz_.fill(0);
+      desired_hz_.fill(0.0);
       run_ = false;
     }
     cv_.notify_all();

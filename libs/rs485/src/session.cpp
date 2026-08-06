@@ -158,21 +158,26 @@ ExchangeResult Session::Exec(Target target, const std::string &command) {
   return last_;
 }
 
-ExchangeResult Session::SetNote(uint8_t slot, uint16_t hz) {
+ExchangeResult Session::SetNote(uint8_t slot, double hz) {
   if (slot > 15u) {
     last_.status = Status::Err;
     std::snprintf(last_.err_code, sizeof(last_.err_code), "range");
     return last_;
   }
-  if (hz != 0u && (hz < 20u || hz >= 20000u)) {
+  if (hz != 0.0 && (hz < 20.0 || hz >= 20000.0)) {
     last_.status = Status::Err;
     std::snprintf(last_.err_code, sizeof(last_.err_code), "range");
     return last_;
   }
   const char hex = (slot < 10u) ? static_cast<char>('0' + slot)
                                 : static_cast<char>('a' + (slot - 10u));
-  char cmd[24];
-  std::snprintf(cmd, sizeof(cmd), "n%c %u", hex, static_cast<unsigned>(hz));
+  char cmd[40];
+  if (hz == 0.0) {
+    std::snprintf(cmd, sizeof(cmd), "n%c 0", hex);
+  } else {
+    /* Never integer-round pitch — ET octaves must stay exact 2:1 on the wire. */
+    std::snprintf(cmd, sizeof(cmd), "n%c %.9f", hex, hz);
+  }
   return Exec(Target::Channel, cmd);
 }
 
