@@ -129,16 +129,19 @@ Each voice can have a multi-segment linear envelope: pairs of
 `(end_amp, slope[±k])` then a final `release_slope[±k]`. Start of the first
 segment is always 0. Last segment is release to 0.
 
-| Command               | Meaning                         |
-| --------------------- | ------------------------------- |
-| `en`                  | List which slots have a program |
-| `en <tokens…>`        | Program **all** 16 voices       |
-| `en0`…`enf`           | Query one voice                 |
-| `en0`…`enf <tokens…>` | Program one voice               |
+| Command               | Meaning                                      |
+| --------------------- | -------------------------------------------- |
+| `en`                  | List which slots have a program              |
+| `en <tokens…>`        | Program **all** 16 voices                    |
+| `en 0`                | Clear all voices (unprogrammed bypass)       |
+| `en0`…`enf`           | Query one voice                              |
+| `en0`…`enf <tokens…>` | Program one voice                            |
+| `en0`…`enf 0`         | Clear one voice (unprogrammed bypass)        |
 
 Token list rules:
 
-- Odd count, at least 3 tokens, at most 19.
+- Clear: single token `0`.
+- Program: odd count, at least 3 tokens, at most 19.
 - Pattern: `end slope[±k] [end slope[±k] …] release_slope[±k]`
 - Each `end` in **[0, 1]**; each `slope` **> 0** (amplitude units per second)
 - Optional pitch-track constant glued to the slope token: `10+1`, `2.0-0.5`
@@ -151,6 +154,8 @@ Examples:
 en0 1.0 10  0.2
 en0 1.0 10+1  0.7 5  0.2
 en0 1.0 2.0+2  0.2-1
+en0 0
+en 0
 ```
 
 Unprogrammed voices leave amplitude at full scale (envelope bypass).
