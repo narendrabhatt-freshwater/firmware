@@ -196,11 +196,11 @@ The Effect Card was upgraded for dwc2 isochronous-IN fixes. Do not
 
 **Channel Card** (this branch): N0–NF note bank + gain on RS485 and USB CDC —
 
-| Command | Meaning |
-|---|---|
-| `N0` | Session defaults: **bypass on** + **gain 1 0** |
+| Command                        | Meaning                                                       |
+| ------------------------------ | ------------------------------------------------------------- |
+| `N0`                           | Session defaults: **bypass on** + **gain 1 0**                |
 | `N0`…`NF` `0` / `<Hz> [scale]` | Note off/on; optional scale 0..1 (default 1.0); summed on CH1 |
-| `gain <ch> <dB>` | CS4304 DAC atten on CH1..4 (e.g. `gain 1 40` = −40 dB) |
+| `gain <ch> <dB>`               | CS4304 DAC atten on CH1..4 (e.g. `gain 1 40` = −40 dB)        |
 
 Examples: `n0 440 0.5`, `n1 550` (scale 1.0), `n2 660 0.1`.
 
@@ -215,8 +215,10 @@ fw rs485 send channel "N0 440 0.5" --port /dev/cu.usbserial-XXXX
 fw rs485 channel --port /dev/cu.usbserial-XXXX   # REPL: 440, n1 550, …
 ```
 
-See [`apps/console/README.md`](apps/console/README.md) and
-[`docs/rs485_console_architecture.md`](docs/rs485_console_architecture.md).
+See [`apps/console/README.md`](apps/console/README.md),
+[`docs/protocol.md`](docs/protocol.md) (host↔card protocol), and
+[`docs/rs485_console_architecture.md`](docs/rs485_console_architecture.md)
+(bus framing).
 Per-voice digital LPF: [`docs/note_filter_butterworth.md`](docs/note_filter_butterworth.md).
 
 **USB CDC** — same Channel Card `N0`…`NF` parser on `/dev/cu.usbmodemCHCARD*`.

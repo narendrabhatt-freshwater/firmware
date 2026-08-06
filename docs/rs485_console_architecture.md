@@ -112,5 +112,8 @@ Same command set over USB CDC (no `[C]` tag on CDC).
 
 ## Command reference
 
-Live `help` / per-card READMEs remain the command-set source of truth; this
-doc owns framing and shipping rules only.
+Wire protocol (framing, addresses, commands, replies):
+[`protocol.md`](protocol.md).
+
+Live `h` / `help` / `?` on each card is authoritative if docs drift.
+This architecture note owns bus turnaround and shipping layout.
