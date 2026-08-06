@@ -4,8 +4,8 @@
  * @brief   Interrupt-driven receive ring buffer for UART5 (RS485 console).
  *
  * Polling UART5 with HAL_UART_Receive() from the main loop only catches a
- * byte if the loop happens to look within one character time (~11 us at
- * 921600) — and the loop also runs the USB task, the cpuload producer and
+ * byte if the loop happens to look within one character time (~22 us at
+ * 460800) — and the loop also runs the USB task, the cpuload producer and
  * blocking console replies. Hosts therefore had to pace every character
  * ~1 ms apart, which made a chord take ~100 ms to send.
  *

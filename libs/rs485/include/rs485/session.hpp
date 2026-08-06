@@ -24,7 +24,7 @@ enum class EffectEcho : uint8_t {
 };
 
 struct SessionOptions {
-  uint32_t baud = 921600;
+  uint32_t baud = 460800;
   uint32_t atten_db = 6; /**< CH1 gain at open (0..127). */
   uint32_t reply_timeout_ms = 400;
   int retries = 1;

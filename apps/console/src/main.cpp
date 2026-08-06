@@ -1,7 +1,7 @@
 /**
  * @file main.cpp
  * @brief rs485_console — optional PC-side client for the Channel/Effect
- *        RS485 bus. Any serial terminal at 921600 8N1 can speak the same
+ *        RS485 bus. Any serial terminal at 460800 8N1 can speak the same
  *        ASCII protocol; this tool adds targeting, retries, and --echo-off.
  *        See docs/rs485_console_architecture.md.
  */
@@ -49,7 +49,7 @@ void PrintUsage()
          "\n"
          "Options:\n"
          "  --port PATH        Serial device for the RS485 adapter\n"
-         "  --baud N           Baud rate (default 921600)\n"
+         "  --baud N           Baud rate (default 460800)\n"
          "  --target TARGET    Default: channel|effect|all (default channel)\n"
          "  --timeout-ms N     Per-attempt reply wait, ms (default 500)\n"
          "  --retries N        Extra attempts on timeout (default 2)\n"
@@ -70,7 +70,7 @@ void PrintUsage()
 struct Options
 {
   std::string port;
-  uint32_t baud = 921600;
+  uint32_t baud = 460800;
   Target target = Target::Channel;
   uint32_t timeout_ms = 500;
   int retries = 2;
