@@ -51,9 +51,10 @@ Velocity is ignored. Pitch: \(f = 440 \times 2^{(n-69)/12}\).
 3. Each On/Off/Retrig → one `c:nX <Hz>` or `c:nX 0`, wait for `[C]ok`
 4. On quit: best-effort `n 0`
 
-Hz are sent as fractional ASCII (`n0 261.625565…`) — **never** integer-rounded.
-Integer Hz breaks equal-temperament octaves (C4→262 / C5→523 → ~1 Hz beat /
-“dip” when held together).
+Hz are sent as fractional ASCII (`n0 261.625565…`) — never integer-rounded.
+Integer rounding detunes equal-temperament octaves (e.g. C4→262 Hz, C5→523 Hz
+instead of 261.63 / 523.25) and produces ~1 Hz beating when those notes sound
+together.
 
 Voice allocation stays in host `VoiceBank`. Card default scale is **0.125**
 when Hz is sent without a scale argument.

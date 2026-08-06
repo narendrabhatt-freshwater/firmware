@@ -1,0 +1,55 @@
+---
+description: Production-quality comments and docs — no AI-chat tone, no conversational leftovers
+alwaysApply: true
+---
+
+# Comments and Documentation Tone
+
+Write comments and docs for **future engineers reading the product**, not for
+an AI chat transcript. Tone is neutral, precise, and durable.
+
+## Do
+
+- Comment **why** (constraint, hazard, non-obvious tradeoff) — not what the
+  next line obviously does.
+- Prefer measured technical language: failure mode, units, bounds, protocol
+  requirement, measured symptom.
+- Keep README/API notes factual and scannable; put deep rationale in code
+  comments or `docs/` when length warrants it.
+- Match existing voice (e.g. RS485 turnaround / DMA priority notes in
+  `uart5_rx.c`, `dma.c`, `audio_bridge.c`).
+
+## Do not
+
+- Conversational asides, scare-quotes for informal metaphors, emoji, or
+  “chat with the assistant” phrasing (`we should`, `let's`, `as discussed`).
+- Leaving investigation breadcrumbs in production text (`still broken?`,
+  `tried X`, `TODO for the agent`, `FIXME later maybe`).
+- Restating the code or padding docs with narrative that does not help a
+  maintainer act.
+
+## Examples
+
+```text
+BAD (chatty / informal):
+  Integer Hz breaks equal-temperament octaves (C4→262 / C5→523 → ~1 Hz beat /
+  “dip” when held together).
+
+GOOD (production):
+  Send frequencies as fractional ASCII, not integer Hz. Integer rounding
+  detunes equal-temperament octaves (e.g. C4→262 Hz, C5→523 Hz instead of
+  261.63 / 523.25) and produces ~1 Hz beating when those notes sound together.
+```
+
+```c
+/* BAD — narrates the obvious */
+/* Set the pin high */
+HAL_GPIO_WritePin(...);
+
+/* GOOD — records a non-obvious constraint */
+/* Busy-wait: HAL_Delay deadlocks if called from USB IRQ context. */
+```
+
+When editing docs or comments you did not write, upgrade tone to match this
+rule if you touch the surrounding prose; do not rewrite unrelated sections
+for style alone.

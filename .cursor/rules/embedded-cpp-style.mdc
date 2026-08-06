@@ -18,7 +18,8 @@ migration is intentional but must be an explicit project — see
   `audio_bridge.c`, which busy-waits instead specifically because it can run in
   USB IRQ context.
 - Comment the **why**, not the **what** — match the existing style (e.g. the
-  RS485 bus-turnaround comments in `main.c`).
+  RS485 bus-turnaround comments in `main.c`). Tone and what belongs in
+  production docs: `comments-and-docs.mdc`.
 - Bounds-check all console/register inputs; reply `ok: ...` / `err: ...` —
   never silently clamp a bad value.
 
