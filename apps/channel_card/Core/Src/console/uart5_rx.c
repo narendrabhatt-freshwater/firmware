@@ -113,9 +113,9 @@ void UART5_IRQHandler(void)
 
     /* RS485 turnaround often stamps FE/NE on noise and on real bytes.
      * Clear the sticky flags so RX keeps running, but keep the byte —
-     * binary bank frames (MIDI) carry non-ASCII Hz/sum/magic; dropping
-     * those on FE truncated banks and left voices stuck. Console_Poll
-     * resyncs on a fresh "c:"/"*:"/"e:" if idle garbage prefixes a line. */
+     * dropping on FE used to truncate frames and stick voices.
+     * Console_Poll resyncs on a fresh "c:"/"*:"/"e:" if idle garbage
+     * prefixes a line. */
     if (isr & (USART_ISR_FE | USART_ISR_NE))
     {
       UART5->ICR = USART_ICR_FECF | USART_ICR_NECF;

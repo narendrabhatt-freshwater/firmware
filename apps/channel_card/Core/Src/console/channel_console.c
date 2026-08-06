@@ -1109,64 +1109,12 @@ void Console_ExecFromUSB(char *line)
   console_via_usb = 0;
 }
 
-/** MIDI host binary bank: magic 0x01 + 16×uint16 LE Hz + sum8.
- * Fixed scale 0.125 (matches midi_host). Reject whole frame on bad sum/Hz. */
-#define BINBANK_MAGIC 0x01u
-#define BINBANK_HZ_BYTES 32u
-#define BINBANK_SCALE 0.125
-/** Wire bytes before CR: "c:" + magic + 32 Hz + sum8. */
-#define BINBANK_FRAME_LEN 36u
-
-static void Console_ApplyBinBank(const uint8_t *hz32, uint8_t sum8)
-{
-  uint8_t sum = 0;
-  uint16_t hz[NOTE_BANK_VOICES];
-
-  for (uint8_t i = 0; i < BINBANK_HZ_BYTES; i++)
-  {
-    sum = (uint8_t)(sum + hz32[i]);
-  }
-  if (sum != sum8)
-  {
-    RS485_Reply("err:syntax\r\n");
-    return;
-  }
-
-  for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
-  {
-    const uint16_t v =
-        (uint16_t)hz32[(uint8_t)(2u * i)] |
-        ((uint16_t)hz32[(uint8_t)(2u * i + 1u)] << 8);
-    if (v != 0u && (v < 20u || v >= 20000u))
-    {
-      RS485_Reply("err:range\r\n");
-      return;
-    }
-    hz[i] = v;
-  }
-
-  for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
-  {
-    if (hz[i] == 0u)
-    {
-      NoteBank_SetFreq(i, 0.0, 0.0);
-    }
-    else
-    {
-      NoteBank_SetFreq(i, (double)hz[i], BINBANK_SCALE);
-    }
-  }
-  RS485_Reply("ok\r\n");
-}
-
 /** Poll RX, echo typing, run a command on Enter. Non-blocking.
- * Messages addressed to other cards are silently dropped.
- * After "c:"/"*:", magic 0x01 switches to raw binary bank mode. */
+ * ASCII only (fractional nX Hz). Messages for other cards are dropped. */
 static void Console_Poll(void)
 {
-  static uint8_t cmd[40];
+  static uint8_t cmd[96];
   static uint8_t idx = 0;
-  static uint8_t bin_mode = 0;
   static uint32_t dropped_reported = 0;
   uint8_t c;
 
@@ -1181,40 +1129,11 @@ static void Console_Poll(void)
 
   while (Uart5Rx_Get(&c))
   {
-    /* Binary bank payload is length-framed: Hz bytes / sum8 may be 0x0D/0x0A.
-     * Only treat CR/LF as the terminator after the fixed 36-byte header. */
-    if (bin_mode && idx < BINBANK_FRAME_LEN)
-    {
-      cmd[idx++] = c;
-      continue;
-    }
-
     if (c == '\r' || c == '\n')
     {
 #if RS485_ECHO
       RS485_Send("\r\n");
 #endif
-      if (bin_mode)
-      {
-        /* Exact length: c: / *: + magic + 32 Hz + sum8. */
-        if (idx == BINBANK_FRAME_LEN && cmd[1] == ':' &&
-            (cmd[0] == (uint8_t)RS485_CARD_ID ||
-             cmd[0] == (uint8_t)RS485_BROADCAST_ID) &&
-            cmd[2] == BINBANK_MAGIC)
-        {
-          /* Legacy binary bank — deprecated; prefer ASCII nX one-by-one. */
-          Console_ApplyBinBank(&cmd[3], cmd[35]);
-        }
-        else if (cmd[0] == (uint8_t)RS485_CARD_ID ||
-                 cmd[0] == (uint8_t)RS485_BROADCAST_ID)
-        {
-          RS485_Reply("err:syntax\r\n");
-        }
-        bin_mode = 0;
-        idx = 0;
-        continue;
-      }
-
       cmd[idx] = '\0';
 
       /* Card-address filtering: only execute if addressed to us.
@@ -1228,12 +1147,6 @@ static void Console_Poll(void)
 
       idx = 0;
     }
-    else if (bin_mode)
-    {
-      /* idx == BINBANK_FRAME_LEN already; non-CR junk → abandon. */
-      bin_mode = 0;
-      idx = 0;
-    }
     else if (c == 0x08 || c == 0x7F) /* backspace */
     {
       if (idx > 0)
@@ -1243,14 +1156,6 @@ static void Console_Poll(void)
         RS485_Send("\b \b");
 #endif
       }
-    }
-    else if (c == BINBANK_MAGIC && idx == 2u && cmd[1] == ':' &&
-             (cmd[0] == (uint8_t)RS485_CARD_ID ||
-              cmd[0] == (uint8_t)RS485_BROADCAST_ID))
-    {
-      /* "c:" / "*:" then magic → raw bank payload (any byte values). */
-      cmd[idx++] = c;
-      bin_mode = 1;
     }
     else if (c >= 32 && c < 127 && idx < sizeof(cmd) - 1)
     {
