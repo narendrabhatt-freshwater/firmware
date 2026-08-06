@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <unordered_map>
 #include <vector>
 
@@ -392,6 +393,44 @@ void VoiceSlotBadge(const char *str_id, const char *label, bool active,
   }
 
   ImGui::PopID();
+}
+
+bool VoiceSelector(const char *str_id, int *current, int count)
+{
+  ImGui::PushID(str_id);
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  const float size = 26.f;
+  const float gap = 4.f;
+  bool changed = false;
+
+  for (int i = 0; i < count; ++i) {
+    if (i) {
+      ImGui::SameLine(0.f, gap);
+    }
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    char label[4];
+    std::snprintf(label, sizeof(label), "%x", i & 15);
+    ImGui::PushID(i);
+    ImGui::InvisibleButton("##chip", ImVec2(size, size));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool sel = (*current == i);
+    if (ImGui::IsItemClicked()) {
+      *current = i;
+      changed = true;
+    }
+
+    const ImU32 bg = sel ? U32(kPalette.accent)
+                     : hovered ? U32A(kPalette.accent_dim, 0.6f)
+                               : U32A(kPalette.panel_alt, 0.85f);
+    dl->AddRectFilled(pos, V2Add(pos, ImVec2(size, size)), bg, 5.f);
+    const ImVec2 tsize = ImGui::CalcTextSize(label);
+    dl->AddText(V2Add(pos, ImVec2((size - tsize.x) * 0.5f, (size - tsize.y) * 0.5f)),
+               sel ? U32(kPalette.bg) : U32(kPalette.text), label);
+    ImGui::PopID();
+  }
+
+  ImGui::PopID();
+  return changed;
 }
 
 } // namespace fw::ui

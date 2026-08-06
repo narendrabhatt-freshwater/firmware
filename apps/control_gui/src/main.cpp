@@ -63,7 +63,7 @@ int main(int argc, char **argv)
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 #endif
 
-  GLFWwindow *window = glfwCreateWindow(1360, 900, "Freshwater Control",
+  GLFWwindow *window = glfwCreateWindow(1360, 900, "CMI",
                                         nullptr, nullptr);
   if (!window) {
     std::fprintf(stderr, "glfwCreateWindow failed\n");
@@ -86,8 +86,7 @@ int main(int argc, char **argv)
 
   App app;
   app.RefreshPortLists();
-  app.log.Push("Freshwater Control — connect MIDI and/or RS485, start from Perform");
-  app.log.Push("Framework: Dear ImGui + GLFW + OpenGL3 (macOS / Linux / Windows)");
+  app.log.Push("CMI ready — connect MIDI and/or RS485, start from Perform");
 
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();

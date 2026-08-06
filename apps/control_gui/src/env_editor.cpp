@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -34,43 +35,175 @@ std::string FormatSlopeToken(float slope, float k)
   return buf;
 }
 
-void DrawEnvelopeCurve(const EnvProgram &prog, ImVec2 size)
+/**
+ * Interactive envelope curve: click empty space to split a segment and add
+ * a breakpoint there, drag an existing breakpoint to reshape (vertical =
+ * amplitude, horizontal = re-solves that segment's slope so the point lands
+ * at the dragged time). Breakpoint 0 (start, fixed at t=0/amp=0) isn't
+ * draggable; the release point's amplitude is pinned to 0 but its time
+ * (via slope) is.
+ */
+void DrawEnvelopeCurveEditor(EnvProgram &prog, ImVec2 size_arg)
 {
+  const ImVec2 avail = ImGui::GetContentRegionAvail();
+  const ImVec2 size(size_arg.x <= 0.f ? avail.x + size_arg.x : size_arg.x,
+                    size_arg.y <= 0.f ? avail.y + size_arg.y : size_arg.y);
+
   float samples[256];
   float dur = 0.f;
   prog.SampleCurve(samples, 256, &dur);
 
-  fw::ui::GlowWaveform("envcurve", samples, 256, size, 0.f, 1.f);
+  const int n = static_cast<int>(prog.segs.size());
+  std::vector<float> times(static_cast<std::size_t>(n) + 1);
+  std::vector<float> amps(static_cast<std::size_t>(n) + 1);
+  times[0] = 0.f;
+  amps[0] = 0.f;
+  for (int i = 0; i < n; ++i) {
+    const bool rel = (i + 1 == n);
+    const float d = EnvProgram::SegDuration(amps[static_cast<std::size_t>(i)],
+                                            prog.segs[static_cast<std::size_t>(i)], rel);
+    times[static_cast<std::size_t>(i + 1)] = times[static_cast<std::size_t>(i)] + d;
+    amps[static_cast<std::size_t>(i + 1)] =
+        rel ? 0.f : prog.segs[static_cast<std::size_t>(i)].end_amp;
+  }
+  const float total = std::max(times.back(), 1e-6f);
 
+  const ImVec2 p0 = ImGui::GetCursorScreenPos();
   ImDrawList *dl = ImGui::GetWindowDrawList();
-  const ImVec2 p0 = ImGui::GetItemRectMin();
-  const ImVec2 p1 = ImGui::GetItemRectMax();
-  const float w = p1.x - p0.x;
-  const float h = p1.y - p0.y;
+  const ImVec2 p1 = ImVec2(p0.x + size.x, p0.y + size.y);
+  const float w = size.x;
+  const float h = size.y;
+
+  auto ScreenOf = [&](int i) {
+    const float u = times[static_cast<std::size_t>(i)] / total;
+    const float v = amps[static_cast<std::size_t>(i)];
+    return ImVec2(p0.x + u * w, p0.y + h - v * h);
+  };
+
+  dl->AddRectFilled(p0, p1, fw::theme::U32A(fw::theme::kPalette.panel_alt, 0.55f), 8.f);
+  dl->AddRect(p0, p1, fw::theme::U32A(fw::theme::kPalette.border, 0.7f), 8.f);
+
+  ImGui::InvisibleButton("envcurve", size);
+  const bool canvas_hovered = ImGui::IsItemHovered();
+  const ImVec2 mouse = ImGui::GetIO().MousePos;
 
   // Segment boundary ticks
-  float t_acc = 0.f;
-  float start = 0.f;
-  for (std::size_t i = 0; i < prog.segs.size(); ++i) {
-    const bool rel = (i + 1 == prog.segs.size());
-    const float d =
-        EnvProgram::SegDuration(start, prog.segs[i], rel);
-    t_acc += d;
-    if (!rel) {
-      start = prog.segs[i].end_amp;
+  for (int i = 1; i < n; ++i) {
+    const float x = p0.x + (times[static_cast<std::size_t>(i)] / total) * w;
+    dl->AddLine(ImVec2(x, p0.y), ImVec2(x, p1.y), IM_COL32(80, 120, 180, 90), 1.f);
+  }
+
+  // Glow curve
+  dl->PushClipRect(p0, p1, true);
+  {
+    ImVec2 pts[256];
+    for (int i = 0; i < 256; ++i) {
+      const float u = static_cast<float>(i) / 255.f;
+      pts[i] = ImVec2(p0.x + u * w, p0.y + h - samples[i] * h);
     }
-    if (dur > 1e-6f && i + 1 < prog.segs.size()) {
-      const float x = p0.x + (t_acc / dur) * w;
-      dl->AddLine(ImVec2(x, p0.y), ImVec2(x, p1.y),
-                  IM_COL32(80, 120, 180, 90), 1.f);
+    dl->AddPolyline(pts, 256, fw::theme::U32A(fw::theme::kPalette.accent, 0.10f), 0, 6.f);
+    dl->AddPolyline(pts, 256, fw::theme::U32A(fw::theme::kPalette.accent, 0.24f), 0, 3.5f);
+    dl->AddPolyline(pts, 256, fw::theme::U32(fw::theme::kPalette.accent), 0, 1.6f);
+  }
+  dl->PopClipRect();
+
+  static int s_drag_idx = -1; // 1..n -> segs[idx-1]; -1 = none
+
+  // Hit-test breakpoints 1..n (0 is the fixed start, not draggable).
+  int hovered_handle = -1;
+  if (canvas_hovered || s_drag_idx >= 0) {
+    constexpr float kPickR = 11.f;
+    for (int i = 1; i <= n; ++i) {
+      const ImVec2 hp = ScreenOf(i);
+      const float dx = mouse.x - hp.x;
+      const float dy = mouse.y - hp.y;
+      if (dx * dx + dy * dy <= kPickR * kPickR) {
+        hovered_handle = i;
+        break;
+      }
     }
   }
 
-  char label[64];
-  std::snprintf(label, sizeof(label), "duration ~%.3f s (gate held at last end)",
-                static_cast<double>(dur));
-  ImGui::TextDisabled("%s", label);
-  (void)h;
+  // Ghost "+" affordance over empty canvas.
+  if (canvas_hovered && hovered_handle < 0 && s_drag_idx < 0 &&
+      n < EnvProgram::kMaxSegs) {
+    dl->AddCircle(mouse, 6.f, fw::theme::U32A(fw::theme::kPalette.text, 0.5f), 12, 1.5f);
+    dl->AddLine(ImVec2(mouse.x - 3.f, mouse.y), ImVec2(mouse.x + 3.f, mouse.y),
+               fw::theme::U32A(fw::theme::kPalette.text, 0.7f), 1.5f);
+    dl->AddLine(ImVec2(mouse.x, mouse.y - 3.f), ImVec2(mouse.x, mouse.y + 3.f),
+               fw::theme::U32A(fw::theme::kPalette.text, 0.7f), 1.5f);
+  }
+
+  // Draw breakpoints (skip 0: fixed start).
+  for (int i = 1; i <= n; ++i) {
+    const ImVec2 hp = ScreenOf(i);
+    const bool active_h = (i == s_drag_idx) || (i == hovered_handle);
+    const float r = active_h ? 7.f : 5.f;
+    dl->AddCircleFilled(hp, r, fw::theme::U32(fw::theme::kPalette.accent), 14);
+    dl->AddCircle(hp, r, fw::theme::U32(fw::theme::kPalette.bg), 14, 1.5f);
+  }
+
+  // Continue an active drag.
+  if (s_drag_idx >= 0 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    const ImVec2 d = ImGui::GetIO().MouseDelta;
+    const int segi = s_drag_idx - 1;
+    const bool is_release = (s_drag_idx == n);
+    const float px_per_sec = (total > 1e-6f) ? w / total : 0.f;
+    const float dt = (px_per_sec > 1e-6f) ? d.x / px_per_sec : 0.f;
+    const float prev_time = times[static_cast<std::size_t>(s_drag_idx - 1)];
+    const float new_time =
+        std::max(times[static_cast<std::size_t>(s_drag_idx)] + dt, prev_time + 0.02f);
+    const float prev_amp = amps[static_cast<std::size_t>(s_drag_idx - 1)];
+    const float new_amp =
+        is_release ? 0.f
+                   : std::clamp(amps[static_cast<std::size_t>(s_drag_idx)] - d.y / h, 0.f, 1.f);
+    const float new_slope = std::fabs(new_amp - prev_amp) / std::max(new_time - prev_time, 0.02f);
+    prog.segs[static_cast<std::size_t>(segi)].end_amp = new_amp;
+    prog.segs[static_cast<std::size_t>(segi)].slope = std::clamp(new_slope, 0.05f, 200.f);
+  } else if (s_drag_idx >= 0) {
+    s_drag_idx = -1; // mouse released
+  }
+
+  // Start a drag, or add a new breakpoint by splitting the clicked segment.
+  if (canvas_hovered && s_drag_idx < 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    if (hovered_handle >= 0) {
+      s_drag_idx = hovered_handle;
+    } else if (n < EnvProgram::kMaxSegs) {
+      const float click_time = std::clamp((mouse.x - p0.x) / w, 0.f, 1.f) * total;
+      const float click_amp = std::clamp((p1.y - mouse.y) / h, 0.f, 1.f);
+
+      int k = n - 1;
+      for (int i = 0; i < n; ++i) {
+        if (click_time <= times[static_cast<std::size_t>(i + 1)]) {
+          k = i;
+          break;
+        }
+      }
+      const float prev_amp = (k == 0) ? 0.f : prog.segs[static_cast<std::size_t>(k - 1)].end_amp;
+      const bool was_release = (k + 1 == n);
+      const float orig_end = was_release ? 0.f : prog.segs[static_cast<std::size_t>(k)].end_amp;
+      const float t_k = times[static_cast<std::size_t>(k)];
+      const float t_k1 = times[static_cast<std::size_t>(k + 1)];
+
+      EnvSegment seg_a;
+      seg_a.end_amp = click_amp;
+      seg_a.slope = std::clamp(
+          std::fabs(click_amp - prev_amp) / std::max(click_time - t_k, 0.02f), 0.05f, 200.f);
+      seg_a.k = prog.segs[static_cast<std::size_t>(k)].k;
+
+      EnvSegment seg_b = prog.segs[static_cast<std::size_t>(k)];
+      seg_b.end_amp = orig_end;
+      seg_b.slope = std::clamp(
+          std::fabs(orig_end - click_amp) / std::max(t_k1 - click_time, 0.02f), 0.05f, 200.f);
+
+      prog.segs[static_cast<std::size_t>(k)] = seg_b;
+      prog.segs.insert(prog.segs.begin() + k, seg_a);
+    }
+  }
+
+  ImGui::SetCursorScreenPos(ImVec2(p0.x, p1.y));
+  ImGui::TextDisabled("duration ~%.3f s (gate held at last end) · click to add a point, drag to reshape",
+                      static_cast<double>(dur));
 }
 
 } // namespace
@@ -298,9 +431,8 @@ void DrawFilterCard(App &app)
   fw::ui::SectionHeader("DIGITAL LPF (voices 0–7)");
   ImGui::Spacing();
 
-  ImGui::TextDisabled("Voice");
-  ImGui::SetNextItemWidth(-1);
-  ImGui::SliderInt("##filtvoice", &app.selected_voice, 0, 15, "n%x");
+  ImGui::TextDisabled("Voice (filter is n0–n7 only)");
+  fw::ui::VoiceSelector("##filtvoice", &app.selected_voice, 8);
   const bool filt_ok = (app.selected_voice >= 0 && app.selected_voice <= 7);
   if (!filt_ok) {
     ImGui::TextColored(fw::theme::kPalette.warning,
@@ -360,9 +492,69 @@ void DrawFilterCard(App &app)
   ImGui::EndChild();
 }
 
+void DrawVoiceOverview(App &app)
+{
+  fw::ui::SectionHeader("ALL VOICES");
+  ImGui::TextDisabled("Click a voice to edit its envelope below");
+
+  const float gap = 6.f;
+  const float cell_w = (ImGui::GetContentRegionAvail().x - gap * 7.f) / 8.f;
+  const float cell_h = 52.f;
+
+  for (int i = 0; i < static_cast<int>(midi_host::kVoiceCount); ++i) {
+    if (i % 8 != 0) {
+      ImGui::SameLine(0.f, gap);
+    }
+    ImGui::PushID(i);
+    const bool sel = (app.selected_voice == i);
+
+    float samples[48];
+    float dur = 0.f;
+    app.voice_envs[static_cast<std::size_t>(i)].SampleCurve(samples, 48, &dur);
+
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImGui::InvisibleButton("##thumb", ImVec2(cell_w, cell_h));
+    if (ImGui::IsItemClicked()) {
+      app.selected_voice = i;
+    }
+    const bool hovered = ImGui::IsItemHovered();
+
+    dl->AddRectFilled(pos, ImVec2(pos.x + cell_w, pos.y + cell_h),
+                      fw::theme::U32A(fw::theme::kPalette.panel_alt, sel ? 0.9f : 0.55f),
+                      6.f);
+    dl->AddRect(pos, ImVec2(pos.x + cell_w, pos.y + cell_h),
+               sel ? fw::theme::U32(fw::theme::kPalette.accent)
+                   : fw::theme::U32A(fw::theme::kPalette.border, hovered ? 0.9f : 0.6f),
+               6.f, 0, sel ? 2.f : 1.f);
+
+    ImVec2 pts[48];
+    const float pad = 4.f;
+    const float track_h = cell_h - 18.f;
+    for (int s = 0; s < 48; ++s) {
+      const float u = static_cast<float>(s) / 47.f;
+      pts[s] = ImVec2(pos.x + pad + u * (cell_w - pad * 2.f),
+                      pos.y + cell_h - 14.f - samples[s] * track_h);
+    }
+    dl->AddPolyline(pts, 48,
+                    sel ? fw::theme::U32(fw::theme::kPalette.accent)
+                        : fw::theme::U32A(fw::theme::kPalette.accent, 0.7f),
+                    0, sel ? 1.6f : 1.2f);
+
+    char label[4];
+    std::snprintf(label, sizeof(label), "n%x", i);
+    dl->AddText(ImVec2(pos.x + 4.f, pos.y + cell_h - 14.f),
+               sel ? fw::theme::U32(fw::theme::kPalette.text)
+                   : fw::theme::U32A(fw::theme::kPalette.text_dim, 0.9f),
+               label);
+
+    ImGui::PopID();
+  }
+}
+
 void DrawEnvelopeEditor(App &app)
 {
-  EnvProgram &prog = app.env;
+  EnvProgram &prog = app.voice_envs[static_cast<std::size_t>(app.selected_voice & 15)];
   prog.EnsureValid();
 
   fw::ui::SectionHeader("ENVELOPE");
@@ -370,8 +562,7 @@ void DrawEnvelopeEditor(App &app)
       "Linear segments -> hold at last end -> release to 0. Per-segment k: "
       "rate × (f/C4)^k");
 
-  ImGui::SetNextItemWidth(80);
-  ImGui::SliderInt("Edit voice", &app.selected_voice, 0, 15, "n%x");
+  ImGui::Text("Editing n%x", app.selected_voice & 15);
   ImGui::SameLine();
   ImGui::Checkbox("Apply to all 16", &app.env_apply_all);
 
@@ -397,7 +588,7 @@ void DrawEnvelopeEditor(App &app)
   ImGui::TextDisabled("%d / %d segs (incl. release)",
                       static_cast<int>(prog.segs.size()), EnvProgram::kMaxSegs);
 
-  DrawEnvelopeCurve(prog, ImVec2(-1, 140));
+  DrawEnvelopeCurveEditor(prog, ImVec2(-1, 180));
 
   ImGui::BeginChild("segtable", ImVec2(0, 220), ImGuiChildFlags_Borders);
   if (ImGui::BeginTable("segs", 6,
@@ -489,6 +680,13 @@ void DrawEnvelopeEditor(App &app)
   if (fw::ui::GlowButton("Apply envelope to card", ImVec2(-1, 36))) {
     app.bus.QueueExec(rs485::Target::Channel, cmd);
     app.log.Push(std::string("-> ") + cmd);
+    if (app.env_apply_all) {
+      // Mirror locally so the all-voices overview reflects what the card
+      // now actually holds for every voice.
+      for (auto &e : app.voice_envs) {
+        e = prog;
+      }
+    }
   }
   ImGui::EndDisabled();
   if (ImGui::Button("Query enN")) {

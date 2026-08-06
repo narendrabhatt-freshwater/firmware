@@ -162,17 +162,15 @@ void App::Draw()
   const ImGuiViewport *vp = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(vp->WorkPos);
   ImGui::SetNextWindowSize(vp->WorkSize);
-  ImGui::Begin("Freshwater Control", nullptr,
+  ImGui::Begin("CMI", nullptr,
                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoSavedSettings |
                    ImGuiWindowFlags_NoBringToFrontOnFocus);
 
   // ── Header ─────────────────────────────────────────────────────────────
   ImGui::PushFont(fw::theme::g_fonts.large);
-  ImGui::TextColored(kPalette.accent, "FRESHWATER");
+  ImGui::TextColored(kPalette.accent, "CMI");
   ImGui::PopFont();
-  ImGui::TextDisabled(
-      "Control · Dear ImGui + GLFW + OpenGL3 · Preview scope ≠ card DSP");
   ImGui::Spacing();
 
   // ── Connection / output cards ─────────────────────────────────────────
@@ -449,6 +447,10 @@ void App::Draw()
     ImGui::SameLine(0.f, col_gap);
     ImGui::BeginChild("tone_right", ImVec2(0, 0), ImGuiChildFlags_None,
                       ImGuiWindowFlags_AlwaysVerticalScrollbar);
+    ImGui::BeginChild("voice_overview", ImVec2(0, 192), ImGuiChildFlags_Borders);
+    DrawVoiceOverview(*this);
+    ImGui::EndChild();
+    ImGui::Spacing();
     DrawEnvelopeEditor(*this);
     ImGui::EndChild();
   } else if (view == GuiView::Effect) {

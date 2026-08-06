@@ -53,4 +53,9 @@ bool GlowButton(const char *label, const ImVec2 &size = ImVec2(0, 0),
 void VoiceSlotBadge(const char *str_id, const char *label, bool active,
                     float glow01, const char *sub);
 
+/** Compact row of `count` hex-labelled chips (n0, n1, ...) for picking a
+ * voice — click to select, replaces slider-based voice pickers. Returns
+ * true if the click changed `*current` this frame. */
+bool VoiceSelector(const char *str_id, int *current, int count);
+
 } // namespace fw::ui

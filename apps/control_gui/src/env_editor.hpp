@@ -57,6 +57,10 @@ struct EnvProgram
   static float PitchRate(float freq_hz, float k);
 };
 
+/** Small clickable grid of all 16 voices' envelope shapes; click one to
+ * make it the DrawEnvelopeEditor target. */
+void DrawVoiceOverview(App &app);
+
 /** Draw Tone-tab envelope UI; queues Apply via app.bus when user commits. */
 void DrawEnvelopeEditor(App &app);
 

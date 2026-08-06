@@ -41,7 +41,7 @@ struct App
   midi_host::MidiInput midi;
   std::unique_ptr<midi_host::AudioEngine> audio;
   PreviewScope preview;
-  EnvProgram env;
+  std::array<EnvProgram, midi_host::kVoiceCount> voice_envs;
 
   bool midi_open = false;
   bool audio_open = false;
