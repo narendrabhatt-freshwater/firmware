@@ -117,14 +117,14 @@ to integers if you care about equal temperament.
 
 ### Playback mode
 
-| Command       | Meaning |
-| ------------- | ------- |
-| `mode`        | Query: `ok: mode notes` or `ok: mode wave` |
-| `mode notes`  | DDS note bank (`s`/`p`/`t`, `n0`…`nf`) — default |
-| `mode wave`   | One-shot waveform player on slots 0–7 |
+| Command | Meaning                                          |
+| ------- | ------------------------------------------------ |
+| `m`     | Query: `ok: m 0` (notes) or `ok: m 1` (wave)     |
+| `m 0`   | DDS note bank (`s`/`p`/`t`, `n0`…`nf`) — default |
+| `m 1`   | One-shot waveform player on slots 0–7            |
 
 Switching mode hard-stops active voices. Wave sample data in AXI is kept
-while powered; it is lost on reset (re-upload over USB).
+while powered; it is lost on reset (re-upload over USB CDC).
 
 ### Waveform (wave mode)
 
@@ -132,12 +132,12 @@ Eight AXI banks × 32 KiB (16384 int16 LE samples max). Path:
 wave → amp/env → LPF → CH1. Playback rate (samples/s) = pitch_Hz × 128;
 filter tracking uses pitch = rate / 128.
 
-| Command              | Meaning |
-| -------------------- | ------- |
-| `w`                  | Query lengths / playing (`*` = playing) |
-| `w0`…`w7`            | Query one slot |
-| `w0`…`w7 <rate>`     | Play/restart at `rate` samples/s (1…192000) |
-| `w0`…`w7 0`          | Stop slot |
+| Command              | Meaning                                                       |
+| -------------------- | ------------------------------------------------------------- |
+| `w`                  | Query lengths / playing (`*` = playing)                       |
+| `w0`…`w7`            | Query one slot                                                |
+| `w0`…`w7 <rate>`     | Play/restart at `rate` samples/s (1…192000)                   |
+| `w0`…`w7 0`          | Stop slot                                                     |
 | `wl <slot> <nbytes>` | **USB CDC only.** Begin binary upload; `nbytes` even, 2…32768 |
 
 `n0`…`n7` in wave mode start the same one-shot with
@@ -146,12 +146,7 @@ silences that slot even if the key is still held. `err:mode` if `w*`
 while in notes mode; `err:usb` if `wl` over RS485; `err:empty` if no
 samples loaded.
 
-Upload (USB CDC):
-
-1. Host sends `c:wl 0 8192\r` (or bare `wl …` on CDC).
-2. Card replies `ok:ready`.
-3. Host writes raw int16 LE bytes (no ASCII).
-4. Final `ok:wave <slot> <nsamp>` when `nbytes` have been received.
+Wave upload framing is defined in §4 (USB CDC).
 
 ### Oscillator shape (global)
 
@@ -167,14 +162,14 @@ Each voice can have a multi-segment linear envelope: pairs of
 `(end_amp, slope[±k])` then a final `release_slope[±k]`. Start of the first
 segment is always 0. Last segment is release to 0.
 
-| Command               | Meaning                                      |
-| --------------------- | -------------------------------------------- |
-| `en`                  | List which slots have a program              |
-| `en <tokens…>`        | Program **all** 16 voices                    |
-| `en 0`                | Clear all voices (unprogrammed bypass)       |
-| `en0`…`enf`           | Query one voice                              |
-| `en0`…`enf <tokens…>` | Program one voice                            |
-| `en0`…`enf 0`         | Clear one voice (unprogrammed bypass)        |
+| Command               | Meaning                                |
+| --------------------- | -------------------------------------- |
+| `en`                  | List which slots have a program        |
+| `en <tokens…>`        | Program **all** 16 voices              |
+| `en 0`                | Clear all voices (unprogrammed bypass) |
+| `en0`…`enf`           | Query one voice                        |
+| `en0`…`enf <tokens…>` | Program one voice                      |
+| `en0`…`enf 0`         | Clear one voice (unprogrammed bypass)  |
 
 Token list rules:
 
@@ -283,6 +278,8 @@ c:f0 300
 c:fk0 1
 c:n0 523.25
 c:en0 1.0 10+1 0.2
+c:m 1
+c:w0 48000
 c:n 0
 ```
 
@@ -330,14 +327,85 @@ e:ar 1 0
 
 ---
 
-## 4. USB CDC vs RS485 (same commands)
+## 4. USB CDC protocol
 
-|                | RS485                                    | USB CDC       |
-| -------------- | ---------------------------------------- | ------------- |
-| Commands       | Same parsers                             | Same parsers  |
-| Address prefix | Useful on a shared bus                   | Optional      |
-| Reply tag      | `[C] ` / `[E] `                          | None          |
-| Echo           | Channel: off. Effect: `ec` (default off) | Local echo on |
+Channel Card USB exposes **two** host-facing functions. Do not conflate them:
+
+| Interface            | Role                                                                    |
+| -------------------- | ----------------------------------------------------------------------- |
+| **UAC2** (speaker)   | Isochronous audio into CH1 — OS volume / DAW stream. Not this document. |
+| **CDC ACM** (serial) | Same ASCII console as RS485, plus binary wave upload (`wl`).            |
+
+Effect Card also has CDC for its console; it has no wave bank / `wl`.
+
+### CDC vs RS485 (console)
+
+|                | RS485                                       | USB CDC (ACM)                                                                  |
+| -------------- | ------------------------------------------- | ------------------------------------------------------------------------------ |
+| Commands       | Same parsers                                | Same parsers                                                                   |
+| Line framing   | Host `\r`; card `\r\n`                      | Same                                                                           |
+| Address prefix | Useful on a shared bus (`c:` / `e:` / `*:`) | Optional; still accepted                                                       |
+| Reply tag      | `[C] ` / `[E] `                             | None — body only                                                               |
+| Echo           | Channel: off. Effect: `ec` (default off)    | Local keystroke echo on                                                        |
+| Baud           | **460800 8N1** on the UART                  | Host may open any rate (e.g. 115200); TinyUSB CDC ignores line coding for data |
+| `wl` upload    | Rejected (`err:usb`)                        | Allowed                                                                        |
+
+Typical host path on macOS / Linux: Channel `cu.usbmodem*` / `ttyACM*`.
+USB–UART adapters (`cu.usbserial*`, `ttyUSB*`) are the RS485 dongle — wrong
+port for `wl`.
+
+### Wave upload session (`wl`)
+
+Binary payload rides on the **same** CDC pipe as ASCII. While an upload is
+active, the card stops line-editing and feeds raw bytes into the wave bank
+(no echo, no `\r` framing on the payload).
+
+Constraints:
+
+- Slot **0…7**
+- `nbytes` even, in **[2, 32768]** (max one bank)
+- Samples are **int16 little-endian**, contiguous
+- No per-chunk ACKs — only the final status line
+
+Sequence:
+
+```text
+Host →  wl 0 8192\r          (or c:wl 0 8192\r)
+Card →  ok:ready\r\n
+Host →  <8192 raw bytes>     (may be many USB writes; card RX FIFO is small)
+Card →  ok:wave 0 4096\r\n   (slot, sample count = nbytes/2)
+```
+
+Errors you may see instead of `ok:ready` / `ok:wave`:
+
+| Body         | Meaning                                          |
+| ------------ | ------------------------------------------------ |
+| `err:usb`    | `wl` sent on RS485                               |
+| `err:syntax` | Bad `wl` line                                    |
+| `err:range`  | Slot / size / concurrent upload / commit failure |
+
+Host tips:
+
+1. Open the Channel CDC port once and keep it open across slots (reopen +
+   settle dominates wall time, not the 32 KiB transfer).
+2. After `ok:ready`, write the payload in modest chunks (hundreds of bytes)
+   and keep reading — do not drain/discard RX during the transfer or you
+   can miss `ok:wave`.
+3. Upload only loads AXI RAM. To hear it: `m 1`, then `w0 <rate>` (or
+   `n0 <Hz>` in wave mode). Data survives mode switches until power-cycle.
+
+Example (one slot, then play):
+
+```text
+wl 3 32768\r
+ok:ready
+<32768 bytes>
+ok:wave 3 16384
+m 1\r
+ok: m 1
+w3 48000\r
+ok
+```
 
 ---
 

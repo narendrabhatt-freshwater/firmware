@@ -402,7 +402,7 @@ static void Console_Help(void)
 {
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   RS485_Reply("ok: n0 | n0..nf Hz [sc] | n Hz|0 | "
-              "mode notes|wave | w | w0..w7 rate|0 | wl slot nbytes | "
+              "m 0|1 | w | w0..w7 rate|0 | wl slot nbytes | "
               "en0..enf end slope[±k] ... rel[±k]|0 | ek0..ekf k | "
               "s | p|t 0.1..0.9 | f0..f7 Hz [q] | f Hz|0 [q] | "
               "fk0..fk7 k | fk k | g ch dB | "
@@ -1355,33 +1355,41 @@ static void Console_CmdNoteSlot(char *line)
   Console_SetNoteFreq(note, hz, scale);
 }
 
+/** Playback mode: m / m 0 (notes) / m 1 (wave). */
 static void Console_CmdMode(char *line)
 {
-  if (strcmp(line, "mode") == 0)
+  unsigned int v;
+
+  if (strcmp(line, "m") == 0)
   {
     if (PlayMode_Get() == PLAY_MODE_WAVE)
     {
-      RS485_Reply("ok: mode wave\r\n");
+      RS485_Reply("ok: m 1\r\n");
     }
     else
     {
-      RS485_Reply("ok: mode notes\r\n");
+      RS485_Reply("ok: m 0\r\n");
     }
     return;
   }
-  if (strcmp(line, "mode notes") == 0)
+  if (sscanf(line, "m %u", &v) != 1)
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+  if (v == 0u)
   {
     (void)PlayMode_Set(PLAY_MODE_NOTES);
-    RS485_Reply("ok: mode notes\r\n");
+    RS485_Reply("ok: m 0\r\n");
     return;
   }
-  if (strcmp(line, "mode wave") == 0)
+  if (v == 1u)
   {
     (void)PlayMode_Set(PLAY_MODE_WAVE);
-    RS485_Reply("ok: mode wave\r\n");
+    RS485_Reply("ok: m 1\r\n");
     return;
   }
-  RS485_Reply("err:syntax\r\n");
+  RS485_Reply("err:range\r\n");
 }
 
 static void Console_CmdWaveQuery(void)
@@ -1522,8 +1530,8 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- mode notes|wave ---- */
-  if (strncmp(line, "mode", 4) == 0 && (line[4] == '\0' || line[4] == ' '))
+  /* ---- m / m 0|1: playback mode (0=notes, 1=wave) ---- */
+  if (line[0] == 'm' && (line[1] == '\0' || line[1] == ' '))
   {
     Console_CmdMode(line);
     return;

@@ -245,7 +245,7 @@ void DrawPlayModeStrip(App &app)
     app.play_mode = mode;
     if (app.bus.IsOpen()) {
       app.bus.QueueExec(rs485::Target::Channel,
-                        app.play_mode == 1 ? "mode wave" : "mode notes");
+                        app.play_mode == 1 ? "m 1" : "m 0");
     }
   }
 }
@@ -333,7 +333,7 @@ void DrawWaveBankPage(App &app)
     app.waves.SetCdcPath(app.wave_cdc_path);
     if (app.waves.StartUpload(app.log, -1) && app.bus.IsOpen()) {
       app.play_mode = 1;
-      app.bus.QueueExec(rs485::Target::Channel, "mode wave");
+      app.bus.QueueExec(rs485::Target::Channel, "m 1");
     }
   }
   ImGui::EndDisabled();
@@ -350,7 +350,7 @@ void DrawWaveBankPage(App &app)
                          ImVec2(btn_w, 0))) {
     app.play_mode = app.play_mode == 1 ? 0 : 1;
     app.bus.QueueExec(rs485::Target::Channel,
-                      app.play_mode == 1 ? "mode wave" : "mode notes");
+                      app.play_mode == 1 ? "m 1" : "m 0");
   }
   ImGui::EndDisabled();
 
