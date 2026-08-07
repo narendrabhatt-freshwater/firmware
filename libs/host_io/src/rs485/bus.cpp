@@ -1,7 +1,8 @@
-#include "rs485/bus.hpp"
+#include "host_io/rs485/bus.hpp"
 
 #include <cstdio>
 
+namespace host_io {
 namespace rs485 {
 
 Bus::Bus() = default;
@@ -166,3 +167,4 @@ uint32_t Bus::TimeoutCount() const
 uint32_t Bus::ErrCount() const { return link_ ? link_->ErrCount() : 0; }
 
 } // namespace rs485
+} // namespace host_io

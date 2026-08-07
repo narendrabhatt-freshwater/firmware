@@ -33,11 +33,11 @@ bool HzEqual(double a, double b)
 }
 
 void LogResult(const std::function<void(const std::string &)> &push,
-               rs485::Target target,
+               protocol::Target target,
                const protocol::Result &r)
 {
-  const char *tag = (target == rs485::Target::Effect)    ? "[E] "
-                    : (target == rs485::Target::Channel) ? "[C] "
+  const char *tag = (target == protocol::Target::Effect)    ? "[E] "
+                    : (target == protocol::Target::Channel) ? "[C] "
                                                          : "[*] ";
   if (r.status == protocol::Status::Ok) {
     push(std::string(tag) + (r.raw[0] ? r.raw : "ok"));
@@ -50,7 +50,7 @@ void LogResult(const std::function<void(const std::string &)> &push,
 
 struct BusController::Impl
 {
-  rs485::Bus bus;
+  host_io::rs485::Bus bus;
 
   std::mutex mu_;
   std::condition_variable cv_;
@@ -108,10 +108,10 @@ bool BusController::Open(const std::string &path,
     Close(log);
   }
 
-  rs485::BusOptions opts;
+  host_io::rs485::BusOptions opts;
   opts.baud = baud;
   opts.atten_db = atten_db;
-  opts.effect_echo = rs485::EffectEcho::Off;
+  opts.effect_echo = host_io::rs485::EffectEcho::Off;
   opts.allow_missing_effect = true;
   opts.idle_gap_ms = 0;
   opts.post_ack_settle_ms = 0;
@@ -212,7 +212,7 @@ void BusController::RequestRecover(LogBuffer &log)
   log.Push("… soft recover queued");
 }
 
-void BusController::QueueExec(rs485::Target target, std::string command)
+void BusController::QueueExec(protocol::Target target, std::string command)
 {
   Job j;
   j.kind = JobKind::Exec;
@@ -351,7 +351,7 @@ void BusController::WorkerMain(LogBuffer *log)
       case JobKind::Channel: {
         if (job.channel_op) {
           const auto r = job.channel_op(impl_->bus.Channel());
-          LogResult(push, rs485::Target::Channel, r);
+          LogResult(push, protocol::Target::Channel, r);
           if (r.status == protocol::Status::Timeout) {
             halted_.store(true);
             push("*** bus fault — Soft Recover or reconnect");
@@ -362,7 +362,7 @@ void BusController::WorkerMain(LogBuffer *log)
       case JobKind::Effect: {
         if (job.effect_op) {
           const auto r = job.effect_op(impl_->bus.Effect());
-          LogResult(push, rs485::Target::Effect, r);
+          LogResult(push, protocol::Target::Effect, r);
           if (r.status == protocol::Status::Timeout) {
             halted_.store(true);
             push("*** bus fault — Soft Recover or reconnect");

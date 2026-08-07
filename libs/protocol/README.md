@@ -15,7 +15,7 @@ Ship this library with that protocol specification to a host team that
 already owns a UART, CDC, or other pipe.
 
 Optional Freshwater PC glue (ports, tagged RS485 link, CDC wave upload):
-`libs/rs485` in the product tree. Not required to use this library.
+`libs/host_io` in the product tree. Not required to use this library.
 
 ---
 
@@ -105,7 +105,7 @@ Local validation failures use `Result::LocalErr("range", …)` or
 
 Wave **upload** (`wl` + binary payload) is not in this library — it needs a
 byte stream. See the console protocol specification (USB CDC / `wl` section)
-and, in the product tree, `libs/rs485` `WaveUploader`.
+and, in the product tree, `libs/host_io` (`host_io::usb::WaveUploader`).
 
 ---
 

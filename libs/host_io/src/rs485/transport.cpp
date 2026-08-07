@@ -1,7 +1,8 @@
-#include "rs485/rs485_transport.hpp"
+#include "host_io/rs485/transport.hpp"
 
 #include <cstdio>
 
+namespace host_io {
 namespace rs485 {
 namespace {
 
@@ -45,3 +46,4 @@ bool Rs485Transport::SendBlind(protocol::Target target,
 }
 
 } // namespace rs485
+} // namespace host_io

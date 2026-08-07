@@ -6,9 +6,9 @@
  *        See docs/rs485_console_architecture.md.
  */
 
-#include "rs485/link.hpp"
-#include "rs485/serial_port.hpp"
-#include "rs485/types.hpp"
+#include "host_io/rs485/link.hpp"
+#include "host_io/serial_port.hpp"
+#include "host_io/rs485/types.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -25,14 +25,14 @@
 #include <unistd.h>
 #endif
 
-using rs485::ExchangeResult;
-using rs485::Link;
-using rs485::LinkOptions;
-using rs485::ParseTarget;
-using rs485::SerialPort;
-using rs485::Status;
-using rs485::Target;
-using rs485::TargetName;
+using host_io::rs485::ExchangeResult;
+using host_io::rs485::Link;
+using host_io::rs485::LinkOptions;
+using host_io::rs485::ParseTarget;
+using host_io::SerialPort;
+using host_io::rs485::Status;
+using host_io::rs485::Target;
+using host_io::rs485::TargetName;
 
 namespace
 {

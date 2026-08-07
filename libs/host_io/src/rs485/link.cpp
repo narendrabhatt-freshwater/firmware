@@ -1,4 +1,4 @@
-#include "rs485/link.hpp"
+#include "host_io/rs485/link.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -6,6 +6,7 @@
 #include <cstring>
 #include <thread>
 
+namespace host_io {
 namespace rs485 {
 namespace {
 
@@ -71,7 +72,7 @@ void SleepMs(uint32_t ms) {
 
 } // namespace
 
-Link::Link(SerialPort &port, LinkOptions opts) : port_(port), opts_(opts) {}
+Link::Link(host_io::SerialPort &port, LinkOptions opts) : port_(port), opts_(opts) {}
 
 bool Link::WriteWire(const uint8_t *bytes, size_t len) {
   if (port_.ManualRtsControl()) {
@@ -315,3 +316,4 @@ bool Link::SendBlind(Target target, const std::string &command_in) {
 }
 
 } // namespace rs485
+} // namespace host_io

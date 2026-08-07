@@ -3,8 +3,8 @@
 #include "anim.hpp"
 #include "env_editor.hpp"
 #include "note_event.hpp"
-#include "rs485/serial_port.hpp"
-#include "rs485/types.hpp"
+#include "host_io/serial_port.hpp"
+#include "protocol/types.hpp"
 #include "theme.hpp"
 #include "wave_bank_ui.hpp"
 #include "widgets.hpp"
@@ -23,7 +23,7 @@ using fw::theme::kPalette;
 
 void App::RefreshPortLists()
 {
-  serial_ports = rs485::SerialPort::ListPorts();
+  serial_ports = host_io::SerialPort::ListPorts();
   midi_ports = midi_host::MidiInput::ListPorts();
   if (serial_path_buf[0] == '\0' && !serial_ports.empty()) {
     std::snprintf(serial_path_buf, sizeof(serial_path_buf), "%s",
@@ -504,21 +504,21 @@ void App::Draw()
     ImGui::InputText("Command", raw_cmd, sizeof(raw_cmd));
     ImGui::SameLine();
     if (fw::ui::GlowButton("Send") && raw_cmd[0]) {
-      const rs485::Target t = (raw_target == 1)   ? rs485::Target::Effect
-                              : (raw_target == 2) ? rs485::Target::All
-                                                  : rs485::Target::Channel;
+      const protocol::Target t = (raw_target == 1)   ? protocol::Target::Effect
+                              : (raw_target == 2) ? protocol::Target::All
+                                                  : protocol::Target::Channel;
       bus.QueueExec(t, raw_cmd);
     }
     if (ImGui::Button("Channel help  h")) {
-      bus.QueueExec(rs485::Target::Channel, "h");
+      bus.QueueExec(protocol::Target::Channel, "h");
     }
     ImGui::SameLine();
     if (ImGui::Button("cpu 0")) {
-      bus.QueueExec(rs485::Target::Channel, "cpu 0");
+      bus.QueueExec(protocol::Target::Channel, "cpu 0");
     }
     ImGui::SameLine();
     if (ImGui::Button("cpu 4")) {
-      bus.QueueExec(rs485::Target::Channel, "cpu 4");
+      bus.QueueExec(protocol::Target::Channel, "cpu 4");
     }
   } else if (view == GuiView::Setup) {
     DrawSetup();

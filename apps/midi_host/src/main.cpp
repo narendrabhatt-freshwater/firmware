@@ -14,7 +14,7 @@
 #include "pitch.hpp"
 #include "voice_bank.hpp"
 
-#include "rs485/bus.hpp"
+#include "host_io/rs485/bus.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -221,7 +221,7 @@ int main(int argc, char** argv)
   std::string rs485_path;
   uint32_t rs485_baud = 460800;
   uint32_t gain_db = 6;
-  rs485::EffectEcho effect_echo = rs485::EffectEcho::Off;
+  host_io::rs485::EffectEcho effect_echo = host_io::rs485::EffectEcho::Off;
 
   for (int i = 1; i < argc; ++i) {
     const char* arg = argv[i];
@@ -238,15 +238,15 @@ int main(int argc, char** argv)
       continue;
     }
     if (std::strcmp(arg, "--echo-off") == 0) {
-      effect_echo = rs485::EffectEcho::Off;
+      effect_echo = host_io::rs485::EffectEcho::Off;
       continue;
     }
     if (std::strcmp(arg, "--echo-on") == 0) {
-      effect_echo = rs485::EffectEcho::On;
+      effect_echo = host_io::rs485::EffectEcho::On;
       continue;
     }
     if (std::strcmp(arg, "--echo-leave") == 0) {
-      effect_echo = rs485::EffectEcho::Leave;
+      effect_echo = host_io::rs485::EffectEcho::Leave;
       continue;
     }
     if (std::strcmp(arg, "--midi") == 0 || std::strcmp(arg, "--port") == 0) {
@@ -386,11 +386,11 @@ int main(int argc, char** argv)
                 << " @ " << rs485_baud << ", gain 1 " << channel->AttenDb()
                 << ")\n";
       std::cout << "bus:    ASCII nX one-by-one (strict ACK)";
-      if (effect_echo == rs485::EffectEcho::Leave) {
+      if (effect_echo == host_io::rs485::EffectEcho::Leave) {
         std::cout << ", effect echo left unchanged";
       } else if (channel->EffectEchoDisabled()) {
         std::cout << ", effect echo off";
-      } else if (effect_echo == rs485::EffectEcho::On) {
+      } else if (effect_echo == host_io::rs485::EffectEcho::On) {
         std::cout << ", effect echo on";
       } else {
         std::cout << ", effect absent/no echo ack";

@@ -3,22 +3,23 @@
  * @brief Owns RS485 port + link; bootstrap; protocol Channel/Effect clients.
  */
 
-#ifndef RS485_BUS_HPP
-#define RS485_BUS_HPP
+#ifndef HOST_IO_RS485_BUS_HPP
+#define HOST_IO_RS485_BUS_HPP
 
 #include "protocol/channel.hpp"
 #include "protocol/effect.hpp"
 #include "protocol/result.hpp"
 
-#include "rs485/link.hpp"
-#include "rs485/rs485_transport.hpp"
-#include "rs485/serial_port.hpp"
-#include "rs485/types.hpp"
+#include "host_io/rs485/link.hpp"
+#include "host_io/rs485/transport.hpp"
+#include "host_io/serial_port.hpp"
+#include "host_io/rs485/types.hpp"
 
 #include <cstdint>
 #include <memory>
 #include <string>
 
+namespace host_io {
 namespace rs485 {
 
 enum class EffectEcho : uint8_t {
@@ -76,11 +77,11 @@ public:
   uint32_t AttenDb() const { return opts_.atten_db; }
   bool EchoDisabled() const { return echo_disabled_; }
 
-  SerialPort &Port() { return port_; }
+  host_io::SerialPort &Port() { return port_; }
   Link *GetLink() { return link_.get(); }
 
 private:
-  SerialPort port_;
+  host_io::SerialPort port_;
   std::unique_ptr<Link> link_;
   std::unique_ptr<Rs485Transport> transport_;
   std::unique_ptr<protocol::ChannelClient> channel_;
@@ -94,5 +95,6 @@ private:
 };
 
 } // namespace rs485
+} // namespace host_io
 
-#endif /* RS485_BUS_HPP */
+#endif /* HOST_IO_RS485_BUS_HPP */

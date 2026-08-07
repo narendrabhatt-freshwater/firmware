@@ -1,15 +1,16 @@
 /**
- * @file rs485_transport.hpp
- * @brief protocol::IConsoleTransport over rs485::Link.
+ * @file transport.hpp
+ * @brief protocol::IConsoleTransport over host_io::rs485::Link.
  */
 
-#ifndef RS485_TRANSPORT_ADAPTER_HPP
-#define RS485_TRANSPORT_ADAPTER_HPP
+#ifndef HOST_IO_RS485_TRANSPORT_HPP
+#define HOST_IO_RS485_TRANSPORT_HPP
 
 #include "protocol/transport.hpp"
 
-#include "rs485/link.hpp"
+#include "host_io/rs485/link.hpp"
 
+namespace host_io {
 namespace rs485 {
 
 class Rs485Transport final : public protocol::IConsoleTransport {
@@ -29,5 +30,6 @@ private:
 };
 
 } // namespace rs485
+} // namespace host_io
 
-#endif /* RS485_TRANSPORT_ADAPTER_HPP */
+#endif /* HOST_IO_RS485_TRANSPORT_HPP */

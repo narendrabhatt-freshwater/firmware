@@ -20,7 +20,7 @@ bool WaveCdcSession::Open(const std::string &cdc_path, LogBuffer &log)
 {
   Close();
   std::string err;
-  if (!rs485::WaveUploader::OpenCdcPort(port_, cdc_path, err)) {
+  if (!host_io::usb::WaveUploader::OpenCdcPort(port_, cdc_path, err)) {
     log.Push(err);
     return false;
   }
@@ -38,7 +38,7 @@ bool WaveCdcSession::LoadFile(int slot,
     log.Push("err: wave slot 0..7");
     return false;
   }
-  rs485::WaveUploader up(port_);
+  host_io::usb::WaveUploader up(port_);
   const auto r = up.UploadFile(static_cast<uint8_t>(slot), file_path,
                                on_progress);
   log.Push(r.message);

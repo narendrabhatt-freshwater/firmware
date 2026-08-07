@@ -1,6 +1,6 @@
 #include "channel_rs485.hpp"
 
-#include "rs485/bus.hpp"
+#include "host_io/rs485/bus.hpp"
 
 #include <array>
 #include <atomic>
@@ -42,7 +42,7 @@ bool HzEqual(double a, double b)
 
 struct ChannelRs485Out::Impl
 {
-  rs485::Bus bus;
+  host_io::rs485::Bus bus;
 
   std::mutex mu_;
   std::condition_variable cv_;
@@ -232,7 +232,7 @@ ChannelRs485Out::~ChannelRs485Out() { Close(); }
 void ChannelRs485Out::Open(const std::string &serial_path,
                            uint32_t baud,
                            uint32_t atten_db,
-                           rs485::EffectEcho effect_echo)
+                           host_io::rs485::EffectEcho effect_echo)
 {
   Close();
   if (atten_db > 127u) {
@@ -240,7 +240,7 @@ void ChannelRs485Out::Open(const std::string &serial_path,
   }
   atten_db_ = atten_db;
 
-  rs485::BusOptions opts;
+  host_io::rs485::BusOptions opts;
   opts.baud = baud;
   opts.atten_db = atten_db;
   opts.reply_timeout_ms = 400;

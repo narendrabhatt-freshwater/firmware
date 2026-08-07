@@ -9,14 +9,14 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()
 
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../libs/rs485"
-                 "${CMAKE_CURRENT_BINARY_DIR}/rs485")
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../libs/host_io"
+                 "${CMAKE_CURRENT_BINARY_DIR}/host_io")
 
 add_executable(rs485_console
   src/main.cpp
 )
 
-target_link_libraries(rs485_console PRIVATE rs485::rs485)
+target_link_libraries(rs485_console PRIVATE host_io::host_io)
 
 if(MSVC)
   target_compile_options(rs485_console PRIVATE /W4)

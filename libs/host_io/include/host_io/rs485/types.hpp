@@ -1,20 +1,20 @@
 /**
  * @file types.hpp
- * @brief Shared RS485 console types — targets, exchange status, link options.
+ * @brief RS485 tagged-link types — targets, status, link options.
  *
  * Wire contract: host TX is CR-terminated ASCII; card replies are one
  * tagged terminal line ending in CRLF (`[C]ok\r\n` / `[E]err:range\r\n`).
- * See docs/rs485_console_architecture.md.
  */
 
-#ifndef RS485_TYPES_HPP
-#define RS485_TYPES_HPP
+#ifndef HOST_IO_RS485_TYPES_HPP
+#define HOST_IO_RS485_TYPES_HPP
 
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
 #include <string>
 
+namespace host_io {
 namespace rs485 {
 
 enum class Target : uint8_t { Channel = 0, Effect = 1, All = 2 };
@@ -86,5 +86,6 @@ struct LinkOptions {
 ExchangeResult ParseTaggedReply(const std::string &line, Target expected);
 
 } // namespace rs485
+} // namespace host_io
 
-#endif // RS485_TYPES_HPP
+#endif // HOST_IO_RS485_TYPES_HPP

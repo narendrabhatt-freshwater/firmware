@@ -1,25 +1,21 @@
 /**
  * @file serial_port.hpp
- * @brief Minimal cross-platform serial port abstraction for the RS485
- *        console (macOS / Linux via termios, Windows via Win32 comm API).
+ * @brief Cross-platform OS serial port (macOS/Linux termios, Windows Win32).
  *
- * Intentionally simple: blocking-with-timeout Open/Write/Read, no
- * background threads. RS485 is half-duplex and single-transmitter-at-a-time
- * (see docs/rs485_console_architecture.md) — the console only ever has one
- * request in flight, so it doesn't need async I/O. Framing (target prefix,
- * CR + tagged reply parsing) lives in rs485::Link,,
- * not here — this file only knows about bytes.
+ * Shared by RS485 and USB CDC host paths. Blocking Open/Write/Read with
+ * timeout; no background threads. Framing belongs in host_io::rs485::Link
+ * or host_io::usb transports — this type only moves bytes.
  */
 
-#ifndef RS485_SERIAL_PORT_HPP
-#define RS485_SERIAL_PORT_HPP
+#ifndef HOST_IO_SERIAL_PORT_HPP
+#define HOST_IO_SERIAL_PORT_HPP
 
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
-namespace rs485 {
+namespace host_io {
 
 class SerialPort {
 public:
@@ -89,6 +85,6 @@ private:
   void SetError(const std::string &context);
 };
 
-} // namespace rs485
+} // namespace host_io
 
-#endif // RS485_SERIAL_PORT_HPP
+#endif // HOST_IO_SERIAL_PORT_HPP

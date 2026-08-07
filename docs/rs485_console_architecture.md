@@ -11,10 +11,10 @@ terminal can type (`screen`, `minicom`, PuTTY at **460800 8N1**).
 | Channel / Effect firmware                           | Product protocol (addressing, commands, `ok`/`err`)       | Yes            |
 | USB↔RS485 adapter + any terminal                    | Maintenance / bring-up                                    | Enough for lab |
 | [`apps/console`](../apps/console) (`rs485_console`) | Convenience REPL, retries, `--echo-off`                   | No             |
-| [`apps/midi_host`](../apps/midi_host)               | MIDI → one-by-one notes via [`libs/protocol`](../libs/protocol) | No             |
+| [`apps/midi_host`](../apps/midi_host)               | MIDI → one-by-one notes via [`libs/host_io`](../libs/host_io) | No             |
 | [`apps/control_gui`](../apps/control_gui)           | Dear ImGui + GLFW: MIDI + full console + preview scope  | No             |
 | [`libs/protocol`](../libs/protocol)                 | Wire API only (`namespace protocol`) — format/parse/typed clients | Host apps only |
-| [`libs/rs485`](../libs/rs485)                       | Optional PC serial + tagged link + `Bus` / wave upload            | Freshwater tools |
+| [`libs/host_io`](../libs/host_io)                       | PC serial + `host_io::rs485` / `host_io::usb`            | Freshwater tools |
 
 **Implication:** do not invent framing a terminal cannot type. Voice commands
 are ASCII (`c:n3 440` + Enter). Compact `[C]ok` replies stay human-readable.
@@ -25,7 +25,7 @@ flowchart LR
   Con[apps/console]
   Midi[apps/midi_host]
   Gui[apps/control_gui]
-  Lib[libs/rs485]
+  Lib[libs/host_io]
   Proto[libs/protocol]
   Bus[RS485 adapter 460800 8N1]
   CC[Channel Card]
@@ -115,9 +115,9 @@ Same command set over USB CDC (no `[C]` tag on CDC).
 [`libs/protocol`](../libs/protocol): wire encoding only — `Format*`,
 `ParseReplyBody`, `ChannelClient` / `EffectClient` over `IConsoleTransport`.
 
-[`libs/rs485`](../libs/rs485): PC serial, tagged `Link`, `Bus` bootstrap,
-CDC `WaveUploader`. Used by `apps/console`, `apps/midi_host`, and
-`apps/control_gui`.
+[`libs/host_io`](../libs/host_io): shared `SerialPort`, `host_io::rs485`
+(tagged `Link` / `Bus`), `host_io::usb` (CDC + `WaveUploader`). Used by
+`apps/console`, `apps/midi_host`, and `apps/control_gui`.
 
 ## Command reference
 

@@ -70,8 +70,8 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(rtaudio)
 
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../libs/rs485"
-                 "${CMAKE_CURRENT_BINARY_DIR}/rs485")
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../libs/host_io"
+                 "${CMAKE_CURRENT_BINARY_DIR}/host_io")
 
 set(MIDI_HOST_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../midi_host/src")
 
@@ -107,7 +107,7 @@ target_link_libraries(control_gui PRIVATE
   imgui_lib
   rtmidi
   rtaudio
-  rs485::rs485
+  host_io::host_io
 )
 
 # OpenGL — portable across Win / macOS / Linux

@@ -3,7 +3,7 @@
  * @brief termios-based SerialPort backend for macOS and Linux.
  */
 
-#include "rs485/serial_port.hpp"
+#include "host_io/serial_port.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -18,7 +18,7 @@
 #include <IOKit/serial/ioss.h>
 #endif
 
-namespace rs485 {
+namespace host_io {
 
 struct SerialPort::Impl {
   int fd = -1;
@@ -249,4 +249,4 @@ std::vector<std::string> SerialPort::ListPorts() {
   return ports;
 }
 
-} // namespace rs485
+} // namespace host_io

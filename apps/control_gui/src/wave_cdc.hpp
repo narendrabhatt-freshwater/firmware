@@ -2,9 +2,9 @@
 
 #include "log_buffer.hpp"
 
-#include "rs485/wave_upload.hpp"
+#include "host_io/usb/wave_upload.hpp"
 
-#include "rs485/serial_port.hpp"
+#include "host_io/serial_port.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -12,7 +12,7 @@
 
 /**
  * Keeps the Channel USB CDC port open across multiple slot loads.
- * Upload framing lives in rs485::WaveUploader.
+ * Upload framing lives in host_io::usb::WaveUploader.
  */
 class WaveCdcSession
 {
@@ -27,7 +27,7 @@ public:
                 const std::function<void(float)> &on_progress = {});
 
 private:
-  rs485::SerialPort port_;
+  host_io::SerialPort port_;
 };
 
 /** One-shot helper (opens, loads, closes). Prefer WaveCdcSession for batches. */

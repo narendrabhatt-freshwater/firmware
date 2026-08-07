@@ -1,4 +1,4 @@
-#include "rs485/cdc_transport.hpp"
+#include "host_io/usb/cdc_transport.hpp"
 
 #include "protocol/types.hpp"
 
@@ -7,7 +7,8 @@
 #include <cstring>
 #include <string>
 
-namespace rs485 {
+namespace host_io {
+namespace usb {
 namespace {
 
 std::string WireCommand(protocol::Target target, const std::string &command)
@@ -18,7 +19,7 @@ std::string WireCommand(protocol::Target target, const std::string &command)
   return protocol::TargetPrefix(target) + command;
 }
 
-bool WaitLine(SerialPort &port, std::string &accum, uint32_t timeout_ms)
+bool WaitLine(host_io::SerialPort &port, std::string &accum, uint32_t timeout_ms)
 {
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
@@ -56,7 +57,7 @@ std::string FirstLine(const std::string &accum)
 
 } // namespace
 
-CdcTransport::CdcTransport(SerialPort &port, CdcTransportOptions opts)
+CdcTransport::CdcTransport(host_io::SerialPort &port, CdcTransportOptions opts)
     : port_(port), opts_(opts)
 {
 }
@@ -101,4 +102,5 @@ bool CdcTransport::SendBlind(protocol::Target target,
   return ok;
 }
 
-} // namespace rs485
+} // namespace usb
+} // namespace host_io

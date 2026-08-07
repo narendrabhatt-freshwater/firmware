@@ -8,13 +8,13 @@
  * real hardware once a Windows dev machine + adapter are available.
  */
 
-#include "rs485/serial_port.hpp"
+#include "host_io/serial_port.hpp"
 
 #include <windows.h>
 
 #include <string>
 
-namespace rs485 {
+namespace host_io {
 
 struct SerialPort::Impl {
   HANDLE handle = INVALID_HANDLE_VALUE;
@@ -190,4 +190,4 @@ std::vector<std::string> SerialPort::ListPorts() {
   return ports;
 }
 
-} // namespace rs485
+} // namespace host_io

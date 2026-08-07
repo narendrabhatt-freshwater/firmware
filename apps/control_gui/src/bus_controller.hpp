@@ -3,12 +3,12 @@
 #include "log_buffer.hpp"
 #include "voice_bank.hpp"
 
-#include "rs485/bus.hpp"
+#include "host_io/rs485/bus.hpp"
 #include "protocol/channel.hpp"
 #include "protocol/effect.hpp"
 #include "protocol/result.hpp"
 
-#include "rs485/types.hpp"
+#include "protocol/types.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -54,7 +54,7 @@ public:
   void RequestRecover(LogBuffer &log);
 
   /** Queue arbitrary console line (c:/e:/ prefix optional). */
-  void QueueExec(rs485::Target target, std::string command);
+  void QueueExec(protocol::Target target, std::string command);
 
   /** Typed Channel / Effect ops run on the worker thread. */
   void QueueChannel(ChannelOp op);
@@ -86,7 +86,7 @@ private:
   struct Job
   {
     JobKind kind = JobKind::Notes;
-    rs485::Target target = rs485::Target::Channel;
+    protocol::Target target = protocol::Target::Channel;
     std::string command;
     uint8_t atten_db = 0;
     ChannelOp channel_op;

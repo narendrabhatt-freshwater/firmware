@@ -3,7 +3,7 @@
 PC-side C++17 app: MIDI in (RtMidi), 16-voice FIFO note bank on the **host**,
 equal-temperament pitch (A4 = 440 Hz). Output is either Mac speakers (RtAudio)
 or the Channel Card over RS485 — **one ASCII `nX` command per event** with
-strict ACK ([`libs/protocol`](../../libs/protocol) + [`libs/rs485`](../../libs/rs485)).
+strict ACK ([`libs/protocol`](../../libs/protocol) + [`libs/host_io`](../../libs/host_io)).
 
 ## MIDI input — any controller
 

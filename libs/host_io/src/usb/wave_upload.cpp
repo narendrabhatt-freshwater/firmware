@@ -1,4 +1,4 @@
-#include "rs485/wave_upload.hpp"
+#include "host_io/usb/wave_upload.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -7,10 +7,11 @@
 #include <fstream>
 #include <thread>
 
-namespace rs485 {
+namespace host_io {
+namespace usb {
 namespace {
 
-bool WaitForSubstring(SerialPort &port,
+bool WaitForSubstring(host_io::SerialPort &port,
                       const char *needle,
                       std::string &accum,
                       uint32_t timeout_ms,
@@ -48,7 +49,7 @@ std::string SanitizeRx(std::string s)
   return s;
 }
 
-void DrainRx(SerialPort &port)
+void DrainRx(host_io::SerialPort &port)
 {
   uint8_t buf[256];
   for (int i = 0; i < 8; ++i) {
@@ -58,7 +59,7 @@ void DrainRx(SerialPort &port)
   }
 }
 
-void PollRx(SerialPort &port, std::string &accum)
+void PollRx(host_io::SerialPort &port, std::string &accum)
 {
   uint8_t buf[256];
   for (;;) {
@@ -88,9 +89,9 @@ bool LooksLikeRs485AdapterPath(const std::string &path)
          path.find("ttyUSB") != std::string::npos;
 }
 
-WaveUploader::WaveUploader(SerialPort &cdc_port) : port_(cdc_port) {}
+WaveUploader::WaveUploader(host_io::SerialPort &cdc_port) : port_(cdc_port) {}
 
-bool WaveUploader::OpenCdcPort(SerialPort &port,
+bool WaveUploader::OpenCdcPort(host_io::SerialPort &port,
                                const std::string &cdc_path,
                                std::string &err_out,
                                uint32_t baud)
@@ -225,4 +226,5 @@ WaveUploadResult WaveUploader::UploadFile(
   return Upload(slot, data.data(), data.size(), on_progress);
 }
 
-} // namespace rs485
+} // namespace usb
+} // namespace host_io

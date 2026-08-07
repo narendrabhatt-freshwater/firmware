@@ -3,19 +3,20 @@
  * @brief One request/response exchange over a shared RS485 bus.
  */
 
-#ifndef RS485_LINK_HPP
-#define RS485_LINK_HPP
+#ifndef HOST_IO_RS485_LINK_HPP
+#define HOST_IO_RS485_LINK_HPP
 
-#include "rs485/serial_port.hpp"
-#include "rs485/types.hpp"
+#include "host_io/serial_port.hpp"
+#include "host_io/rs485/types.hpp"
 
 #include <string>
 
+namespace host_io {
 namespace rs485 {
 
 class Link {
 public:
-  explicit Link(SerialPort &port, LinkOptions opts = {});
+  explicit Link(host_io::SerialPort &port, LinkOptions opts = {});
 
   void SetOptions(const LinkOptions &opts) { opts_ = opts; }
   const LinkOptions &Options() const { return opts_; }
@@ -38,7 +39,7 @@ public:
   const ExchangeResult &LastResult() const { return last_; }
 
 private:
-  SerialPort &port_;
+  host_io::SerialPort &port_;
   LinkOptions opts_;
   ExchangeResult last_{};
   uint32_t timeout_count_ = 0;
@@ -52,5 +53,6 @@ private:
 };
 
 } // namespace rs485
+} // namespace host_io
 
-#endif // RS485_LINK_HPP
+#endif // HOST_IO_RS485_LINK_HPP

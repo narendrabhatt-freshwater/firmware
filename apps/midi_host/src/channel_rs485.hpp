@@ -2,7 +2,7 @@
 
 #include "voice_bank.hpp"
 
-#include "rs485/bus.hpp"
+#include "host_io/rs485/bus.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -32,7 +32,7 @@ public:
   void Open(const std::string &serial_path,
             uint32_t baud = 460800,
             uint32_t atten_db = 6,
-            rs485::EffectEcho effect_echo = rs485::EffectEcho::Off);
+            host_io::rs485::EffectEcho effect_echo = host_io::rs485::EffectEcho::Off);
 
   void Close();
 

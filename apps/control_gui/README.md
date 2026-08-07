@@ -12,7 +12,7 @@ voice allocation matches `apps/midi_host`.
 | Window / input | **GLFW** 3.4 |
 | Graphics | **OpenGL 3** (macOS Core Profile / Linux / Windows) |
 | MIDI / local audio | RtMidi + RtAudio (same as `midi_host`) |
-| Bus | [`libs/rs485`](../../libs/rs485) + [`libs/protocol`](../../libs/protocol) |
+| Bus | [`libs/host_io`](../../libs/host_io) + [`libs/protocol`](../../libs/protocol) |
 
 Runs on **macOS, Linux, and Windows** with CMake + a C++17 toolchain.
 Dependencies are pulled by FetchContent on first configure (needs network once).

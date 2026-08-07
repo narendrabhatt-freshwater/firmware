@@ -13,7 +13,7 @@ Host apps should prefer the C++ wire wrapper in
 [`libs/protocol`](../libs/protocol) (`namespace protocol`: format / parse /
 typed clients). That package has **no serial I/O** — inject a transport or
 send the `Format*` strings yourself. Freshwater PC tools use
-[`libs/rs485`](../libs/rs485) for the actual RS485/CDC pipe. This document
+[`libs/host_io`](../libs/host_io) for the actual RS485/CDC pipe. This document
 remains the normative wire contract.
 
 ---

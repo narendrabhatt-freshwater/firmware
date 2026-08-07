@@ -33,8 +33,8 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(rtaudio)
 
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../libs/rs485"
-                 "${CMAKE_CURRENT_BINARY_DIR}/rs485")
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../libs/host_io"
+                 "${CMAKE_CURRENT_BINARY_DIR}/host_io")
 
 add_executable(midi_host
   src/main.cpp
@@ -48,7 +48,7 @@ add_executable(midi_host
 
 target_include_directories(midi_host PRIVATE src)
 
-target_link_libraries(midi_host PRIVATE rtmidi rtaudio rs485::rs485)
+target_link_libraries(midi_host PRIVATE rtmidi rtaudio host_io::host_io)
 
 if(APPLE)
   find_library(COREMIDI_FRAMEWORK CoreMIDI REQUIRED)

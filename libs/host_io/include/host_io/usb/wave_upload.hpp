@@ -3,17 +3,18 @@
  * @brief USB CDC binary wave bank upload (`wl` session).
  */
 
-#ifndef RS485_WAVE_UPLOAD_HPP
-#define RS485_WAVE_UPLOAD_HPP
+#ifndef HOST_IO_USB_WAVE_UPLOAD_HPP
+#define HOST_IO_USB_WAVE_UPLOAD_HPP
 
-#include "rs485/serial_port.hpp"
+#include "host_io/serial_port.hpp"
 
 #include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
 
-namespace rs485 {
+namespace host_io {
+namespace usb {
 
 struct WaveUploadResult {
   bool ok = false;
@@ -28,10 +29,10 @@ struct WaveUploadResult {
  */
 class WaveUploader {
 public:
-  explicit WaveUploader(SerialPort &cdc_port);
+  explicit WaveUploader(host_io::SerialPort &cdc_port);
 
   /** Open helper: DTR, short settle, drain. Rejects USB-UART RS485 paths. */
-  static bool OpenCdcPort(SerialPort &port,
+  static bool OpenCdcPort(host_io::SerialPort &port,
                           const std::string &cdc_path,
                           std::string &err_out,
                           uint32_t baud = 115200);
@@ -47,11 +48,12 @@ public:
       const std::function<void(float)> &on_progress = {});
 
 private:
-  SerialPort &port_;
+  host_io::SerialPort &port_;
 };
 
 bool LooksLikeRs485AdapterPath(const std::string &path);
 
-} // namespace rs485
+} // namespace usb
+} // namespace host_io
 
-#endif /* RS485_WAVE_UPLOAD_HPP */
+#endif /* HOST_IO_USB_WAVE_UPLOAD_HPP */

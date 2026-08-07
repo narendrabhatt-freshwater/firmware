@@ -3,7 +3,7 @@
  * @brief Injected send/receive boundary for typed clients (no serial here).
  *
  * ChannelClient / EffectClient never open ports. Host code implements
- * IConsoleTransport (UART, CDC, mock, or product glue such as libs/rs485).
+ * IConsoleTransport (UART, CDC, mock, or product glue such as libs/host_io).
  */
 
 #ifndef PROTOCOL_TRANSPORT_HPP

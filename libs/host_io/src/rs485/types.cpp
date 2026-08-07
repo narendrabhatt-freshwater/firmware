@@ -1,9 +1,10 @@
-#include "rs485/types.hpp"
+#include "host_io/rs485/types.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cstring>
 
+namespace host_io {
 namespace rs485 {
 namespace {
 
@@ -129,3 +130,4 @@ ExchangeResult ParseTaggedReply(const std::string &line_in, Target expected) {
 }
 
 } // namespace rs485
+} // namespace host_io
