@@ -356,24 +356,36 @@ port for `wl`.
 
 ### Wave upload session (`wl`)
 
-Binary payload rides on the **same** CDC pipe as ASCII. While an upload is
-active, the card stops line-editing and feeds raw bytes into the wave bank
-(no echo, no `\r` framing on the payload).
+Binary payload rides on the **same** CDC pipe as ASCII. After `ok:ready`,
+the console leaves line mode: CDC RX bytes go to `WaveUpload_Feed` only
+(no echo, no `\r` line framing, no command parse).
 
 Constraints:
 
 - Slot **0…7**
 - `nbytes` even, in **[2, 32768]** (max one bank)
 - Samples are **int16 little-endian**, contiguous
-- No per-chunk ACKs — only the final status line
+
+**Console reply API (what the card writes):** exactly two success lines for
+a full transfer — nothing in between, even if USB delivers the payload in
+many `tud_cdc_read` / `WaveUpload_Feed` calls.
+
+| When                                  | Card writes (`USB_CDC_WriteStr`) |
+| ------------------------------------- | -------------------------------- |
+| `wl` accepted                         | `ok:ready\r\n`                   |
+| During the `nbytes` of sample data    | *(no console reply)*             |
+| Last byte received and bank committed | `ok:wave <slot> <nsamp>\r\n`     |
+
+There is no per-chunk / per-`Feed` ACK. Mid-payload console traffic would
+serialize Full-Speed CDC and is intentionally omitted.
 
 Sequence:
 
 ```text
-Host →  wl 0 8192\r          (or c:wl 0 8192\r)
-Card →  ok:ready\r\n
-Host →  <8192 raw bytes>     (may be many USB writes; card RX FIFO is small)
-Card →  ok:wave 0 4096\r\n   (slot, sample count = nbytes/2)
+Host →  wl 0 8192\r
+Card →  ok:ready\r\n          ← console write #1
+Host →  <8192 raw bytes>      ← opaque; card may Feed() many times
+Card →  ok:wave 0 4096\r\n    ← console write #2 (nsamp = nbytes/2)
 ```
 
 Errors you may see instead of `ok:ready` / `ok:wave`:
@@ -384,13 +396,12 @@ Errors you may see instead of `ok:ready` / `ok:wave`:
 | `err:syntax` | Bad `wl` line                                    |
 | `err:range`  | Slot / size / concurrent upload / commit failure |
 
-Host tips:
+Notes:
 
-1. Open the Channel CDC port once and keep it open across slots (reopen +
-   settle dominates wall time, not the 32 KiB transfer).
-2. After `ok:ready`, write the payload in modest chunks (hundreds of bytes)
-   and keep reading — do not drain/discard RX during the transfer or you
-   can miss `ok:wave`.
+1. Keep the CDC session open across slots when loading a bank; reopen cost
+   dominates, not the 32 KiB transfer.
+2. While waiting for `ok:wave`, keep reading the CDC RX path — do not
+   discard pending replies.
 3. Upload only loads AXI RAM. To hear it: `m 1`, then `w0 <rate>` (or
    `n0 <Hz>` in wave mode). Data survives mode switches until power-cycle.
 
@@ -406,7 +417,6 @@ ok: m 1
 w3 48000\r
 ok
 ```
-
 ---
 
 ## 5. Half-duplex and pitch text
