@@ -115,7 +115,12 @@ _fw() {
             '1:sub:(build list run play channel)' \
             "${midi_opts[@]}"
           ;;
-        status|info|help)
+        status|info)
+          _arguments \
+            '--debug[Debug preset]' \
+            '--release[Release preset]'
+          ;;
+        help)
           ;;
       esac
       ;;

@@ -60,6 +60,9 @@ _fw_complete() {
     list|ls|devices)
       COMPREPLY=( $(compgen -W "${kinds}" -- "${cur}") )
       ;;
+    status|info)
+      COMPREPLY=( $(compgen -W "--debug --release" -- "${cur}") )
+      ;;
     console|log|logs|follow|tail|shell|repl)
       if [[ ${COMP_CWORD} -eq 2 ]]; then
         COMPREPLY=( $(compgen -W "${cards_one}" -- "${cur}") )

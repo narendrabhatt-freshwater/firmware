@@ -96,7 +96,7 @@ usage() {
     "  fw midi     build | list"
     "  fw control  [run] | build"
     "  fw clean    [channel|effect|all]"
-    "  fw status"
+    "  fw status   [--debug|--release]"
     "  fw help"
     ""
     "Build options"
@@ -652,7 +652,106 @@ cmd_list() {
   fi
 }
 
+# Reconstruct GNU ld --print-memory-usage from .map + ELF section headers,
+# then print arm-none-eabi-size (same pair cmake prints after link).
+print_elf_memory() {
+  local elf="$1"
+  [[ -f "$elf" ]] || return 0
+
+  if command -v arm-none-eabi-readelf >/dev/null 2>&1 \
+     && command -v python3 >/dev/null 2>&1 \
+     && [[ -f "${elf%.elf}.map" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      printf '\r  %s\n' "$line"
+    done < <(python3 - "$elf" <<'PY'
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+def fmt_size(n: int) -> str:
+    if n == 0:
+        return "0 B"
+    if n % (1024 * 1024) == 0:
+        return f"{n // (1024 * 1024)} MB"
+    if n % 1024 == 0:
+        return f"{n // 1024} KB"
+    return f"{n} B"
+
+elf = Path(sys.argv[1])
+text = elf.with_suffix(".map").read_text(errors="replace")
+m = re.search(
+    r"Memory Configuration\n\nName\s+Origin\s+Length\s+Attributes\n(.*?)\n\*default\*",
+    text,
+    re.S,
+)
+if not m:
+    sys.exit(0)
+regions = []
+for line in m.group(1).strip().splitlines():
+    parts = line.split()
+    if len(parts) >= 3:
+        regions.append((parts[0], int(parts[1], 16), int(parts[2], 16)))
+
+out = subprocess.check_output(["arm-none-eabi-readelf", "-SW", str(elf)], text=True)
+secs = []
+for line in out.splitlines():
+    mm = re.match(
+        r"\s*\[\s*\d+\]\s+(\S+)\s+(\S+)\s+([0-9A-Fa-f]+)\s+[0-9A-Fa-f]+\s+([0-9A-Fa-f]+)\s+\S+\s+(\S+)",
+        line,
+    )
+    if not mm:
+        continue
+    name, typ, addr_s, size_s, flg = mm.groups()
+    if "A" not in flg:
+        continue
+    secs.append((name, typ, int(addr_s, 16), int(size_s, 16)))
+
+lma = {}
+for name, _vma, _sz, lma_s in re.findall(
+    r"^(\.[A-Za-z0-9_.]+)\s+(0x[0-9A-Fa-f]+)\s+(0x[0-9A-Fa-f]+)\s+load address\s+(0x[0-9A-Fa-f]+)",
+    text,
+    re.M,
+):
+    lma[name] = int(lma_s, 16)
+
+high = {name: origin for name, origin, _ in regions}
+
+def bump(addr: int, size: int) -> None:
+    if size <= 0:
+        return
+    end = addr + size
+    for rname, origin, length in regions:
+        if origin <= addr < origin + length:
+            if end > high[rname]:
+                high[rname] = end
+            return
+
+for name, typ, addr, size in secs:
+    bump(addr, size)
+    # .data (PROGBITS) also occupies its flash load address; .bss does not.
+    if name in lma and lma[name] != addr and typ == "PROGBITS":
+        bump(lma[name], size)
+
+print("Memory region         Used Size  Region Size  %age Used")
+for name, origin, length in regions:
+    used = max(0, high[name] - origin)
+    pct = (100.0 * used / length) if length else 0.0
+    print(f"{name:>14}: {fmt_size(used):>12} {fmt_size(length):>12} {pct:8.2f}%")
+PY
+)
+  fi
+
+  if command -v arm-none-eabi-size >/dev/null 2>&1; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      printf '\r  %s\n' "$line"
+    done < <(arm-none-eabi-size "$elf")
+  fi
+}
+
 cmd_status() {
+  parse_flags "$@"
+
   hdr "Config"
   row "root" "$ROOT"
   row "preset" "$PRESET"
@@ -663,7 +762,7 @@ cmd_status() {
   outn
   out "Toolchain"
   local c path
-  for c in cmake ninja arm-none-eabi-gcc arm-none-eabi-objcopy dfu-util; do
+  for c in cmake ninja arm-none-eabi-gcc arm-none-eabi-objcopy arm-none-eabi-size dfu-util; do
     if path="$(command -v "$c" 2>/dev/null)"; then
       printf '\r  %-22s ok    %s\n' "$c" "$path"
     else
@@ -686,8 +785,17 @@ cmd_status() {
     if [[ -f "$elf" ]]; then
       sz="$(wc -c <"$elf" | tr -d ' ')"
       printf '\r  %-8s %-4s %s (%s)\n' "$card" "elf" "$(relpath "$elf")" "$(human_bytes "$sz")"
-      [[ -f "$hex" ]] && printf '\r  %-8s %-4s %s\n' "" "hex" "$(relpath "$hex")"
-      [[ -f "$bin" ]] && printf '\r  %-8s %-4s %s\n' "" "bin" "$(relpath "$bin")"
+      if [[ -f "$hex" ]]; then
+        sz="$(wc -c <"$hex" | tr -d ' ')"
+        printf '\r  %-8s %-4s %s (%s)\n' "" "hex" "$(relpath "$hex")" "$(human_bytes "$sz")"
+      fi
+      if [[ -f "$bin" ]]; then
+        sz="$(wc -c <"$bin" | tr -d ' ')"
+        printf '\r  %-8s %-4s %s (%s)\n' "" "bin" "$(relpath "$bin")" "$(human_bytes "$sz")"
+      fi
+      outn
+      print_elf_memory "$elf"
+      outn
     else
       printf '\r  %-8s %s\n' "$card" "(not built — fw build $card)"
     fi
