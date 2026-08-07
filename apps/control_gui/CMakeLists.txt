@@ -83,6 +83,9 @@ add_executable(control_gui
   src/env_editor.cpp
   src/theme.cpp
   src/widgets.cpp
+  src/wave_cdc.cpp
+  src/wave_upload_queue.cpp
+  src/wave_bank_ui.cpp
   ${MIDI_HOST_SRC}/midi_input.cpp
   ${MIDI_HOST_SRC}/pitch.cpp
   ${MIDI_HOST_SRC}/voice_bank.cpp

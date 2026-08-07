@@ -58,4 +58,15 @@ void VoiceSlotBadge(const char *str_id, const char *label, bool active,
  * true if the click changed `*current` this frame. */
 bool VoiceSelector(const char *str_id, int *current, int count);
 
+/** Thin accent progress bar (value 0..1). */
+void ProgressBar(const char *str_id, float value01, const ImVec2 &size);
+
+/** Collapsible left nav rail. Returns true if a nav item was clicked.
+ * `*expanded` / `*anim_width` own drawer width animation.
+ * If `gain_db` is non-null, draws a vertical gain slider (0..127) at the
+ * bottom; returns via `*gain_changed` when the value moves. */
+bool NavDrawer(const char *str_id, const char *const *labels, int count,
+               int *current, bool *expanded, float *anim_width,
+               int *gain_db = nullptr, bool *gain_changed = nullptr);
+
 } // namespace fw::ui

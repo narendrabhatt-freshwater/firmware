@@ -97,24 +97,24 @@ void Apply()
   c[ImGuiCol_TextSelectedBg] =
       ImVec4(kPalette.accent.x, kPalette.accent.y, kPalette.accent.z, 0.35f);
 
-  s.WindowRounding = 10.f;
-  s.ChildRounding = 10.f;
-  s.FrameRounding = 6.f;
-  s.PopupRounding = 8.f;
-  s.ScrollbarRounding = 8.f;
-  s.GrabRounding = 6.f;
-  s.TabRounding = 6.f;
+  s.WindowRounding = 8.f;
+  s.ChildRounding = 8.f;
+  s.FrameRounding = 5.f;
+  s.PopupRounding = 6.f;
+  s.ScrollbarRounding = 6.f;
+  s.GrabRounding = 5.f;
+  s.TabRounding = 5.f;
   s.WindowBorderSize = 1.f;
   s.ChildBorderSize = 1.f;
   s.PopupBorderSize = 1.f;
   s.FrameBorderSize = 1.f;
-  s.WindowPadding = ImVec2(14.f, 14.f);
-  s.FramePadding = ImVec2(10.f, 6.f);
-  s.ItemSpacing = ImVec2(10.f, 8.f);
-  s.ItemInnerSpacing = ImVec2(8.f, 6.f);
-  s.IndentSpacing = 18.f;
-  s.ScrollbarSize = 14.f;
-  s.GrabMinSize = 10.f;
+  s.WindowPadding = ImVec2(10.f, 8.f);
+  s.FramePadding = ImVec2(7.f, 4.f);
+  s.ItemSpacing = ImVec2(8.f, 5.f);
+  s.ItemInnerSpacing = ImVec2(6.f, 4.f);
+  s.IndentSpacing = 14.f;
+  s.ScrollbarSize = 12.f;
+  s.GrabMinSize = 8.f;
 }
 
 void LoadFonts(ImGuiIO &io)
@@ -144,8 +144,9 @@ void LoadFonts(ImGuiIO &io)
 
 #ifdef FW_FONT_DIR
   const std::string path = std::string(FW_FONT_DIR) + "/Roboto-Medium.ttf";
-  g_fonts.body = io.Fonts->AddFontFromFileTTF(path.c_str(), 18.f, &cfg);
-  g_fonts.large = io.Fonts->AddFontFromFileTTF(path.c_str(), 27.f, &cfg);
+  /* Dense control-surface sizing — 18/27 felt oversized on Retina. */
+  g_fonts.body = io.Fonts->AddFontFromFileTTF(path.c_str(), 14.5f, &cfg);
+  g_fonts.large = io.Fonts->AddFontFromFileTTF(path.c_str(), 18.f, &cfg);
 #endif
 
   if (!g_fonts.body) {

@@ -239,6 +239,15 @@ SECTIONS
     . = ALIGN(4);
   } >RAM_D1
 
+  /* Waveform banks (8 x 32 KiB int16). CPU-read one-shot tables; AXI for
+     size (256 KiB) — not DTCM. */
+  .wave_bank (NOLOAD) : ALIGN(4)
+  {
+    *(.wave_bank)
+    *(.wave_bank*)
+    . = ALIGN(4);
+  } >RAM_D1
+
   /* User_heap_stack section, used to check that there is enough RAM left */
   ._user_heap_stack (NOLOAD) :
   {

@@ -169,6 +169,12 @@ void SerialPort::SetRts(bool asserted) {
   EscapeCommFunction(impl_->handle, asserted ? SETRTS : CLRRTS);
 }
 
+void SerialPort::SetDtr(bool asserted) {
+  if (!is_open_)
+    return;
+  EscapeCommFunction(impl_->handle, asserted ? SETDTR : CLRDTR);
+}
+
 std::vector<std::string> SerialPort::ListPorts() {
   std::vector<std::string> ports;
   char devices[65536];

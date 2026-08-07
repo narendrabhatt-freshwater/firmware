@@ -13,6 +13,8 @@
 #include "audio_rate.h"
 #include "note_envelope.h"
 #include "note_filter.h"
+#include "play_mode.h"
+#include "wave_bank.h"
 
 #include <stdint.h>
 
@@ -274,19 +276,30 @@ static inline int32_t NoteBank_OscSample(uint32_t ph)
 }
 
 /**
- * One voice: shape osc → Q15 (scale × envelope) → LPF.
- * Programmed envelopes: keep osc alive through release; clear inc when idle.
+ * One voice: osc or wave → Q15 (scale × envelope) → LPF.
+ * Programmed envelopes: keep voice alive through release; clear inc when idle.
+ * Wave mode (slots 0..7): one-shot table; silence after end while env may run.
  */
 static inline int32_t NoteBank_VoiceSample(uint8_t note)
 {
-  uint32_t ph = note_phase[note];
-  int32_t s = NoteBank_OscSample(ph);
+  int32_t s;
   int32_t amp;
   float env;
   int32_t env_q15;
   int32_t gain_q15;
+  uint8_t wave_mode =
+      (PlayMode_Get() == PLAY_MODE_WAVE && note < WAVE_BANK_SLOTS) ? 1u : 0u;
 
-  note_phase[note] = ph + note_inc[note];
+  if (wave_mode != 0u)
+  {
+    s = WaveBank_NextSample(note);
+  }
+  else
+  {
+    uint32_t ph = note_phase[note];
+    s = NoteBank_OscSample(ph);
+    note_phase[note] = ph + note_inc[note];
+  }
 
   if (NoteEnv_IsProgrammed(note) != 0u)
   {
@@ -294,6 +307,10 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
     if (NoteEnv_IsActive(note) == 0u)
     {
       note_inc[note] = 0u;
+      if (wave_mode != 0u)
+      {
+        WaveBank_Stop(note);
+      }
       NoteFilter_Reset(note);
       return 0;
     }
@@ -301,6 +318,13 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
   else
   {
     env = 1.0f;
+    /* No envelope: drop voice when one-shot wave ends. */
+    if (wave_mode != 0u && WaveBank_IsPlaying(note) == 0u && s == 0)
+    {
+      note_inc[note] = 0u;
+      NoteFilter_Reset(note);
+      return 0;
+    }
   }
 
   env_q15 = (int32_t)(env * (float)NOTE_AMP_Q15_MAX + 0.5f);
@@ -350,6 +374,26 @@ void NoteBank_Init(void)
   }
 }
 
+void NoteBank_PanicAll(void)
+{
+  uint8_t i;
+
+  WaveBank_StopAll();
+  for (i = 0u; i < NOTE_BANK_VOICES; i++)
+  {
+    note_freq_hz[i] = 0.0;
+    note_scale[i] = 0.0;
+    note_phase[i] = 0u;
+    note_inc[i] = 0u;
+    note_amp_q15[i] = 0;
+    NoteFilter_Reset(i);
+    if (NoteEnv_IsProgrammed(i) != 0u)
+    {
+      NoteEnv_NoteOff(i);
+    }
+  }
+}
+
 void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
 {
   if (note >= NOTE_BANK_VOICES)
@@ -369,6 +413,10 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
     }
     note_freq_hz[note] = 0.0;
     note_inc[note] = 0;
+    if (PlayMode_Get() == PLAY_MODE_WAVE && note < WAVE_BANK_SLOTS)
+    {
+      WaveBank_Stop(note);
+    }
     NoteFilter_Reset(note);
     return;
   }
@@ -384,10 +432,32 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
 
   note_freq_hz[note] = freq_hz;
   note_scale[note] = scale;
-  note_inc[note] = NoteBank_PhaseIncFromHz(freq_hz);
   note_amp_q15[note] = NoteBank_ScaleToQ15(scale);
   NoteEnv_NoteOn(note, (float)freq_hz);
   NoteFilter_OnNoteFreq(note, freq_hz);
+
+  if (PlayMode_Get() == PLAY_MODE_WAVE)
+  {
+    if (note >= WAVE_BANK_SLOTS)
+    {
+      /* Wave mode only drives slots 0..7. */
+      note_freq_hz[note] = 0.0;
+      note_inc[note] = 0u;
+      return;
+    }
+    if (WaveBank_NoteOn(note, freq_hz) != 0)
+    {
+      note_freq_hz[note] = 0.0;
+      note_inc[note] = 0u;
+      return;
+    }
+    /* Non-zero sentinel so the mix loop keeps processing env/filter. */
+    note_inc[note] = 1u;
+    note_phase[note] = 0u;
+    return;
+  }
+
+  note_inc[note] = NoteBank_PhaseIncFromHz(freq_hz);
 }
 
 double NoteBank_GetFreq(uint8_t note)
@@ -443,6 +513,18 @@ double NoteBank_GetShapeParam(void)
 
 uint8_t NoteBank_AnyActive(void)
 {
+  if (PlayMode_Get() == PLAY_MODE_WAVE)
+  {
+    for (uint8_t i = 0; i < WAVE_BANK_SLOTS; i++)
+    {
+      if (note_inc[i] != 0u)
+      {
+        return 1u;
+      }
+    }
+    return WaveBank_AnyPlaying();
+  }
+
   for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
   {
     if (note_inc[i] != 0u)

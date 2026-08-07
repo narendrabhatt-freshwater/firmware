@@ -4,6 +4,7 @@
 #include "theme.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <unordered_map>
@@ -429,6 +430,140 @@ bool VoiceSelector(const char *str_id, int *current, int count)
     ImGui::PopID();
   }
 
+  ImGui::PopID();
+  return changed;
+}
+
+void ProgressBar(const char *str_id, float value01, const ImVec2 &size)
+{
+  ImGui::PushID(str_id);
+  const ImVec2 pos = ImGui::GetCursorScreenPos();
+  ImVec2 sz = size;
+  if (sz.x <= 0.f) {
+    sz.x = ImGui::GetContentRegionAvail().x;
+  }
+  if (sz.y <= 0.f) {
+    sz.y = 8.f;
+  }
+  ImGui::InvisibleButton("##bar", sz);
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  const float v = std::clamp(value01, 0.f, 1.f);
+  dl->AddRectFilled(pos, V2Add(pos, sz), U32A(kPalette.panel_alt, 0.9f), 4.f);
+  if (v > 0.001f) {
+    dl->AddRectFilled(pos, V2Add(pos, ImVec2(sz.x * v, sz.y)),
+                      U32(kPalette.accent), 4.f);
+  }
+  ImGui::PopID();
+}
+
+bool NavDrawer(const char *str_id, const char *const *labels, int count,
+               int *current, bool *expanded, float *anim_width, int *gain_db,
+               bool *gain_changed)
+{
+  ImGui::PushID(str_id);
+  const float collapsed_w = 52.f;
+  const float expanded_w = 148.f;
+  const float target = *expanded ? expanded_w : collapsed_w;
+  *anim_width =
+      fw::anim::ExpApproach(*anim_width, target, ImGui::GetIO().DeltaTime, 14.f);
+
+  if (gain_changed) {
+    *gain_changed = false;
+  }
+
+  ImGui::BeginChild("nav_drawer", ImVec2(*anim_width, 0),
+                    ImGuiChildFlags_Borders);
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  const ImVec2 wp = ImGui::GetWindowPos();
+  dl->AddRectFilled(wp,
+                    ImVec2(wp.x + 3.f, wp.y + ImGui::GetWindowSize().y),
+                    U32(kPalette.accent), 0.f);
+
+  const float gain_zone = gain_db ? 148.f : 0.f;
+  ImGui::BeginChild("nav_items", ImVec2(0, -gain_zone), ImGuiChildFlags_None);
+
+  ImGui::Dummy(ImVec2(0, 4));
+  if (*expanded) {
+    ImGui::TextColored(kPalette.accent, "  CMI");
+  } else {
+    ImGui::TextColored(kPalette.accent, " C");
+  }
+
+  if (ImGui::InvisibleButton("##toggle", ImVec2(-1, 18))) {
+    *expanded = !*expanded;
+  }
+  {
+    const ImVec2 p = ImGui::GetItemRectMin();
+    dl->AddText(ImVec2(p.x + 12.f, p.y + 1.f), U32(kPalette.text_dim),
+                *expanded ? "<< collapse" : ">>");
+  }
+
+  ImGui::Spacing();
+  bool changed = false;
+  for (int i = 0; i < count; ++i) {
+    ImGui::PushID(i);
+    const bool sel = (*current == i);
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const float h = 30.f;
+    const float w = ImGui::GetContentRegionAvail().x;
+    ImGui::InvisibleButton("##nav", ImVec2(w, h));
+    if (ImGui::IsItemClicked()) {
+      *current = i;
+      changed = true;
+    }
+    const bool hovered = ImGui::IsItemHovered();
+    if (sel || hovered) {
+      dl->AddRectFilled(pos, V2Add(pos, ImVec2(w, h)),
+                        sel ? U32A(kPalette.accent, 0.22f)
+                            : U32A(kPalette.accent_dim, 0.35f),
+                        5.f);
+    }
+    if (sel) {
+      dl->AddRectFilled(pos, ImVec2(pos.x + 3.f, pos.y + h), U32(kPalette.accent),
+                        0.f);
+    }
+    char glyph[8];
+    std::snprintf(glyph, sizeof(glyph), " %c",
+                  labels[i][0] ? static_cast<char>(std::toupper(labels[i][0]))
+                               : '?');
+    if (*expanded || *anim_width > 110.f) {
+      dl->AddText(V2Add(pos, ImVec2(12.f, 7.f)),
+                  sel ? U32(kPalette.accent) : U32(kPalette.text), labels[i]);
+    } else {
+      dl->AddText(V2Add(pos, ImVec2(16.f, 7.f)),
+                  sel ? U32(kPalette.accent) : U32(kPalette.text_dim), glyph);
+    }
+    ImGui::PopID();
+  }
+
+  ImGui::EndChild(); /* nav_items */
+
+  if (gain_db) {
+    ImGui::Separator();
+    if (*expanded || *anim_width > 100.f) {
+      ImGui::TextDisabled("GAIN");
+      ImGui::SameLine();
+      ImGui::Text("%d dB", *gain_db);
+    } else {
+      ImGui::TextDisabled("G");
+    }
+    const float slider_h = 100.f;
+    const float slider_w = 22.f;
+    const float x =
+        (ImGui::GetContentRegionAvail().x - slider_w) * 0.5f;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, x));
+    if (ImGui::VSliderInt("##gain", ImVec2(slider_w, slider_h), gain_db, 0, 127,
+                          "")) {
+      if (gain_changed) {
+        *gain_changed = true;
+      }
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("CS4304 atten %d dB (0 = loudest)", *gain_db);
+    }
+  }
+
+  ImGui::EndChild();
   ImGui::PopID();
   return changed;
 }

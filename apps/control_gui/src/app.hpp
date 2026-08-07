@@ -4,6 +4,7 @@
 #include "env_editor.hpp"
 #include "log_buffer.hpp"
 #include "preview_scope.hpp"
+#include "wave_upload_queue.hpp"
 
 #include "audio_engine.hpp"
 #include "midi_input.hpp"
@@ -22,8 +23,10 @@ enum class GuiView : int
 {
   Perform = 0,
   Tone = 1,
-  Effect = 2,
-  Lab = 3,
+  Waves = 2,
+  Effect = 3,
+  Lab = 4,
+  Setup = 5,
 };
 
 enum class OutMode : int
@@ -42,23 +45,33 @@ struct App
   std::unique_ptr<midi_host::AudioEngine> audio;
   PreviewScope preview;
   std::array<EnvProgram, midi_host::kVoiceCount> voice_envs;
+  WaveUploadQueue waves;
 
   bool midi_open = false;
   bool audio_open = false;
-  int midi_port_index = -1; // -1 = auto Launchkey
+  int midi_port_index = -1;
   std::vector<midi_host::MidiPortInfo> midi_ports;
   std::vector<std::string> serial_ports;
   int serial_port_index = 0;
   char serial_path_buf[256] = {};
   uint32_t baud = 460800;
   int gain_db = 6;
-  OutMode out_mode = OutMode::Speakers;
+  OutMode out_mode = OutMode::Card;
   GuiView view = GuiView::Perform;
 
   char raw_cmd[256] = {};
-  int raw_target = 0; // 0 channel 1 effect 2 all
+  int raw_target = 0;
 
-  int shape_mode = 0; // 0 sine 1 pulse 2 triangle
+  int play_mode = 0;
+  int wave_slot = 0;
+  float wave_rate = 14000.f;
+  char wave_cdc_path[256] = {};
+  int wave_cdc_port_index = 0;
+
+  bool nav_expanded = true;
+  float nav_width = 148.f;
+
+  int shape_mode = 0;
   float shape_param = 0.5f;
   float filter_hz_f = 20000.f;
   float filter_q_f = 1.f;
@@ -75,6 +88,7 @@ struct App
   void RefreshPortLists();
   void Tick();
   void Draw();
+  void DrawSetup();
   void ApplyBankEvents(const std::vector<midi_host::BankEvent> &events);
   void AllNotesOff();
   bool EnsureAudio();

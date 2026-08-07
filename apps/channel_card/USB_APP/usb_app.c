@@ -13,6 +13,7 @@
 #include "channel_console.h"
 #include "main.h"
 #include "tusb.h"
+#include "wave_upload.h"
 
 //--------------------------------------------------------------------+
 // State
@@ -108,6 +109,19 @@ static void CDC_Console_Poll(void)
 
   while (tud_cdc_available())
   {
+    /* Binary wave upload: consume raw bytes, no echo / line edit. */
+    if (WaveUpload_IsActive() != 0u)
+    {
+      uint8_t tmp[64];
+      uint32_t n = tud_cdc_read(tmp, sizeof tmp);
+      if (n == 0u)
+      {
+        break;
+      }
+      (void)WaveUpload_Feed(tmp, n);
+      continue;
+    }
+
     char c;
     if (tud_cdc_read(&c, 1) == 0)
       break;

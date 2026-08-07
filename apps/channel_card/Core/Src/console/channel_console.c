@@ -17,8 +17,11 @@
 #include "note_bank.h"
 #include "note_envelope.h"
 #include "note_filter.h"
+#include "play_mode.h"
 #include "uart5_rx.h"
 #include "usb_app.h"
+#include "wave_bank.h"
+#include "wave_upload.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -399,6 +402,7 @@ static void Console_Help(void)
 {
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   RS485_Reply("ok: n0 | n0..nf Hz [sc] | n Hz|0 | "
+              "mode notes|wave | w | w0..w7 rate|0 | wl slot nbytes | "
               "en0..enf end slope[±k] ... rel[±k]|0 | ek0..ekf k | "
               "s | p|t 0.1..0.9 | f0..f7 Hz [q] | f Hz|0 [q] | "
               "fk0..fk7 k | fk k | g ch dB | "
@@ -1351,6 +1355,155 @@ static void Console_CmdNoteSlot(char *line)
   Console_SetNoteFreq(note, hz, scale);
 }
 
+static void Console_CmdMode(char *line)
+{
+  if (strcmp(line, "mode") == 0)
+  {
+    if (PlayMode_Get() == PLAY_MODE_WAVE)
+    {
+      RS485_Reply("ok: mode wave\r\n");
+    }
+    else
+    {
+      RS485_Reply("ok: mode notes\r\n");
+    }
+    return;
+  }
+  if (strcmp(line, "mode notes") == 0)
+  {
+    (void)PlayMode_Set(PLAY_MODE_NOTES);
+    RS485_Reply("ok: mode notes\r\n");
+    return;
+  }
+  if (strcmp(line, "mode wave") == 0)
+  {
+    (void)PlayMode_Set(PLAY_MODE_WAVE);
+    RS485_Reply("ok: mode wave\r\n");
+    return;
+  }
+  RS485_Reply("err:syntax\r\n");
+}
+
+static void Console_CmdWaveQuery(void)
+{
+  char b[200];
+  int n;
+  uint8_t i;
+
+  n = snprintf(b, sizeof b, "ok: w");
+  for (i = 0u; i < WAVE_BANK_SLOTS && n > 0 && (size_t)n < sizeof b; i++)
+  {
+    n += snprintf(b + n, sizeof b - (size_t)n, " %u:%lu%s", (unsigned)i,
+                  (unsigned long)WaveBank_GetLength(i),
+                  WaveBank_IsPlaying(i) != 0u ? "*" : "");
+  }
+  if (n > 0 && (size_t)n < sizeof b)
+  {
+    snprintf(b + n, sizeof b - (size_t)n, "\r\n");
+  }
+  RS485_Reply(b);
+}
+
+static void Console_CmdWaveSlot(char *line)
+{
+  unsigned int slot;
+  double rate;
+  char c;
+
+  if (PlayMode_Get() != PLAY_MODE_WAVE)
+  {
+    RS485_Reply("err:mode\r\n");
+    return;
+  }
+
+  /* w0 / w0 <rate> / w0 0 */
+  if (sscanf(line, "w%u%c", &slot, &c) < 1)
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+  if (slot >= WAVE_BANK_SLOTS)
+  {
+    RS485_Reply("err:range\r\n");
+    return;
+  }
+
+  if (line[1] >= '0' && line[1] <= '7' && line[2] == '\0')
+  {
+    char b[80];
+    snprintf(b, sizeof b, "ok: w%u len %lu rate %.1f %s\r\n", slot,
+             (unsigned long)WaveBank_GetLength((uint8_t)slot),
+             WaveBank_GetRate((uint8_t)slot),
+             WaveBank_IsPlaying((uint8_t)slot) != 0u ? "play" : "stop");
+    RS485_Reply(b);
+    return;
+  }
+
+  if (sscanf(line, "w%u %lf", &slot, &rate) != 2)
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+  if (slot >= WAVE_BANK_SLOTS)
+  {
+    RS485_Reply("err:range\r\n");
+    return;
+  }
+
+  if (rate == 0.0)
+  {
+    NoteBank_SetFreq((uint8_t)slot, 0.0, 0.0);
+    WaveBank_Stop((uint8_t)slot);
+    RS485_Reply("ok\r\n");
+    return;
+  }
+
+  /* Map rate → pitch for Shared note/filter/env path (rate = pitch * 128). */
+  {
+    double pitch = rate / WAVE_BANK_RATE_PER_HZ;
+    if (rate < WAVE_BANK_RATE_MIN || rate > WAVE_BANK_RATE_MAX)
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+    if (WaveBank_GetLength((uint8_t)slot) < 2u)
+    {
+      RS485_Reply("err:empty\r\n");
+      return;
+    }
+    NoteBank_SetFreq((uint8_t)slot, pitch, 0.125);
+    if (NoteBank_GetFreq((uint8_t)slot) <= 0.0)
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+  }
+  RS485_Reply("ok\r\n");
+}
+
+static void Console_CmdWaveLoad(char *line)
+{
+  unsigned int slot;
+  unsigned long nbytes;
+
+  if (!console_via_usb)
+  {
+    RS485_Reply("err:usb\r\n");
+    return;
+  }
+  if (sscanf(line, "wl %u %lu", &slot, &nbytes) != 2)
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+  if (WaveUpload_Begin((uint8_t)slot, (uint32_t)nbytes) != 0)
+  {
+    RS485_Reply("err:range\r\n");
+    return;
+  }
+  RS485_Reply("ok:ready\r\n");
+}
+
 static void Console_Exec(char *line)
 {
   char b[160];
@@ -1366,6 +1519,32 @@ static void Console_Exec(char *line)
       strcmp(line, "?") == 0)
   {
     Console_Help();
+    return;
+  }
+
+  /* ---- mode notes|wave ---- */
+  if (strncmp(line, "mode", 4) == 0 && (line[4] == '\0' || line[4] == ' '))
+  {
+    Console_CmdMode(line);
+    return;
+  }
+
+  /* ---- wl <slot> <nbytes>: USB CDC binary upload ---- */
+  if (strncmp(line, "wl ", 3) == 0)
+  {
+    Console_CmdWaveLoad(line);
+    return;
+  }
+
+  /* ---- w / w0..w7 ---- */
+  if (strcmp(line, "w") == 0)
+  {
+    Console_CmdWaveQuery();
+    return;
+  }
+  if (line[0] == 'w' && line[1] >= '0' && line[1] <= '7')
+  {
+    Console_CmdWaveSlot(line);
     return;
   }
 
@@ -1618,6 +1797,8 @@ void ChannelConsole_Init(void)
 
   NoteFilter_InitAll();
   NoteEnv_Init();
+  WaveBank_Init();
+  PlayMode_Init();
   NoteBank_Init();
 
   RS485_Reply("ok: ready — h for cmds\r\n");

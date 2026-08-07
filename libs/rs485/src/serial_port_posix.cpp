@@ -213,6 +213,19 @@ void SerialPort::SetRts(bool asserted) {
   ioctl(impl_->fd, TIOCMSET, &status);
 }
 
+void SerialPort::SetDtr(bool asserted) {
+  if (!is_open_)
+    return;
+  int status = 0;
+  if (ioctl(impl_->fd, TIOCMGET, &status) != 0)
+    return;
+  if (asserted)
+    status |= TIOCM_DTR;
+  else
+    status &= ~TIOCM_DTR;
+  ioctl(impl_->fd, TIOCMSET, &status);
+}
+
 std::vector<std::string> SerialPort::ListPorts() {
   static const char *kPatterns[] = {
 #if defined(__APPLE__)

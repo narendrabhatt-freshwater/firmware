@@ -67,6 +67,12 @@ public:
   /** Only meaningful when ManualRtsControl() is true. */
   void SetRts(bool asserted);
 
+  /**
+   * Drive DTR. Needed for USB CDC ACM: TinyUSB tud_cdc_connected() is true
+   * only while DTR is asserted, and console replies are gated on that.
+   */
+  void SetDtr(bool asserted);
+
   const std::string &LastError() const { return last_error_; }
 
   /** Best-effort enumeration of likely serial device paths for this OS.

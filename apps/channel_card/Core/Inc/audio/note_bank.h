@@ -42,6 +42,11 @@ extern "C"
   void NoteBank_Init(void);
 
   /**
+   * @brief Hard-silence all voices (no envelope release). Used on mode switch.
+   */
+  void NoteBank_PanicAll(void);
+
+  /**
    * @brief Set one note's frequency (Hz) and amplitude scale (0.0..1.0).
    * @param note    Voice 0..15 (N0..NF). Out-of-range is ignored.
    * @param freq_hz Frequency Hz; <= 0 turns the note off (release if env active).

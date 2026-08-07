@@ -115,6 +115,45 @@ Success reply for sets: `ok`.
 Fractional Hz is intentional (e.g. `261.625565` for C4). Do not round
 to integers if you care about equal temperament.
 
+### Playback mode
+
+| Command       | Meaning |
+| ------------- | ------- |
+| `mode`        | Query: `ok: mode notes` or `ok: mode wave` |
+| `mode notes`  | DDS note bank (`s`/`p`/`t`, `n0`…`nf`) — default |
+| `mode wave`   | One-shot waveform player on slots 0–7 |
+
+Switching mode hard-stops active voices. Wave sample data in AXI is kept
+while powered; it is lost on reset (re-upload over USB).
+
+### Waveform (wave mode)
+
+Eight AXI banks × 32 KiB (16384 int16 LE samples max). Path:
+wave → amp/env → LPF → CH1. Playback rate (samples/s) = pitch_Hz × 128;
+filter tracking uses pitch = rate / 128.
+
+| Command              | Meaning |
+| -------------------- | ------- |
+| `w`                  | Query lengths / playing (`*` = playing) |
+| `w0`…`w7`            | Query one slot |
+| `w0`…`w7 <rate>`     | Play/restart at `rate` samples/s (1…192000) |
+| `w0`…`w7 0`          | Stop slot |
+| `wl <slot> <nbytes>` | **USB CDC only.** Begin binary upload; `nbytes` even, 2…32768 |
+
+`n0`…`n7` in wave mode start the same one-shot with
+`rate = Hz × 128` and respect envelope sustain/release. End of wave
+silences that slot even if the key is still held. `err:mode` if `w*`
+while in notes mode; `err:usb` if `wl` over RS485; `err:empty` if no
+samples loaded.
+
+Upload (USB CDC):
+
+1. Host sends `c:wl 0 8192\r` (or bare `wl …` on CDC).
+2. Card replies `ok:ready`.
+3. Host writes raw int16 LE bytes (no ASCII). Card may emit
+   `ok:chunk <offset>` every 1024 bytes.
+4. Final `ok:wave <slot> <nsamp>`.
+
 ### Oscillator shape (global)
 
 | Command        | Meaning                                           |

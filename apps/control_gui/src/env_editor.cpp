@@ -5,6 +5,7 @@
 #include "widgets.hpp"
 
 #include "imgui.h"
+#include "rs485/types.hpp"
 
 #include <algorithm>
 #include <cmath>
