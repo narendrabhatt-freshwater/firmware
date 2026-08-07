@@ -22,6 +22,7 @@ FLASH_SELECT=0
 FLASH_ERASE=0
 FLASH_VERIFY=1
 FLASH_START=1
+BUILD_FORCE=0
 
 # Serial console / log
 SERIAL_PORT="${FW_SERIAL_PORT:-}"     # e.g. /dev/cu.usbmodemCHCARD_0013
@@ -82,7 +83,7 @@ usage() {
     "fw - Freshwater CMI firmware CLI"
     ""
     "Usage"
-    "  fw build    [channel|effect|all] [--debug|--release]"
+    "  fw build    [channel|effect|all] [--debug|--release] [--force]"
     "  fw flash    [channel|effect] [options]"
     "  fw list     [usb|stlink|uart|all]"
     "  fw console  [channel|effect] [--port PATH]"
@@ -97,6 +98,10 @@ usage() {
     "  fw clean    [channel|effect|all]"
     "  fw status"
     "  fw help"
+    ""
+    "Build options"
+    "  --debug | --release     preset (default Debug)"
+    "  --force | -f            wipe build/ then reconfigure and rebuild"
     ""
     "Flash options"
     "  --debug | --release     preset (default Debug)"
@@ -163,6 +168,7 @@ usage() {
     "  fw control"
     "  fw flash channel --port USB1"
     "  fw build all --release"
+    "  fw build channel --force"
   )
   local line
   for line in "${lines[@]}"; do
@@ -243,6 +249,12 @@ cmd_build_one() {
   need_cmd ninja
   need_cmd arm-none-eabi-gcc
   need_cmd arm-none-eabi-objcopy
+
+  # Wipe cmake/ninja cache and artifacts so the next configure+build cannot
+  # reuse a stale tree (e.g. after toolchain or preset changes).
+  if [[ "$BUILD_FORCE" -eq 1 ]]; then
+    cmd_clean_one "$card"
+  fi
 
   info "build $card ($PRESET)"
   (
@@ -1398,6 +1410,7 @@ parse_flags() {
     case "$1" in
       --debug)   PRESET="Debug" ;;
       --release) PRESET="Release" ;;
+      --force|-f) BUILD_FORCE=1 ;;
       --tool)
         [[ $# -ge 2 ]] || die "--tool needs cube|dfu|auto"
         FLASH_TOOL="$2"; shift

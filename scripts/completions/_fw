@@ -81,7 +81,9 @@ _fw() {
           _arguments \
             '1:card:(channel effect all)' \
             '--debug[Debug preset]' \
-            '--release[Release preset]'
+            '--release[Release preset]' \
+            '--force[Wipe build/ then rebuild]' \
+            '-f[Wipe build/ then rebuild]'
           ;;
         flash)
           _arguments \

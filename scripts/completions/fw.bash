@@ -47,7 +47,7 @@ _fw_complete() {
       if [[ ${COMP_CWORD} -eq 2 ]]; then
         COMPREPLY=( $(compgen -W "${cards_all}" -- "${cur}") )
       else
-        COMPREPLY=( $(compgen -W "--debug --release" -- "${cur}") )
+        COMPREPLY=( $(compgen -W "--debug --release --force -f" -- "${cur}") )
       fi
       ;;
     flash)
