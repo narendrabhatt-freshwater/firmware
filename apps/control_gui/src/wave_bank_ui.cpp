@@ -90,6 +90,21 @@ void AssignFolder(App &app, const std::string &folder)
   app.log.Push(msg);
 }
 
+/** Same .raw path into every bank slot (upload still writes each wN separately). */
+void AssignSameToAll(App &app, const std::string &path)
+{
+  if (path.empty()) {
+    return;
+  }
+  for (int slot = 0; slot < 8; ++slot) {
+    app.waves.SetSlotPath(slot, path);
+  }
+  char msg[128];
+  std::snprintf(msg, sizeof(msg), "ok: assigned %s to w0..w7",
+                Basename(path.c_str()).c_str());
+  app.log.Push(msg);
+}
+
 void DrawMiniWave(const WaveSlotState &st, const ImVec2 &size)
 {
   const ImVec2 p0 = ImGui::GetCursorScreenPos();
@@ -168,6 +183,15 @@ void DrawSlotCard(App &app, int slot, const WaveSlotState &st, float card_w,
     }
   }
   ImGui::SameLine();
+  ImGui::BeginDisabled(st.path[0] == '\0');
+  if (ImGui::SmallButton("All")) {
+    AssignSameToAll(app, st.path);
+  }
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("Assign this file to w0..w7");
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
   if (ImGui::SmallButton("Clear")) {
     app.waves.ClearSlot(slot);
   }
@@ -235,7 +259,7 @@ void DrawWaveBankPage(App &app)
     app.waves.SetCdcPath(app.wave_cdc_path);
   }
 
-  /* Toolbar sizes to content — never clip Load folder / Upload all. */
+  /* Toolbar sizes to content — never clip Assign all / Upload all. */
   ImGui::BeginChild("wave_toolbar", ImVec2(0, 0),
                     ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
 
@@ -290,11 +314,18 @@ void DrawWaveBankPage(App &app)
   }
 
   const float btn_w =
-      (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 3.f) /
-      4.f;
+      (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 4.f) /
+      5.f;
   ImGui::BeginDisabled(app.waves.Busy());
   if (fw::ui::GlowButton("Load folder", ImVec2(btn_w, 0))) {
     AssignFolder(app, WaveCdc_PickFolder());
+  }
+  ImGui::SameLine();
+  if (fw::ui::GlowButton("Assign all", ImVec2(btn_w, 0))) {
+    AssignSameToAll(app, WaveCdc_PickRawFile());
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Pick one .raw and assign it to every slot");
   }
   ImGui::SameLine();
   ImGui::BeginDisabled(app.wave_cdc_path[0] == '\0');
