@@ -119,6 +119,6 @@ and, in the product tree, `libs/rs485` `WaveUploader`.
 | `protocol/channel.hpp` | Channel card API + `Format*` (notes, `m`, wave play, shape, env, filter, gain, cpu) |
 | `protocol/effect.hpp` | Effect card API + `Format*` |
 
-Method-level bounds and wire tokens are documented on the public headers.
-When header and the console protocol specification disagree, trust the
-firmware `h` menu / that specification, then update this library.
+Public headers use Doxygen (`@brief`, `@param`, `@return`, bounds, wire
+tokens). When header and the console protocol specification disagree, trust
+the firmware `h` menu / that specification, then update this library.

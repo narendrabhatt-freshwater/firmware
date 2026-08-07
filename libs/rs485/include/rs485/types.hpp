@@ -11,6 +11,7 @@
 #define RS485_TYPES_HPP
 
 #include <cstdint>
+#include <cstddef>
 #include <cstring>
 #include <string>
 
@@ -37,10 +38,14 @@ enum class Status : uint8_t {
 };
 
 struct ExchangeResult {
+  /** Keep aligned with protocol::Result buffer sizes (transport bridge). */
+  static constexpr std::size_t kErrCodeCapacity = 16;
+  static constexpr std::size_t kRawCapacity = 96;
+
   Status status = Status::Timeout;
   Target from = Target::Channel;
-  char err_code[16] = {};
-  char raw[96] = {};
+  char err_code[kErrCodeCapacity] = {};
+  char raw[kRawCapacity] = {};
 
   bool ok() const { return status == Status::Ok; }
   bool got_reply() const {
