@@ -57,7 +57,9 @@ extern "C" {
 // CDC CONFIGURATION
 //--------------------------------------------------------------------
 
-#define CFG_TUD_CDC_RX_BUFSIZE      256
+/* Wave upload can blast tens of KiB; a tiny RX FIFO stalls the host and
+ * risks losing the final ok:wave race on the host side if we over-drain. */
+#define CFG_TUD_CDC_RX_BUFSIZE      2048
 #define CFG_TUD_CDC_TX_BUFSIZE      512
 
 //--------------------------------------------------------------------

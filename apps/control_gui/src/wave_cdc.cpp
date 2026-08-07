@@ -1,7 +1,5 @@
 #include "wave_cdc.hpp"
 
-#include "rs485/serial_port.hpp"
-
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -33,7 +31,7 @@ bool WaitForSubstring(rs485::SerialPort &port,
       std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   uint8_t buf[256];
   while (std::chrono::steady_clock::now() < deadline) {
-    const size_t n = port.ReadTimeout(buf, sizeof(buf), 50);
+    const size_t n = port.ReadTimeout(buf, sizeof(buf), 20);
     if (n > 0) {
       accum.append(reinterpret_cast<const char *>(buf), n);
       if (accum.find(needle) != std::string::npos) {
@@ -69,14 +67,35 @@ std::string ShellTrim(std::string out)
   return out;
 }
 
+/** Discard leftover console noise without blocking long. */
+void DrainRx(rs485::SerialPort &port)
+{
+  uint8_t buf[256];
+  for (int i = 0; i < 8; ++i) {
+    if (port.ReadTimeout(buf, sizeof(buf), 5) == 0) {
+      break;
+    }
+  }
+}
+
+/** Non-blocking append of whatever is already in the OS RX buffer. */
+void PollRx(rs485::SerialPort &port, std::string &accum)
+{
+  uint8_t buf[256];
+  for (;;) {
+    const size_t n = port.ReadTimeout(buf, sizeof(buf), 0);
+    if (n == 0) {
+      break;
+    }
+    accum.append(reinterpret_cast<const char *>(buf), n);
+  }
+}
+
 } // namespace
 
-bool WaveCdc_LoadRaw(const std::string &cdc_path,
-                     int slot,
-                     const std::string &file_path,
-                     LogBuffer &log,
-                     const std::function<void(float)> &on_progress)
+bool WaveCdcSession::Open(const std::string &cdc_path, LogBuffer &log)
 {
+  Close();
   if (cdc_path.empty()) {
     log.Push("err: no USB CDC path (Channel Card cu.usbmodem…)");
     return false;
@@ -84,6 +103,34 @@ bool WaveCdc_LoadRaw(const std::string &cdc_path,
   if (LooksLikeRs485Adapter(cdc_path)) {
     log.Push("err: that looks like the RS485 adapter — pick Channel "
              "cu.usbmodem* / ttyACM* for wave upload");
+    return false;
+  }
+  if (!port_.Open(cdc_path, 115200)) {
+    log.Push("err: CDC open " + port_.LastError());
+    return false;
+  }
+  port_.SetDtr(true);
+  /* Short settle only — do not burn 1.5s waiting for a boot banner. */
+  std::this_thread::sleep_for(std::chrono::milliseconds(80));
+  DrainRx(port_);
+  port_.FlushInput();
+  warmed_ = true;
+  return true;
+}
+
+void WaveCdcSession::Close()
+{
+  port_.Close();
+  warmed_ = false;
+}
+
+bool WaveCdcSession::LoadFile(int slot,
+                              const std::string &file_path,
+                              LogBuffer &log,
+                              const std::function<void(float)> &on_progress)
+{
+  if (!port_.IsOpen()) {
+    log.Push("err: CDC session not open");
     return false;
   }
   if (slot < 0 || slot > 7) {
@@ -105,30 +152,19 @@ bool WaveCdc_LoadRaw(const std::string &cdc_path,
     return false;
   }
 
-  rs485::SerialPort port;
-  if (!port.Open(cdc_path, 115200)) {
-    log.Push("err: CDC open " + port.LastError());
-    return false;
-  }
-
-  port.SetDtr(true);
-  std::this_thread::sleep_for(std::chrono::milliseconds(400));
-  {
-    std::string boot;
-    (void)WaitForSubstring(port, "ready", boot, 1500, false);
-  }
-  port.FlushInput();
+  DrainRx(port_);
+  port_.FlushInput();
 
   char cmd[64];
   std::snprintf(cmd, sizeof(cmd), "c:wl %d %zu\r", slot, n);
-  if (!port.Write(reinterpret_cast<const uint8_t *>(cmd), std::strlen(cmd))) {
+  if (!port_.Write(reinterpret_cast<const uint8_t *>(cmd), std::strlen(cmd))) {
     log.Push("err: CDC write wl");
     return false;
   }
-  port.DrainOutput();
+  port_.DrainOutput();
 
   std::string rx;
-  if (!WaitForSubstring(port, "ok:ready", rx, 5000, true)) {
+  if (!WaitForSubstring(port_, "ok:ready", rx, 2000, true)) {
     if (rx.find("err:") != std::string::npos) {
       log.Push("err: card reply " + SanitizeRx(rx));
     } else if (rx.empty()) {
@@ -144,28 +180,38 @@ bool WaveCdc_LoadRaw(const std::string &cdc_path,
     on_progress(0.05f);
   }
 
+  /* Never DrainRx during/after payload — that discarded ok:wave (empty ()).
+   * Accumulate replies while writing; card RX FIFO is only 256 B so keep
+   * host chunks modest and poll so we notice completion promptly. */
+  rx.clear();
   size_t off = 0;
   while (off < n) {
     const size_t chunk = std::min<size_t>(512, n - off);
-    if (!port.Write(data.data() + off, chunk)) {
+    if (!port_.Write(data.data() + off, chunk)) {
       log.Push("err: CDC write payload @" + std::to_string(off));
       return false;
     }
     off += chunk;
+    PollRx(port_, rx);
+    if (rx.find("err:") != std::string::npos) {
+      log.Push("err: card reply " + SanitizeRx(rx));
+      return false;
+    }
     if (on_progress) {
       on_progress(0.05f + 0.9f * static_cast<float>(off) / static_cast<float>(n));
     }
   }
-  port.DrainOutput();
+  port_.DrainOutput();
 
-  rx.clear();
-  if (!WaitForSubstring(port, "ok:wave", rx, 10000, true)) {
-    if (rx.find("err:") != std::string::npos) {
-      log.Push("err: card reply " + SanitizeRx(rx));
-    } else {
-      log.Push("err: no ok:wave (" + SanitizeRx(rx) + ")");
+  if (rx.find("ok:wave") == std::string::npos) {
+    if (!WaitForSubstring(port_, "ok:wave", rx, 3000, true)) {
+      if (rx.find("err:") != std::string::npos) {
+        log.Push("err: card reply " + SanitizeRx(rx));
+      } else {
+        log.Push("err: no ok:wave (" + SanitizeRx(rx) + ")");
+      }
+      return false;
     }
-    return false;
   }
 
   if (on_progress) {
@@ -184,6 +230,21 @@ bool WaveCdc_LoadRaw(const std::string &cdc_path,
     log.Push("ok:wave uploaded");
   }
   return true;
+}
+
+bool WaveCdc_LoadRaw(const std::string &cdc_path,
+                     int slot,
+                     const std::string &file_path,
+                     LogBuffer &log,
+                     const std::function<void(float)> &on_progress)
+{
+  WaveCdcSession session;
+  if (!session.Open(cdc_path, log)) {
+    return false;
+  }
+  const bool ok = session.LoadFile(slot, file_path, log, on_progress);
+  session.Close();
+  return ok;
 }
 
 std::string WaveCdc_PickRawFile()

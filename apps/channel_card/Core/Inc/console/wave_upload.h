@@ -26,7 +26,7 @@ extern "C"
   int WaveUpload_Begin(uint8_t slot, uint32_t nbytes);
 
   /**
-   * @brief Feed raw CDC bytes. May emit ok:chunk / ok:wave / err via USB_CDC_WriteStr.
+   * @brief Feed raw CDC bytes. Emits ok:wave or err via USB_CDC_WriteStr when complete.
    * @return Number of bytes consumed from buf (may be < len if session ends).
    */
   uint32_t WaveUpload_Feed(const uint8_t *buf, uint32_t len);

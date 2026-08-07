@@ -150,9 +150,8 @@ Upload (USB CDC):
 
 1. Host sends `c:wl 0 8192\r` (or bare `wl …` on CDC).
 2. Card replies `ok:ready`.
-3. Host writes raw int16 LE bytes (no ASCII). Card may emit
-   `ok:chunk <offset>` every 1024 bytes.
-4. Final `ok:wave <slot> <nsamp>`.
+3. Host writes raw int16 LE bytes (no ASCII).
+4. Final `ok:wave <slot> <nsamp>` when `nbytes` have been received.
 
 ### Oscillator shape (global)
 

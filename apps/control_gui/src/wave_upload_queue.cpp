@@ -188,6 +188,20 @@ void WaveUploadQueue::Worker()
 
     const int total = static_cast<int>(jobs.size());
     int done = 0;
+
+    WaveCdcSession session;
+    if (!session.Open(cdc, *log)) {
+      std::lock_guard<std::mutex> lock(mu_);
+      for (int s : jobs) {
+        auto &st = slots_[static_cast<size_t>(s)];
+        st.ui = WaveSlotUi::Failed;
+        std::snprintf(st.status, sizeof(st.status), "no cdc");
+      }
+      busy_ = false;
+      current_slot_ = -1;
+      continue;
+    }
+
     for (int slot : jobs) {
       if (cancel_.load()) {
         std::lock_guard<std::mutex> lock(mu_);
@@ -213,12 +227,12 @@ void WaveUploadQueue::Worker()
         path = st.path;
       }
 
-      const bool ok = WaveCdc_LoadRaw(
-          cdc, slot, path, *log,
-          [this, slot, total, done](float p) {
+      const bool ok = session.LoadFile(
+          slot, path, *log, [this, slot, total, done](float p) {
             std::lock_guard<std::mutex> lock(mu_);
             slots_[static_cast<size_t>(slot)].progress = p;
-            const float base = static_cast<float>(done) / static_cast<float>(total);
+            const float base =
+                static_cast<float>(done) / static_cast<float>(total);
             overall_ = base + p / static_cast<float>(total);
           });
 
@@ -239,9 +253,9 @@ void WaveUploadQueue::Worker()
       overall_ = static_cast<float>(done) / static_cast<float>(total);
     }
 
+    session.Close();
     current_slot_ = -1;
     busy_ = false;
-    overall_ = busy_.load() ? overall_.load() : (cancel_.load() ? overall_.load() : 1.f);
     if (!cancel_.load() && log) {
       log->Push("ok: wave bank upload finished");
     }

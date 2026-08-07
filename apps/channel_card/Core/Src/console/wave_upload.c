@@ -12,13 +12,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#define WAVE_UPLOAD_CHUNK_ACK 1024u
-
 static uint8_t s_active;
 static uint8_t s_slot;
 static uint32_t s_need;
 static uint32_t s_got;
-static uint32_t s_ack_at;
 static int16_t *s_dst;
 
 uint8_t WaveUpload_IsActive(void)
@@ -61,7 +58,6 @@ int WaveUpload_Begin(uint8_t slot, uint32_t nbytes)
   s_slot = slot;
   s_need = nbytes;
   s_got = 0u;
-  s_ack_at = WAVE_UPLOAD_CHUNK_ACK;
   s_active = 1u;
   return 0;
 }
@@ -92,12 +88,8 @@ uint32_t WaveUpload_Feed(const uint8_t *buf, uint32_t len)
   }
   s_got += take;
 
-  while (s_got >= s_ack_at && s_ack_at < s_need)
-  {
-    snprintf(msg, sizeof msg, "ok:chunk %lu\r\n", (unsigned long)s_ack_at);
-    USB_CDC_WriteStr(msg);
-    s_ack_at += WAVE_UPLOAD_CHUNK_ACK;
-  }
+  /* No per-chunk ACKs — they throttle Full-Speed CDC far more than the
+   * bulk payload itself. Final ok:wave is enough. */
 
   if (s_got >= s_need)
   {

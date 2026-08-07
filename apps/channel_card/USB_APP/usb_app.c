@@ -112,7 +112,7 @@ static void CDC_Console_Poll(void)
     /* Binary wave upload: consume raw bytes, no echo / line edit. */
     if (WaveUpload_IsActive() != 0u)
     {
-      uint8_t tmp[64];
+      uint8_t tmp[256];
       uint32_t n = tud_cdc_read(tmp, sizeof tmp);
       if (n == 0u)
       {

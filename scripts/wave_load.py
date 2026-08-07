@@ -82,11 +82,9 @@ def main() -> int:
             if b"ok:wave" in buf:
                 print(buf.decode("ascii", errors="replace").strip())
                 return 0
-            if b"err:" in buf and b"ok:chunk" not in buf.split(b"err:")[-1][:20]:
-                # allow ok:chunk lines; fail on real err
-                if b"\r\nerr:" in buf or buf.strip().startswith(b"err:"):
-                    print(buf.decode("ascii", errors="replace"), file=sys.stderr)
-                    return 1
+            if b"err:" in buf:
+                print(buf.decode("ascii", errors="replace"), file=sys.stderr)
+                return 1
 
     print("err: timeout waiting for ok:wave", file=sys.stderr)
     print(buf.decode("ascii", errors="replace"), file=sys.stderr)
