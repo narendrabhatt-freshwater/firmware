@@ -11,9 +11,10 @@ terminal can type (`screen`, `minicom`, PuTTY at **460800 8N1**).
 | Channel / Effect firmware                           | Product protocol (addressing, commands, `ok`/`err`)       | Yes            |
 | USB↔RS485 adapter + any terminal                    | Maintenance / bring-up                                    | Enough for lab |
 | [`apps/console`](../apps/console) (`rs485_console`) | Convenience REPL, retries, `--echo-off`                   | No             |
-| [`apps/midi_host`](../apps/midi_host)               | MIDI → one-by-one notes via [`libs/rs485`](../libs/rs485) | No             |
+| [`apps/midi_host`](../apps/midi_host)               | MIDI → one-by-one notes via [`libs/protocol`](../libs/protocol) | No             |
 | [`apps/control_gui`](../apps/control_gui)           | Dear ImGui + GLFW: MIDI + full console + preview scope  | No             |
-| [`libs/rs485`](../libs/rs485)                       | Shared C++17 automation client                            | Host apps only |
+| [`libs/protocol`](../libs/protocol)                 | Wire API only (`namespace protocol`) — format/parse/typed clients | Host apps only |
+| [`libs/rs485`](../libs/rs485)                       | Optional PC serial + tagged link + `Bus` / wave upload            | Freshwater tools |
 
 **Implication:** do not invent framing a terminal cannot type. Voice commands
 are ASCII (`c:n3 440` + Enter). Compact `[C]ok` replies stay human-readable.
@@ -25,12 +26,14 @@ flowchart LR
   Midi[apps/midi_host]
   Gui[apps/control_gui]
   Lib[libs/rs485]
+  Proto[libs/protocol]
   Bus[RS485 adapter 460800 8N1]
   CC[Channel Card]
   EC[Effect Card]
   Con --> Lib
   Midi --> Lib
   Gui --> Lib
+  Lib --> Proto
   Lib --> Bus
   Term --> Bus
   Bus --> CC
@@ -109,9 +112,12 @@ Same command set over USB CDC (no `[C]` tag on CDC).
 
 ## Host library
 
-[`libs/rs485`](../libs/rs485): `SerialPort`, `Link` (burst TX), `Session`
-(bootstrap + `SetNote` / `Silence` / `Gain`). Linked by `apps/console` and
-`apps/midi_host`.
+[`libs/protocol`](../libs/protocol): wire encoding only — `Format*`,
+`ParseReplyBody`, `ChannelClient` / `EffectClient` over `IConsoleTransport`.
+
+[`libs/rs485`](../libs/rs485): PC serial, tagged `Link`, `Bus` bootstrap,
+CDC `WaveUploader`. Used by `apps/console`, `apps/midi_host`, and
+`apps/control_gui`.
 
 ## Command reference
 

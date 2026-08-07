@@ -2,7 +2,7 @@
 
 #include "voice_bank.hpp"
 
-#include "rs485/session.hpp"
+#include "rs485/bus.hpp"
 
 #include <cstdint>
 #include <memory>

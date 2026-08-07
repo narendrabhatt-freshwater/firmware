@@ -1,6 +1,6 @@
 #include "channel_rs485.hpp"
 
-#include "rs485/session.hpp"
+#include "rs485/bus.hpp"
 
 #include <array>
 #include <atomic>
@@ -16,7 +16,6 @@ namespace midi_host
 namespace
 {
 
-/** Clamp audible range; keep fractional Hz (no integer round — breaks octaves). */
 double ClampNoteHz(double hz)
 {
   if (hz <= 0.0) {
@@ -43,15 +42,13 @@ bool HzEqual(double a, double b)
 
 struct ChannelRs485Out::Impl
 {
-  rs485::Session session;
+  rs485::Bus bus;
 
   std::mutex mu_;
   std::condition_variable cv_;
   std::array<double, kVoiceCount> desired_hz_{};
-  /** Updated only on [C]ok. */
   std::array<double, kVoiceCount> sent_hz_{};
   std::atomic<bool> run_{false};
-  /** Missing ACK / I/O — silence once, stop all further note TX. */
   std::atomic<bool> halted_{false};
   std::thread worker_;
 
@@ -86,7 +83,6 @@ struct ChannelRs485Out::Impl
     return false;
   }
 
-  /** Offs first, then Ons (lowest index). */
   bool TakeDirtySlot(uint8_t &slot_out, double &hz_out)
   {
     for (uint8_t i = 0; i < kVoiceCount; ++i) {
@@ -108,17 +104,13 @@ struct ChannelRs485Out::Impl
 
   void MarkSent(uint8_t slot, double hz) { sent_hz_[slot] = hz; }
 
-  /**
-   * Bus dead: one silence attempt, no more notes until process restart.
-   * send → wait → ACK; no ACK → stop. Do not keep TX'ing into a dead bus.
-   */
   void TripHalt(const char *why)
   {
     bool expected = false;
     if (!halted_.compare_exchange_strong(expected, true)) {
       return;
     }
-    session.MarkBusFault();
+    bus.MarkBusFault();
     {
       std::lock_guard<std::mutex> lock(mu_);
       desired_hz_.fill(0.0);
@@ -128,10 +120,11 @@ struct ChannelRs485Out::Impl
 
     std::fprintf(stderr, "\n*** RS485 fault: %s\n", why);
     std::fprintf(stderr, "*** sending silence — note output STOPPED\n");
-    std::fprintf(stderr, "*** quit (Enter) and restart midi_host after fixing the bus\n\n");
+    std::fprintf(stderr,
+                 "*** quit (Enter) and restart midi_host after fixing the bus\n\n");
 
-    if (!session.SoftRecover()) {
-      session.ForceClearBus();
+    if (!bus.SoftRecover()) {
+      bus.ForceClearBus();
     }
   }
 
@@ -147,7 +140,7 @@ struct ChannelRs485Out::Impl
             return true;
           }
           if (halted_.load()) {
-            return false; /* sleep until Close sets run_=false */
+            return false;
           }
           return WorkPending();
         });
@@ -174,12 +167,11 @@ struct ChannelRs485Out::Impl
         } else {
           std::printf("ok     slot=%-2u  n%X %.2f Hz\n",
                       static_cast<unsigned>(slot),
-                      static_cast<unsigned>(slot),
-                      ack_hz);
+                      static_cast<unsigned>(slot), ack_hz);
         }
       };
 
-      rs485::ExchangeResult r = session.SetNote(slot, hz);
+      protocol::Result r = bus.Channel().SetNote(slot, hz);
       if (r.ok()) {
         {
           std::lock_guard<std::mutex> lock(mu_);
@@ -189,7 +181,7 @@ struct ChannelRs485Out::Impl
         continue;
       }
 
-      if (r.status == rs485::Status::Err) {
+      if (r.status == protocol::Status::Err) {
         char msg[96];
         std::snprintf(msg, sizeof(msg), "card err:%s on n%X %.2f", r.err_code,
                       static_cast<unsigned>(slot), hz);
@@ -197,14 +189,13 @@ struct ChannelRs485Out::Impl
         continue;
       }
 
-      if (r.status == rs485::Status::IoError) {
+      if (r.status == protocol::Status::IoError) {
         TripHalt("serial I/O error (no reliable ACK path)");
         continue;
       }
 
       char msg[192];
-      std::snprintf(msg, sizeof(msg),
-                    "no [C]ok for n%X %.2f — RX: %s",
+      std::snprintf(msg, sizeof(msg), "no [C]ok for n%X %.2f — RX: %s",
                     static_cast<unsigned>(slot), hz,
                     r.raw[0] != '\0' ? r.raw : "(empty)");
       TripHalt(msg);
@@ -249,10 +240,9 @@ void ChannelRs485Out::Open(const std::string &serial_path,
   }
   atten_db_ = atten_db;
 
-  rs485::SessionOptions opts;
+  rs485::BusOptions opts;
   opts.baud = baud;
   opts.atten_db = atten_db;
-  /* Strict one-shot: TX → wait for [C]ok → next. No retries / settle / idle. */
   opts.reply_timeout_ms = 400;
   opts.retries = 0;
   opts.idle_gap_ms = 0;
@@ -264,15 +254,15 @@ void ChannelRs485Out::Open(const std::string &serial_path,
   opts.effect_echo = effect_echo;
   opts.allow_missing_effect = true;
 
-  const rs485::ExchangeResult r = impl_->session.Open(serial_path, opts);
+  const protocol::Result r = impl_->bus.Open(serial_path, opts);
   if (!r.ok()) {
     std::string msg = "RS485 session open failed";
     if (r.raw[0] != '\0') {
       msg += ": ";
       msg += r.raw;
-    } else if (r.status == rs485::Status::Timeout) {
+    } else if (r.status == protocol::Status::Timeout) {
       msg += " (timeout — check wiring / Channel Card power)";
-    } else if (r.status == rs485::Status::Err) {
+    } else if (r.status == protocol::Status::Err) {
       msg += " (err:";
       msg += r.err_code;
       msg += ")";
@@ -292,7 +282,7 @@ void ChannelRs485Out::Close()
   if (impl_->run_.load()) {
     impl_->StopWorker();
   }
-  impl_->session.Close();
+  impl_->bus.Close();
   path_.clear();
 }
 
@@ -307,12 +297,12 @@ void ChannelRs485Out::ApplyBankEvent(const BankEvent & /*event*/,
 
 bool ChannelRs485Out::EffectEchoDisabled() const
 {
-  return impl_ && impl_->session.EchoDisabled();
+  return impl_ && impl_->bus.EchoDisabled();
 }
 
 bool ChannelRs485Out::BusFault() const
 {
-  return impl_ && (impl_->halted_.load() || impl_->session.BusFault());
+  return impl_ && (impl_->halted_.load() || impl_->bus.BusFault());
 }
 
 } // namespace midi_host

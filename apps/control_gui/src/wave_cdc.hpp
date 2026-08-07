@@ -1,6 +1,9 @@
 #pragma once
 
 #include "log_buffer.hpp"
+
+#include "rs485/wave_upload.hpp"
+
 #include "rs485/serial_port.hpp"
 
 #include <cstdint>
@@ -9,8 +12,7 @@
 
 /**
  * Keeps the Channel USB CDC port open across multiple slot loads.
- * USB FS (~12 Mbit/s) can move 32 KiB in tens of ms; reopen + settle
- * delays were the real cost of "Upload all".
+ * Upload framing lives in rs485::WaveUploader.
  */
 class WaveCdcSession
 {
@@ -26,7 +28,6 @@ public:
 
 private:
   rs485::SerialPort port_;
-  bool warmed_ = false;
 };
 
 /** One-shot helper (opens, loads, closes). Prefer WaveCdcSession for batches. */

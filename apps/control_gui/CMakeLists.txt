@@ -107,7 +107,7 @@ target_link_libraries(control_gui PRIVATE
   imgui_lib
   rtmidi
   rtaudio
-  rs485
+  rs485::rs485
 )
 
 # OpenGL — portable across Win / macOS / Linux

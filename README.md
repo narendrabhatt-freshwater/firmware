@@ -283,6 +283,10 @@ hardware:
   speakers (RtMidi + RtAudio). See [`apps/midi_host/README.md`](apps/midi_host/README.md).
 - **`apps/control_gui`** — Dear ImGui + GLFW control surface (MIDI, RS485
   console, local preview scope). See [`apps/control_gui/README.md`](apps/control_gui/README.md).
+- **`libs/protocol`** — Wire API only (`namespace protocol`: format / parse /
+  typed clients; no serial). See [`libs/protocol/README.md`](libs/protocol/README.md).
+- **`libs/rs485`** — Optional PC serial + RS485 link + `Bus` / CDC wave upload
+  (Freshwater tools). Depends on `libs/protocol`.
 
 > **Not under version control yet.** Initialising a git repo at
 > `firmware/` and committing this baseline is strongly recommended

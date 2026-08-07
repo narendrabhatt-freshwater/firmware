@@ -4,8 +4,10 @@
 #include "theme.hpp"
 #include "widgets.hpp"
 
+#include "protocol/channel.hpp"
+#include "protocol/effect.hpp"
+
 #include "imgui.h"
-#include "rs485/types.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -409,18 +411,19 @@ void DrawOscillatorCard(App &app)
   }
 
   if (fw::ui::GlowButton("Apply shape", ImVec2(-1, 0))) {
+    const float p = app.shape_param;
     if (app.shape_mode == 0) {
-      app.bus.QueueExec(rs485::Target::Channel, "s");
+      app.bus.QueueChannel([](protocol::ChannelClient &ch) {
+        return ch.Sine();
+      });
     } else if (app.shape_mode == 1) {
-      char cmd[32];
-      std::snprintf(cmd, sizeof(cmd), "p %.4g",
-                    static_cast<double>(app.shape_param));
-      app.bus.QueueExec(rs485::Target::Channel, cmd);
+      app.bus.QueueChannel([p](protocol::ChannelClient &ch) {
+        return ch.Pulse(static_cast<double>(p));
+      });
     } else {
-      char cmd[32];
-      std::snprintf(cmd, sizeof(cmd), "t %.4g",
-                    static_cast<double>(app.shape_param));
-      app.bus.QueueExec(rs485::Target::Channel, cmd);
+      app.bus.QueueChannel([p](protocol::ChannelClient &ch) {
+        return ch.Triangle(static_cast<double>(p));
+      });
     }
   }
   ImGui::EndChild();
@@ -460,33 +463,30 @@ void DrawFilterCard(App &app)
   std::snprintf(label1, sizeof(label1), "Apply to n%x",
                app.selected_voice & 7);
   if (fw::ui::GlowButton(label1, ImVec2(-1, 0))) {
-    const int v = app.selected_voice & 7;
-    char cmd[64];
-    if (app.filter_bypass) {
-      std::snprintf(cmd, sizeof(cmd), "f%x 20000", v);
-    } else {
-      std::snprintf(cmd, sizeof(cmd), "f%x %.4g %.4g", v,
-                    static_cast<double>(app.filter_hz_f),
-                    static_cast<double>(app.filter_q_f));
-    }
-    app.bus.QueueExec(rs485::Target::Channel, cmd);
-    std::snprintf(cmd, sizeof(cmd), "fk%x %.4g", v,
-                  static_cast<double>(app.filter_k_f));
-    app.bus.QueueExec(rs485::Target::Channel, cmd);
+    const uint8_t v = static_cast<uint8_t>(app.selected_voice & 7);
+    const bool bypass = app.filter_bypass;
+    const double hz = static_cast<double>(app.filter_hz_f);
+    const double q = static_cast<double>(app.filter_q_f);
+    const double fk = static_cast<double>(app.filter_k_f);
+    app.bus.QueueChannel([v, bypass, hz, q](protocol::ChannelClient &ch) {
+      return bypass ? ch.SetFilter(v, 20000.0)
+                    : ch.SetFilter(v, hz, q);
+    });
+    app.bus.QueueChannel([v, fk](protocol::ChannelClient &ch) {
+      return ch.SetFk(v, fk);
+    });
   }
   if (fw::ui::GlowButton("Apply to all n0–n7", ImVec2(-1, 0))) {
-    char cmd[64];
-    if (app.filter_bypass) {
-      std::snprintf(cmd, sizeof(cmd), "f 20000");
-    } else {
-      std::snprintf(cmd, sizeof(cmd), "f %.4g %.4g",
-                    static_cast<double>(app.filter_hz_f),
-                    static_cast<double>(app.filter_q_f));
-    }
-    app.bus.QueueExec(rs485::Target::Channel, cmd);
-    std::snprintf(cmd, sizeof(cmd), "fk %.4g",
-                  static_cast<double>(app.filter_k_f));
-    app.bus.QueueExec(rs485::Target::Channel, cmd);
+    const bool bypass = app.filter_bypass;
+    const double hz = static_cast<double>(app.filter_hz_f);
+    const double q = static_cast<double>(app.filter_q_f);
+    const double fk = static_cast<double>(app.filter_k_f);
+    app.bus.QueueChannel([bypass, hz, q](protocol::ChannelClient &ch) {
+      return bypass ? ch.SetFilters(20000.0) : ch.SetFilters(hz, q);
+    });
+    app.bus.QueueChannel([fk](protocol::ChannelClient &ch) {
+      return ch.SetFk(fk);
+    });
   }
   ImGui::EndDisabled();
   ImGui::TextDisabled("fc = fbase × (note_Hz / C4)^fk");
@@ -679,7 +679,9 @@ void DrawEnvelopeEditor(App &app)
   ImGui::TextWrapped("%s", cmd.c_str());
   ImGui::BeginDisabled(!app.bus.IsOpen());
   if (fw::ui::GlowButton("Apply envelope to card", ImVec2(-1, 36))) {
-    app.bus.QueueExec(rs485::Target::Channel, cmd);
+    app.bus.QueueChannel([cmd](protocol::ChannelClient &ch) {
+      return ch.Exec(cmd);
+    });
     app.log.Push(std::string("-> ") + cmd);
     if (app.env_apply_all) {
       // Mirror locally so the all-voices overview reflects what the card
@@ -691,16 +693,18 @@ void DrawEnvelopeEditor(App &app)
   }
   ImGui::EndDisabled();
   if (ImGui::Button("Query enN")) {
-    char q[16];
-    std::snprintf(q, sizeof(q), "en%x", app.selected_voice & 15);
-    app.bus.QueueExec(rs485::Target::Channel, q);
+    const uint8_t slot = static_cast<uint8_t>(app.selected_voice & 15);
+    app.bus.QueueChannel([slot](protocol::ChannelClient &ch) {
+      return ch.GetEnvelope(slot);
+    });
   }
   ImGui::SameLine();
   if (ImGui::Button("Bulk ekN from preview k")) {
-    char q[32];
-    std::snprintf(q, sizeof(q), "ek%x %.4g", app.selected_voice & 15,
-                  static_cast<double>(pk));
-    app.bus.QueueExec(rs485::Target::Channel, q);
+    const uint8_t slot = static_cast<uint8_t>(app.selected_voice & 15);
+    const double k = static_cast<double>(pk);
+    app.bus.QueueChannel([slot, k](protocol::ChannelClient &ch) {
+      return ch.SetEnvK(slot, k);
+    });
   }
   ImGui::TextDisabled(
       "Prefer per-segment slope±k on Apply; ek overrides all ks on that voice");
@@ -719,19 +723,21 @@ void DrawEffectPanel(App &app)
                     ImGuiChildFlags_Borders);
   ImGui::TextUnformatted("POWER / AUDIO");
   if (fw::ui::GlowButton("Refresh status  e:s", ImVec2(-1, 0))) {
-    app.bus.QueueExec(rs485::Target::Effect, "s");
+    app.bus.QueueEffect([](protocol::EffectClient &e) { return e.Status(); });
   }
   if (fw::ui::GlowButton("48V phantom ON", ImVec2(-1, 0))) {
-    app.bus.QueueExec(rs485::Target::Effect, "v 1");
+    app.bus.QueueEffect([](protocol::EffectClient &e) { return e.Set48V(true); });
   }
   if (fw::ui::GlowButton("48V phantom OFF", ImVec2(-1, 0), true)) {
-    app.bus.QueueExec(rs485::Target::Effect, "v 0");
+    app.bus.QueueEffect([](protocol::EffectClient &e) { return e.Set48V(false); });
   }
   if (fw::ui::GlowButton("AUDIO_EN ON", ImVec2(-1, 0))) {
-    app.bus.QueueExec(rs485::Target::Effect, "a 1");
+    app.bus.QueueEffect(
+        [](protocol::EffectClient &e) { return e.SetAudioEn(true); });
   }
   if (fw::ui::GlowButton("AUDIO_EN OFF", ImVec2(-1, 0), true)) {
-    app.bus.QueueExec(rs485::Target::Effect, "a 0");
+    app.bus.QueueEffect(
+        [](protocol::EffectClient &e) { return e.SetAudioEn(false); });
   }
   ImGui::EndChild();
 
@@ -739,24 +745,30 @@ void DrawEffectPanel(App &app)
   ImGui::BeginChild("eff_leds", ImVec2(0, 168), ImGuiChildFlags_Borders);
   ImGui::TextUnformatted("LEDS");
   if (fw::ui::GlowButton("Auto flash ON", ImVec2(-1, 0))) {
-    app.bus.QueueExec(rs485::Target::Effect, "l 1");
+    app.bus.QueueEffect(
+        [](protocol::EffectClient &e) { return e.SetLedFlash(true); });
   }
   if (fw::ui::GlowButton("Auto flash OFF", ImVec2(-1, 0), true)) {
-    app.bus.QueueExec(rs485::Target::Effect, "l 0");
+    app.bus.QueueEffect(
+        [](protocol::EffectClient &e) { return e.SetLedFlash(false); });
   }
   if (fw::ui::GlowButton("Red ON", ImVec2((ImGui::GetContentRegionAvail().x - 8.f) * 0.5f, 0))) {
-    app.bus.QueueExec(rs485::Target::Effect, "lr 1");
+    app.bus.QueueEffect(
+        [](protocol::EffectClient &e) { return e.SetLedRed(true); });
   }
   ImGui::SameLine();
   if (fw::ui::GlowButton("Red OFF", ImVec2(-1, 0), true)) {
-    app.bus.QueueExec(rs485::Target::Effect, "lr 0");
+    app.bus.QueueEffect(
+        [](protocol::EffectClient &e) { return e.SetLedRed(false); });
   }
   if (fw::ui::GlowButton("Yellow ON", ImVec2((ImGui::GetContentRegionAvail().x - 8.f) * 0.5f, 0))) {
-    app.bus.QueueExec(rs485::Target::Effect, "ly 1");
+    app.bus.QueueEffect(
+        [](protocol::EffectClient &e) { return e.SetLedYellow(true); });
   }
   ImGui::SameLine();
   if (fw::ui::GlowButton("Yellow OFF", ImVec2(-1, 0), true)) {
-    app.bus.QueueExec(rs485::Target::Effect, "ly 0");
+    app.bus.QueueEffect(
+        [](protocol::EffectClient &e) { return e.SetLedYellow(false); });
   }
   ImGui::EndChild();
 
@@ -769,29 +781,35 @@ void DrawEffectPanel(App &app)
     char label[8];
     std::snprintf(label, sizeof(label), " %d ", ch);
     if (ImGui::Button(label, ImVec2(40, 32))) {
-      char cmd[16];
-      std::snprintf(cmd, sizeof(cmd), "u %d", ch);
-      app.bus.QueueExec(rs485::Target::Effect, cmd);
+      const uint8_t uch = static_cast<uint8_t>(ch);
+      app.bus.QueueEffect([uch](protocol::EffectClient &e) {
+        return e.SetUsbAdcCh(uch);
+      });
     }
   }
   if (ImGui::Button("Query u")) {
-    app.bus.QueueExec(rs485::Target::Effect, "u");
+    app.bus.QueueEffect(
+        [](protocol::EffectClient &e) { return e.GetUsbAdcCh(); });
   }
 
   ImGui::SeparatorText("Echo / lab shortcuts");
   ImGui::TextDisabled("Keep echo OFF while using MIDI / Control GUI");
   if (ImGui::Button("ec 0 (echo off)")) {
-    app.bus.QueueExec(rs485::Target::Effect, "ec 0");
+    app.bus.QueueEffect(
+        [](protocol::EffectClient &e) { return e.SetEcho(false); });
   }
   ImGui::SameLine();
   if (ImGui::Button("ec 1 (echo on)")) {
-    app.bus.QueueExec(rs485::Target::Effect, "ec 1");
+    app.bus.QueueEffect(
+        [](protocol::EffectClient &e) { return e.SetEcho(true); });
   }
   if (ImGui::Button("I2C scan")) {
-    app.bus.QueueExec(rs485::Target::Effect, "i2c");
+    app.bus.QueueEffect(
+        [](protocol::EffectClient &e) { return e.I2cScan(); });
   }
   ImGui::SameLine();
   if (ImGui::Button("ADC init  ai")) {
-    app.bus.QueueExec(rs485::Target::Effect, "ai");
+    app.bus.QueueEffect(
+        [](protocol::EffectClient &e) { return e.AdcInit(); });
   }
 }

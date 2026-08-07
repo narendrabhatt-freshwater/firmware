@@ -3,7 +3,7 @@
  * @brief control_gui — Dear ImGui + GLFW host for MIDI + RS485 console.
  *
  * Portable windowing via GLFW (macOS / Linux / Windows). Protocol and
- * voice allocation reuse libs/rs485 and apps/midi_host sources.
+ * voice allocation reuse libs/protocol and apps/midi_host sources.
  */
 
 #include "app.hpp"

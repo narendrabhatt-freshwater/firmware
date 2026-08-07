@@ -5,8 +5,9 @@
 #include "wave_cdc.hpp"
 #include "widgets.hpp"
 
+#include "protocol/channel.hpp"
+
 #include "imgui.h"
-#include "rs485/types.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -207,16 +208,12 @@ void DrawSlotCard(App &app, int slot, const WaveSlotState &st, float card_w,
                        app.waves.Busy());
   if (ImGui::SmallButton("Play")) {
     app.wave_slot = slot;
-    char cmd[48];
-    std::snprintf(cmd, sizeof(cmd), "w%d %.0f", slot,
-                  static_cast<double>(app.wave_rate));
-    app.bus.QueueExec(rs485::Target::Channel, cmd);
+    app.bus.QueuePlayWave(static_cast<uint8_t>(slot),
+                          static_cast<double>(app.wave_rate));
   }
   ImGui::SameLine();
   if (ImGui::SmallButton("Stop")) {
-    char cmd[16];
-    std::snprintf(cmd, sizeof(cmd), "w%d 0", slot);
-    app.bus.QueueExec(rs485::Target::Channel, cmd);
+    app.bus.QueueStopWave(static_cast<uint8_t>(slot));
   }
   ImGui::EndDisabled();
 
@@ -244,8 +241,8 @@ void DrawPlayModeStrip(App &app)
   if (mode != app.play_mode) {
     app.play_mode = mode;
     if (app.bus.IsOpen()) {
-      app.bus.QueueExec(rs485::Target::Channel,
-                        app.play_mode == 1 ? "m 1" : "m 0");
+      app.bus.QueueMode(app.play_mode == 1 ? protocol::PlayMode::Wave
+                                           : protocol::PlayMode::Notes);
     }
   }
 }
@@ -333,7 +330,7 @@ void DrawWaveBankPage(App &app)
     app.waves.SetCdcPath(app.wave_cdc_path);
     if (app.waves.StartUpload(app.log, -1) && app.bus.IsOpen()) {
       app.play_mode = 1;
-      app.bus.QueueExec(rs485::Target::Channel, "m 1");
+      app.bus.QueueMode(protocol::PlayMode::Wave);
     }
   }
   ImGui::EndDisabled();
@@ -349,8 +346,8 @@ void DrawWaveBankPage(App &app)
   if (fw::ui::GlowButton(app.play_mode == 1 ? "Mode: WAVE" : "Mode: NOTES",
                          ImVec2(btn_w, 0))) {
     app.play_mode = app.play_mode == 1 ? 0 : 1;
-    app.bus.QueueExec(rs485::Target::Channel,
-                      app.play_mode == 1 ? "m 1" : "m 0");
+    app.bus.QueueMode(app.play_mode == 1 ? protocol::PlayMode::Wave
+                                         : protocol::PlayMode::Notes);
   }
   ImGui::EndDisabled();
 

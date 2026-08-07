@@ -3,26 +3,29 @@
 #include "log_buffer.hpp"
 #include "voice_bank.hpp"
 
-#include "rs485/session.hpp"
+#include "rs485/bus.hpp"
+#include "protocol/channel.hpp"
+#include "protocol/effect.hpp"
+#include "protocol/result.hpp"
+
 #include "rs485/types.hpp"
 
-#include <array>
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
-#include <mutex>
-#include <queue>
 #include <string>
-#include <thread>
 
 /**
- * Owns the RS485 Session. Single-flight worker: note slot updates and
- * arbitrary Exec lines share one queue so half-duplex stays sane.
+ * Owns the RS485 bus. Single-flight worker: note slot updates and
+ * typed / raw console ops share one queue so half-duplex stays sane.
  */
 class BusController
 {
 public:
+  using ChannelOp = std::function<protocol::Result(protocol::ChannelClient &)>;
+  using EffectOp = std::function<protocol::Result(protocol::EffectClient &)>;
+
   BusController();
   ~BusController();
 
@@ -53,6 +56,14 @@ public:
   /** Queue arbitrary console line (c:/e:/ prefix optional). */
   void QueueExec(rs485::Target target, std::string command);
 
+  /** Typed Channel / Effect ops run on the worker thread. */
+  void QueueChannel(ChannelOp op);
+  void QueueEffect(EffectOp op);
+
+  void QueueMode(protocol::PlayMode mode);
+  void QueuePlayWave(uint8_t slot, double rate_hz);
+  void QueueStopWave(uint8_t slot);
+
   /** CH1 gain at next opportunity (also used from Transport slider). */
   void QueueGain(uint8_t atten_db);
 
@@ -68,6 +79,8 @@ private:
     Gain,
     Silence,
     Recover,
+    Channel,
+    Effect,
   };
 
   struct Job
@@ -76,6 +89,8 @@ private:
     rs485::Target target = rs485::Target::Channel;
     std::string command;
     uint8_t atten_db = 0;
+    ChannelOp channel_op;
+    EffectOp effect_op;
   };
 
   struct Impl;
@@ -86,4 +101,5 @@ private:
   std::atomic<uint32_t> atten_db_{6};
 
   void WorkerMain(LogBuffer *log);
+  void Enqueue(Job job);
 };

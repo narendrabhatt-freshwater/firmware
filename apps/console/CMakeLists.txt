@@ -16,7 +16,7 @@ add_executable(rs485_console
   src/main.cpp
 )
 
-target_link_libraries(rs485_console PRIVATE rs485)
+target_link_libraries(rs485_console PRIVATE rs485::rs485)
 
 if(MSVC)
   target_compile_options(rs485_console PRIVATE /W4)

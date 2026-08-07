@@ -1,7 +1,11 @@
 #include "bus_controller.hpp"
 
 #include <array>
+#include <condition_variable>
 #include <cstdio>
+#include <mutex>
+#include <queue>
+#include <thread>
 
 namespace
 {
@@ -28,11 +32,25 @@ bool HzEqual(double a, double b)
   return a == b;
 }
 
+void LogResult(const std::function<void(const std::string &)> &push,
+               rs485::Target target,
+               const protocol::Result &r)
+{
+  const char *tag = (target == rs485::Target::Effect)    ? "[E] "
+                    : (target == rs485::Target::Channel) ? "[C] "
+                                                         : "[*] ";
+  if (r.status == protocol::Status::Ok) {
+    push(std::string(tag) + (r.raw[0] ? r.raw : "ok"));
+  } else {
+    push(std::string(tag) + "err: " + (r.raw[0] ? r.raw : "timeout/io"));
+  }
+}
+
 } // namespace
 
 struct BusController::Impl
 {
-  rs485::Session session;
+  rs485::Bus bus;
 
   std::mutex mu_;
   std::condition_variable cv_;
@@ -42,13 +60,6 @@ struct BusController::Impl
   std::atomic<bool> run_{false};
   std::thread worker_;
   LogBuffer *log_ = nullptr;
-
-  void Log(const std::string &line)
-  {
-    if (log_) {
-      log_->Push(line);
-    }
-  }
 };
 
 BusController::BusController() : impl_(std::make_unique<Impl>()) {}
@@ -63,17 +74,29 @@ BusController::~BusController()
 
 std::string BusController::Path() const
 {
-  return impl_ ? impl_->session.Path() : std::string{};
+  return impl_ ? impl_->bus.Path() : std::string{};
 }
 
 uint32_t BusController::TimeoutCount() const
 {
-  return impl_ ? impl_->session.TimeoutCount() : 0;
+  return impl_ ? impl_->bus.TimeoutCount() : 0;
 }
 
 uint32_t BusController::ErrCount() const
 {
-  return impl_ ? impl_->session.ErrCount() : 0;
+  return impl_ ? impl_->bus.ErrCount() : 0;
+}
+
+void BusController::Enqueue(Job job)
+{
+  if (!open_.load() || halted_.load()) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(impl_->mu_);
+    impl_->jobs_.push(std::move(job));
+  }
+  impl_->cv_.notify_one();
 }
 
 bool BusController::Open(const std::string &path,
@@ -85,7 +108,7 @@ bool BusController::Open(const std::string &path,
     Close(log);
   }
 
-  rs485::SessionOptions opts;
+  rs485::BusOptions opts;
   opts.baud = baud;
   opts.atten_db = atten_db;
   opts.effect_echo = rs485::EffectEcho::Off;
@@ -95,8 +118,8 @@ bool BusController::Open(const std::string &path,
   opts.reply_timeout_ms = 400;
   opts.retries = 1;
 
-  const auto r = impl_->session.Open(path, opts);
-  if (r.status != rs485::Status::Ok) {
+  const auto r = impl_->bus.Open(path, opts);
+  if (r.status != protocol::Status::Ok) {
     log.Push(std::string("err: open ") + path + " — " +
              (r.raw[0] ? r.raw : "failed"));
     return false;
@@ -132,7 +155,7 @@ void BusController::Close(LogBuffer &log)
   if (impl_->worker_.joinable()) {
     impl_->worker_.join();
   }
-  impl_->session.Close();
+  impl_->bus.Close();
   impl_->log_ = nullptr;
   halted_.store(false);
   log.Push("ok: disconnected");
@@ -191,18 +214,48 @@ void BusController::RequestRecover(LogBuffer &log)
 
 void BusController::QueueExec(rs485::Target target, std::string command)
 {
-  if (!open_.load() || halted_.load()) {
-    return;
-  }
-  {
-    std::lock_guard<std::mutex> lock(impl_->mu_);
-    Job j;
-    j.kind = JobKind::Exec;
-    j.target = target;
-    j.command = std::move(command);
-    impl_->jobs_.push(std::move(j));
-  }
-  impl_->cv_.notify_one();
+  Job j;
+  j.kind = JobKind::Exec;
+  j.target = target;
+  j.command = std::move(command);
+  Enqueue(std::move(j));
+}
+
+void BusController::QueueChannel(ChannelOp op)
+{
+  Job j;
+  j.kind = JobKind::Channel;
+  j.channel_op = std::move(op);
+  Enqueue(std::move(j));
+}
+
+void BusController::QueueEffect(EffectOp op)
+{
+  Job j;
+  j.kind = JobKind::Effect;
+  j.effect_op = std::move(op);
+  Enqueue(std::move(j));
+}
+
+void BusController::QueueMode(protocol::PlayMode mode)
+{
+  QueueChannel([mode](protocol::ChannelClient &ch) {
+    return ch.SetMode(mode);
+  });
+}
+
+void BusController::QueuePlayWave(uint8_t slot, double rate_hz)
+{
+  QueueChannel([slot, rate_hz](protocol::ChannelClient &ch) {
+    return ch.PlayWave(slot, rate_hz);
+  });
+}
+
+void BusController::QueueStopWave(uint8_t slot)
+{
+  QueueChannel([slot](protocol::ChannelClient &ch) {
+    return ch.StopWave(slot);
+  });
 }
 
 void BusController::QueueGain(uint8_t atten_db)
@@ -211,14 +264,10 @@ void BusController::QueueGain(uint8_t atten_db)
     return;
   }
   atten_db_.store(atten_db);
-  {
-    std::lock_guard<std::mutex> lock(impl_->mu_);
-    Job j;
-    j.kind = JobKind::Gain;
-    j.atten_db = atten_db;
-    impl_->jobs_.push(std::move(j));
-  }
-  impl_->cv_.notify_one();
+  Job j;
+  j.kind = JobKind::Gain;
+  j.atten_db = atten_db;
+  Enqueue(std::move(j));
 }
 
 void BusController::WorkerMain(LogBuffer *log)
@@ -264,7 +313,6 @@ void BusController::WorkerMain(LogBuffer *log)
         impl_->jobs_.pop();
         have_job = true;
       } else if (!halted_.load()) {
-        // Offs first, then Ons — same as midi_host ChannelRs485Out.
         for (uint8_t i = 0; i < midi_host::kVoiceCount; ++i) {
           if (impl_->desired_hz_[i] <= 0.0 && impl_->sent_hz_[i] > 0.0) {
             note_slot = i;
@@ -289,20 +337,33 @@ void BusController::WorkerMain(LogBuffer *log)
     if (have_job) {
       switch (job.kind) {
       case JobKind::Notes:
-        // Desired Hz already updated; fall through to note drain next loop.
         break;
       case JobKind::Exec: {
-        const auto r = impl_->session.Exec(job.target, job.command);
-        const char *tag =
-            (job.target == rs485::Target::Effect)   ? "[E] "
-            : (job.target == rs485::Target::Channel) ? "[C] "
-                                                     : "[*] ";
-        if (r.status == rs485::Status::Ok) {
-          push(std::string(tag) + (r.raw[0] ? r.raw : "ok"));
-        } else {
-          push(std::string(tag) + "err: " +
-               (r.raw[0] ? r.raw : "timeout/io"));
-          if (r.status == rs485::Status::Timeout) {
+        const auto r = impl_->bus.Exec(
+            static_cast<protocol::Target>(job.target), job.command);
+        LogResult(push, job.target, r);
+        if (r.status == protocol::Status::Timeout) {
+          halted_.store(true);
+          push("*** bus fault — Soft Recover or reconnect");
+        }
+        break;
+      }
+      case JobKind::Channel: {
+        if (job.channel_op) {
+          const auto r = job.channel_op(impl_->bus.Channel());
+          LogResult(push, rs485::Target::Channel, r);
+          if (r.status == protocol::Status::Timeout) {
+            halted_.store(true);
+            push("*** bus fault — Soft Recover or reconnect");
+          }
+        }
+        break;
+      }
+      case JobKind::Effect: {
+        if (job.effect_op) {
+          const auto r = job.effect_op(impl_->bus.Effect());
+          LogResult(push, rs485::Target::Effect, r);
+          if (r.status == protocol::Status::Timeout) {
             halted_.store(true);
             push("*** bus fault — Soft Recover or reconnect");
           }
@@ -310,8 +371,8 @@ void BusController::WorkerMain(LogBuffer *log)
         break;
       }
       case JobKind::Gain: {
-        const auto r = impl_->session.Gain(1, job.atten_db);
-        if (r.status == rs485::Status::Ok) {
+        const auto r = impl_->bus.Channel().SetGain(1, job.atten_db);
+        if (r.status == protocol::Status::Ok) {
           push("ok: g 1 " + std::to_string(job.atten_db));
         } else {
           push("err: gain");
@@ -319,20 +380,20 @@ void BusController::WorkerMain(LogBuffer *log)
         break;
       }
       case JobKind::Silence: {
-        const auto r = impl_->session.Silence();
+        const auto r = impl_->bus.Channel().AllNotesOff();
         {
           std::lock_guard<std::mutex> lock(impl_->mu_);
           impl_->sent_hz_.fill(0.0);
           impl_->desired_hz_.fill(0.0);
         }
-        push(r.status == rs485::Status::Ok ? "ok: silence"
-                                           : "err: silence");
+        push(r.status == protocol::Status::Ok ? "ok: silence"
+                                                  : "err: silence");
         break;
       }
       case JobKind::Recover: {
-        const bool ok = impl_->session.SoftRecover();
+        const bool ok = impl_->bus.SoftRecover();
         if (!ok) {
-          impl_->session.ForceClearBus();
+          impl_->bus.ForceClearBus();
         }
         {
           std::lock_guard<std::mutex> lock(impl_->mu_);
@@ -340,7 +401,7 @@ void BusController::WorkerMain(LogBuffer *log)
           impl_->sent_hz_.fill(0.0);
         }
         halted_.store(false);
-        impl_->session.ClearBusFault();
+        impl_->bus.ClearBusFault();
         push(ok ? "ok: soft recover" : "ok: force clear bus");
         break;
       }
@@ -352,14 +413,14 @@ void BusController::WorkerMain(LogBuffer *log)
       continue;
     }
 
-    rs485::ExchangeResult r;
+    protocol::Result r;
     if (note_hz <= 0.0) {
-      r = impl_->session.NoteOff(note_slot);
+      r = impl_->bus.Channel().NoteOff(note_slot);
     } else {
-      r = impl_->session.SetNote(note_slot, note_hz);
+      r = impl_->bus.Channel().SetNote(note_slot, note_hz);
     }
 
-    if (r.status == rs485::Status::Ok) {
+    if (r.status == protocol::Status::Ok) {
       std::lock_guard<std::mutex> lock(impl_->mu_);
       impl_->sent_hz_[note_slot] = note_hz;
     } else {
@@ -367,8 +428,8 @@ void BusController::WorkerMain(LogBuffer *log)
       push("*** RS485 fault on n" +
            std::string(1, "0123456789abcdef"[note_slot]) +
            " — note TX stopped");
-      if (!impl_->session.SoftRecover()) {
-        impl_->session.ForceClearBus();
+      if (!impl_->bus.SoftRecover()) {
+        impl_->bus.ForceClearBus();
       }
       std::lock_guard<std::mutex> lock(impl_->mu_);
       impl_->desired_hz_.fill(0.0);

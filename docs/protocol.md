@@ -9,6 +9,13 @@ Baud on the RS485 UARTs is **460800 8N1**.
 Type `h` (or `help` or `?`) on either card for the live one-line menu.
 If this document and the firmware disagree, trust the firmware.
 
+Host apps should prefer the C++ wire wrapper in
+[`libs/protocol`](../libs/protocol) (`namespace protocol`: format / parse /
+typed clients). That package has **no serial I/O** — inject a transport or
+send the `Format*` strings yourself. Freshwater PC tools use
+[`libs/rs485`](../libs/rs485) for the actual RS485/CDC pipe. This document
+remains the normative wire contract.
+
 ---
 
 ## 1. How a line works

@@ -48,7 +48,7 @@ add_executable(midi_host
 
 target_include_directories(midi_host PRIVATE src)
 
-target_link_libraries(midi_host PRIVATE rtmidi rtaudio rs485)
+target_link_libraries(midi_host PRIVATE rtmidi rtaudio rs485::rs485)
 
 if(APPLE)
   find_library(COREMIDI_FRAMEWORK CoreMIDI REQUIRED)
