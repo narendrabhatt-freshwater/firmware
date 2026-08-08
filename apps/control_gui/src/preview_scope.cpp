@@ -23,6 +23,22 @@ void PreviewScope::SetVoices(const midi_host::VoiceBank &bank)
 void PreviewScope::Render(float sample_rate_hz)
 {
   peak_ = 0.f;
+  rms_ = 0.f;
+  pkpk_ = 0.f;
+  active_count_ = 0;
+  for (const auto &o : oscs_) {
+    if (o.active) {
+      ++active_count_;
+    }
+  }
+  window_ms_ = (sample_rate_hz > 0.f)
+                   ? (1000.f * static_cast<float>(kDisplaySamples) /
+                      sample_rate_hz)
+                   : 0.f;
+
+  float min_s = 0.f;
+  float max_s = 0.f;
+  double sum_sq = 0.0;
   const double two_pi = 2.0 * M_PI;
   for (int n = 0; n < kDisplaySamples; ++n) {
     double mix = 0.0;
@@ -44,5 +60,15 @@ void PreviewScope::Render(float sample_rate_hz)
     const float s = static_cast<float>(mix);
     samples_[static_cast<std::size_t>(n)] = s;
     peak_ = std::max(peak_, std::fabs(s));
+    sum_sq += static_cast<double>(s) * static_cast<double>(s);
+    if (n == 0 || s < min_s) {
+      min_s = s;
+    }
+    if (n == 0 || s > max_s) {
+      max_s = s;
+    }
   }
+  pkpk_ = max_s - min_s;
+  rms_ = static_cast<float>(
+      std::sqrt(sum_sq / static_cast<double>(kDisplaySamples)));
 }

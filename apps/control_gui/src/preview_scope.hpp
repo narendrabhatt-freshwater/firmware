@@ -18,6 +18,11 @@ public:
 
   const std::array<float, kDisplaySamples> &Samples() const { return samples_; }
   float Peak() const { return peak_; }
+  float Rms() const { return rms_; }
+  float PkPk() const { return pkpk_; }
+  int ActiveCount() const { return active_count_; }
+  /** Wall-clock span of the display buffer at the last Render() rate. */
+  float WindowMs() const { return window_ms_; }
 
 private:
   struct Osc
@@ -30,4 +35,8 @@ private:
   std::array<Osc, midi_host::kVoiceCount> oscs_{};
   std::array<float, kDisplaySamples> samples_{};
   float peak_ = 0.f;
+  float rms_ = 0.f;
+  float pkpk_ = 0.f;
+  float window_ms_ = 0.f;
+  int active_count_ = 0;
 };

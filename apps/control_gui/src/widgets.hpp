@@ -39,7 +39,7 @@ void AnimatedTabBar(const char *str_id, const char *const *labels, int count,
  * color ramp (accent → warning → danger) as it approaches full scale. */
 void LevelMeter(const char *str_id, float value01, const ImVec2 &size);
 
-/** Neon-style multi-pass glow waveform, replacing ImGui::PlotLines. */
+/** Neon-style multi-pass glow waveform with a light scope graticule. */
 void GlowWaveform(const char *str_id, const float *samples, int count,
                   const ImVec2 &size, float scale_min = -1.f,
                   float scale_max = 1.f);
@@ -48,10 +48,11 @@ void GlowWaveform(const char *str_id, const float *samples, int count,
 bool GlowButton(const char *label, const ImVec2 &size = ImVec2(0, 0),
                 bool danger = false);
 
-/** Small voice-slot card used in the Perform grid; `glow01` eases in/out as
- * the voice activates/deactivates. */
+/** Compact voice-slot chip for the Perform strip; `glow01` eases in/out as
+ * the voice activates/deactivates. `selected` draws a stronger border. */
 void VoiceSlotBadge(const char *str_id, const char *label, bool active,
-                    float glow01, const char *sub);
+                    float glow01, const char *sub = nullptr,
+                    bool selected = false);
 
 /** Compact row of `count` hex-labelled chips (n0, n1, ...) for picking a
  * voice — click to select, replaces slider-based voice pickers. Returns
@@ -62,11 +63,17 @@ bool VoiceSelector(const char *str_id, int *current, int count);
 void ProgressBar(const char *str_id, float value01, const ImVec2 &size);
 
 /** Collapsible left nav rail. Returns true if a nav item was clicked.
- * `*expanded` / `*anim_width` own drawer width animation.
- * If `gain_db` is non-null, draws a vertical gain slider (0..127) at the
- * bottom; returns via `*gain_changed` when the value moves. */
+ * `*expanded` / `*anim_width` own drawer width animation. */
 bool NavDrawer(const char *str_id, const char *const *labels, int count,
-               int *current, bool *expanded, float *anim_width,
-               int *gain_db = nullptr, bool *gain_changed = nullptr);
+               int *current, bool *expanded, float *anim_width);
+
+/** Drag grip between panels. `horizontal_bar` true → resize north/south
+ * (stacked panels); false → east/west (side-by-side). Returns mouse delta
+ * along the resize axis while dragging, else 0. Caller applies delta to a
+ * stored size and clamps.
+ * `cross_axis_size` > 0 overrides the long-axis length (needed after
+ * SameLine, where GetContentRegionAvail() is not the column height). */
+float Splitter(const char *str_id, bool horizontal_bar, float thickness = 5.f,
+               float cross_axis_size = 0.f);
 
 } // namespace fw::ui

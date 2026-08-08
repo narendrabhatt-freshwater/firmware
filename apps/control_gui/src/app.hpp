@@ -71,6 +71,12 @@ struct App
   bool nav_expanded = true;
   float nav_width = 148.f;
 
+  /** Persisted panel sizes for drag splitters (pixels). */
+  float layout_log_h = 100.f;
+  float layout_perform_voice_h = 78.f;
+  float layout_perform_piano_h = 106.f;
+  float layout_tone_left_w = 0.f; // 0 → seed from fraction on first draw
+
   int shape_mode = 0;
   float shape_param = 0.5f;
   float filter_hz_f = 20000.f;
