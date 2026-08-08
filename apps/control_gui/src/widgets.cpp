@@ -166,19 +166,21 @@ namespace fw::ui
   void SegmentedControl(const char *str_id, const char *const *labels,
                         int count, int *current)
   {
-    PillGroup(str_id, labels, count, current, 28.f);
+    PillGroup(str_id, labels, count, current, theme::S(theme::Metrics::RowH));
   }
 
   void SectionHeader(const char *title, const char *pill_id,
                      const char *pill_label, bool active, bool alert)
   {
-    ImGui::TextUnformatted(title);
+    ImGui::PushFont(theme::g_fonts.large);
+    ImGui::TextColored(kPalette.accent, "%s", title);
+    ImGui::PopFont();
     if (!pill_id || !pill_label)
     {
       return;
     }
     ImGui::SameLine();
-    const float pill_w = ImGui::CalcTextSize(pill_label).x + 46.f;
+    const float pill_w = ImGui::CalcTextSize(pill_label).x + theme::S(46.f);
     const float avail = ImGui::GetContentRegionAvail().x;
     if (avail > pill_w)
     {
@@ -186,6 +188,44 @@ namespace fw::ui
     }
     StatusPill(pill_id, pill_label, active, alert);
   }
+
+  bool BeginSection(const char *str_id, const char *title, const ImVec2 &size,
+                    bool border)
+  {
+    const ImGuiChildFlags flags =
+        border ? ImGuiChildFlags_Borders : ImGuiChildFlags_None;
+    const bool open = ImGui::BeginChild(str_id, size, flags);
+    if (open && title && title[0]) {
+      // Cursor stays on the title line so callers can SameLine() actions,
+      // then call NewLine()/Spacing before the body.
+      SectionHeader(title);
+    }
+    return open;
+  }
+
+  void EndSection() { ImGui::EndChild(); }
+
+  void EmptyState(const char *title, const char *detail)
+  {
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const ImVec2 tsize = ImGui::CalcTextSize(title);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
+                         std::max(0.f, (avail.y - tsize.y * 3.f) * 0.35f));
+    const float x = std::max(0.f, (avail.x - tsize.x) * 0.5f);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + x);
+    ImGui::PushFont(theme::g_fonts.large);
+    ImGui::TextColored(kPalette.text_dim, "%s", title);
+    ImGui::PopFont();
+    if (detail && detail[0]) {
+      const ImVec2 dsize = ImGui::CalcTextSize(detail, nullptr, false, avail.x * 0.7f);
+      ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                           std::max(0.f, (avail.x - dsize.x) * 0.5f));
+      ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + avail.x * 0.7f);
+      ImGui::TextDisabled("%s", detail);
+      ImGui::PopTextWrapPos();
+    }
+  }
+
 
   void PianoKey(const char *str_id, const char *label, const ImVec2 &size,
                 bool sounding)
@@ -242,10 +282,11 @@ namespace fw::ui
   void AnimatedTabBar(const char *str_id, const char *const *labels, int count,
                       int *current)
   {
-    PillGroup(str_id, labels, count, current, 36.f);
+    PillGroup(str_id, labels, count, current, theme::S(36.f));
   }
 
-  void LevelMeter(const char *str_id, float value01, const ImVec2 &size_arg)
+  void LevelMeter(const char *str_id, float value01, const ImVec2 &size_arg,
+                  float peak_hold01)
   {
     ImGui::PushID(str_id);
     const ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -278,6 +319,12 @@ namespace fw::ui
       dl->AddRectFilled(V2Add(pos, ImVec2(fillw - 2.f, 0.f)),
                         V2Add(pos, ImVec2(fillw + 2.f, size.y)),
                         U32A(kPalette.text, 0.30f));
+    }
+    if (peak_hold01 >= 0.f) {
+      const float px =
+          pos.x + size.x * std::clamp(peak_hold01, 0.f, 1.f);
+      dl->AddLine(ImVec2(px, pos.y + 1.f), ImVec2(px, pos.y + size.y - 1.f),
+                  U32A(kPalette.text, 0.85f), 2.f);
     }
     dl->AddRect(pos, V2Add(pos, size), U32A(kPalette.border, 0.8f),
                 size.y * 0.3f);
@@ -521,8 +568,8 @@ namespace fw::ui
                  int *current, bool *expanded, float *anim_width)
   {
     ImGui::PushID(str_id);
-    const float collapsed_w = 52.f;
-    const float expanded_w = 148.f;
+    const float collapsed_w = theme::S(theme::Metrics::NavCollapsed);
+    const float expanded_w = theme::S(theme::Metrics::NavExpanded);
     const float target = *expanded ? expanded_w : collapsed_w;
     *anim_width =
         fw::anim::ExpApproach(*anim_width, target, ImGui::GetIO().DeltaTime, 14.f);
@@ -532,37 +579,39 @@ namespace fw::ui
     ImDrawList *dl = ImGui::GetWindowDrawList();
     const ImVec2 wp = ImGui::GetWindowPos();
     dl->AddRectFilled(wp,
-                      ImVec2(wp.x + 3.f, wp.y + ImGui::GetWindowSize().y),
+                      ImVec2(wp.x + theme::S(3.f), wp.y + ImGui::GetWindowSize().y),
                       U32(kPalette.accent), 0.f);
 
-    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::Dummy(ImVec2(0, theme::S(theme::Metrics::SpaceXS)));
     if (*expanded)
     {
+      ImGui::PushFont(theme::g_fonts.large);
       ImGui::TextColored(kPalette.accent, "  CMI");
+      ImGui::PopFont();
     }
     else
     {
       ImGui::TextColored(kPalette.accent, " C");
     }
 
-    if (ImGui::InvisibleButton("##toggle", ImVec2(-1, 18)))
+    if (ImGui::InvisibleButton("##toggle", ImVec2(-1, theme::S(18.f))))
     {
       *expanded = !*expanded;
     }
     {
       const ImVec2 p = ImGui::GetItemRectMin();
-      dl->AddText(ImVec2(p.x + 12.f, p.y + 1.f), U32(kPalette.text_dim),
+      dl->AddText(ImVec2(p.x + theme::S(12.f), p.y + 1.f), U32(kPalette.text_dim),
                   *expanded ? "<< collapse" : ">>");
     }
 
-    ImGui::Spacing();
+    ImGui::Dummy(ImVec2(0, theme::S(theme::Metrics::SpaceS)));
     bool changed = false;
     for (int i = 0; i < count; ++i)
     {
       ImGui::PushID(i);
       const bool sel = (*current == i);
       const ImVec2 pos = ImGui::GetCursorScreenPos();
-      const float h = 30.f;
+      const float h = theme::S(32.f);
       const float w = ImGui::GetContentRegionAvail().x;
       ImGui::InvisibleButton("##nav", ImVec2(w, h));
       if (ImGui::IsItemClicked())
@@ -576,25 +625,25 @@ namespace fw::ui
         dl->AddRectFilled(pos, V2Add(pos, ImVec2(w, h)),
                           sel ? U32A(kPalette.accent, 0.22f)
                               : U32A(kPalette.accent_dim, 0.35f),
-                          5.f);
+                          theme::S(5.f));
       }
       if (sel)
       {
-        dl->AddRectFilled(pos, ImVec2(pos.x + 3.f, pos.y + h), U32(kPalette.accent),
-                          0.f);
+        dl->AddRectFilled(pos, ImVec2(pos.x + theme::S(3.f), pos.y + h),
+                          U32(kPalette.accent), 0.f);
       }
       char glyph[8];
       std::snprintf(glyph, sizeof(glyph), " %c",
                     labels[i][0] ? static_cast<char>(std::toupper(labels[i][0]))
                                  : '?');
-      if (*expanded || *anim_width > 110.f)
+      if (*expanded || *anim_width > theme::S(110.f))
       {
-        dl->AddText(V2Add(pos, ImVec2(12.f, 7.f)),
+        dl->AddText(V2Add(pos, ImVec2(theme::S(12.f), theme::S(8.f))),
                     sel ? U32(kPalette.accent) : U32(kPalette.text), labels[i]);
       }
       else
       {
-        dl->AddText(V2Add(pos, ImVec2(16.f, 7.f)),
+        dl->AddText(V2Add(pos, ImVec2(theme::S(16.f), theme::S(8.f))),
                     sel ? U32(kPalette.accent) : U32(kPalette.text_dim), glyph);
       }
       ImGui::PopID();
@@ -609,6 +658,9 @@ float Splitter(const char *str_id, bool horizontal_bar, float thickness,
                float cross_axis_size)
 {
   ImGui::PushID(str_id);
+  if (thickness <= 0.f) {
+    thickness = theme::S(theme::Metrics::Splitter);
+  }
   const ImVec2 avail = ImGui::GetContentRegionAvail();
   const float long_axis =
       cross_axis_size > 0.f
@@ -648,6 +700,43 @@ float Splitter(const char *str_id, bool horizontal_bar, float thickness,
   }
   ImGui::PopID();
   return delta;
+}
+
+bool ToggleRow(const char *label, bool *value, bool enabled)
+{
+  ImGui::PushID(label);
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted(label);
+  ImGui::SameLine();
+  const float btn_w = theme::S(64.f);
+  const float gap = ImGui::GetStyle().ItemSpacing.x;
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                       std::max(0.f, ImGui::GetContentRegionAvail().x -
+                                         btn_w * 2.f - gap));
+  bool changed = false;
+  ImGui::BeginDisabled(!enabled);
+  if (*value) {
+    if (GlowButton("ON", ImVec2(btn_w, 0))) {
+      /* already on */
+    }
+    ImGui::SameLine(0.f, gap);
+    if (GlowButton("OFF", ImVec2(btn_w, 0), true)) {
+      *value = false;
+      changed = true;
+    }
+  } else {
+    if (GlowButton("ON", ImVec2(btn_w, 0))) {
+      *value = true;
+      changed = true;
+    }
+    ImGui::SameLine(0.f, gap);
+    if (GlowButton("OFF", ImVec2(btn_w, 0), true)) {
+      /* already off */
+    }
+  }
+  ImGui::EndDisabled();
+  ImGui::PopID();
+  return changed;
 }
 
 } // namespace fw::ui

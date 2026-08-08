@@ -176,11 +176,12 @@ void DrawSlotCard(App &app, int slot, const WaveSlotState &st, float card_w,
     fw::ui::ProgressBar("##p", 1.f, ImVec2(-1, 6));
   }
 
-  ImGui::BeginDisabled(app.waves.Busy());
+  ImGui::BeginDisabled(app.waves.Busy() || app.file_dialog.Busy());
   if (ImGui::SmallButton("Browse")) {
-    const std::string picked = WaveCdc_PickRawFile();
-    if (!picked.empty()) {
-      app.waves.SetSlotPath(slot, picked);
+    app.file_dialog_kind = AsyncFileDialog::Kind::File;
+    app.file_dialog_slot = slot;
+    if (!app.file_dialog.BeginPickFile()) {
+      app.PushToastErr("file dialog busy");
     }
   }
   ImGui::SameLine();
@@ -252,6 +253,29 @@ void DrawWaveBankPage(App &app)
   std::array<WaveSlotState, 8> snap{};
   app.waves.Snapshot(snap);
 
+  // Folder picks and drag-and-drop land in pending_drops.
+  if (!app.pending_drops.empty()) {
+    for (const auto &p : app.pending_drops) {
+      if (p.rfind("folder:", 0) == 0) {
+        AssignFolder(app, p.substr(7));
+      } else {
+        // Drop onto the first empty slot, else overwrite w0.
+        int dest = 0;
+        for (int s = 0; s < 8; ++s) {
+          if (snap[static_cast<std::size_t>(s)].path[0] == '\0') {
+            dest = s;
+            break;
+          }
+        }
+        app.waves.SetSlotPath(dest, p);
+        app.PushToastOk(std::string("assigned drop → w") +
+                        std::to_string(dest));
+      }
+    }
+    app.pending_drops.clear();
+    app.waves.Snapshot(snap);
+  }
+
   if (app.wave_cdc_path[0]) {
     app.waves.SetCdcPath(app.wave_cdc_path);
   }
@@ -313,13 +337,21 @@ void DrawWaveBankPage(App &app)
   const float btn_w =
       (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 4.f) /
       5.f;
-  ImGui::BeginDisabled(app.waves.Busy());
+  ImGui::BeginDisabled(app.waves.Busy() || app.file_dialog.Busy());
   if (fw::ui::GlowButton("Load folder", ImVec2(btn_w, 0))) {
-    AssignFolder(app, WaveCdc_PickFolder());
+    app.file_dialog_kind = AsyncFileDialog::Kind::Folder;
+    app.file_dialog_slot = -1;
+    if (!app.file_dialog.BeginPickFolder()) {
+      app.PushToastErr("file dialog busy");
+    }
   }
   ImGui::SameLine();
   if (fw::ui::GlowButton("Assign all", ImVec2(btn_w, 0))) {
-    AssignSameToAll(app, WaveCdc_PickRawFile());
+    app.file_dialog_kind = AsyncFileDialog::Kind::File;
+    app.file_dialog_slot = -2;
+    if (!app.file_dialog.BeginPickFile()) {
+      app.PushToastErr("file dialog busy");
+    }
   }
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("Pick one .raw and assign it to every slot");

@@ -39,10 +39,30 @@ cmake --build apps/control_gui/build
 
 ## Views
 
-1. **Perform** — MIDI / on-screen keys, 16 voice meters, Preview scope, Speakers/Card/Both
-2. **Tone** — oscillator shape, LPF + fk, **multi-segment envelope editor** (per-segment end amp, slope, pitch-track k, live curve, ASCII `en`/`enN`)
-3. **Effect** — phantom, AUDIO_EN, LEDs, USB ADC channel, echo, I2C/ADC
-4. **Lab** — raw command line + CPU helpers
+1. **Perform** — Preview scope hero, 16 voice chips, on-screen + computer keyboard piano (A–K / W E T Y U, Z/X octave)
+2. **Tone** — oscillator shape, LPF + fk, multi-segment envelope editor with presets / undo / copy-to-all
+3. **Waves** — 8-slot bank, CDC upload, drag-and-drop files, waveform thumbnails
+4. **Effect** — phantom / AUDIO_EN / LEDs (last-sent state), USB ADC channel, ADC register inspector
+5. **Lab** — raw command line with history, log filter, click-to-copy
+6. **Setup** — RS485 / MIDI / output mode, auto-reconnect, port refresh
+
+## Shell
+
+- Left nav drawer (collapsible)
+- Top bar: connection pills left · gain / Silence / Recover right
+- Collapsible log strip + status bar (queue depth, MIDI activity)
+- DPI-aware spacing/typography (`theme::Scale`)
+- Layout and ports persisted to `~/Library/Application Support/Freshwater/control_gui.ini` (macOS) or the XDG config path on Linux
+
+## Shortcuts
+
+| Key | Action |
+| --- | --- |
+| `1`–`6` | Switch views |
+| `Space` | All notes off / silence |
+| `?` | Shortcuts overlay |
+| `A`–`K`, `W E T Y U` | Piano (Perform) |
+| `Z` / `X` | Octave down / up |
 
 Envelope programs match firmware: odd token lists, `slope±k` glued (e.g. `10+1`, `2.0-0.5`), 2–10 segments including release.
 

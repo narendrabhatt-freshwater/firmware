@@ -59,6 +59,7 @@ struct BusController::Impl
   std::queue<Job> jobs_;
   std::atomic<bool> run_{false};
   std::thread worker_;
+  std::thread open_thread_;
   LogBuffer *log_ = nullptr;
 };
 
@@ -67,6 +68,9 @@ BusController::BusController() : impl_(std::make_unique<Impl>()) {}
 BusController::~BusController()
 {
   LogBuffer sink;
+  if (impl_ && impl_->open_thread_.joinable()) {
+    impl_->open_thread_.join();
+  }
   if (open_.load()) {
     Close(sink);
   }
@@ -87,16 +91,32 @@ uint32_t BusController::ErrCount() const
   return impl_ ? impl_->bus.ErrCount() : 0;
 }
 
-void BusController::Enqueue(Job job)
+std::size_t BusController::QueueDepth() const
 {
-  if (!open_.load() || halted_.load()) {
-    return;
+  if (!impl_) {
+    return 0;
+  }
+  std::lock_guard<std::mutex> lock(impl_->mu_);
+  return impl_->jobs_.size();
+}
+
+BusQueueResult BusController::Enqueue(Job job)
+{
+  if (connecting_.load()) {
+    return BusQueueResult::Connecting;
+  }
+  if (!open_.load()) {
+    return BusQueueResult::Closed;
+  }
+  if (halted_.load()) {
+    return BusQueueResult::Halted;
   }
   {
     std::lock_guard<std::mutex> lock(impl_->mu_);
     impl_->jobs_.push(std::move(job));
   }
   impl_->cv_.notify_one();
+  return BusQueueResult::Ok;
 }
 
 bool BusController::Open(const std::string &path,
@@ -145,8 +165,30 @@ bool BusController::Open(const std::string &path,
   return true;
 }
 
+void BusController::RequestOpen(const std::string &path,
+                                uint32_t baud,
+                                uint32_t atten_db,
+                                LogBuffer &log)
+{
+  if (connecting_.exchange(true)) {
+    log.Push("err: bus connect already in progress");
+    return;
+  }
+  if (impl_->open_thread_.joinable()) {
+    impl_->open_thread_.join();
+  }
+  impl_->open_thread_ = std::thread([this, path, baud, atten_db, &log] {
+    (void)Open(path, baud, atten_db, log);
+    connecting_.store(false);
+  });
+}
+
 void BusController::Close(LogBuffer &log)
 {
+  if (impl_->open_thread_.joinable()) {
+    impl_->open_thread_.join();
+  }
+  connecting_.store(false);
   if (!open_.exchange(false)) {
     return;
   }
@@ -212,62 +254,69 @@ void BusController::RequestRecover(LogBuffer &log)
   log.Push("… soft recover queued");
 }
 
-void BusController::QueueExec(protocol::Target target, std::string command)
+BusQueueResult BusController::QueueExec(protocol::Target target,
+                                        std::string command)
 {
   Job j;
   j.kind = JobKind::Exec;
   j.target = target;
   j.command = std::move(command);
-  Enqueue(std::move(j));
+  return Enqueue(std::move(j));
 }
 
-void BusController::QueueChannel(ChannelOp op)
+BusQueueResult BusController::QueueChannel(ChannelOp op)
 {
   Job j;
   j.kind = JobKind::Channel;
   j.channel_op = std::move(op);
-  Enqueue(std::move(j));
+  return Enqueue(std::move(j));
 }
 
-void BusController::QueueEffect(EffectOp op)
+BusQueueResult BusController::QueueEffect(EffectOp op)
 {
   Job j;
   j.kind = JobKind::Effect;
   j.effect_op = std::move(op);
-  Enqueue(std::move(j));
+  return Enqueue(std::move(j));
 }
 
-void BusController::QueueMode(protocol::PlayMode mode)
+BusQueueResult BusController::QueueMode(protocol::PlayMode mode)
 {
-  QueueChannel([mode](protocol::ChannelClient &ch) {
+  return QueueChannel([mode](protocol::ChannelClient &ch) {
     return ch.SetMode(mode);
   });
 }
 
-void BusController::QueuePlayWave(uint8_t slot, double rate_hz)
+BusQueueResult BusController::QueuePlayWave(uint8_t slot, double rate_hz)
 {
-  QueueChannel([slot, rate_hz](protocol::ChannelClient &ch) {
+  return QueueChannel([slot, rate_hz](protocol::ChannelClient &ch) {
     return ch.PlayWave(slot, rate_hz);
   });
 }
 
-void BusController::QueueStopWave(uint8_t slot)
+BusQueueResult BusController::QueueStopWave(uint8_t slot)
 {
-  QueueChannel([slot](protocol::ChannelClient &ch) {
+  return QueueChannel([slot](protocol::ChannelClient &ch) {
     return ch.StopWave(slot);
   });
 }
 
-void BusController::QueueGain(uint8_t atten_db)
+BusQueueResult BusController::QueueGain(uint8_t atten_db)
 {
-  if (!open_.load() || halted_.load()) {
-    return;
+  if (connecting_.load()) {
+    return BusQueueResult::Connecting;
+  }
+  if (!open_.load()) {
+    return BusQueueResult::Closed;
+  }
+  if (halted_.load()) {
+    return BusQueueResult::Halted;
   }
   atten_db_.store(atten_db);
   Job j;
   j.kind = JobKind::Gain;
   j.atten_db = atten_db;
-  Enqueue(std::move(j));
+  return Enqueue(std::move(j));
 }
 
 void BusController::WorkerMain(LogBuffer *log)

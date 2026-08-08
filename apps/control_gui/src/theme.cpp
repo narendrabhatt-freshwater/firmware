@@ -1,5 +1,7 @@
 #include "theme.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 
 namespace fw::theme
@@ -21,6 +23,27 @@ const Palette kPalette{
 };
 
 Fonts g_fonts{};
+
+namespace
+{
+float g_scale = 1.f;
+} // namespace
+
+float Scale() { return g_scale; }
+
+float S(float logical_px) { return logical_px * g_scale; }
+
+ImVec2 S2(float x, float y) { return ImVec2(S(x), S(y)); }
+
+bool SetContentScale(float content_scale_x)
+{
+  const float next = std::clamp(content_scale_x, 0.75f, 3.f);
+  if (std::fabs(next - g_scale) < 0.04f) {
+    return false;
+  }
+  g_scale = next;
+  return true;
+}
 
 ImU32 U32(const ImVec4 &c) { return ImGui::ColorConvertFloat4ToU32(c); }
 
@@ -97,28 +120,32 @@ void Apply()
   c[ImGuiCol_TextSelectedBg] =
       ImVec4(kPalette.accent.x, kPalette.accent.y, kPalette.accent.z, 0.35f);
 
-  s.WindowRounding = 8.f;
-  s.ChildRounding = 8.f;
-  s.FrameRounding = 5.f;
-  s.PopupRounding = 6.f;
-  s.ScrollbarRounding = 6.f;
-  s.GrabRounding = 5.f;
-  s.TabRounding = 5.f;
+  const float sc = g_scale;
+  s.WindowRounding = 8.f * sc;
+  s.ChildRounding = 8.f * sc;
+  s.FrameRounding = 5.f * sc;
+  s.PopupRounding = 6.f * sc;
+  s.ScrollbarRounding = 6.f * sc;
+  s.GrabRounding = 5.f * sc;
+  s.TabRounding = 5.f * sc;
   s.WindowBorderSize = 1.f;
   s.ChildBorderSize = 1.f;
   s.PopupBorderSize = 1.f;
   s.FrameBorderSize = 1.f;
-  s.WindowPadding = ImVec2(10.f, 8.f);
-  s.FramePadding = ImVec2(7.f, 4.f);
-  s.ItemSpacing = ImVec2(8.f, 5.f);
-  s.ItemInnerSpacing = ImVec2(6.f, 4.f);
-  s.IndentSpacing = 14.f;
-  s.ScrollbarSize = 12.f;
-  s.GrabMinSize = 8.f;
+  s.WindowPadding = ImVec2(Metrics::SpaceM * sc, Metrics::SpaceS * sc);
+  s.FramePadding = ImVec2(7.f * sc, 4.f * sc);
+  s.ItemSpacing = ImVec2(Metrics::SpaceS * sc, 5.f * sc);
+  s.ItemInnerSpacing = ImVec2(6.f * sc, 4.f * sc);
+  s.IndentSpacing = 14.f * sc;
+  s.ScrollbarSize = 12.f * sc;
+  s.GrabMinSize = 8.f * sc;
 }
 
 void LoadFonts(ImGuiIO &io)
 {
+  io.Fonts->Clear();
+  g_fonts = {};
+
   ImFontConfig cfg;
   cfg.OversampleH = 3;
   cfg.OversampleV = 3;
@@ -128,6 +155,7 @@ void LoadFonts(ImGuiIO &io)
   // Punctuation (en/em dash, arrows, "not equal") — extend the range or
   // those render as tofu '?' glyphs.
   static ImVector<ImWchar> ranges;
+  ranges.clear();
   {
     ImFontGlyphRangesBuilder builder;
     builder.AddRanges(io.Fonts->GetGlyphRangesDefault());
@@ -142,11 +170,15 @@ void LoadFonts(ImGuiIO &io)
   }
   cfg.GlyphRanges = ranges.Data;
 
+  const float sc = g_scale;
 #ifdef FW_FONT_DIR
   const std::string path = std::string(FW_FONT_DIR) + "/Roboto-Medium.ttf";
-  /* Dense control-surface sizing — 18/27 felt oversized on Retina. */
-  g_fonts.body = io.Fonts->AddFontFromFileTTF(path.c_str(), 14.5f, &cfg);
-  g_fonts.large = io.Fonts->AddFontFromFileTTF(path.c_str(), 18.f, &cfg);
+  g_fonts.body =
+      io.Fonts->AddFontFromFileTTF(path.c_str(), Metrics::BodyFontPx * sc, &cfg);
+  g_fonts.large =
+      io.Fonts->AddFontFromFileTTF(path.c_str(), Metrics::LargeFontPx * sc, &cfg);
+  g_fonts.hero =
+      io.Fonts->AddFontFromFileTTF(path.c_str(), Metrics::HeroFontPx * sc, &cfg);
 #endif
 
   if (!g_fonts.body) {
@@ -154,6 +186,9 @@ void LoadFonts(ImGuiIO &io)
   }
   if (!g_fonts.large) {
     g_fonts.large = g_fonts.body;
+  }
+  if (!g_fonts.hero) {
+    g_fonts.hero = g_fonts.large;
   }
   io.FontDefault = g_fonts.body;
 }

@@ -19,10 +19,19 @@ void SectionHeader(const char *title, const char *pill_id = nullptr,
                    const char *pill_label = nullptr, bool active = false,
                    bool alert = false);
 
+/** Shared section card: bordered child with padded title row. Pair with
+ * EndSection(). Optional `header_right` draws after the title (same line). */
+bool BeginSection(const char *str_id, const char *title,
+                  const ImVec2 &size = ImVec2(0, 0),
+                  bool border = true);
+
+void EndSection();
+
+/** Empty-state placeholder centered in the remaining region. */
+void EmptyState(const char *title, const char *detail);
+
 /** Ivory piano key: dips and tints toward the accent color on press, and
- * glows softly while `sounding` (e.g. the note is active elsewhere). Caller
- * reads ImGui::IsItemActivated()/IsItemDeactivated() right after the call,
- * same convention as a plain ImGui::Button held for note-on/note-off. */
+ * glows softly while `sounding`. Caller reads IsItemActivated()/Deactivated. */
 void PianoKey(const char *str_id, const char *label, const ImVec2 &size,
              bool sounding = false);
 
@@ -36,8 +45,9 @@ void AnimatedTabBar(const char *str_id, const char *const *labels, int count,
                     int *current);
 
 /** Horizontal level meter with fast attack / slow release easing and a
- * color ramp (accent → warning → danger) as it approaches full scale. */
-void LevelMeter(const char *str_id, float value01, const ImVec2 &size);
+ * color ramp (accent → warning → danger). Optional peak-hold needle. */
+void LevelMeter(const char *str_id, float value01, const ImVec2 &size,
+                float peak_hold01 = -1.f);
 
 /** Neon-style multi-pass glow waveform with a light scope graticule. */
 void GlowWaveform(const char *str_id, const float *samples, int count,
@@ -48,32 +58,27 @@ void GlowWaveform(const char *str_id, const float *samples, int count,
 bool GlowButton(const char *label, const ImVec2 &size = ImVec2(0, 0),
                 bool danger = false);
 
-/** Compact voice-slot chip for the Perform strip; `glow01` eases in/out as
- * the voice activates/deactivates. `selected` draws a stronger border. */
+/** Compact voice-slot chip for the Perform strip. */
 void VoiceSlotBadge(const char *str_id, const char *label, bool active,
                     float glow01, const char *sub = nullptr,
                     bool selected = false);
 
 /** Compact row of `count` hex-labelled chips (n0, n1, ...) for picking a
- * voice — click to select, replaces slider-based voice pickers. Returns
- * true if the click changed `*current` this frame. */
+ * voice. Returns true if the click changed `*current` this frame. */
 bool VoiceSelector(const char *str_id, int *current, int count);
 
 /** Thin accent progress bar (value 0..1). */
 void ProgressBar(const char *str_id, float value01, const ImVec2 &size);
 
-/** Collapsible left nav rail. Returns true if a nav item was clicked.
- * `*expanded` / `*anim_width` own drawer width animation. */
+/** Collapsible left nav rail. Returns true if a nav item was clicked. */
 bool NavDrawer(const char *str_id, const char *const *labels, int count,
                int *current, bool *expanded, float *anim_width);
 
-/** Drag grip between panels. `horizontal_bar` true → resize north/south
- * (stacked panels); false → east/west (side-by-side). Returns mouse delta
- * along the resize axis while dragging, else 0. Caller applies delta to a
- * stored size and clamps.
- * `cross_axis_size` > 0 overrides the long-axis length (needed after
- * SameLine, where GetContentRegionAvail() is not the column height). */
-float Splitter(const char *str_id, bool horizontal_bar, float thickness = 5.f,
+/** Drag grip between panels. `horizontal_bar` true → resize north/south. */
+float Splitter(const char *str_id, bool horizontal_bar, float thickness = 0.f,
                float cross_axis_size = 0.f);
+
+/** Toggle row: label left, GlowButton on/off cluster right. */
+bool ToggleRow(const char *label, bool *value, bool enabled = true);
 
 } // namespace fw::ui
