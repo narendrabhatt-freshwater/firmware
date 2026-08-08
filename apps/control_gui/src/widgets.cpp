@@ -4,7 +4,6 @@
 #include "theme.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <unordered_map>
@@ -36,169 +35,323 @@ namespace fw::ui
       return it->second;
     }
 
-    /** Shared sliding-pill implementation behind SegmentedControl and
-     * AnimatedTabBar; only sizing differs between the two. */
-    void PillGroup(const char *str_id, const char *const *labels, int count,
-                   int *current, float height)
+    struct BtnColors
     {
-      if (count <= 0)
+      ImVec4 bg;
+      ImVec4 border;
+      ImVec4 text;
+    };
+
+    BtnColors KindColors(BtnKind kind)
+    {
+      switch (kind)
       {
-        return;
+      case BtnKind::Primary:
+        return {ImVec4(kPalette.accent.x, kPalette.accent.y, kPalette.accent.z,
+                       0.10f),
+                ImVec4(kPalette.accent.x, kPalette.accent.y, kPalette.accent.z,
+                       0.25f),
+                kPalette.accent};
+      case BtnKind::Danger:
+        return {ImVec4(kPalette.danger.x, kPalette.danger.y, kPalette.danger.z,
+                       0.08f),
+                ImVec4(kPalette.danger.x, kPalette.danger.y, kPalette.danger.z,
+                       0.25f),
+                kPalette.danger};
+      case BtnKind::Warn:
+        return {ImVec4(kPalette.warning.x, kPalette.warning.y,
+                       kPalette.warning.z, 0.08f),
+                ImVec4(kPalette.warning.x, kPalette.warning.y,
+                       kPalette.warning.z, 0.25f),
+                kPalette.warning};
+      case BtnKind::Neutral:
+      default:
+        return {kPalette.panel_alt,
+                kPalette.border,
+                kPalette.text_dim};
       }
-      *current = std::clamp(*current, 0, count - 1);
+    }
 
-      ImGui::PushID(str_id);
-      const ImGuiID gid = ImGui::GetID("##pillgroup");
-      static std::unordered_map<ImGuiID, float> s_pill_x;
-      static std::unordered_map<ImGuiID, float> s_pill_w;
-
-      std::vector<float> widths(static_cast<std::size_t>(count));
-      std::vector<float> xoff(static_cast<std::size_t>(count));
-      const float pad = height * 0.42f;
-      float total = 0.f;
-      for (int i = 0; i < count; ++i)
+    bool ButtonImpl(const char *label, ImVec2 size, BtnKind kind,
+                    ImFont *font, const ImVec2 &padding)
+    {
+      ImGui::PushID(label);
+      if (font)
       {
-        const std::size_t si = static_cast<std::size_t>(i);
-        widths[si] = ImGui::CalcTextSize(labels[i]).x + pad * 2.f;
-        xoff[si] = total;
-        total += widths[si];
+        ImGui::PushFont(font);
+      }
+      // ImGui "##id" suffixes size the hit target but must not paint.
+      const char *text_end = label;
+      while (*text_end && !(text_end[0] == '#' && text_end[1] == '#')) {
+        ++text_end;
+      }
+      const ImVec2 label_size = ImGui::CalcTextSize(label, text_end);
+      const ImVec2 avail = ImGui::GetContentRegionAvail();
+      if (size.x == 0.f)
+      {
+        size.x = label_size.x + padding.x * 2.f;
+      }
+      else if (size.x < 0.f)
+      {
+        size.x = avail.x;
+      }
+      if (size.y == 0.f)
+      {
+        size.y = label_size.y + padding.y * 2.f;
+      }
+      else if (size.y < 0.f)
+      {
+        size.y = avail.y;
       }
 
       const ImVec2 pos = ImGui::GetCursorScreenPos();
       ImDrawList *dl = ImGui::GetWindowDrawList();
-      dl->AddRectFilled(pos, V2Add(pos, ImVec2(total, height)),
-                        U32A(kPalette.panel_alt, 0.55f), height * 0.5f);
+      ImGui::InvisibleButton("##btn", size);
+      const bool hovered = ImGui::IsItemHovered();
+      const bool active = ImGui::IsItemActive();
+      const bool pressed = ImGui::IsItemClicked();
 
-      const float dt = ImGui::GetIO().DeltaTime;
-      const float target_x = xoff[static_cast<std::size_t>(*current)];
-      const float target_w = widths[static_cast<std::size_t>(*current)];
-      float &pill_x = AnimSlot(s_pill_x, gid, target_x);
-      float &pill_w = AnimSlot(s_pill_w, gid, target_w);
-      pill_x = fw::anim::ExpApproach(pill_x, target_x, dt, 16.f);
-      pill_w = fw::anim::ExpApproach(pill_w, target_w, dt, 16.f);
-
-      dl->AddRectFilled(V2Add(pos, ImVec2(pill_x + 3.f, 3.f)),
-                        V2Add(pos, ImVec2(pill_x + pill_w - 3.f, height - 3.f)),
-                        U32(kPalette.accent), (height - 6.f) * 0.5f);
-
-      for (int i = 0; i < count; ++i)
+      BtnColors bc = KindColors(kind);
+      float bg_a = bc.bg.w;
+      float border_a = bc.border.w;
+      if (hovered)
       {
-        const std::size_t si = static_cast<std::size_t>(i);
-        if (i)
-        {
-          ImGui::SameLine(0.f, 0.f);
-        }
-        ImGui::InvisibleButton(labels[i], ImVec2(widths[si], height));
-        if (ImGui::IsItemClicked())
-        {
-          *current = i;
-        }
-        const bool sel = (*current == i);
-        const bool hovered = ImGui::IsItemHovered();
-        const ImVec2 tsize = ImGui::CalcTextSize(labels[i]);
-        const ImVec2 tpos = V2Add(
-            pos, ImVec2(xoff[si] + (widths[si] - tsize.x) * 0.5f,
-                        (height - tsize.y) * 0.5f));
-        ImU32 tcol;
-        if (sel)
-        {
-          tcol = U32(kPalette.bg);
-        }
-        else if (hovered)
-        {
-          tcol = U32(kPalette.text);
-        }
-        else
-        {
-          tcol = U32(kPalette.text_dim);
-        }
-        dl->AddText(tpos, tcol, labels[i]);
+        bg_a = std::min(1.f, bg_a + 0.07f);
+        border_a = std::min(1.f, border_a + 0.20f);
       }
+      // GetColorU32 folds style.Alpha so BeginDisabled dimming applies.
+      const ImVec2 p0 = active ? V2Add(pos, ImVec2(0.5f, 0.5f)) : pos;
+      const ImVec2 p1 = V2Add(pos, active ? ImVec2(size.x - 0.5f, size.y - 0.5f)
+                                          : size);
+      dl->AddRectFilled(p0, p1,
+                        ImGui::GetColorU32(ImVec4(bc.bg.x, bc.bg.y, bc.bg.z,
+                                                  bg_a)),
+                        theme::S(2.f));
+      dl->AddRect(p0, p1,
+                  ImGui::GetColorU32(ImVec4(bc.border.x, bc.border.y,
+                                            bc.border.z, border_a)),
+                  theme::S(2.f));
 
+      const ImVec2 tpos = V2Add(
+          pos, ImVec2((size.x - label_size.x) * 0.5f,
+                      (size.y - label_size.y) * 0.5f));
+      dl->AddText(tpos, ImGui::GetColorU32(bc.text), label, text_end);
+
+      if (font)
+      {
+        ImGui::PopFont();
+      }
       ImGui::PopID();
+      return pressed;
     }
 
   } // namespace
+
+  bool Btn(const char *label, const ImVec2 &size, BtnKind kind)
+  {
+    return ButtonImpl(label, size, kind, theme::g_fonts.caps,
+                      theme::S2(12.f, 6.f));
+  }
+
+  bool ChipBtn(const char *label, bool selected, BtnKind kind)
+  {
+    BtnKind k = kind;
+    if (selected)
+    {
+      k = BtnKind::Primary;
+    }
+    return ButtonImpl(label, ImVec2(0, 0), k, theme::g_fonts.mono_small,
+                      theme::S2(7.f, 3.f));
+  }
+
+  bool GlowButton(const char *label, const ImVec2 &size, bool danger)
+  {
+    return Btn(label, size, danger ? BtnKind::Danger : BtnKind::Primary);
+  }
+
+  bool ToggleSwitch(const char *str_id, bool *value, bool enabled)
+  {
+    ImGui::PushID(str_id);
+    const ImVec2 size = theme::S2(32.f, 16.f);
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImGui::InvisibleButton("##switch", size);
+    bool changed = false;
+    if (enabled && ImGui::IsItemClicked())
+    {
+      *value = !*value;
+      changed = true;
+    }
+
+    const ImGuiID id = ImGui::GetID("##switch");
+    static std::unordered_map<ImGuiID, float> s_anim;
+    float &t = AnimSlot(s_anim, id, *value ? 1.f : 0.f);
+    t = fw::anim::ExpApproach(t, *value ? 1.f : 0.f,
+                              ImGui::GetIO().DeltaTime, 18.f);
+
+    const ImVec4 fill = *value
+                            ? ImVec4(kPalette.accent.x, kPalette.accent.y,
+                                     kPalette.accent.z, 0.25f)
+                            : kPalette.bg_alt;
+    const ImVec4 border = *value
+                              ? ImVec4(kPalette.accent.x, kPalette.accent.y,
+                                       kPalette.accent.z, 0.45f)
+                              : kPalette.border_hi;
+    dl->AddRectFilled(pos, V2Add(pos, size), ImGui::GetColorU32(fill),
+                      size.y * 0.5f);
+    dl->AddRect(pos, V2Add(pos, size), ImGui::GetColorU32(border),
+                size.y * 0.5f);
+
+    const float knob_x = pos.x + theme::S(3.f) + t * theme::S(14.f);
+    const float knob_y = pos.y + size.y * 0.5f;
+    const ImVec4 knob = *value ? kPalette.accent : kPalette.muted;
+    if (*value)
+    {
+      dl->AddCircleFilled(ImVec2(knob_x + theme::S(5.f), knob_y),
+                          theme::S(8.f),
+                          ImGui::GetColorU32(ImVec4(kPalette.accent.x,
+                                                    kPalette.accent.y,
+                                                    kPalette.accent.z, 0.20f)),
+                          16);
+    }
+    dl->AddCircleFilled(ImVec2(knob_x + theme::S(5.f), knob_y), theme::S(5.f),
+                        ImGui::GetColorU32(knob), 16);
+    ImGui::PopID();
+    return changed;
+  }
+
+  bool ToggleRow(const char *label, bool *value, bool enabled)
+  {
+    ImGui::PushID(label);
+    const float row_h = theme::S(22.f);
+    const float start_y = ImGui::GetCursorPosY();
+    bool changed = ToggleSwitch("##sw", value, enabled);
+    ImGui::SameLine(0.f, theme::S(10.f));
+    ImGui::SetCursorPosY(start_y + theme::S(1.f));
+    if (theme::g_fonts.mono)
+    {
+      ImGui::PushFont(theme::g_fonts.mono);
+    }
+    ImGui::TextColored(*value ? kPalette.text : kPalette.text_dim, "%s",
+                       label);
+    if (theme::g_fonts.mono)
+    {
+      ImGui::PopFont();
+    }
+    // Right-aligned ON / OFF readout
+    ImGui::SameLine();
+    const char *state = *value ? "ON" : "OFF";
+    if (theme::g_fonts.mono_small)
+    {
+      ImGui::PushFont(theme::g_fonts.mono_small);
+    }
+    const float w = ImGui::CalcTextSize(state).x;
+    const float avail = ImGui::GetContentRegionAvail().x;
+    if (avail > w)
+    {
+      ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - w);
+    }
+    ImGui::SetCursorPosY(start_y + theme::S(3.f));
+    ImGui::TextColored(*value ? kPalette.accent : kPalette.muted, "%s", state);
+    if (theme::g_fonts.mono_small)
+    {
+      ImGui::PopFont();
+    }
+    // Bottom hairline like the design's row divider
+    ImGui::SetCursorPosY(start_y + row_h);
+    ImGui::Separator();
+    ImGui::PopID();
+    return changed;
+  }
+
+  void StatusDot(float radius, const ImVec4 &color, bool glow)
+  {
+    radius = theme::S(radius);
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float line_h = ImGui::GetTextLineHeight();
+    const ImVec2 c(p.x + radius, p.y + line_h * 0.5f);
+    if (glow)
+    {
+      dl->AddCircleFilled(c, radius * 2.2f, U32A(color, 0.25f), 16);
+    }
+    dl->AddCircleFilled(c, radius, U32(color), 12);
+    ImGui::Dummy(ImVec2(radius * 2.f, line_h));
+  }
 
   void StatusPill(const char *str_id, const char *label, bool active,
                   bool alert)
   {
     ImGui::PushID(str_id);
+    if (theme::g_fonts.mono_small)
+    {
+      ImGui::PushFont(theme::g_fonts.mono_small);
+    }
     const ImVec2 tsize = ImGui::CalcTextSize(label);
-    const float dot_r = 4.5f;
-    const float pad_x = 10.f;
-    const float pad_y = 6.f;
-    const ImVec2 size(dot_r * 2.f + 8.f + tsize.x + pad_x * 2.f,
+    const float dot_r = theme::S(3.f);
+    const float pad_x = theme::S(8.f);
+    const float pad_y = theme::S(4.f);
+    const float gap = theme::S(6.f);
+    const ImVec2 size(dot_r * 2.f + gap + tsize.x + pad_x * 2.f,
                       std::max(tsize.y, dot_r * 2.f) + pad_y * 2.f);
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImGui::InvisibleButton("##pill", size);
 
-    const double time = ImGui::GetTime();
-    const ImVec4 &dot_base = alert    ? kPalette.danger
-                             : active ? kPalette.success
-                                      : kPalette.text_dim;
-    const float pulse = (alert || active)
-                            ? fw::anim::Pulse01(time, alert ? 0.55f : 1.6f)
-                            : 0.f;
+    const ImVec4 &dot = alert    ? kPalette.danger
+                        : active ? kPalette.accent
+                                 : kPalette.muted;
+    dl->AddRectFilled(pos, V2Add(pos, size), U32(kPalette.bg_alt),
+                      theme::S(2.f));
+    dl->AddRect(pos, V2Add(pos, size), U32(kPalette.border), theme::S(2.f));
 
-    dl->AddRectFilled(pos, V2Add(pos, size), U32A(kPalette.panel_alt, 0.6f),
-                      size.y * 0.5f);
-
-    const ImVec2 dot_center =
-        V2Add(pos, ImVec2(pad_x + dot_r, size.y * 0.5f));
+    const ImVec2 dc = V2Add(pos, ImVec2(pad_x + dot_r, size.y * 0.5f));
     if (active || alert)
     {
-      const float halo_r = dot_r * (1.6f + 0.9f * pulse);
-      dl->AddCircleFilled(dot_center, halo_r,
-                          U32A(dot_base, (alert ? 0.35f : 0.22f) * (0.5f + 0.5f * pulse)),
-                          20);
+      dl->AddCircleFilled(dc, dot_r * 2.f, U32A(dot, 0.30f), 14);
     }
-    dl->AddCircleFilled(dot_center, dot_r, U32(dot_base), 16);
-
-    const ImVec2 tpos =
-        V2Add(pos, ImVec2(pad_x + dot_r * 2.f + 8.f, pad_y - 0.5f));
-    dl->AddText(tpos, U32(kPalette.text), label);
-
+    dl->AddCircleFilled(dc, dot_r, U32(dot), 12);
+    dl->AddText(V2Add(pos, ImVec2(pad_x + dot_r * 2.f + gap, pad_y)),
+                U32(active || alert ? kPalette.text : kPalette.text_dim),
+                label);
+    if (theme::g_fonts.mono_small)
+    {
+      ImGui::PopFont();
+    }
     ImGui::PopID();
-  }
-
-  void SegmentedControl(const char *str_id, const char *const *labels,
-                        int count, int *current)
-  {
-    PillGroup(str_id, labels, count, current, theme::S(theme::Metrics::RowH));
-  }
-
-  void SectionHeader(const char *title, const char *pill_id,
-                     const char *pill_label, bool active, bool alert)
-  {
-    ImGui::PushFont(theme::g_fonts.large);
-    ImGui::TextColored(kPalette.accent, "%s", title);
-    ImGui::PopFont();
-    if (!pill_id || !pill_label)
-    {
-      return;
-    }
-    ImGui::SameLine();
-    const float pill_w = ImGui::CalcTextSize(pill_label).x + theme::S(46.f);
-    const float avail = ImGui::GetContentRegionAvail().x;
-    if (avail > pill_w)
-    {
-      ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - pill_w);
-    }
-    StatusPill(pill_id, pill_label, active, alert);
   }
 
   bool BeginSection(const char *str_id, const char *title, const ImVec2 &size,
                     bool border)
   {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, kPalette.panel);
     const ImGuiChildFlags flags =
         border ? ImGuiChildFlags_Borders : ImGuiChildFlags_None;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, theme::S2(10.f, 8.f));
     const bool open = ImGui::BeginChild(str_id, size, flags);
-    if (open && title && title[0]) {
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    if (open && title && title[0])
+    {
+      // Title row: small mono, letterspaced feel, bottom hairline.
+      ImDrawList *dl = ImGui::GetWindowDrawList();
+      const ImVec2 wp = ImGui::GetWindowPos();
+      const ImVec2 ws = ImGui::GetWindowSize();
+      if (theme::g_fonts.mono_small)
+      {
+        ImGui::PushFont(theme::g_fonts.mono_small);
+      }
+      ImGui::TextColored(kPalette.text_dim, "%s", title);
+      if (theme::g_fonts.mono_small)
+      {
+        ImGui::PopFont();
+      }
+      const float line_y = wp.y + theme::S(26.f);
+      dl->AddLine(ImVec2(wp.x, line_y), ImVec2(wp.x + ws.x, line_y),
+                  U32(kPalette.border), 1.f);
       // Cursor stays on the title line so callers can SameLine() actions,
       // then call NewLine()/Spacing before the body.
-      SectionHeader(title);
+      ImGui::SameLine();
     }
     return open;
   }
@@ -226,63 +379,102 @@ namespace fw::ui
     }
   }
 
-
-  void PianoKey(const char *str_id, const char *label, const ImVec2 &size,
-                bool sounding)
+  void GlowWaveform(const char *str_id, const float *samples, int count,
+                    const ImVec2 &size_arg, float scale_min, float scale_max)
   {
     ImGui::PushID(str_id);
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const ImVec2 size(size_arg.x <= 0.f ? avail.x + size_arg.x : size_arg.x,
+                      size_arg.y <= 0.f ? avail.y + size_arg.y : size_arg.y);
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     ImDrawList *dl = ImGui::GetWindowDrawList();
-    ImGui::InvisibleButton("##key", size);
-    const bool hovered = ImGui::IsItemHovered();
-    const bool held = ImGui::IsItemActive();
+    ImGui::InvisibleButton("##wave", size);
 
-    const ImGuiID id = ImGui::GetID("##key");
-    static std::unordered_map<ImGuiID, float> s_press;
-    float &press = AnimSlot(s_press, id, 0.f);
-    const float dt = ImGui::GetIO().DeltaTime;
-    const float target = (held || sounding) ? 1.f : 0.f;
-    press = std::clamp(
-        fw::anim::ExpApproach(press, target, dt, held ? 34.f : 16.f), 0.f, 1.f);
+    dl->AddRectFilled(pos, V2Add(pos, size), U32(kPalette.bg));
 
-    const ImVec4 ivory(0.88f, 0.89f, 0.91f, 1.f);
-    const ImVec4 fill(ivory.x + (kPalette.accent.x - ivory.x) * press,
-                      ivory.y + (kPalette.accent.y - ivory.y) * press,
-                      ivory.z + (kPalette.accent.z - ivory.z) * press, 1.f);
-
-    const float dip = press * 3.f;
-    const ImVec2 p0 = V2Add(pos, ImVec2(2.f, dip));
-    const ImVec2 p1 = V2Add(pos, ImVec2(size.x - 2.f, size.y));
-
-    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(fill), 5.f,
-                      ImDrawFlags_RoundCornersBottom);
-    dl->AddRectFilled(
-        p0, ImVec2(p1.x, p0.y + size.y * 0.14f),
-        ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, 0.16f * (1.f - press))), 5.f,
-        ImDrawFlags_RoundCornersTop);
-    dl->AddRect(p0, p1, ImGui::GetColorU32(ImVec4(0.f, 0.f, 0.f, 0.35f)), 5.f,
-                ImDrawFlags_RoundCornersBottom, 1.f);
-    if (hovered && press < 0.05f)
+    // 10×8 graticule (design Oscilloscope): faint grid, brighter centre axes,
+    // minor ticks on the axes.
+    const int divx = 10;
+    const int divy = 8;
+    const ImU32 grid = U32A(kPalette.accent, 0.07f);
+    const ImU32 axis = U32A(kPalette.accent, 0.14f);
+    for (int i = 0; i <= divx; ++i)
     {
-      dl->AddRect(p0, p1, ImGui::GetColorU32(kPalette.accent_dim), 5.f,
-                  ImDrawFlags_RoundCornersBottom, 1.5f);
+      const float x = pos.x + size.x * (static_cast<float>(i) / divx);
+      dl->AddLine(ImVec2(x, pos.y), ImVec2(x, pos.y + size.y), grid, 1.f);
+    }
+    for (int i = 0; i <= divy; ++i)
+    {
+      const float y = pos.y + size.y * (static_cast<float>(i) / divy);
+      dl->AddLine(ImVec2(pos.x, y), ImVec2(pos.x + size.x, y), grid, 1.f);
+    }
+    const float midy = pos.y + size.y * 0.5f;
+    const float midx = pos.x + size.x * 0.5f;
+    dl->AddLine(ImVec2(pos.x, midy), ImVec2(pos.x + size.x, midy), axis, 1.f);
+    dl->AddLine(ImVec2(midx, pos.y), ImVec2(midx, pos.y + size.y), axis, 1.f);
+    constexpr int kMinor = 5;
+    for (int i = 0; i < divx; ++i)
+    {
+      for (int j = 1; j < kMinor; ++j)
+      {
+        const float x = pos.x + size.x * ((static_cast<float>(i) +
+                                           static_cast<float>(j) / kMinor) /
+                                          divx);
+        dl->AddLine(ImVec2(x, pos.y + size.y * 0.46f),
+                    ImVec2(x, pos.y + size.y * 0.54f), grid, 0.5f);
+      }
+    }
+    for (int i = 0; i < divy; ++i)
+    {
+      for (int j = 1; j < kMinor; ++j)
+      {
+        const float y = pos.y + size.y * ((static_cast<float>(i) +
+                                           static_cast<float>(j) / kMinor) /
+                                          divy);
+        dl->AddLine(ImVec2(pos.x + size.x * 0.46f, y),
+                    ImVec2(pos.x + size.x * 0.54f, y), grid, 0.5f);
+      }
     }
 
-    const ImVec2 tsize = ImGui::CalcTextSize(label);
-    const ImVec2 tpos =
-        V2Add(pos, ImVec2((size.x - tsize.x) * 0.5f,
-                          size.y - tsize.y - 8.f + dip));
-    const ImVec4 text_col =
-        press > 0.55f ? ImVec4(1.f, 1.f, 1.f, 1.f) : ImVec4(0.15f, 0.16f, 0.20f, 1.f);
-    dl->AddText(tpos, ImGui::GetColorU32(text_col), label);
+    if (count >= 2 && samples)
+    {
+      dl->PushClipRect(pos, V2Add(pos, size), true);
+      std::vector<ImVec2> pts(static_cast<std::size_t>(count));
+      const float range = scale_max - scale_min;
+      const float inv_range = (std::fabs(range) > 1e-6f) ? 1.f / range : 1.f;
+      bool flat = true;
+      for (int i = 0; i < count; ++i)
+      {
+        if (std::fabs(samples[i]) > 1e-6f)
+        {
+          flat = false;
+        }
+        const float u = static_cast<float>(i) / static_cast<float>(count - 1);
+        const float t = (samples[i] - scale_min) * inv_range;
+        pts[static_cast<std::size_t>(i)] =
+            ImVec2(pos.x + u * size.x, pos.y + size.y - t * size.y);
+      }
+      const ImVec4 &trace = kPalette.scope_trace;
+      if (flat)
+      {
+        // Idle: single dim zero line with light glow (design flat trace).
+        dl->AddLine(ImVec2(pos.x, midy), ImVec2(pos.x + size.x, midy),
+                    U32A(trace, 0.10f), 4.f);
+        dl->AddLine(ImVec2(pos.x, midy), ImVec2(pos.x + size.x, midy),
+                    U32A(trace, 0.25f), 1.f);
+      }
+      else
+      {
+        dl->AddPolyline(pts.data(), count, U32A(trace, 0.18f), 0, 6.f);
+        dl->AddPolyline(pts.data(), count, U32A(trace, 0.45f), 0, 3.f);
+        dl->AddPolyline(pts.data(), count, U32(trace), 0, 1.2f);
+        dl->AddPolyline(pts.data(), count, U32(kPalette.accent_bright), 0,
+                        0.5f);
+      }
+      dl->PopClipRect();
+    }
 
     ImGui::PopID();
-  }
-
-  void AnimatedTabBar(const char *str_id, const char *const *labels, int count,
-                      int *current)
-  {
-    PillGroup(str_id, labels, count, current, theme::S(36.f));
   }
 
   void LevelMeter(const char *str_id, float value01, const ImVec2 &size_arg,
@@ -304,21 +496,12 @@ namespace fw::ui
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImGui::InvisibleButton("##meterbox", size);
 
-    dl->AddRectFilled(pos, V2Add(pos, size), U32A(kPalette.panel_alt, 0.7f),
-                      size.y * 0.3f);
-
+    dl->AddRectFilled(pos, V2Add(pos, size), U32(kPalette.border), 2.f);
     const float fillw = size.x * v;
     if (fillw > 0.5f)
     {
-      const ImU32 c_hot = v > 0.85f  ? U32(kPalette.danger)
-                          : v > 0.6f ? U32(kPalette.warning)
-                                     : U32(kPalette.accent);
-      dl->AddRectFilledMultiColor(pos, V2Add(pos, ImVec2(fillw, size.y)),
-                                  U32(kPalette.accent), c_hot, c_hot,
-                                  U32(kPalette.accent));
-      dl->AddRectFilled(V2Add(pos, ImVec2(fillw - 2.f, 0.f)),
-                        V2Add(pos, ImVec2(fillw + 2.f, size.y)),
-                        U32A(kPalette.text, 0.30f));
+      const ImU32 c = v > 0.9f ? U32(kPalette.danger) : U32(kPalette.accent);
+      dl->AddRectFilled(pos, V2Add(pos, ImVec2(fillw, size.y)), c, 2.f);
     }
     if (peak_hold01 >= 0.f) {
       const float px =
@@ -326,218 +509,35 @@ namespace fw::ui
       dl->AddLine(ImVec2(px, pos.y + 1.f), ImVec2(px, pos.y + size.y - 1.f),
                   U32A(kPalette.text, 0.85f), 2.f);
     }
-    dl->AddRect(pos, V2Add(pos, size), U32A(kPalette.border, 0.8f),
-                size.y * 0.3f);
-
     ImGui::PopID();
   }
 
-  void GlowWaveform(const char *str_id, const float *samples, int count,
-                    const ImVec2 &size_arg, float scale_min, float scale_max)
+  void VerticalMeter(const char *str_id, float value01, const ImVec2 &size,
+                     float peak_hold01)
   {
     ImGui::PushID(str_id);
-    const ImVec2 avail = ImGui::GetContentRegionAvail();
-    const ImVec2 size(size_arg.x <= 0.f ? avail.x + size_arg.x : size_arg.x,
-                      size_arg.y <= 0.f ? avail.y + size_arg.y : size_arg.y);
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     ImDrawList *dl = ImGui::GetWindowDrawList();
-    ImGui::InvisibleButton("##wave", size);
-
-    dl->AddRectFilled(pos, V2Add(pos, size), U32A(kPalette.panel_alt, 0.55f),
-                      8.f);
-    dl->AddRect(pos, V2Add(pos, size), U32A(kPalette.border, 0.7f), 8.f);
-
-    // Scope graticule — denser only when the plot is tall enough to read.
-    const float pad = 6.f;
-    const float midy = pos.y + size.y * 0.5f;
-    dl->AddLine(ImVec2(pos.x + pad, midy), ImVec2(pos.x + size.x - pad, midy),
-                U32A(kPalette.border, 0.55f), 1.f);
-    if (size.y >= 80.f)
-    {
-      const ImU32 grid = U32A(kPalette.border, 0.28f);
-      for (int d = 1; d <= 2; ++d)
-      {
-        const float y = pos.y + size.y * (0.5f - 0.25f * static_cast<float>(d));
-        const float y2 = pos.y + size.y * (0.5f + 0.25f * static_cast<float>(d));
-        dl->AddLine(ImVec2(pos.x + pad, y), ImVec2(pos.x + size.x - pad, y),
-                    grid, 1.f);
-        dl->AddLine(ImVec2(pos.x + pad, y2), ImVec2(pos.x + size.x - pad, y2),
-                    grid, 1.f);
-      }
-      constexpr int kDivs = 8;
-      for (int i = 1; i < kDivs; ++i)
-      {
-        const float x =
-            pos.x + size.x * (static_cast<float>(i) / static_cast<float>(kDivs));
-        dl->AddLine(ImVec2(x, pos.y + pad), ImVec2(x, pos.y + size.y - pad),
-                    grid, 1.f);
-      }
+    ImGui::InvisibleButton("##vmeter", size);
+    const float v = std::clamp(value01, 0.f, 1.f);
+    dl->AddRectFilled(pos, V2Add(pos, size), U32(kPalette.border), 2.f);
+    const float fill_h = size.y * v;
+    if (fill_h > 1.f) {
+      const ImU32 c =
+          v > 0.9f ? U32(kPalette.danger) : U32(kPalette.accent);
+      dl->AddRectFilled(ImVec2(pos.x, pos.y + size.y - fill_h),
+                        ImVec2(pos.x + size.x, pos.y + size.y), c, 2.f);
+      dl->AddRectFilled(ImVec2(pos.x - 1.f, pos.y + size.y - fill_h),
+                        ImVec2(pos.x + size.x + 1.f, pos.y + size.y),
+                        U32A(kPalette.accent, 0.15f), 2.f);
     }
-
-    if (count >= 2 && samples)
-    {
-      dl->PushClipRect(pos, V2Add(pos, size), true);
-      std::vector<ImVec2> pts(static_cast<std::size_t>(count));
-      const float range = scale_max - scale_min;
-      const float inv_range = (std::fabs(range) > 1e-6f) ? 1.f / range : 1.f;
-      for (int i = 0; i < count; ++i)
-      {
-        const float u = static_cast<float>(i) / static_cast<float>(count - 1);
-        const float t = (samples[i] - scale_min) * inv_range;
-        pts[static_cast<std::size_t>(i)] =
-            ImVec2(pos.x + u * size.x, pos.y + size.y - t * size.y);
-      }
-      const ImVec4 &trace = kPalette.scope_trace;
-      dl->AddPolyline(pts.data(), count, U32A(trace, 0.12f), 0, 6.f);
-      dl->AddPolyline(pts.data(), count, U32A(trace, 0.28f), 0, 3.5f);
-      dl->AddPolyline(pts.data(), count, U32(trace), 0, 1.6f);
-      dl->PopClipRect();
+    if (peak_hold01 >= 0.f) {
+      const float py =
+          pos.y + size.y * (1.f - std::clamp(peak_hold01, 0.f, 1.f));
+      dl->AddLine(ImVec2(pos.x, py), ImVec2(pos.x + size.x, py),
+                  U32A(kPalette.text, 0.9f), 1.5f);
     }
-
     ImGui::PopID();
-  }
-
-  bool GlowButton(const char *label, const ImVec2 &size_arg, bool danger)
-  {
-    ImGui::PushID(label);
-    const ImVec2 label_size = ImGui::CalcTextSize(label, nullptr, true);
-    const ImVec2 padding(16.f, 10.f);
-    const ImVec2 avail = ImGui::GetContentRegionAvail();
-    ImVec2 size = size_arg;
-    if (size.x == 0.f)
-    {
-      size.x = label_size.x + padding.x * 2.f;
-    }
-    else if (size.x < 0.f)
-    {
-      size.x = avail.x;
-    }
-    if (size.y == 0.f)
-    {
-      size.y = label_size.y + padding.y * 2.f;
-    }
-    else if (size.y < 0.f)
-    {
-      size.y = avail.y;
-    }
-
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList *dl = ImGui::GetWindowDrawList();
-    ImGui::InvisibleButton("##glowbtn", size);
-    const bool hovered = ImGui::IsItemHovered();
-    const bool active = ImGui::IsItemActive();
-    const bool pressed = ImGui::IsItemClicked();
-
-    const ImGuiID id = ImGui::GetID("##glowbtn");
-    static std::unordered_map<ImGuiID, float> s_glow;
-    float &glow = AnimSlot(s_glow, id, 0.f);
-    const float dt = ImGui::GetIO().DeltaTime;
-    glow = fw::anim::ExpApproach(glow, hovered ? 1.f : 0.f, dt, 12.f);
-
-    const ImVec4 &base = danger ? kPalette.danger : kPalette.accent;
-    const float inset = active ? 2.f : 0.f;
-    const ImVec2 p0 = V2Add(pos, ImVec2(inset, inset));
-    const ImVec2 p1 = V2Add(pos, ImVec2(size.x - inset, size.y - inset));
-
-    // GetColorU32() (rather than the raw U32/U32A helpers) folds in the
-    // current style.Alpha, so BeginDisabled()'s dimming still applies even
-    // though this widget draws itself via ImDrawList.
-    const float fill_a = active ? 0.85f : (0.30f + 0.45f * glow);
-    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(ImVec4(base.x, base.y, base.z, fill_a)), 6.f);
-    dl->AddRect(p0, p1,
-                ImGui::GetColorU32(ImVec4(base.x, base.y, base.z, 0.55f + 0.45f * glow)),
-                6.f, 0, 1.5f);
-
-    const ImVec4 &text_col =
-        (active || glow > 0.5f) ? kPalette.bg : kPalette.text;
-    const ImVec2 tsize = ImGui::CalcTextSize(label);
-    const ImVec2 tpos = V2Add(
-        pos, ImVec2((size.x - tsize.x) * 0.5f, (size.y - tsize.y) * 0.5f));
-    dl->AddText(tpos, ImGui::GetColorU32(text_col), label);
-
-    ImGui::PopID();
-    return pressed;
-  }
-
-  void VoiceSlotBadge(const char *str_id, const char *label, bool active,
-                      float glow01, const char *sub, bool selected)
-  {
-    ImGui::PushID(str_id);
-    // Compact chip — note name optional on a second line when sounding.
-    const ImVec2 size(sub ? 46.f : 34.f, sub ? 36.f : 28.f);
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList *dl = ImGui::GetWindowDrawList();
-    ImGui::InvisibleButton("##slot", size);
-
-    const float g = std::clamp(glow01, 0.f, 1.f);
-    dl->AddRectFilled(pos, V2Add(pos, size), U32A(kPalette.panel_alt, 0.9f),
-                      6.f);
-    if (g > 0.01f)
-    {
-      dl->AddRectFilled(pos, V2Add(pos, size), U32A(kPalette.accent, 0.28f * g),
-                        6.f);
-    }
-    const ImU32 border =
-        selected    ? U32(kPalette.accent)
-        : g > 0.01f ? U32A(kPalette.accent, 0.4f + 0.6f * g)
-                    : U32A(kPalette.border, 0.6f);
-    dl->AddRect(pos, V2Add(pos, size), border, 6.f, 0,
-                selected ? 2.f : (1.f + g));
-
-    const ImVec2 tsize = ImGui::CalcTextSize(label);
-    const float label_y = sub ? 3.f : (size.y - tsize.y) * 0.5f;
-    dl->AddText(V2Add(pos, ImVec2((size.x - tsize.x) * 0.5f, label_y)),
-                active ? U32(kPalette.text) : U32A(kPalette.text_dim, 0.85f),
-                label);
-    if (sub)
-    {
-      const ImVec2 ssize = ImGui::CalcTextSize(sub);
-      dl->AddText(V2Add(pos, ImVec2((size.x - ssize.x) * 0.5f, 18.f)),
-                  U32A(kPalette.text_dim, 0.9f), sub);
-    }
-
-    ImGui::PopID();
-  }
-
-  bool VoiceSelector(const char *str_id, int *current, int count)
-  {
-    ImGui::PushID(str_id);
-    ImDrawList *dl = ImGui::GetWindowDrawList();
-    const float size = 26.f;
-    const float gap = 4.f;
-    bool changed = false;
-
-    for (int i = 0; i < count; ++i)
-    {
-      if (i)
-      {
-        ImGui::SameLine(0.f, gap);
-      }
-      const ImVec2 pos = ImGui::GetCursorScreenPos();
-      char label[4];
-      std::snprintf(label, sizeof(label), "%x", i & 15);
-      ImGui::PushID(i);
-      ImGui::InvisibleButton("##chip", ImVec2(size, size));
-      const bool hovered = ImGui::IsItemHovered();
-      const bool sel = (*current == i);
-      if (ImGui::IsItemClicked())
-      {
-        *current = i;
-        changed = true;
-      }
-
-      const ImU32 bg = sel       ? U32(kPalette.accent)
-                       : hovered ? U32A(kPalette.accent_dim, 0.6f)
-                                 : U32A(kPalette.panel_alt, 0.85f);
-      dl->AddRectFilled(pos, V2Add(pos, ImVec2(size, size)), bg, 5.f);
-      const ImVec2 tsize = ImGui::CalcTextSize(label);
-      dl->AddText(V2Add(pos, ImVec2((size - tsize.x) * 0.5f, (size - tsize.y) * 0.5f)),
-                  sel ? U32(kPalette.bg) : U32(kPalette.text), label);
-      ImGui::PopID();
-    }
-
-    ImGui::PopID();
-    return changed;
   }
 
   void ProgressBar(const char *str_id, float value01, const ImVec2 &size)
@@ -551,389 +551,162 @@ namespace fw::ui
     }
     if (sz.y <= 0.f)
     {
-      sz.y = 8.f;
+      sz.y = theme::S(3.f);
     }
     ImGui::InvisibleButton("##bar", sz);
     ImDrawList *dl = ImGui::GetWindowDrawList();
     const float v = std::clamp(value01, 0.f, 1.f);
-    dl->AddRectFilled(pos, V2Add(pos, sz), U32A(kPalette.panel_alt, 0.9f), 4.f);
+    dl->AddRectFilled(pos, V2Add(pos, sz), U32(kPalette.border), sz.y * 0.5f);
     if (v > 0.001f)
     {
       dl->AddRectFilled(pos, V2Add(pos, ImVec2(sz.x * v, sz.y)),
-                        U32(kPalette.accent), 4.f);
+                        U32(kPalette.accent), sz.y * 0.5f);
     }
     ImGui::PopID();
   }
 
-  bool NavDrawer(const char *str_id, const char *const *labels, int count,
-                 int *current, bool *expanded, float *anim_width)
+  float Splitter(const char *str_id, bool horizontal_bar, float thickness,
+                 float cross_axis_size)
   {
     ImGui::PushID(str_id);
-    const float collapsed_w = theme::S(theme::Metrics::NavCollapsed);
-    const float expanded_w = theme::S(theme::Metrics::NavExpanded);
-    const float target = *expanded ? expanded_w : collapsed_w;
-    *anim_width =
-        fw::anim::ExpApproach(*anim_width, target, ImGui::GetIO().DeltaTime, 14.f);
+    if (thickness <= 0.f) {
+      thickness = theme::S(theme::Metrics::Splitter);
+    }
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float long_axis =
+        cross_axis_size > 0.f
+            ? cross_axis_size
+            : (horizontal_bar ? avail.x : avail.y);
+    const ImVec2 size =
+        horizontal_bar ? ImVec2(long_axis, thickness) : ImVec2(thickness, long_axis);
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##split", size);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+    if (hovered || held) {
+      ImGui::SetMouseCursor(horizontal_bar ? ImGuiMouseCursor_ResizeNS
+                                           : ImGuiMouseCursor_ResizeEW);
+    }
 
-    ImGui::BeginChild("nav_drawer", ImVec2(*anim_width, 0),
-                      ImGuiChildFlags_Borders);
     ImDrawList *dl = ImGui::GetWindowDrawList();
-    const ImVec2 wp = ImGui::GetWindowPos();
-    dl->AddRectFilled(wp,
-                      ImVec2(wp.x + theme::S(3.f), wp.y + ImGui::GetWindowSize().y),
-                      U32(kPalette.accent), 0.f);
+    const float a = held ? 0.6f : (hovered ? 0.35f : 0.12f);
+    dl->AddRectFilled(pos, V2Add(pos, size), U32A(kPalette.accent, a), 1.f);
 
-    ImGui::Dummy(ImVec2(0, theme::S(theme::Metrics::SpaceXS)));
-    if (*expanded)
-    {
-      ImGui::PushFont(theme::g_fonts.large);
-      ImGui::TextColored(kPalette.accent, "  CMI");
-      ImGui::PopFont();
-    }
-    else
-    {
-      ImGui::TextColored(kPalette.accent, " C");
-    }
-
-    if (ImGui::InvisibleButton("##toggle", ImVec2(-1, theme::S(18.f))))
-    {
-      *expanded = !*expanded;
-    }
-    {
-      const ImVec2 p = ImGui::GetItemRectMin();
-      dl->AddText(ImVec2(p.x + theme::S(12.f), p.y + 1.f), U32(kPalette.text_dim),
-                  *expanded ? "<< collapse" : ">>");
-    }
-
-    ImGui::Dummy(ImVec2(0, theme::S(theme::Metrics::SpaceS)));
-    bool changed = false;
-    for (int i = 0; i < count; ++i)
-    {
-      ImGui::PushID(i);
-      const bool sel = (*current == i);
-      const ImVec2 pos = ImGui::GetCursorScreenPos();
-      const float h = theme::S(32.f);
-      const float w = ImGui::GetContentRegionAvail().x;
-      ImGui::InvisibleButton("##nav", ImVec2(w, h));
-      if (ImGui::IsItemClicked())
-      {
-        *current = i;
-        changed = true;
-      }
-      const bool hovered = ImGui::IsItemHovered();
-      if (sel || hovered)
-      {
-        dl->AddRectFilled(pos, V2Add(pos, ImVec2(w, h)),
-                          sel ? U32A(kPalette.accent, 0.22f)
-                              : U32A(kPalette.accent_dim, 0.35f),
-                          theme::S(5.f));
-      }
-      if (sel)
-      {
-        dl->AddRectFilled(pos, ImVec2(pos.x + theme::S(3.f), pos.y + h),
-                          U32(kPalette.accent), 0.f);
-      }
-      char glyph[8];
-      std::snprintf(glyph, sizeof(glyph), " %c",
-                    labels[i][0] ? static_cast<char>(std::toupper(labels[i][0]))
-                                 : '?');
-      if (*expanded || *anim_width > theme::S(110.f))
-      {
-        dl->AddText(V2Add(pos, ImVec2(theme::S(12.f), theme::S(8.f))),
-                    sel ? U32(kPalette.accent) : U32(kPalette.text), labels[i]);
-      }
-      else
-      {
-        dl->AddText(V2Add(pos, ImVec2(theme::S(16.f), theme::S(8.f))),
-                    sel ? U32(kPalette.accent) : U32(kPalette.text_dim), glyph);
-      }
-      ImGui::PopID();
-    }
-
-  ImGui::EndChild();
-  ImGui::PopID();
-  return changed;
-}
-
-float Splitter(const char *str_id, bool horizontal_bar, float thickness,
-               float cross_axis_size)
-{
-  ImGui::PushID(str_id);
-  if (thickness <= 0.f) {
-    thickness = theme::S(theme::Metrics::Splitter);
-  }
-  const ImVec2 avail = ImGui::GetContentRegionAvail();
-  const float long_axis =
-      cross_axis_size > 0.f
-          ? cross_axis_size
-          : (horizontal_bar ? avail.x : avail.y);
-  const ImVec2 size =
-      horizontal_bar ? ImVec2(long_axis, thickness) : ImVec2(thickness, long_axis);
-  const ImVec2 pos = ImGui::GetCursorScreenPos();
-  ImGui::InvisibleButton("##split", size);
-  const bool hovered = ImGui::IsItemHovered();
-  const bool held = ImGui::IsItemActive();
-  if (hovered || held) {
-    ImGui::SetMouseCursor(horizontal_bar ? ImGuiMouseCursor_ResizeNS
-                                         : ImGuiMouseCursor_ResizeEW);
-  }
-
-  ImDrawList *dl = ImGui::GetWindowDrawList();
-  const float a = held ? 0.85f : (hovered ? 0.55f : 0.22f);
-  dl->AddRectFilled(pos, V2Add(pos, size), U32A(kPalette.accent, a), 2.f);
-  // Center tick so the grip reads as a handle, not a bare separator.
-  if (horizontal_bar) {
-    const float midy = pos.y + size.y * 0.5f;
-    const float midx = pos.x + size.x * 0.5f;
-    dl->AddLine(ImVec2(midx - 18.f, midy), ImVec2(midx + 18.f, midy),
-               U32A(kPalette.text, held ? 0.7f : 0.35f), 1.5f);
-  } else {
-    const float midx = pos.x + size.x * 0.5f;
-    const float midy = pos.y + size.y * 0.5f;
-    dl->AddLine(ImVec2(midx, midy - 18.f), ImVec2(midx, midy + 18.f),
-               U32A(kPalette.text, held ? 0.7f : 0.35f), 1.5f);
-  }
-
-  float delta = 0.f;
-  if (held) {
-    delta = horizontal_bar ? ImGui::GetIO().MouseDelta.y
-                           : ImGui::GetIO().MouseDelta.x;
-  }
-  ImGui::PopID();
-  return delta;
-}
-
-bool ToggleRow(const char *label, bool *value, bool enabled)
-{
-  ImGui::PushID(label);
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted(label);
-  ImGui::SameLine();
-  const float btn_w = theme::S(64.f);
-  const float gap = ImGui::GetStyle().ItemSpacing.x;
-  ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                       std::max(0.f, ImGui::GetContentRegionAvail().x -
-                                         btn_w * 2.f - gap));
-  bool changed = false;
-  ImGui::BeginDisabled(!enabled);
-  if (*value) {
-    if (GlowButton("ON", ImVec2(btn_w, 0))) {
-      /* already on */
-    }
-    ImGui::SameLine(0.f, gap);
-    if (GlowButton("OFF", ImVec2(btn_w, 0), true)) {
-      *value = false;
-      changed = true;
-    }
-  } else {
-    if (GlowButton("ON", ImVec2(btn_w, 0))) {
-      *value = true;
-      changed = true;
-    }
-    ImGui::SameLine(0.f, gap);
-    if (GlowButton("OFF", ImVec2(btn_w, 0), true)) {
-      /* already off */
-    }
-  }
-  ImGui::EndDisabled();
-  ImGui::PopID();
-  return changed;
-}
-
-bool TopTabs(const char *str_id, const char *const *labels, int count,
-             int *current)
-{
-  ImGui::PushID(str_id);
-  bool changed = false;
-  *current = std::clamp(*current, 0, count - 1);
-  for (int i = 0; i < count; ++i) {
-    if (i) {
-      ImGui::SameLine(0.f, 4.f);
-    }
-    ImGui::PushID(i);
-    const bool sel = (*current == i);
-    if (sel) {
-      ImGui::PushStyleColor(ImGuiCol_Button, kPalette.panel_high);
-      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kPalette.panel_high);
-      ImGui::PushStyleColor(ImGuiCol_Border,
-                            ImVec4(kPalette.accent.x, kPalette.accent.y,
-                                   kPalette.accent.z, 0.85f));
-      ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
-    }
-    const ImVec2 sz(ImGui::CalcTextSize(labels[i]).x + 28.f, 32.f);
-    if (ImGui::Button(labels[i], sz)) {
-      if (*current != i) {
-        *current = i;
-        changed = true;
-      }
-    }
-    if (sel) {
-      ImGui::PopStyleVar();
-      ImGui::PopStyleColor(3);
-      // Cyan underline
-      const ImVec2 rmin = ImGui::GetItemRectMin();
-      const ImVec2 rmax = ImGui::GetItemRectMax();
-      ImGui::GetWindowDrawList()->AddRectFilled(
-          ImVec2(rmin.x + 6.f, rmax.y - 2.f), ImVec2(rmax.x - 6.f, rmax.y),
-          U32(kPalette.accent_bright));
+    float delta = 0.f;
+    if (held) {
+      delta = horizontal_bar ? ImGui::GetIO().MouseDelta.y
+                             : ImGui::GetIO().MouseDelta.x;
     }
     ImGui::PopID();
+    return delta;
   }
-  ImGui::PopID();
-  return changed;
-}
 
-namespace
-{
-
-void DrawRotaryDial(ImDrawList *dl, ImVec2 pos, float size, float t01,
-                    bool hot, const char *value_label, const char *label)
-{
-  const float cx = pos.x + size * 0.5f;
-  const float cy = pos.y + size * 0.5f;
-  const float r = size * 0.42f;
-  dl->AddCircleFilled(ImVec2(cx, cy), r, U32(kPalette.panel_high), 48);
-  dl->AddCircle(ImVec2(cx, cy), r,
-                U32A(hot ? kPalette.accent : kPalette.border, 0.9f), 48, 2.f);
-  const float a0 = 2.35619f; // 135°
-  const float a1 = 7.06858f; // 405°
-  const float t = std::clamp(t01, 0.f, 1.f);
-  const float ang = a0 + (a1 - a0) * t;
-  dl->PathArcTo(ImVec2(cx, cy), r - 3.f, a0, ang, 32);
-  dl->PathStroke(U32(kPalette.accent), 0, 3.f);
-  const float nx = std::cos(ang);
-  const float ny = std::sin(ang);
-  dl->AddLine(ImVec2(cx + nx * (r * 0.25f), cy + ny * (r * 0.25f)),
-              ImVec2(cx + nx * (r * 0.78f), cy + ny * (r * 0.78f)),
-              U32(kPalette.accent_bright), 2.5f);
-  if (theme::g_fonts.mono) {
-    ImGui::PushFont(theme::g_fonts.mono);
-  }
-  const ImVec2 vsz = ImGui::CalcTextSize(value_label);
-  dl->AddText(ImVec2(cx - vsz.x * 0.5f, pos.y + size - 2.f), U32(kPalette.text),
-              value_label);
-  if (theme::g_fonts.mono) {
-    ImGui::PopFont();
-  }
-  const ImVec2 lsz = ImGui::CalcTextSize(label);
-  dl->AddText(ImVec2(cx - lsz.x * 0.5f, pos.y + size + 12.f),
-              U32(kPalette.text_dim), label);
-}
-
-} // namespace
-
-bool RotaryKnob(const char *str_id, const char *label, float *value, float v_min,
-                float v_max, const char *format, float size)
-{
-  ImGui::PushID(str_id);
-  const ImVec2 pos = ImGui::GetCursorScreenPos();
-  ImDrawList *dl = ImGui::GetWindowDrawList();
-  ImGui::InvisibleButton("##knob", ImVec2(size, size + 28.f));
-  const bool active = ImGui::IsItemActive();
-  const bool hovered = ImGui::IsItemHovered();
-  bool changed = false;
-  if (active) {
-    const float dy = -ImGui::GetIO().MouseDelta.y;
-    const float range = v_max - v_min;
-    *value = std::clamp(*value + dy * range * 0.005f, v_min, v_max);
-    changed = (dy != 0.f);
-  }
-  const float t = (*value - v_min) / std::max(v_max - v_min, 1e-6f);
-  char buf[32];
-  std::snprintf(buf, sizeof(buf), format, static_cast<double>(*value));
-  DrawRotaryDial(dl, pos, size, t, hovered || active, buf, label);
-  ImGui::PopID();
-  return changed;
-}
-
-bool RotaryKnobStepped(const char *str_id, const char *label, int *index,
-                       int count, const char *value_label, float size)
-{
-  if (!index || count < 1) {
-    return false;
-  }
-  *index = std::clamp(*index, 0, count - 1);
-  ImGui::PushID(str_id);
-  const ImVec2 pos = ImGui::GetCursorScreenPos();
-  ImDrawList *dl = ImGui::GetWindowDrawList();
-  ImGui::InvisibleButton("##knob", ImVec2(size, size + 28.f));
-  const bool active = ImGui::IsItemActive();
-  const bool hovered = ImGui::IsItemHovered();
-  bool changed = false;
-
-  /* Accumulate drag so each detent needs a deliberate flick, not a pixel nudge. */
-  ImGuiStorage *st = ImGui::GetStateStorage();
-  const ImGuiID accum_id = ImGui::GetID("##accum");
-  float accum = st->GetFloat(accum_id, 0.f);
-  if (active) {
-    accum += -ImGui::GetIO().MouseDelta.y;
-  } else if (!hovered) {
-    accum = 0.f;
-  }
-  if (hovered) {
-    const float wheel = ImGui::GetIO().MouseWheel;
-    if (wheel > 0.f) {
-      accum += 18.f;
-    } else if (wheel < 0.f) {
-      accum -= 18.f;
+  void DrawNavIcon(ImDrawList *dl, NavIcon icon, ImVec2 c, float h, ImU32 col)
+  {
+    switch (icon)
+    {
+    case NavIcon::Perform:
+    {
+      // ◈ outline diamond with filled centre
+      const ImVec2 pts[4] = {ImVec2(c.x, c.y - h), ImVec2(c.x + h, c.y),
+                             ImVec2(c.x, c.y + h), ImVec2(c.x - h, c.y)};
+      dl->AddPolyline(pts, 4, col, ImDrawFlags_Closed, 1.2f);
+      const float ih = h * 0.45f;
+      const ImVec2 ipts[4] = {ImVec2(c.x, c.y - ih), ImVec2(c.x + ih, c.y),
+                              ImVec2(c.x, c.y + ih), ImVec2(c.x - ih, c.y)};
+      dl->AddConvexPolyFilled(ipts, 4, col);
+      break;
+    }
+    case NavIcon::Tone:
+    {
+      // ◇ outline diamond
+      const ImVec2 pts[4] = {ImVec2(c.x, c.y - h), ImVec2(c.x + h, c.y),
+                             ImVec2(c.x, c.y + h), ImVec2(c.x - h, c.y)};
+      dl->AddPolyline(pts, 4, col, ImDrawFlags_Closed, 1.2f);
+      break;
+    }
+    case NavIcon::Waves:
+    {
+      // ⊟ boxed minus
+      dl->AddRect(ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h), col,
+                  1.f, 0, 1.2f);
+      dl->AddLine(ImVec2(c.x - h * 0.5f, c.y), ImVec2(c.x + h * 0.5f, c.y),
+                  col, 1.2f);
+      break;
+    }
+    case NavIcon::Effect:
+    {
+      // ⊞ boxed plus
+      dl->AddRect(ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h), col,
+                  1.f, 0, 1.2f);
+      dl->AddLine(ImVec2(c.x - h * 0.5f, c.y), ImVec2(c.x + h * 0.5f, c.y),
+                  col, 1.2f);
+      dl->AddLine(ImVec2(c.x, c.y - h * 0.5f), ImVec2(c.x, c.y + h * 0.5f),
+                  col, 1.2f);
+      break;
+    }
+    case NavIcon::Setup:
+    {
+      // ◧ square, left half filled
+      dl->AddRect(ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h), col,
+                  1.f, 0, 1.2f);
+      dl->AddRectFilled(ImVec2(c.x - h + 1.5f, c.y - h + 1.5f),
+                        ImVec2(c.x, c.y + h - 1.5f), col);
+      break;
+    }
     }
   }
-  constexpr float kDetent = 14.f;
-  while (accum >= kDetent) {
-    if (*index + 1 < count) {
-      ++(*index);
-      changed = true;
-    }
-    accum -= kDetent;
-  }
-  while (accum <= -kDetent) {
-    if (*index > 0) {
-      --(*index);
-      changed = true;
-    }
-    accum += kDetent;
-  }
-  if (*index == 0 && accum < 0.f) {
-    accum = 0.f;
-  }
-  if (*index == count - 1 && accum > 0.f) {
-    accum = 0.f;
-  }
-  st->SetFloat(accum_id, accum);
 
-  const float t =
-      (count <= 1) ? 0.f : static_cast<float>(*index) / static_cast<float>(count - 1);
-  DrawRotaryDial(dl, pos, size, t, hovered || active,
-                 value_label ? value_label : "", label);
-  ImGui::PopID();
-  return changed;
-}
+  bool RefreshBtn(const char *str_id, const ImVec2 &size_arg)
+  {
+    ImGui::PushID(str_id);
+    const ImVec2 size(size_arg.x > 0.f ? size_arg.x : theme::S(26.f),
+                      size_arg.y > 0.f ? size_arg.y : theme::S(22.f));
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImGui::InvisibleButton("##refresh", size);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool clicked = ImGui::IsItemClicked();
+    const ImVec2 p1(pos.x + size.x, pos.y + size.y);
+    dl->AddRectFilled(pos, p1, ImGui::GetColorU32(kPalette.panel_alt),
+                      theme::S(2.f));
+    dl->AddRect(pos, p1,
+                ImGui::GetColorU32(hovered ? kPalette.border_hi
+                                           : kPalette.border),
+                theme::S(2.f));
+    const ImVec2 c(pos.x + size.x * 0.5f, pos.y + size.y * 0.5f);
+    const float r = std::min(size.x, size.y) * 0.28f;
+    const ImU32 col = ImGui::GetColorU32(kPalette.text_dim);
+    // 300° arc + arrowhead at the open end.
+    dl->PathArcTo(c, r, -0.35f * 3.14159f, 1.25f * 3.14159f, 20);
+    dl->PathStroke(col, 0, theme::S(1.4f));
+    const float ang = -0.35f * 3.14159f;
+    const float ah = theme::S(2.5f);
+    const ImVec2 tip(c.x + r * std::cos(ang), c.y + r * std::sin(ang));
+    dl->AddTriangleFilled(ImVec2(tip.x - ah, tip.y - ah),
+                          ImVec2(tip.x + ah * 1.2f, tip.y),
+                          ImVec2(tip.x - ah, tip.y + ah), col);
+    ImGui::PopID();
+    return clicked;
+  }
 
-void VerticalMeter(const char *str_id, float value01, const ImVec2 &size,
-                   float peak_hold01)
-{
-  ImGui::PushID(str_id);
-  const ImVec2 pos = ImGui::GetCursorScreenPos();
-  ImDrawList *dl = ImGui::GetWindowDrawList();
-  ImGui::InvisibleButton("##vmeter", size);
-  const float v = std::clamp(value01, 0.f, 1.f);
-  dl->AddRectFilled(pos, V2Add(pos, size), U32A(kPalette.bg_alt, 0.95f), 3.f);
-  const float fill_h = size.y * v;
-  if (fill_h > 1.f) {
-    const ImU32 c = v > 0.85f   ? U32(kPalette.danger)
-                    : v > 0.6f ? U32(kPalette.warning)
-                               : U32(kPalette.scope_trace);
-    dl->AddRectFilled(ImVec2(pos.x + 1.f, pos.y + size.y - fill_h),
-                      ImVec2(pos.x + size.x - 1.f, pos.y + size.y), c, 2.f);
+  void WarnIcon(const ImVec4 &col, float size)
+  {
+    size = theme::S(size);
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float line_h = ImGui::GetTextLineHeight();
+    const float top = p.y + (line_h - size) * 0.5f;
+    const ImVec2 a(p.x + size * 0.5f, top);
+    const ImVec2 b(p.x, top + size);
+    const ImVec2 c(p.x + size, top + size);
+    dl->AddTriangle(a, b, c, U32(col), 1.4f);
+    // exclamation tick
+    const float cx = p.x + size * 0.5f;
+    dl->AddLine(ImVec2(cx, top + size * 0.35f), ImVec2(cx, top + size * 0.68f),
+                U32(col), 1.4f);
+    dl->AddCircleFilled(ImVec2(cx, top + size * 0.82f), 0.8f, U32(col), 6);
+    ImGui::Dummy(ImVec2(size, line_h));
   }
-  if (peak_hold01 >= 0.f) {
-    const float py =
-        pos.y + size.y * (1.f - std::clamp(peak_hold01, 0.f, 1.f));
-    dl->AddLine(ImVec2(pos.x, py), ImVec2(pos.x + size.x, py),
-                U32A(kPalette.text, 0.9f), 2.f);
-  }
-  dl->AddRect(pos, V2Add(pos, size), U32A(kPalette.border, 0.7f), 3.f);
-  ImGui::PopID();
-}
 
 } // namespace fw::ui

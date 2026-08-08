@@ -45,9 +45,9 @@ void ToastHost::Draw()
   const ImGuiViewport *vp = ImGui::GetMainViewport();
   const float pad = S(fw::theme::Metrics::SpaceM);
   const float width = S(320.f);
-  float y = vp->WorkPos.y + pad + S(fw::theme::Metrics::TopBarH);
+  float y = vp->WorkPos.y + pad + S(fw::theme::Metrics::StatusBarH);
 
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, S(8.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, S(2.f));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(12.f), S(10.f)));
   for (int i = static_cast<int>(items_.size()) - 1; i >= 0; --i) {
     const Toast &t = items_[static_cast<std::size_t>(i)];

@@ -27,8 +27,7 @@ enum class GuiView : int
   Tone = 1,
   Waves = 2,
   Effect = 3,
-  Lab = 4,
-  Setup = 5,
+  Setup = 4,
 };
 
 enum class OutMode : int
@@ -51,6 +50,7 @@ struct EffectUiState
   uint8_t adc_chip = 0;
   uint8_t adc_reg = 0;
   uint8_t adc_val = 0;
+  int adc_mode = 0; // 0 = read, 1 = write
 };
 
 struct App
@@ -81,7 +81,7 @@ struct App
   GuiView view = GuiView::Perform;
 
   char raw_cmd[256] = {};
-  int raw_target = 0;
+  int raw_target = 0; // 0 channel, 1 effect, 2 all (console target tabs)
   std::deque<std::string> lab_history;
   int lab_history_index = -1;
   char log_filter[64] = {};
@@ -91,41 +91,48 @@ struct App
   int play_mode = 0;
   int wave_slot = 0;
   float wave_rate = 14000.f;
+  std::array<float, 8> wave_slot_rate{
+      14000.f, 14000.f, 14000.f, 14000.f, 14000.f, 14000.f, 14000.f, 14000.f};
   char wave_cdc_path[256] = {};
   int wave_cdc_port_index = 0;
 
-  bool nav_expanded = true; // legacy settings key; unused by Stitch shell
-  float nav_width = 148.f;
+  bool nav_expanded = true; // legacy settings key; unused by phosphor shell
+  float nav_width = 148.f;  // legacy
+  float ui_scale = 1.f;     // user zoom (Cmd/Ctrl +/-/0), persisted
   bool log_collapsed = false;
-  float layout_log_w = 280.f; // right activity log width
+  float layout_log_w = 288.f; // right LOG + CONSOLE width (design 288)
   bool auto_reconnect = false;
   bool settings_dirty = false;
   float settings_save_countdown = 0.f;
 
   /** Persisted panel sizes for drag splitters (window pixels). */
-  float layout_log_h = 100.f; // legacy
-  float layout_perform_voice_h = 78.f;
-  float layout_perform_piano_h = 140.f;
-  float layout_tone_left_w = 0.f; // 0 → seed from fraction on first draw
+  float layout_log_h = 100.f;             // legacy
+  float layout_perform_voice_h = 78.f;    // legacy
+  float layout_perform_piano_h = 180.f;   // bottom voice/piano strip height
+  float layout_tone_left_w = 0.f;         // legacy
 
   int shape_mode = 0;
   float shape_param = 0.5f;
-  float filter_hz_f = 20000.f;
+  float filter_hz_f = 5000.f;
   float filter_q_f = 1.f;
   float filter_k_f = 0.f;
   bool filter_bypass = true;
+  int filter_voice = 0; // n0..n7 chip selection on the Filter panel
   bool env_apply_all = false;
   int selected_voice = 0;
   int piano_octave = 0; // offset from C4 (0 = C4–C5)
   int piano_velocity = 100;
-  /** Index into classic 1-2-5 TIME/DIV table (µs/div). Default 10 ms/div. */
-  int scope_time_div_idx = 7;
-  /** Index into classic 1-2-5 VOLT/DIV table. Default 0.2 V/div. */
-  int scope_volt_div_idx = 2;
+  /** Perform scope controls (design: continuous halve/double + slider). */
+  float scope_time_ms = 4.f; // ms per division, 0.1–200
+  float scope_volt = 1.f;    // amplitude compression, 0.1–8
   float peak_hold = 0.f;
   float peak_hold_timer = 0.f;
   bool midi_activity = false;
   float midi_activity_timer = 0.f;
+
+  /** Status-bar popover state (BUS / MIDI chips). */
+  bool bus_popover = false;
+  bool midi_popover = false;
 
   EffectUiState effect;
 
@@ -134,7 +141,7 @@ struct App
   std::vector<EnvProgram> env_undo;
   char env_preset_name[64] = "My patch";
 
-  std::deque<std::string> log_view;
+  std::deque<LogEntry> log_view;
   bool log_auto_scroll = true;
 
   std::array<float, midi_host::kVoiceCount> voice_glow{};
@@ -143,15 +150,17 @@ struct App
   void RefreshPortLists();
   void Tick();
   void Draw();
-  void DrawTopNav();
+  void DrawSidebar();
+  void DrawStatusBar();
   void DrawActivityLog();
-  void DrawFooter();
   void DrawPerform();
+  void DrawTone();
   void DrawSetup();
-  void DrawLab();
   void DrawAbout();
   void DrawBusFaultBanner();
+  void DrawShortcutSheet();
   void DrawDisconnectedHint(const char *action);
+  void SendConsole(const char *cmd);
   void ApplyBankEvents(const std::vector<midi_host::BankEvent> &events);
   void AllNotesOff();
   bool EnsureAudio();

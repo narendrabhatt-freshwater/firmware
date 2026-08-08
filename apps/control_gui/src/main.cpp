@@ -102,15 +102,30 @@ int main(int argc, char **argv)
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.IniFilename = nullptr; // layout persistence is apps/settings.ini
 
+  App app;
+  g_app = &app;
+  fw::settings::Load(app);
+
+  // Effective UI scale = persisted user zoom × monitor content scale
+  // (content scale is a no-op on macOS — points already handle Retina).
+  fw::theme::SetUserZoom(app.ui_scale);
+  {
+    float sx = 1.f;
+    float sy = 1.f;
+    glfwGetWindowContentScale(window, &sx, &sy);
+    fw::theme::SetContentScale(sx);
+  }
+  glfwSetWindowContentScaleCallback(
+      window, [](GLFWwindow *, float sx, float) {
+        fw::theme::SetContentScale(sx);
+      });
+  (void)fw::theme::ConsumeFontsDirty(); // initial load below uses final scale
+
   ImGui::StyleColorsDark();
   fw::theme::Apply();
   fw::theme::LoadFonts(io);
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init(glsl_version);
-
-  App app;
-  g_app = &app;
-  fw::settings::Load(app);
   // Clamp layout restored from a broken DPI-scaled save so panels fit.
   app.nav_width = std::clamp(app.nav_width, 52.f, 180.f);
   app.layout_log_h = std::clamp(app.layout_log_h, 56.f, 280.f);
@@ -132,6 +147,14 @@ int main(int argc, char **argv)
 
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
+
+    // Zoom / content-scale changed: rebake fonts + style outside the frame.
+    if (fw::theme::ConsumeFontsDirty()) {
+      ImGui_ImplOpenGL3_DestroyFontsTexture();
+      fw::theme::LoadFonts(io);
+      fw::theme::Apply();
+      ImGui_ImplOpenGL3_CreateFontsTexture();
+    }
 
     {
       std::lock_guard<std::mutex> lock(g_drop_mu);

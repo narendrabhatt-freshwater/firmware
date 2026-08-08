@@ -39,28 +39,31 @@ cmake --build apps/control_gui/build
 
 ## Views
 
-1. **Perform** — Preview scope hero, 16 voice chips, on-screen + computer keyboard piano (A–K / W E T Y U, Z/X octave)
-2. **Tone** — oscillator shape, LPF + fk, multi-segment envelope editor with presets / undo / copy-to-all
-3. **Waves** — 8-slot bank, CDC upload, drag-and-drop files, waveform thumbnails
-4. **Effect** — phantom / AUDIO_EN / LEDs (last-sent state), USB ADC channel, ADC register inspector
-5. **Lab** — raw command line with history, log filter, click-to-copy
-6. **Setup** — RS485 / MIDI / output mode, auto-reconnect, port refresh
+1. **Perform** — full-height preview scope with TIME/DIV / VOLTS/DIV controls, 4×4 voice grid, two-octave on-screen + computer keyboard piano (A–K / W E T Y U, Z/X octave)
+2. **Tone** — playback-mode strip, oscillator shape with waveform preview, n0–n7 LPF + fk, multi-segment envelope editor (voice thumbnails, presets, undo, segment table)
+3. **Waves** — 8-slot bank in a 4-column grid, CDC upload, drag-and-drop files, waveform thumbnails, per-slot playback rate
+4. **Effect** — phantom / AUDIO_EN / LEDs (last-sent state), USB ADC channel, ADC/I2C tools
+5. **Setup** — RS485 / MIDI / output routing, auto-reconnect, port refresh
+
+The UI follows the phosphor-terminal design in
+`vite/Freshwater Control App Design` (React reference implementation).
 
 ## Shell
 
-- Left nav drawer (collapsible)
-- Top bar: connection pills left · gain / Silence / Recover right
-- Collapsible log strip + status bar (queue depth, MIDI activity)
-- DPI-aware spacing/typography (`theme::Scale`)
+- Left 56 px icon rail: view switcher, Recover (on fault), shortcuts
+- Top status bar: BUS / MIDI chips with inline connect popovers, MODE toggle, VOICES count, gain, Silence
+- Right LOG + CONSOLE panel (collapsible): timestamped log with filter, raw command line with CH/EF/ALL target tabs, ↑↓ history, quick sends
+- Bus-fault banner with Recover under the status bar
 - Layout and ports persisted to `~/Library/Application Support/CMI/control_gui.ini` (macOS) or `~/.config/cmi/` on Linux
-- About: click **CMI** in the top bar, **Setup → About…**, or **F1**
+- About: **F1**
 
 ## Shortcuts
 
 | Key                  | Action                  |
 | -------------------- | ----------------------- |
-| `1`–`6`              | Switch views            |
+| `1`–`5`              | Switch views            |
 | `Space`              | All notes off / silence |
+| `Cmd/Ctrl` `+`/`-`/`0` | UI zoom in / out / reset (persisted) |
 | `F1`                 | About                   |
 | `?`                  | Shortcuts overlay       |
 | `A`–`K`, `W E T Y U` | Piano (Perform)         |

@@ -149,7 +149,7 @@ bool Load(App &app)
       continue;
     }
     if (key == "view") {
-      app.view = static_cast<GuiView>(std::clamp(std::atoi(val.c_str()), 0, 5));
+      app.view = static_cast<GuiView>(std::clamp(std::atoi(val.c_str()), 0, 4));
     } else if (key == "nav_expanded") {
       app.nav_expanded = (std::atoi(val.c_str()) != 0);
     } else if (key == "nav_width") {
@@ -184,11 +184,11 @@ bool Load(App &app)
     } else if (key == "play_mode") {
       app.play_mode = std::clamp(std::atoi(val.c_str()), 0, 1);
     } else if (key == "piano_octave") {
-      app.piano_octave = std::clamp(std::atoi(val.c_str()), -2, 4);
+      app.piano_octave = std::clamp(std::atoi(val.c_str()), -4, 3);
+    } else if (key == "ui_scale") {
+      app.ui_scale =
+          std::clamp(std::strtof(val.c_str(), nullptr), 0.75f, 1.75f);
     }
-  }
-  if (!app.nav_expanded) {
-    app.nav_width = fw::theme::Metrics::NavCollapsed;
   }
   return true;
 }
@@ -219,6 +219,7 @@ bool Save(const App &app)
   WriteKV(out, "auto_reconnect", app.auto_reconnect);
   WriteKV(out, "play_mode", app.play_mode);
   WriteKV(out, "piano_octave", app.piano_octave);
+  WriteKV(out, "ui_scale", app.ui_scale);
   return true;
 }
 
