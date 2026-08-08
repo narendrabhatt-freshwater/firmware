@@ -19,6 +19,11 @@
 namespace
 {
 
+using fw::theme::kPalette;
+using fw::theme::S;
+using fw::theme::S2;
+using fw::ui::BtnKind;
+
 constexpr float kKMin = -10.f;
 constexpr float kKMax = 10.f;
 
@@ -38,15 +43,49 @@ std::string FormatSlopeToken(float slope, float k)
   return buf;
 }
 
+void MonoText(const char *text, const ImVec4 &col, ImFont *font)
+{
+  if (font) {
+    ImGui::PushFont(font);
+  }
+  ImGui::TextColored(col, "%s", text);
+  if (font) {
+    ImGui::PopFont();
+  }
+}
+
+/** Design row: mono label (min width 80) + inline content; bottom hairline.
+ * Caller draws content after this and then calls RowEnd(). */
+void RowBegin(const char *label)
+{
+  MonoText(label, kPalette.text_dim, fw::theme::g_fonts.caps);
+  ImGui::SameLine(S(92.f));
+}
+
+void RowEnd()
+{
+  ImGui::Spacing();
+  ImGui::Separator();
+}
+
+void FormatHz(float hz, char *buf, std::size_t n)
+{
+  if (hz < 1000.f) {
+    std::snprintf(buf, n, "%.0f Hz", static_cast<double>(hz));
+  } else {
+    std::snprintf(buf, n, "%.2f kHz", static_cast<double>(hz / 1000.f));
+  }
+}
+
 /**
- * Interactive envelope curve: click empty space to split a segment and add
- * a breakpoint there, drag an existing breakpoint to reshape (vertical =
- * amplitude, horizontal = re-solves that segment's slope so the point lands
- * at the dragged time). Breakpoint 0 (start, fixed at t=0/amp=0) isn't
- * draggable; the release point's amplitude is pinned to 0 but its time
- * (via slope) is.
+ * Interactive envelope curve (design ENVELOPE EDITOR canvas): grid, filled
+ * area, glow line, draggable breakpoints with amp labels. Double-click empty
+ * space to split a segment there, right-click a breakpoint to remove it,
+ * drag to reshape (vertical = amplitude, horizontal re-solves that segment's
+ * slope). Breakpoint 0 (t=0/amp=0) is fixed; the release point's amplitude
+ * is pinned to 0 but its time (via slope) is draggable.
  */
-void DrawEnvelopeCurveEditor(EnvProgram &prog, ImVec2 size_arg)
+void DrawEnvelopeCurveEditor(App &app, EnvProgram &prog, ImVec2 size_arg)
 {
   const ImVec2 avail = ImGui::GetContentRegionAvail();
   const ImVec2 size(size_arg.x <= 0.f ? avail.x + size_arg.x : size_arg.x,
@@ -83,30 +122,45 @@ void DrawEnvelopeCurveEditor(EnvProgram &prog, ImVec2 size_arg)
     return ImVec2(p0.x + u * w, p0.y + h - v * h);
   };
 
-  dl->AddRectFilled(p0, p1, fw::theme::U32A(fw::theme::kPalette.panel_alt, 0.55f), 8.f);
-  dl->AddRect(p0, p1, fw::theme::U32A(fw::theme::kPalette.border, 0.7f), 8.f);
+  dl->AddRectFilled(p0, p1, fw::theme::U32(kPalette.bg_alt), S(2.f));
+  dl->AddRect(p0, p1, fw::theme::U32(kPalette.border), S(2.f));
 
   ImGui::InvisibleButton("envcurve", size);
   const bool canvas_hovered = ImGui::IsItemHovered();
   const ImVec2 mouse = ImGui::GetIO().MousePos;
 
-  // Segment boundary ticks
-  for (int i = 1; i < n; ++i) {
-    const float x = p0.x + (times[static_cast<std::size_t>(i)] / total) * w;
-    dl->AddLine(ImVec2(x, p0.y), ImVec2(x, p1.y), IM_COL32(80, 120, 180, 90), 1.f);
+  // Grid: 10 columns, 5 rows (design)
+  for (int i = 0; i <= 10; ++i) {
+    const float x = p0.x + w * (static_cast<float>(i) / 10.f);
+    dl->AddLine(ImVec2(x, p0.y), ImVec2(x, p1.y),
+                fw::theme::U32A(kPalette.accent, 0.06f), 1.f);
+  }
+  for (int i = 1; i <= 5; ++i) {
+    const float y = p0.y + h * (static_cast<float>(i) / 5.f);
+    dl->AddLine(ImVec2(p0.x, y), ImVec2(p1.x, y),
+                fw::theme::U32A(kPalette.accent, 0.06f), 1.f);
   }
 
-  // Glow curve
   dl->PushClipRect(p0, p1, true);
   {
-    ImVec2 pts[256];
+    // Filled area under the curve
+    ImVec2 fill_pts[258];
     for (int i = 0; i < 256; ++i) {
       const float u = static_cast<float>(i) / 255.f;
-      pts[i] = ImVec2(p0.x + u * w, p0.y + h - samples[i] * h);
+      fill_pts[i] = ImVec2(p0.x + u * w, p0.y + h - samples[i] * h);
     }
-    dl->AddPolyline(pts, 256, fw::theme::U32A(fw::theme::kPalette.accent, 0.10f), 0, 6.f);
-    dl->AddPolyline(pts, 256, fw::theme::U32A(fw::theme::kPalette.accent, 0.24f), 0, 3.5f);
-    dl->AddPolyline(pts, 256, fw::theme::U32(fw::theme::kPalette.accent), 0, 1.6f);
+    fill_pts[256] = ImVec2(p1.x, p1.y);
+    fill_pts[257] = ImVec2(p0.x, p1.y);
+    dl->AddConcavePolyFilled(fill_pts, 258,
+                             fw::theme::U32A(kPalette.accent, 0.05f));
+
+    // Envelope line, glow passes
+    ImVec2 pts[256];
+    for (int i = 0; i < 256; ++i) {
+      pts[i] = fill_pts[i];
+    }
+    dl->AddPolyline(pts, 256, fw::theme::U32A(kPalette.accent, 0.15f), 0, 5.f);
+    dl->AddPolyline(pts, 256, fw::theme::U32(kPalette.accent), 0, 1.5f);
   }
   dl->PopClipRect();
 
@@ -115,7 +169,7 @@ void DrawEnvelopeCurveEditor(EnvProgram &prog, ImVec2 size_arg)
   // Hit-test breakpoints 1..n (0 is the fixed start, not draggable).
   int hovered_handle = -1;
   if (canvas_hovered || s_drag_idx >= 0) {
-    constexpr float kPickR = 11.f;
+    const float kPickR = S(12.f);
     for (int i = 1; i <= n; ++i) {
       const ImVec2 hp = ScreenOf(i);
       const float dx = mouse.x - hp.x;
@@ -127,23 +181,25 @@ void DrawEnvelopeCurveEditor(EnvProgram &prog, ImVec2 size_arg)
     }
   }
 
-  // Ghost "+" affordance over empty canvas.
-  if (canvas_hovered && hovered_handle < 0 && s_drag_idx < 0 &&
-      n < EnvProgram::kMaxSegs) {
-    dl->AddCircle(mouse, 6.f, fw::theme::U32A(fw::theme::kPalette.text, 0.5f), 12, 1.5f);
-    dl->AddLine(ImVec2(mouse.x - 3.f, mouse.y), ImVec2(mouse.x + 3.f, mouse.y),
-               fw::theme::U32A(fw::theme::kPalette.text, 0.7f), 1.5f);
-    dl->AddLine(ImVec2(mouse.x, mouse.y - 3.f), ImVec2(mouse.x, mouse.y + 3.f),
-               fw::theme::U32A(fw::theme::kPalette.text, 0.7f), 1.5f);
-  }
-
-  // Draw breakpoints (skip 0: fixed start).
-  for (int i = 1; i <= n; ++i) {
+  // Draw breakpoints + amp labels (start point drawn as fixed endpoint dot).
+  ImFont *fs = fw::theme::g_fonts.mono_small;
+  for (int i = 0; i <= n; ++i) {
     const ImVec2 hp = ScreenOf(i);
+    const bool is_end = (i == 0 || i == n);
     const bool active_h = (i == s_drag_idx) || (i == hovered_handle);
-    const float r = active_h ? 7.f : 5.f;
-    dl->AddCircleFilled(hp, r, fw::theme::U32(fw::theme::kPalette.accent), 14);
-    dl->AddCircle(hp, r, fw::theme::U32(fw::theme::kPalette.bg), 14, 1.5f);
+    const float r = S(is_end ? 4.f : 5.f) + (active_h ? S(1.5f) : 0.f);
+    dl->AddCircleFilled(hp, r,
+                        fw::theme::U32(is_end ? kPalette.text_dim
+                                              : kPalette.accent),
+                        14);
+    dl->AddCircle(hp, r, fw::theme::U32(kPalette.bg), 14, 1.5f);
+    if (i > 0) {
+      char amp[16];
+      std::snprintf(amp, sizeof(amp), "%.2f",
+                    static_cast<double>(amps[static_cast<std::size_t>(i)]));
+      dl->AddText(fs, fs->FontSize, ImVec2(hp.x + S(6.f), hp.y - S(14.f)),
+                  fw::theme::U32A(kPalette.accent, 0.6f), amp);
+    }
   }
 
   // Continue an active drag.
@@ -154,59 +210,80 @@ void DrawEnvelopeCurveEditor(EnvProgram &prog, ImVec2 size_arg)
     const float px_per_sec = (total > 1e-6f) ? w / total : 0.f;
     const float dt = (px_per_sec > 1e-6f) ? d.x / px_per_sec : 0.f;
     const float prev_time = times[static_cast<std::size_t>(s_drag_idx - 1)];
+    // Firmware allows any slope > 0; 1 ms floor keeps segments distinguishable
+    // while still allowing snappy attacks (previously hard-capped at 20 ms).
+    constexpr float kMinSeg = 0.001f;
+    constexpr float kMaxSlope = 1000.f;
     const float new_time =
-        std::max(times[static_cast<std::size_t>(s_drag_idx)] + dt, prev_time + 0.02f);
+        std::max(times[static_cast<std::size_t>(s_drag_idx)] + dt,
+                 prev_time + kMinSeg);
     const float prev_amp = amps[static_cast<std::size_t>(s_drag_idx - 1)];
     const float new_amp =
         is_release ? 0.f
                    : std::clamp(amps[static_cast<std::size_t>(s_drag_idx)] - d.y / h, 0.f, 1.f);
-    const float new_slope = std::fabs(new_amp - prev_amp) / std::max(new_time - prev_time, 0.02f);
+    const float new_slope =
+        std::fabs(new_amp - prev_amp) / std::max(new_time - prev_time, kMinSeg);
     prog.segs[static_cast<std::size_t>(segi)].end_amp = new_amp;
-    prog.segs[static_cast<std::size_t>(segi)].slope = std::clamp(new_slope, 0.05f, 200.f);
+    prog.segs[static_cast<std::size_t>(segi)].slope =
+        std::clamp(new_slope, 0.05f, kMaxSlope);
   } else if (s_drag_idx >= 0) {
     s_drag_idx = -1; // mouse released
   }
 
-  // Start a drag, or add a new breakpoint by splitting the clicked segment.
-  if (canvas_hovered && s_drag_idx < 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+  // Right-click a middle breakpoint removes it (merges segments).
+  if (canvas_hovered && hovered_handle >= 1 && hovered_handle < n &&
+      ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+    app.env_undo.push_back(prog);
+    prog.RemoveSegmentBeforeRelease(hovered_handle - 1);
+    ImGui::SetCursorScreenPos(ImVec2(p0.x, p1.y));
+    return;
+  }
+
+  // Start a drag, or add a breakpoint on double-click (design behavior).
+  if (canvas_hovered && s_drag_idx < 0 &&
+      ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     if (hovered_handle >= 0) {
       s_drag_idx = hovered_handle;
-    } else if (n < EnvProgram::kMaxSegs) {
-      const float click_time = std::clamp((mouse.x - p0.x) / w, 0.f, 1.f) * total;
-      const float click_amp = std::clamp((p1.y - mouse.y) / h, 0.f, 1.f);
-
-      int k = n - 1;
-      for (int i = 0; i < n; ++i) {
-        if (click_time <= times[static_cast<std::size_t>(i + 1)]) {
-          k = i;
-          break;
-        }
-      }
-      const float prev_amp = (k == 0) ? 0.f : prog.segs[static_cast<std::size_t>(k - 1)].end_amp;
-      const bool was_release = (k + 1 == n);
-      const float orig_end = was_release ? 0.f : prog.segs[static_cast<std::size_t>(k)].end_amp;
-      const float t_k = times[static_cast<std::size_t>(k)];
-      const float t_k1 = times[static_cast<std::size_t>(k + 1)];
-
-      EnvSegment seg_a;
-      seg_a.end_amp = click_amp;
-      seg_a.slope = std::clamp(
-          std::fabs(click_amp - prev_amp) / std::max(click_time - t_k, 0.02f), 0.05f, 200.f);
-      seg_a.k = prog.segs[static_cast<std::size_t>(k)].k;
-
-      EnvSegment seg_b = prog.segs[static_cast<std::size_t>(k)];
-      seg_b.end_amp = orig_end;
-      seg_b.slope = std::clamp(
-          std::fabs(orig_end - click_amp) / std::max(t_k1 - click_time, 0.02f), 0.05f, 200.f);
-
-      prog.segs[static_cast<std::size_t>(k)] = seg_b;
-      prog.segs.insert(prog.segs.begin() + k, seg_a);
     }
+  }
+  if (canvas_hovered && hovered_handle < 0 &&
+      ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+      n < EnvProgram::kMaxSegs) {
+    const float click_time = std::clamp((mouse.x - p0.x) / w, 0.f, 1.f) * total;
+    const float click_amp = std::clamp((p1.y - mouse.y) / h, 0.f, 1.f);
+
+    int k = n - 1;
+    for (int i = 0; i < n; ++i) {
+      if (click_time <= times[static_cast<std::size_t>(i + 1)]) {
+        k = i;
+        break;
+      }
+    }
+    const float prev_amp = (k == 0) ? 0.f : prog.segs[static_cast<std::size_t>(k - 1)].end_amp;
+    const bool was_release = (k + 1 == n);
+    const float orig_end = was_release ? 0.f : prog.segs[static_cast<std::size_t>(k)].end_amp;
+    const float t_k = times[static_cast<std::size_t>(k)];
+    const float t_k1 = times[static_cast<std::size_t>(k + 1)];
+
+    EnvSegment seg_a;
+    seg_a.end_amp = click_amp;
+    seg_a.slope = std::clamp(
+        std::fabs(click_amp - prev_amp) / std::max(click_time - t_k, 0.001f),
+        0.05f, 1000.f);
+    seg_a.k = prog.segs[static_cast<std::size_t>(k)].k;
+
+    EnvSegment seg_b = prog.segs[static_cast<std::size_t>(k)];
+    seg_b.end_amp = orig_end;
+    seg_b.slope = std::clamp(
+        std::fabs(orig_end - click_amp) / std::max(t_k1 - click_time, 0.001f),
+        0.05f, 1000.f);
+
+    app.env_undo.push_back(prog);
+    prog.segs[static_cast<std::size_t>(k)] = seg_b;
+    prog.segs.insert(prog.segs.begin() + k, seg_a);
   }
 
   ImGui::SetCursorScreenPos(ImVec2(p0.x, p1.y));
-  ImGui::TextDisabled("duration ~%.3f s (gate held at last end) · click to add a point, drag to reshape",
-                      static_cast<double>(dur));
 }
 
 } // namespace
@@ -388,428 +465,781 @@ std::string EnvProgram::FormatCommand(int voice) const
   return std::string(prefix) + FormatTokens();
 }
 
+/* ── OSCILLATOR panel (design Tone left column) ──────────────────────── */
+
 void DrawOscillatorCard(App &app)
 {
-  ImGui::BeginChild("osc_card", ImVec2(0, 176), ImGuiChildFlags_Borders);
-  fw::ui::SectionHeader("OSCILLATOR");
-  ImGui::Spacing();
+  const bool offline = !app.bus.IsOpen() || app.bus.BusFault();
+  ImFont *fs = fw::theme::g_fonts.mono_small;
 
-  const char *shapes[] = {"Sine", "Pulse", "Triangle"};
-  fw::ui::SegmentedControl("##shape", shapes, 3, &app.shape_mode);
-  ImGui::Spacing();
-
-  if (app.shape_mode == 1) {
-    ImGui::TextDisabled("Pulse duty");
-    ImGui::SetNextItemWidth(-1);
-    ImGui::SliderFloat("##pulseduty", &app.shape_param, 0.1f, 0.9f, "%.3f");
-  } else if (app.shape_mode == 2) {
-    ImGui::TextDisabled("Triangle asymmetry (0.5 = symmetric)");
-    ImGui::SetNextItemWidth(-1);
-    ImGui::SliderFloat("##triasym", &app.shape_param, 0.1f, 0.9f, "%.3f");
-  } else {
-    ImGui::TextDisabled("s — no shape parameter");
+  if (app.play_mode == 1) {
+    fw::ui::BeginSection("osc_card", "OSCILLATOR — WAVE MODE",
+                         ImVec2(0, S(150.f)));
+    ImGui::NewLine();
+    ImGui::Dummy(ImVec2(0, S(8.f)));
+    {
+      ImFont *icf = fw::theme::g_fonts.icons;
+      const float iw =
+          icf->CalcTextSizeA(icf->FontSize, FLT_MAX, 0.f, "\u229F").x;
+      ImGui::SetCursorPosX((ImGui::GetWindowWidth() - iw) * 0.5f);
+      MonoText("\u229F", kPalette.muted, icf);
+    }
+    {
+      const char *msg = "Oscillator not used in Wave mode.";
+      const float tw = ImGui::CalcTextSize(msg).x;
+      ImGui::SetCursorPosX((ImGui::GetWindowWidth() - tw) * 0.5f);
+      ImGui::TextColored(kPalette.text_dim, "%s", msg);
+    }
+    ImGui::Dummy(ImVec2(0, S(4.f)));
+    ImGui::SetCursorPosX((ImGui::GetWindowWidth() - S(90.f)) * 0.5f);
+    if (fw::ui::Btn("\u2192 Waves", ImVec2(S(90.f), 0), BtnKind::Primary)) {
+      app.view = GuiView::Waves;
+      app.MarkSettingsDirty();
+    }
+    fw::ui::EndSection();
+    return;
   }
 
-  if (fw::ui::GlowButton("Apply shape", ImVec2(-1, 0))) {
-    const float p = app.shape_param;
-    if (app.shape_mode == 0) {
-      app.bus.QueueChannel([](protocol::ChannelClient &ch) {
-        return ch.Sine();
-      });
-    } else if (app.shape_mode == 1) {
-      app.bus.QueueChannel([p](protocol::ChannelClient &ch) {
-        return ch.Pulse(static_cast<double>(p));
-      });
-    } else {
-      app.bus.QueueChannel([p](protocol::ChannelClient &ch) {
-        return ch.Triangle(static_cast<double>(p));
-      });
+  const bool has_param = (app.shape_mode != 0);
+  fw::ui::BeginSection("osc_card", "OSCILLATOR",
+                       ImVec2(0, S(has_param ? 216.f : 188.f)));
+  ImGui::NewLine();
+  ImGui::Spacing();
+
+  // Shape row
+  RowBegin("Shape");
+  {
+    struct ShapeOpt
+    {
+      const char *label;
+      int mode;
+    };
+    static const ShapeOpt kShapes[] = {
+        {"Sine", 0}, {"Pulse", 1}, {"Tri", 2}};
+    for (const auto &s : kShapes) {
+      if (s.mode) {
+        ImGui::SameLine(0.f, 4.f);
+      }
+      if (fw::ui::ChipBtn(s.label, app.shape_mode == s.mode)) {
+        app.shape_mode = s.mode;
+      }
     }
   }
-  ImGui::EndChild();
+  RowEnd();
+
+  if (app.shape_mode == 1) {
+    RowBegin("Duty");
+    ImGui::SetNextItemWidth(S(100.f));
+    ImGui::SliderFloat("##duty", &app.shape_param, 0.1f, 0.9f, "");
+    ImGui::SameLine(0.f, S(8.f));
+    char v[16];
+    std::snprintf(v, sizeof(v), "%.2f", static_cast<double>(app.shape_param));
+    MonoText(v, kPalette.accent, fw::theme::g_fonts.mono);
+    RowEnd();
+  } else if (app.shape_mode == 2) {
+    RowBegin("Asym");
+    ImGui::SetNextItemWidth(S(100.f));
+    ImGui::SliderFloat("##asym", &app.shape_param, 0.1f, 0.9f, "");
+    ImGui::SameLine(0.f, S(8.f));
+    char v[16];
+    std::snprintf(v, sizeof(v), "%.2f", static_cast<double>(app.shape_param));
+    MonoText(v, kPalette.accent, fw::theme::g_fonts.mono);
+    RowEnd();
+  }
+
+  ImGui::Spacing();
+
+  // Wave preview (120×40) + APPLY, bottom row
+  {
+    const float pw = S(120.f);
+    const float ph = S(40.f);
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p0, ImVec2(p0.x + pw, p0.y + ph),
+                      fw::theme::U32(kPalette.bg_alt), S(2.f));
+    dl->AddRect(p0, ImVec2(p0.x + pw, p0.y + ph),
+                fw::theme::U32(kPalette.border), S(2.f));
+    dl->AddLine(ImVec2(p0.x, p0.y + ph * 0.5f),
+                ImVec2(p0.x + pw, p0.y + ph * 0.5f),
+                fw::theme::U32A(kPalette.accent, 0.10f), 1.f);
+    constexpr int kN = 120;
+    ImVec2 pts[kN + 1];
+    for (int i = 0; i <= kN; ++i) {
+      const float t = static_cast<float>(i) / kN;
+      float y;
+      if (app.shape_mode == 0) {
+        y = std::sin(2.f * 3.14159265f * t);
+      } else if (app.shape_mode == 1) {
+        y = t < app.shape_param ? 1.f : -1.f;
+      } else {
+        const float a = std::clamp(app.shape_param, 0.05f, 0.95f);
+        y = t < a ? (2.f * t / a) - 1.f : 1.f - 2.f * (t - a) / (1.f - a);
+      }
+      pts[i] = ImVec2(p0.x + t * pw, p0.y + ph * 0.5f - y * ph * 0.38f);
+    }
+    dl->AddPolyline(pts, kN + 1, fw::theme::U32A(kPalette.accent, 0.35f), 0,
+                    3.f);
+    dl->AddPolyline(pts, kN + 1, fw::theme::U32(kPalette.accent), 0, 1.5f);
+    ImGui::Dummy(ImVec2(pw, ph));
+
+    ImGui::SameLine(ImGui::GetWindowWidth() - S(80.f));
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + ph - S(26.f));
+    ImGui::BeginDisabled(offline);
+    if (fw::ui::Btn("APPLY", S2(64.f, 24.f), BtnKind::Primary)) {
+      const float p = app.shape_param;
+      BusQueueResult r = BusQueueResult::Closed;
+      if (app.shape_mode == 0) {
+        r = app.bus.QueueChannel(
+            [](protocol::ChannelClient &ch) { return ch.Sine(); });
+      } else if (app.shape_mode == 1) {
+        r = app.bus.QueueChannel([p](protocol::ChannelClient &ch) {
+          return ch.Pulse(static_cast<double>(p));
+        });
+      } else {
+        r = app.bus.QueueChannel([p](protocol::ChannelClient &ch) {
+          return ch.Triangle(static_cast<double>(p));
+        });
+      }
+      app.NotifyEnqueue(r == BusQueueResult::Ok, "bus offline");
+    }
+    ImGui::EndDisabled();
+  }
+  if (offline) {
+    MonoText("Bus offline — connect in Setup to apply", kPalette.muted, fs);
+  }
+  fw::ui::EndSection();
 }
+
+/* ── FILTER panel (design: n0–n7 LPF) ────────────────────────────────── */
 
 void DrawFilterCard(App &app)
 {
-  ImGui::BeginChild("filter_card", ImVec2(0, 320), ImGuiChildFlags_Borders);
-  fw::ui::SectionHeader("DIGITAL LPF (voices 0–7)");
+  const bool offline = !app.bus.IsOpen() || app.bus.BusFault();
+  ImFont *fs = fw::theme::g_fonts.mono_small;
+  ImFont *fm = fw::theme::g_fonts.mono;
+
+  fw::ui::BeginSection("filter_card", "FILTER (n0\u2013n7 only)",
+                       ImVec2(0, S(248.f)));
+  ImGui::NewLine();
   ImGui::Spacing();
 
-  ImGui::TextDisabled("Voice (filter is n0–n7 only)");
-  fw::ui::VoiceSelector("##filtvoice", &app.selected_voice, 8);
-  const bool filt_ok = (app.selected_voice >= 0 && app.selected_voice <= 7);
-  if (!filt_ok) {
-    ImGui::TextColored(fw::theme::kPalette.warning,
-                       "Filter applies to n0–n7 only (selected is n%x)",
-                       app.selected_voice);
-  }
-  ImGui::Checkbox("Bypass (f=20000)", &app.filter_bypass);
-  if (!app.filter_bypass) {
-    ImGui::TextDisabled("Cutoff Hz");
-    ImGui::SetNextItemWidth(-1);
-    ImGui::SliderFloat("##cutoff", &app.filter_hz_f, 20.f, 20000.f, "%.1f",
-                       ImGuiSliderFlags_Logarithmic);
-    ImGui::TextDisabled("q (DF4 g)");
-    ImGui::SetNextItemWidth(-1);
-    ImGui::SliderFloat("##q", &app.filter_q_f, 0.5f, 10.f, "%.2f");
-  }
-  ImGui::TextDisabled("Filter pitch-track fk");
-  ImGui::SetNextItemWidth(-1);
-  ImGui::SliderFloat("##fk", &app.filter_k_f, 0.f, 10.f, "%.2f");
+  MonoText("Voices n8\u2013nf have no filter path", kPalette.muted, fs);
   ImGui::Spacing();
 
-  ImGui::BeginDisabled(!filt_ok || !app.bus.IsOpen());
-  char label1[32];
-  std::snprintf(label1, sizeof(label1), "Apply to n%x",
-               app.selected_voice & 7);
-  if (fw::ui::GlowButton(label1, ImVec2(-1, 0))) {
-    const uint8_t v = static_cast<uint8_t>(app.selected_voice & 7);
+  RowBegin("Bypass");
+  {
+    bool bypass = app.filter_bypass;
+    if (ImGui::Checkbox("##bypass", &bypass)) {
+      app.filter_bypass = bypass;
+    }
+    ImGui::SameLine(0.f, S(8.f));
+    MonoText("Wide-open (bypass)", kPalette.text_dim, fs);
+  }
+  RowEnd();
+
+  ImGui::BeginDisabled(app.filter_bypass);
+  RowBegin("Cutoff");
+  ImGui::SetNextItemWidth(S(110.f));
+  ImGui::SliderFloat("##cutoff", &app.filter_hz_f, 20.f, 20000.f, "",
+                     ImGuiSliderFlags_Logarithmic);
+  ImGui::SameLine(0.f, S(8.f));
+  {
+    char hz[24];
+    FormatHz(app.filter_hz_f, hz, sizeof(hz));
+    MonoText(hz, app.filter_bypass ? kPalette.muted : kPalette.accent, fm);
+  }
+  RowEnd();
+
+  RowBegin("Q");
+  ImGui::SetNextItemWidth(S(110.f));
+  ImGui::SliderFloat("##q", &app.filter_q_f, 0.5f, 10.f, "");
+  ImGui::SameLine(0.f, S(8.f));
+  {
+    char q[16];
+    std::snprintf(q, sizeof(q), "%.1f", static_cast<double>(app.filter_q_f));
+    MonoText(q, app.filter_bypass ? kPalette.muted : kPalette.accent, fm);
+  }
+  RowEnd();
+
+  RowBegin("Pitch (fk)");
+  ImGui::SetNextItemWidth(S(110.f));
+  ImGui::SliderFloat("##fk", &app.filter_k_f, 0.f, 10.f, "");
+  app.filter_k_f = std::round(app.filter_k_f * 2.f) * 0.5f;
+  ImGui::SameLine(0.f, S(8.f));
+  {
+    char k[16];
+    std::snprintf(k, sizeof(k), "%.1f", static_cast<double>(app.filter_k_f));
+    MonoText(k, app.filter_bypass ? kPalette.muted : kPalette.accent, fm);
+  }
+  RowEnd();
+  ImGui::EndDisabled();
+
+  ImGui::Spacing();
+  ImGui::BeginDisabled(offline);
+  /* One apply: the shared LPF path covers n0–n7 as a group on hardware. */
+  if (fw::ui::Btn("APPLY n0\u2013n7", ImVec2(-1, S(24.f)),
+                  BtnKind::Primary)) {
     const bool bypass = app.filter_bypass;
     const double hz = static_cast<double>(app.filter_hz_f);
     const double q = static_cast<double>(app.filter_q_f);
     const double fk = static_cast<double>(app.filter_k_f);
-    app.bus.QueueChannel([v, bypass, hz, q](protocol::ChannelClient &ch) {
-      return bypass ? ch.SetFilter(v, 20000.0)
-                    : ch.SetFilter(v, hz, q);
-    });
-    app.bus.QueueChannel([v, fk](protocol::ChannelClient &ch) {
-      return ch.SetFk(v, fk);
-    });
-  }
-  if (fw::ui::GlowButton("Apply to all n0–n7", ImVec2(-1, 0))) {
-    const bool bypass = app.filter_bypass;
-    const double hz = static_cast<double>(app.filter_hz_f);
-    const double q = static_cast<double>(app.filter_q_f);
-    const double fk = static_cast<double>(app.filter_k_f);
+    app.log.Push(LogKind::Tx,
+                 bypass ? std::string("tx filter n0..n7 bypass")
+                        : "tx filter n0..n7 fc=" +
+                              std::to_string(static_cast<int>(hz)) +
+                              " q=" + std::to_string(q) +
+                              " fk=" + std::to_string(fk));
     app.bus.QueueChannel([bypass, hz, q](protocol::ChannelClient &ch) {
       return bypass ? ch.SetFilters(20000.0) : ch.SetFilters(hz, q);
     });
-    app.bus.QueueChannel([fk](protocol::ChannelClient &ch) {
-      return ch.SetFk(fk);
-    });
+    app.bus.QueueChannel(
+        [fk](protocol::ChannelClient &ch) { return ch.SetFk(fk); });
   }
   ImGui::EndDisabled();
-  ImGui::TextDisabled("fc = fbase × (note_Hz / C4)^fk");
-  ImGui::EndChild();
-}
-
-void DrawVoiceOverview(App &app)
-{
-  fw::ui::SectionHeader("ALL VOICES");
-  ImGui::TextDisabled("Click a voice to edit its envelope below");
-
-  const float gap = 6.f;
-  const float cell_w = (ImGui::GetContentRegionAvail().x - gap * 7.f) / 8.f;
-  const float cell_h = 52.f;
-
-  for (int i = 0; i < static_cast<int>(midi_host::kVoiceCount); ++i) {
-    if (i % 8 != 0) {
-      ImGui::SameLine(0.f, gap);
-    }
-    ImGui::PushID(i);
-    const bool sel = (app.selected_voice == i);
-
-    float samples[48];
-    float dur = 0.f;
-    app.voice_envs[static_cast<std::size_t>(i)].SampleCurve(samples, 48, &dur);
-
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList *dl = ImGui::GetWindowDrawList();
-    ImGui::InvisibleButton("##thumb", ImVec2(cell_w, cell_h));
-    if (ImGui::IsItemClicked()) {
-      app.selected_voice = i;
-    }
-    const bool hovered = ImGui::IsItemHovered();
-
-    dl->AddRectFilled(pos, ImVec2(pos.x + cell_w, pos.y + cell_h),
-                      fw::theme::U32A(fw::theme::kPalette.panel_alt, sel ? 0.9f : 0.55f),
-                      6.f);
-    dl->AddRect(pos, ImVec2(pos.x + cell_w, pos.y + cell_h),
-               sel ? fw::theme::U32(fw::theme::kPalette.accent)
-                   : fw::theme::U32A(fw::theme::kPalette.border, hovered ? 0.9f : 0.6f),
-               6.f, 0, sel ? 2.f : 1.f);
-
-    ImVec2 pts[48];
-    const float pad = 4.f;
-    const float track_h = cell_h - 18.f;
-    for (int s = 0; s < 48; ++s) {
-      const float u = static_cast<float>(s) / 47.f;
-      pts[s] = ImVec2(pos.x + pad + u * (cell_w - pad * 2.f),
-                      pos.y + cell_h - 14.f - samples[s] * track_h);
-    }
-    dl->AddPolyline(pts, 48,
-                    sel ? fw::theme::U32(fw::theme::kPalette.accent)
-                        : fw::theme::U32A(fw::theme::kPalette.accent, 0.7f),
-                    0, sel ? 1.6f : 1.2f);
-
-    char label[4];
-    std::snprintf(label, sizeof(label), "n%x", i);
-    dl->AddText(ImVec2(pos.x + 4.f, pos.y + cell_h - 14.f),
-               sel ? fw::theme::U32(fw::theme::kPalette.text)
-                   : fw::theme::U32A(fw::theme::kPalette.text_dim, 0.9f),
-               label);
-
-    ImGui::PopID();
+  if (offline) {
+    MonoText("Bus offline", kPalette.muted, fs);
   }
+  fw::ui::EndSection();
 }
+
+/* ── ENVELOPE EDITOR panel ───────────────────────────────────────────── */
 
 void DrawEnvelopeEditor(App &app)
 {
-  EnvProgram &prog = app.voice_envs[static_cast<std::size_t>(app.selected_voice & 15)];
+  app.selected_voice = std::clamp(app.selected_voice, 0, 15);
+  EnvProgram &prog = app.voice_envs[static_cast<std::size_t>(app.selected_voice)];
   prog.EnsureValid();
+  const bool offline = !app.bus.IsOpen() || app.bus.BusFault();
+  ImFont *fs = fw::theme::g_fonts.mono_small;
+  ImFont *fm = fw::theme::g_fonts.mono;
 
-  fw::ui::SectionHeader("ENVELOPE");
-  ImGui::TextDisabled(
-      "Linear segments -> hold at last end -> release to 0. Per-segment k: "
-      "rate × (f/C4)^k");
+  auto PushUndo = [&] {
+    app.env_undo.push_back(prog);
+    while (app.env_undo.size() > 32) {
+      app.env_undo.erase(app.env_undo.begin());
+    }
+  };
 
-  ImGui::Text("Editing n%x", app.selected_voice & 15);
-  ImGui::SameLine();
-  ImGui::Checkbox("Apply to all 16", &app.env_apply_all);
+  fw::ui::BeginSection("env_editor", "ENVELOPE EDITOR", ImVec2(0, 0));
+  ImGui::NewLine();
+  ImGui::Spacing();
 
-  if (fw::ui::GlowButton("Pluck")) {
-    prog.ResetPluck();
+  // ── Voice select: 8×2 mini cards with envelope thumbnails
+  MonoText("VOICE SELECT", kPalette.text_dim, fs);
+  {
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const float gap = S(4.f);
+    const float cw =
+        (ImGui::GetContentRegionAvail().x - gap * 7.f) / 8.f;
+    const float ch = S(36.f);
+    for (int i = 0; i < 16; ++i) {
+      if (i % 8) {
+        ImGui::SameLine(0.f, gap);
+      }
+      const ImVec2 p0 = ImGui::GetCursorScreenPos();
+      ImGui::PushID(i);
+      ImGui::InvisibleButton("##vs", ImVec2(cw, ch));
+      if (ImGui::IsItemClicked()) {
+        app.selected_voice = i;
+      }
+      const bool hovered = ImGui::IsItemHovered();
+      ImGui::PopID();
+      const bool sel = (app.selected_voice == i);
+      const ImVec2 p1(p0.x + cw, p0.y + ch);
+      dl->AddRectFilled(p0, p1,
+                        sel ? fw::theme::U32A(kPalette.accent, 0.14f)
+                            : fw::theme::U32(kPalette.bg_alt),
+                        S(2.f));
+      dl->AddRect(p0, p1,
+                  sel       ? fw::theme::U32A(kPalette.accent, 0.45f)
+                  : hovered ? fw::theme::U32(kPalette.border_hi)
+                            : fw::theme::U32(kPalette.border),
+                  S(2.f));
+      char id[4];
+      std::snprintf(id, sizeof(id), "n%x", i);
+      const ImVec2 idw = fs->CalcTextSizeA(fs->FontSize, FLT_MAX, 0.f, id);
+      dl->AddText(fs, fs->FontSize,
+                  ImVec2(p0.x + (cw - idw.x) * 0.5f, p0.y + S(2.f)),
+                  fw::theme::U32(sel ? kPalette.accent : kPalette.muted), id);
+      // Mini envelope path for this voice
+      float mini[24];
+      app.voice_envs[static_cast<std::size_t>(i)].SampleCurve(mini, 24);
+      ImVec2 mp[24];
+      const float mh = S(14.f);
+      for (int s = 0; s < 24; ++s) {
+        const float u = static_cast<float>(s) / 23.f;
+        mp[s] = ImVec2(p0.x + S(3.f) + u * (cw - S(6.f)),
+                       p0.y + ch - S(3.f) - mini[s] * mh);
+      }
+      dl->AddPolyline(mp, 24,
+                      sel ? fw::theme::U32(kPalette.accent)
+                          : fw::theme::U32(kPalette.muted),
+                      0, 1.f);
+    }
   }
-  ImGui::SameLine();
-  if (fw::ui::GlowButton("Pad")) {
-    prog.ResetPad();
-  }
-  ImGui::SameLine();
-  if (fw::ui::GlowButton("Organ")) {
-    prog.ResetOrgan();
-  }
-  ImGui::SameLine();
-  if (fw::ui::GlowButton("Snappy")) {
-    prog.ResetSnappy();
-  }
-  ImGui::SameLine();
-  if (fw::ui::GlowButton("+ segment") && prog.AddSegmentBeforeRelease()) {
-  }
-  ImGui::SameLine();
-  ImGui::TextDisabled("%d / %d segs (incl. release)",
-                      static_cast<int>(prog.segs.size()), EnvProgram::kMaxSegs);
+  ImGui::Spacing();
 
-  DrawEnvelopeCurveEditor(prog, ImVec2(-1, 180));
+  // ── Presets + undo
+  {
+    MonoText("Presets:", kPalette.text_dim, fs);
+    ImGui::SameLine(0.f, 8.f);
+    struct Preset
+    {
+      const char *name;
+      void (EnvProgram::*fn)();
+    };
+    static const Preset kPresets[] = {
+        {"Pluck", &EnvProgram::ResetPluck},
+        {"Pad", &EnvProgram::ResetPad},
+        {"Organ", &EnvProgram::ResetOrgan},
+        {"Snappy", &EnvProgram::ResetSnappy},
+    };
+    for (const auto &p : kPresets) {
+      if (fw::ui::ChipBtn(p.name, false, BtnKind::Neutral)) {
+        PushUndo();
+        (prog.*(p.fn))();
+      }
+      ImGui::SameLine(0.f, S(4.f));
+    }
+    ImGui::SameLine(ImGui::GetWindowWidth() - S(84.f));
+    ImGui::BeginDisabled(app.env_undo.empty());
+    if (fw::ui::ChipBtn("\u21A9 Undo", false, BtnKind::Neutral)) {
+      prog = app.env_undo.back();
+      app.env_undo.pop_back();
+    }
+    ImGui::EndDisabled();
+  }
+  ImGui::Spacing();
 
-  ImGui::BeginChild("segtable", ImVec2(0, 220), ImGuiChildFlags_Borders);
-  if (ImGui::BeginTable("segs", 6,
-                        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                            ImGuiTableFlags_SizingStretchProp)) {
-    ImGui::TableSetupColumn("Seg", ImGuiTableColumnFlags_WidthFixed, 70.f);
-    ImGui::TableSetupColumn("End amp", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn("Slope /s", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn("Pitch k", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn("~ms", ImGuiTableColumnFlags_WidthFixed, 56.f);
-    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 36.f);
-    ImGui::TableHeadersRow();
+  // ── Curve editor
+  DrawEnvelopeCurveEditor(app, prog, ImVec2(-1, S(160.f)));
+  {
+    char hint[96];
+    std::snprintf(hint, sizeof(hint),
+                  "Double-click to add · Right-click to remove · Drag to "
+                  "reshape · %d/10 segments",
+                  static_cast<int>(prog.segs.size()));
+    MonoText(hint, kPalette.muted, fs);
+  }
+  ImGui::Spacing();
+
+  // ── Segment table: # / End amp / Duration / k (pitch)
+  {
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const float table_w = ImGui::GetContentRegionAvail().x;
+    const ImVec2 t0 = ImGui::GetCursorScreenPos();
+    const float col0 = S(28.f);
+    const float coln = (table_w - col0) / 3.f;
+    const float head_h = S(18.f);
+    const float row_h = S(22.f);
+    // Header
+    dl->AddRectFilled(t0, ImVec2(t0.x + table_w, t0.y + head_h),
+                      fw::theme::U32(kPalette.bg_alt));
+    const char *heads[] = {"#", "End amp", "Duration", "k (pitch)"};
+    float hx = t0.x + S(6.f);
+    for (int i = 0; i < 4; ++i) {
+      dl->AddText(fs, fs->FontSize, ImVec2(hx, t0.y + S(4.f)),
+                  fw::theme::U32(kPalette.text_dim), heads[i]);
+      hx = t0.x + col0 + coln * static_cast<float>(i) + S(6.f);
+    }
+    dl->AddLine(ImVec2(t0.x, t0.y + head_h),
+                ImVec2(t0.x + table_w, t0.y + head_h),
+                fw::theme::U32(kPalette.border));
+    ImGui::Dummy(ImVec2(table_w, head_h));
 
     float start_amp = 0.f;
     for (int i = 0; i < static_cast<int>(prog.segs.size()); ++i) {
-      ImGui::PushID(i);
+      ImGui::PushID(400 + i);
       const bool is_rel = (i + 1 == static_cast<int>(prog.segs.size()));
       EnvSegment &seg = prog.segs[static_cast<std::size_t>(i)];
+      const ImVec2 r0 = ImGui::GetCursorScreenPos();
 
-      ImGui::TableNextRow();
-      ImGui::TableNextColumn();
-      if (is_rel) {
-        ImGui::TextColored(fw::theme::kPalette.warning, "Release");
-      } else {
-        ImGui::Text("Seg %d", i);
-      }
+      char idx[8];
+      std::snprintf(idx, sizeof(idx), "%d", i);
+      dl->AddText(fs, fs->FontSize, ImVec2(r0.x + S(6.f), r0.y + S(5.f)),
+                  fw::theme::U32(kPalette.muted), idx);
+      char amp[16];
+      const float end = is_rel ? 0.f : seg.end_amp;
+      std::snprintf(amp, sizeof(amp), "%.3f", static_cast<double>(end));
+      dl->AddText(fs, fs->FontSize,
+                  ImVec2(r0.x + col0 + S(6.f), r0.y + S(5.f)),
+                  fw::theme::U32(kPalette.accent), amp);
+      char durs[24];
+      const float d_ms =
+          EnvProgram::SegDuration(start_amp, seg, is_rel) * 1000.f;
+      std::snprintf(durs, sizeof(durs), "~%.0fms", static_cast<double>(d_ms));
+      dl->AddText(fs, fs->FontSize,
+                  ImVec2(r0.x + col0 + coln + S(6.f), r0.y + S(5.f)),
+                  fw::theme::U32(kPalette.text_dim), durs);
 
-      ImGui::TableNextColumn();
-      if (is_rel) {
-        ImGui::TextDisabled("-> 0 (fixed)");
-      } else {
-        ImGui::SetNextItemWidth(-1);
-        ImGui::SliderFloat("##end", &seg.end_amp, 0.f, 1.f, "%.3f");
-      }
+      ImGui::SetCursorScreenPos(
+          ImVec2(r0.x + col0 + coln * 2.f + S(6.f), r0.y + S(3.f)));
+      ImGui::SetNextItemWidth(coln - S(50.f));
+      ImGui::SliderFloat("##k", &seg.k, kKMin, kKMax, "");
+      ImGui::SameLine(0.f, S(4.f));
+      char kv[16];
+      std::snprintf(kv, sizeof(kv), "%.1f", static_cast<double>(seg.k));
+      MonoText(kv, kPalette.text_dim, fs);
 
-      ImGui::TableNextColumn();
-      ImGui::SetNextItemWidth(-1);
-      ImGui::SliderFloat("##slope", &seg.slope, 0.05f, 100.f, "%.3f",
-                         ImGuiSliderFlags_Logarithmic);
-
-      ImGui::TableNextColumn();
-      ImGui::SetNextItemWidth(-1);
-      ImGui::SliderFloat("##k", &seg.k, kKMin, kKMax, "%+.2f");
-
-      ImGui::TableNextColumn();
-      const float d = EnvProgram::SegDuration(start_amp, seg, is_rel);
-      ImGui::Text("%.0f", static_cast<double>(d * 1000.f));
-
-      ImGui::TableNextColumn();
-      if (!is_rel && prog.PreReleaseCount() > 1) {
-        if (ImGui::SmallButton("x")) {
-          prog.RemoveSegmentBeforeRelease(i);
-          ImGui::PopID();
-          break;
-        }
-      }
-
+      ImGui::SetCursorScreenPos(ImVec2(r0.x, r0.y + row_h));
+      dl->AddLine(ImVec2(r0.x, r0.y + row_h - 1.f),
+                  ImVec2(r0.x + table_w, r0.y + row_h - 1.f),
+                  fw::theme::U32(kPalette.border));
       if (!is_rel) {
         start_amp = seg.end_amp;
       }
       ImGui::PopID();
     }
-    ImGui::EndTable();
+    dl->AddRect(t0, ImVec2(t0.x + table_w, ImGui::GetCursorScreenPos().y),
+                fw::theme::U32(kPalette.border), S(2.f));
   }
-  ImGui::EndChild();
+  ImGui::Spacing();
 
-  // Pitch-track preview for selected segment row focus — show rates at C3/C4/C5
-  ImGui::TextUnformatted("Pitch-track preview (selected segment k)");
-  static int k_preview_seg = 0;
-  ImGui::SetNextItemWidth(120);
-  ImGui::SliderInt("Segment##kprev", &k_preview_seg, 0,
-                   std::max(0, static_cast<int>(prog.segs.size()) - 1));
-  k_preview_seg =
-      std::clamp(k_preview_seg, 0, static_cast<int>(prog.segs.size()) - 1);
-  const float pk = prog.segs[static_cast<std::size_t>(k_preview_seg)].k;
-  const float r_c3 = EnvProgram::PitchRate(130.812782f, pk);
-  const float r_c4 = EnvProgram::PitchRate(EnvProgram::kC4Hz, pk);
-  const float r_c5 = EnvProgram::PitchRate(523.251131f, pk);
-  ImGui::Text("k=%+.2f -> rate @ C3 %.3f · C4 %.3f · C5 %.3f",
-              static_cast<double>(pk), static_cast<double>(r_c3),
-              static_cast<double>(r_c4), static_cast<double>(r_c5));
-  ImGui::TextDisabled("k>0: higher notes faster; k<0: higher notes slower");
-
-  ImGui::Separator();
-  const std::string cmd = prog.FormatCommand(
-      app.env_apply_all ? -1 : (app.selected_voice & 15));
-  ImGui::TextWrapped("%s", cmd.c_str());
-  ImGui::BeginDisabled(!app.bus.IsOpen());
-  if (fw::ui::GlowButton("Apply envelope to card", ImVec2(-1, 36))) {
-    app.bus.QueueChannel([cmd](protocol::ChannelClient &ch) {
-      return ch.Exec(cmd);
-    });
-    app.log.Push(std::string("-> ") + cmd);
-    if (app.env_apply_all) {
-      // Mirror locally so the all-voices overview reflects what the card
-      // now actually holds for every voice.
+  // ── Apply row
+  {
+    const std::string cmd_one = prog.FormatCommand(app.selected_voice);
+    const std::string cmd_all = prog.FormatCommand(-1);
+    ImGui::BeginDisabled(offline);
+    if (fw::ui::Btn("APPLY", S2(76.f, 24.f), BtnKind::Primary)) {
+      app.log.Push(LogKind::Tx, "-> " + cmd_one);
+      const auto r = app.bus.QueueChannel(
+          [cmd_one](protocol::ChannelClient &ch) { return ch.Exec(cmd_one); });
+      app.NotifyEnqueue(r == BusQueueResult::Ok, "bus offline");
+    }
+    ImGui::SameLine(0.f, S(8.f));
+    if (fw::ui::Btn("APPLY ALL 16", S2(116.f, 24.f), BtnKind::Neutral)) {
+      app.log.Push(LogKind::Tx, "-> " + cmd_all);
+      const auto r = app.bus.QueueChannel(
+          [cmd_all](protocol::ChannelClient &ch) { return ch.Exec(cmd_all); });
+      app.NotifyEnqueue(r == BusQueueResult::Ok, "bus offline");
       for (auto &e : app.voice_envs) {
         e = prog;
       }
     }
+    ImGui::SameLine(0.f, S(8.f));
+    if (fw::ui::Btn("QUERY", S2(76.f, 24.f), BtnKind::Neutral)) {
+      const uint8_t slot = static_cast<uint8_t>(app.selected_voice);
+      app.bus.QueueChannel([slot](protocol::ChannelClient &ch) {
+        return ch.GetEnvelope(slot);
+      });
+    }
+    ImGui::EndDisabled();
+    if (offline) {
+      ImGui::SameLine(0.f, S(8.f));
+      ImGui::SetCursorPosY(ImGui::GetCursorPosY() + S(6.f));
+      MonoText("Bus offline", kPalette.muted, fs);
+    }
   }
-  ImGui::EndDisabled();
-  if (ImGui::Button("Query enN")) {
-    const uint8_t slot = static_cast<uint8_t>(app.selected_voice & 15);
-    app.bus.QueueChannel([slot](protocol::ChannelClient &ch) {
-      return ch.GetEnvelope(slot);
-    });
+
+  // Command preview (kept from the previous editor — useful when scripting)
+  ImGui::Spacing();
+  {
+    const std::string cmd = prog.FormatCommand(app.selected_voice);
+    ImGui::PushFont(fm);
+    ImGui::TextColored(kPalette.muted, "%s", cmd.c_str());
+    ImGui::PopFont();
   }
-  ImGui::SameLine();
-  if (ImGui::Button("Bulk ekN from preview k")) {
-    const uint8_t slot = static_cast<uint8_t>(app.selected_voice & 15);
-    const double k = static_cast<double>(pk);
-    app.bus.QueueChannel([slot, k](protocol::ChannelClient &ch) {
-      return ch.SetEnvK(slot, k);
-    });
-  }
-  ImGui::TextDisabled(
-      "Prefer per-segment slope±k on Apply; ek overrides all ks on that voice");
+  fw::ui::EndSection();
 }
+
+/* ── EFFECT page ─────────────────────────────────────────────────────── */
+
+namespace
+{
+
+void LedDot(const ImVec4 &col, bool on)
+{
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  const float line_h = ImGui::GetTextLineHeight();
+  const float r = S(6.f);
+  const ImVec2 c(p.x + r, p.y + line_h * 0.5f);
+  if (on) {
+    dl->AddCircleFilled(c, r * 1.5f, fw::theme::U32A(col, 0.25f), 16);
+    dl->AddCircleFilled(c, r, fw::theme::U32(col), 16);
+  } else {
+    dl->AddCircleFilled(c, r, fw::theme::U32(kPalette.bg_alt), 16);
+    dl->AddCircle(c, r, fw::theme::U32(kPalette.border_hi), 16, 1.f);
+  }
+  ImGui::Dummy(ImVec2(r * 2.f, line_h));
+}
+
+} // namespace
 
 void DrawEffectPanel(App &app)
 {
-  ImGui::SeparatorText("Effect card");
-  if (!app.bus.IsOpen()) {
-    ImGui::TextColored(fw::theme::kPalette.warning,
-                       "Connect RS485 bus — Effect shares the multi-drop line.");
-  }
+  ImFont *fs = fw::theme::g_fonts.mono_small;
+  const bool bus_online = app.bus.IsOpen() && !app.bus.BusFault();
 
-  ImGui::BeginChild("eff_power", ImVec2(ImGui::GetContentRegionAvail().x * 0.48f,
-                                        168),
-                    ImGuiChildFlags_Borders);
-  ImGui::TextUnformatted("POWER / AUDIO");
-  if (fw::ui::GlowButton("Refresh status  e:s", ImVec2(-1, 0))) {
-    app.bus.QueueEffect([](protocol::EffectClient &e) { return e.Status(); });
-  }
-  if (fw::ui::GlowButton("48V phantom ON", ImVec2(-1, 0))) {
-    app.bus.QueueEffect([](protocol::EffectClient &e) { return e.Set48V(true); });
-  }
-  if (fw::ui::GlowButton("48V phantom OFF", ImVec2(-1, 0), true)) {
-    app.bus.QueueEffect([](protocol::EffectClient &e) { return e.Set48V(false); });
-  }
-  if (fw::ui::GlowButton("AUDIO_EN ON", ImVec2(-1, 0))) {
-    app.bus.QueueEffect(
-        [](protocol::EffectClient &e) { return e.SetAudioEn(true); });
-  }
-  if (fw::ui::GlowButton("AUDIO_EN OFF", ImVec2(-1, 0), true)) {
-    app.bus.QueueEffect(
-        [](protocol::EffectClient &e) { return e.SetAudioEn(false); });
-  }
-  ImGui::EndChild();
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, S2(12.f, 12.f));
+  ImGui::BeginChild("effect_page", ImVec2(0, 0), ImGuiChildFlags_None);
+  ImGui::PopStyleVar();
 
-  ImGui::SameLine();
-  ImGui::BeginChild("eff_leds", ImVec2(0, 168), ImGuiChildFlags_Borders);
-  ImGui::TextUnformatted("LEDS");
-  if (fw::ui::GlowButton("Auto flash ON", ImVec2(-1, 0))) {
-    app.bus.QueueEffect(
-        [](protocol::EffectClient &e) { return e.SetLedFlash(true); });
+  // Honesty note
+  {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,
+                          ImVec4(kPalette.warning.x, kPalette.warning.y,
+                                 kPalette.warning.z, 0.05f));
+    ImGui::PushStyleColor(ImGuiCol_Border,
+                          ImVec4(kPalette.warning.x, kPalette.warning.y,
+                                 kPalette.warning.z, 0.15f));
+    ImGui::BeginChild("eff_note", ImVec2(0, S(46.f)), ImGuiChildFlags_Borders);
+    ImGui::SetCursorPos(S2(10.f, 8.f));
+    fw::ui::WarnIcon(kPalette.warning);
+    ImGui::SameLine(0.f, S(8.f));
+    ImGui::PushFont(fs);
+    ImGui::PushTextWrapPos(ImGui::GetWindowWidth() - S(10.f));
+    ImGui::TextColored(
+        kPalette.text_dim,
+        "Toggles reflect last command sent, not confirmed hardware state. "
+        "Use Query Status to refresh from the card.%s",
+        bus_online ? "" : " Bus offline — sends will fail until connected.");
+    ImGui::PopTextWrapPos();
+    ImGui::PopFont();
+    ImGui::EndChild();
+    ImGui::PopStyleColor(2);
   }
-  if (fw::ui::GlowButton("Auto flash OFF", ImVec2(-1, 0), true)) {
-    app.bus.QueueEffect(
-        [](protocol::EffectClient &e) { return e.SetLedFlash(false); });
-  }
-  if (fw::ui::GlowButton("Red ON", ImVec2((ImGui::GetContentRegionAvail().x - 8.f) * 0.5f, 0))) {
-    app.bus.QueueEffect(
-        [](protocol::EffectClient &e) { return e.SetLedRed(true); });
-  }
-  ImGui::SameLine();
-  if (fw::ui::GlowButton("Red OFF", ImVec2(-1, 0), true)) {
-    app.bus.QueueEffect(
-        [](protocol::EffectClient &e) { return e.SetLedRed(false); });
-  }
-  if (fw::ui::GlowButton("Yellow ON", ImVec2((ImGui::GetContentRegionAvail().x - 8.f) * 0.5f, 0))) {
-    app.bus.QueueEffect(
-        [](protocol::EffectClient &e) { return e.SetLedYellow(true); });
-  }
-  ImGui::SameLine();
-  if (fw::ui::GlowButton("Yellow OFF", ImVec2(-1, 0), true)) {
-    app.bus.QueueEffect(
-        [](protocol::EffectClient &e) { return e.SetLedYellow(false); });
-  }
-  ImGui::EndChild();
+  ImGui::Spacing();
 
-  ImGui::SeparatorText("USB ADC channel (Effect mic path)");
-  ImGui::TextDisabled("Select which of 8 ADC channels streams over UAC");
+  const float gap = S(12.f);
+  const float col_w = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
+
+  // ── POWER / AUDIO
+  fw::ui::BeginSection("eff_power", "POWER / AUDIO",
+                       ImVec2(col_w, S(app.effect.echo ? 244.f : 196.f)));
+  ImGui::NewLine();
+  ImGui::Spacing();
+  if (fw::ui::ToggleRow("48V Phantom Power", &app.effect.phantom, true)) {
+    const bool v = app.effect.phantom;
+    app.log.Push(LogKind::Tx,
+                 std::string("tx effect phantom ") + (v ? "on" : "off"));
+    app.NotifyEnqueue(
+        app.bus.QueueEffect(
+            [v](protocol::EffectClient &e) { return e.Set48V(v); }) ==
+            BusQueueResult::Ok,
+        "bus offline");
+  }
+  if (fw::ui::ToggleRow("Audio Enable", &app.effect.audio_en, true)) {
+    const bool v = app.effect.audio_en;
+    app.log.Push(LogKind::Tx,
+                 std::string("tx effect audio ") + (v ? "on" : "off"));
+    app.NotifyEnqueue(
+        app.bus.QueueEffect(
+            [v](protocol::EffectClient &e) { return e.SetAudioEn(v); }) ==
+            BusQueueResult::Ok,
+        "bus offline");
+  }
+  if (fw::ui::ToggleRow("RS485 Echo", &app.effect.echo, true)) {
+    const bool v = app.effect.echo;
+    app.log.Push(LogKind::Tx,
+                 std::string("tx effect echo ") + (v ? "on" : "off"));
+    app.NotifyEnqueue(
+        app.bus.QueueEffect(
+            [v](protocol::EffectClient &e) { return e.SetEcho(v); }) ==
+            BusQueueResult::Ok,
+        "bus offline");
+  }
+  if (app.effect.echo) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,
+                          ImVec4(kPalette.danger.x, kPalette.danger.y,
+                                 kPalette.danger.z, 0.08f));
+    ImGui::PushStyleColor(ImGuiCol_Border,
+                          ImVec4(kPalette.danger.x, kPalette.danger.y,
+                                 kPalette.danger.z, 0.20f));
+    ImGui::BeginChild("echo_warn", ImVec2(0, S(42.f)),
+                      ImGuiChildFlags_Borders);
+    ImGui::SetCursorPos(S2(8.f, 5.f));
+    ImGui::PushFont(fs);
+    ImGui::PushTextWrapPos(ImGui::GetWindowWidth() - S(8.f));
+    ImGui::TextColored(kPalette.danger,
+                       "\u26A0 RS485 echo is ON. This disrupts MIDI and "
+                       "control messages. Disable after bring-up.");
+    ImGui::PopTextWrapPos();
+    ImGui::PopFont();
+    ImGui::EndChild();
+    ImGui::PopStyleColor(2);
+  }
+  ImGui::Spacing();
+  if (fw::ui::Btn("\u21A9 Query Status", ImVec2(-1, S(24.f)),
+                  BtnKind::Neutral)) {
+    app.log.Push(LogKind::Tx, "tx effect query");
+    app.NotifyEnqueue(app.bus.QueueEffect([](protocol::EffectClient &e) {
+                        return e.Status();
+                      }) == BusQueueResult::Ok,
+                      "bus offline");
+  }
+  fw::ui::EndSection();
+
+  // ── STATUS LEDs
+  ImGui::SameLine(0.f, gap);
+  fw::ui::BeginSection("eff_leds", "STATUS LEDs",
+                       ImVec2(0, S(app.effect.echo ? 244.f : 196.f)));
+  ImGui::NewLine();
+  ImGui::Spacing();
+  {
+    MonoText("Live preview:", kPalette.text_dim, fs);
+    ImGui::SameLine(0.f, S(12.f));
+    LedDot(kPalette.accent, app.effect.led_flash);
+    ImGui::SameLine(0.f, S(10.f));
+    LedDot(kPalette.danger, app.effect.led_red);
+    ImGui::SameLine(0.f, S(10.f));
+    LedDot(kPalette.warning, app.effect.led_yellow);
+    ImGui::Spacing();
+    ImGui::Separator();
+  }
+  if (fw::ui::ToggleRow("Auto Flash", &app.effect.led_flash, true)) {
+    const bool v = app.effect.led_flash;
+    app.log.Push(LogKind::Tx,
+                 std::string("tx led autoflash ") + (v ? "on" : "off"));
+    app.NotifyEnqueue(
+        app.bus.QueueEffect(
+            [v](protocol::EffectClient &e) { return e.SetLedFlash(v); }) ==
+            BusQueueResult::Ok,
+        "bus offline");
+  }
+  if (fw::ui::ToggleRow("Red LED", &app.effect.led_red, true)) {
+    const bool v = app.effect.led_red;
+    app.log.Push(LogKind::Tx,
+                 std::string("tx led red ") + (v ? "on" : "off"));
+    app.NotifyEnqueue(
+        app.bus.QueueEffect(
+            [v](protocol::EffectClient &e) { return e.SetLedRed(v); }) ==
+            BusQueueResult::Ok,
+        "bus offline");
+  }
+  if (fw::ui::ToggleRow("Yellow LED", &app.effect.led_yellow, true)) {
+    const bool v = app.effect.led_yellow;
+    app.log.Push(LogKind::Tx,
+                 std::string("tx led yellow ") + (v ? "on" : "off"));
+    app.NotifyEnqueue(
+        app.bus.QueueEffect(
+            [v](protocol::EffectClient &e) { return e.SetLedYellow(v); }) ==
+            BusQueueResult::Ok,
+        "bus offline");
+  }
+  fw::ui::EndSection();
+
+  ImGui::Spacing();
+
+  // ── USB ADC CHANNEL
+  fw::ui::BeginSection("eff_usb", "USB ADC CHANNEL", ImVec2(col_w, S(152.f)));
+  ImGui::NewLine();
+  ImGui::Spacing();
+  MonoText("Select which of the 8 ADC input channels streams over USB audio.",
+           kPalette.text_dim, fs);
+  ImGui::Spacing();
   for (int ch = 1; ch <= 8; ++ch) {
     if (ch > 1) {
-      ImGui::SameLine();
+      ImGui::SameLine(0.f, S(5.f));
     }
     char label[8];
-    std::snprintf(label, sizeof(label), " %d ", ch);
-    if (ImGui::Button(label, ImVec2(40, 32))) {
+    std::snprintf(label, sizeof(label), "%d", ch);
+    if (fw::ui::ChipBtn(label, app.effect.usb_adc_ch == ch)) {
+      app.effect.usb_adc_ch = ch;
       const uint8_t uch = static_cast<uint8_t>(ch);
-      app.bus.QueueEffect([uch](protocol::EffectClient &e) {
-        return e.SetUsbAdcCh(uch);
-      });
+      app.log.Push(LogKind::Tx,
+                   std::string("tx adc channel ") + std::to_string(ch));
+      app.NotifyEnqueue(
+          app.bus.QueueEffect([uch](protocol::EffectClient &e) {
+            return e.SetUsbAdcCh(uch);
+          }) == BusQueueResult::Ok,
+          "bus offline");
     }
   }
-  if (ImGui::Button("Query u")) {
-    app.bus.QueueEffect(
-        [](protocol::EffectClient &e) { return e.GetUsbAdcCh(); });
+  ImGui::Spacing();
+  if (fw::ui::Btn("\u21A9 Query Current Channel", ImVec2(0, S(24.f)),
+                  BtnKind::Neutral)) {
+    app.log.Push(LogKind::Tx, "tx adc channel query");
+    app.NotifyEnqueue(app.bus.QueueEffect([](protocol::EffectClient &e) {
+                        return e.GetUsbAdcCh();
+                      }) == BusQueueResult::Ok,
+                      "bus offline");
   }
+  fw::ui::EndSection();
 
-  ImGui::SeparatorText("Echo / lab shortcuts");
-  ImGui::TextDisabled("Keep echo OFF while using MIDI / Control GUI");
-  if (ImGui::Button("ec 0 (echo off)")) {
-    app.bus.QueueEffect(
-        [](protocol::EffectClient &e) { return e.SetEcho(false); });
+  // ── ADC / I2C TOOLS
+  ImGui::SameLine(0.f, gap);
+  fw::ui::BeginSection("eff_adc", "ADC / I2C TOOLS", ImVec2(0, S(152.f)));
+  ImGui::NewLine();
+  ImGui::Spacing();
+  {
+    if (fw::ui::ChipBtn("READ", app.effect.adc_mode == 0)) {
+      app.effect.adc_mode = 0;
+    }
+    ImGui::SameLine(0.f, S(4.f));
+    if (fw::ui::ChipBtn("WRITE", app.effect.adc_mode == 1)) {
+      app.effect.adc_mode = 1;
+    }
   }
-  ImGui::SameLine();
-  if (ImGui::Button("ec 1 (echo on)")) {
-    app.bus.QueueEffect(
-        [](protocol::EffectClient &e) { return e.SetEcho(true); });
+  {
+    MonoText("Chip", kPalette.text_dim, fs);
+    ImGui::SameLine(S(48.f));
+    ImGui::SetNextItemWidth(S(64.f));
+    int chip = app.effect.adc_chip;
+    ImGui::InputInt("##chip", &chip);
+    app.effect.adc_chip = static_cast<uint8_t>(std::clamp(chip, 0, 255));
+
+    MonoText("Reg", kPalette.text_dim, fs);
+    ImGui::SameLine(S(48.f));
+    ImGui::SetNextItemWidth(S(64.f));
+    int reg = app.effect.adc_reg;
+    ImGui::InputInt("##reg", &reg);
+    app.effect.adc_reg = static_cast<uint8_t>(std::clamp(reg, 0, 255));
+
+    if (app.effect.adc_mode == 1) {
+      MonoText("Val", kPalette.text_dim, fs);
+      ImGui::SameLine(S(48.f));
+      ImGui::SetNextItemWidth(S(64.f));
+      int val = app.effect.adc_val;
+      ImGui::InputInt("##val", &val);
+      app.effect.adc_val = static_cast<uint8_t>(std::clamp(val, 0, 255));
+    }
   }
-  if (ImGui::Button("I2C scan")) {
-    app.bus.QueueEffect(
-        [](protocol::EffectClient &e) { return e.I2cScan(); });
+  ImGui::Spacing();
+  {
+    const bool write_mode = (app.effect.adc_mode == 1);
+    if (fw::ui::Btn(write_mode ? "Write" : "Read", S2(64.f, 24.f),
+                    BtnKind::Primary)) {
+      const uint8_t c = app.effect.adc_chip;
+      const uint8_t r = app.effect.adc_reg;
+      const uint8_t v = app.effect.adc_val;
+      if (write_mode) {
+        app.log.Push(LogKind::Tx, "tx adc write chip=" + std::to_string(c) +
+                                      " reg=" + std::to_string(r) +
+                                      " val=" + std::to_string(v));
+        app.NotifyEnqueue(
+            app.bus.QueueEffect([c, r, v](protocol::EffectClient &e) {
+              return e.AdcWrite(c, r, v);
+            }) == BusQueueResult::Ok,
+            "bus offline");
+      } else {
+        app.log.Push(LogKind::Tx, "tx adc read chip=" + std::to_string(c) +
+                                      " reg=" + std::to_string(r));
+        app.NotifyEnqueue(
+            app.bus.QueueEffect([c, r](protocol::EffectClient &e) {
+              return e.AdcRead(c, r);
+            }) == BusQueueResult::Ok,
+            "bus offline");
+      }
+    }
+    ImGui::SameLine(0.f, S(6.f));
+    if (fw::ui::Btn("I2C Scan", ImVec2(0, S(24.f)), BtnKind::Neutral)) {
+      app.log.Push(LogKind::Tx, "tx i2c scan");
+      app.NotifyEnqueue(app.bus.QueueEffect([](protocol::EffectClient &e) {
+                          return e.I2cScan();
+                        }) == BusQueueResult::Ok,
+                        "bus offline");
+    }
+    ImGui::SameLine(0.f, S(6.f));
+    if (fw::ui::Btn("ADC Init", ImVec2(0, S(24.f)), BtnKind::Neutral)) {
+      app.log.Push(LogKind::Tx, "tx adc init");
+      app.NotifyEnqueue(app.bus.QueueEffect([](protocol::EffectClient &e) {
+                          return e.AdcInit();
+                        }) == BusQueueResult::Ok,
+                        "bus offline");
+    }
   }
-  ImGui::SameLine();
-  if (ImGui::Button("ADC init  ai")) {
-    app.bus.QueueEffect(
-        [](protocol::EffectClient &e) { return e.AdcInit(); });
-  }
+  fw::ui::EndSection();
+
+  ImGui::EndChild();
 }

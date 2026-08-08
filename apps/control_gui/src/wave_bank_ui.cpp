@@ -10,6 +10,7 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -18,31 +19,56 @@
 
 namespace fs = std::filesystem;
 using fw::theme::kPalette;
+using fw::theme::S;
+using fw::theme::S2;
+using fw::ui::BtnKind;
 
 namespace
 {
-
-const char *SlotTitle(int i)
-{
-  static const char *k[] = {"Sine A4",  "Saw A3",   "Square E4", "Noise",
-                            "Chirp",    "Sine C2",  "Pluck",     "Dyad C+E"};
-  return (i >= 0 && i < 8) ? k[i] : "?";
-}
 
 ImVec4 StatusColor(WaveSlotUi ui)
 {
   switch (ui) {
   case WaveSlotUi::Done:
-    return kPalette.success;
+    return kPalette.accent;
+  case WaveSlotUi::Assigned:
+    return kPalette.text_dim;
   case WaveSlotUi::Failed:
     return kPalette.danger;
   case WaveSlotUi::Uploading:
   case WaveSlotUi::Queued:
-    return kPalette.accent;
-  case WaveSlotUi::Assigned:
     return kPalette.warning;
   default:
-    return kPalette.text_dim;
+    return kPalette.muted;
+  }
+}
+
+const char *StatusLabel(WaveSlotUi ui)
+{
+  switch (ui) {
+  case WaveSlotUi::Done:
+    return "DONE";
+  case WaveSlotUi::Failed:
+    return "FAILED";
+  case WaveSlotUi::Uploading:
+    return "UPLOADING";
+  case WaveSlotUi::Queued:
+    return "QUEUED";
+  case WaveSlotUi::Assigned:
+    return "ASSIGNED";
+  default:
+    return "EMPTY";
+  }
+}
+
+void MonoText(const char *text, const ImVec4 &col, ImFont *font)
+{
+  if (font) {
+    ImGui::PushFont(font);
+  }
+  ImGui::TextColored(col, "%s", text);
+  if (font) {
+    ImGui::PopFont();
   }
 }
 
@@ -87,298 +113,444 @@ void AssignFolder(App &app, const std::string &folder)
     return;
   }
   char msg[64];
-  std::snprintf(msg, sizeof(msg), "ok: assigned %d / 8 from folder", hit);
+  if (hit > 0) {
+    std::snprintf(msg, sizeof(msg), "ok: auto-assigned %d/8 wave slots", hit);
+  } else {
+    std::snprintf(msg, sizeof(msg),
+                  "err: auto-assign found no w0…w7 .raw files");
+  }
   app.log.Push(msg);
 }
 
-/** Same .raw path into every bank slot (upload still writes each wN separately). */
-void AssignSameToAll(App &app, const std::string &path)
-{
-  if (path.empty()) {
-    return;
-  }
-  for (int slot = 0; slot < 8; ++slot) {
-    app.waves.SetSlotPath(slot, path);
-  }
-  char msg[128];
-  std::snprintf(msg, sizeof(msg), "ok: assigned %s to w0..w7",
-                Basename(path.c_str()).c_str());
-  app.log.Push(msg);
-}
-
-void DrawMiniWave(const WaveSlotState &st, const ImVec2 &size)
+/** Waveform thumbnail (design 120×32 svg): preview polyline or em-dash. */
+void DrawWaveThumb(const WaveSlotState &st, const ImVec2 &size)
 {
   const ImVec2 p0 = ImGui::GetCursorScreenPos();
   ImGui::InvisibleButton("##waveviz", size);
   ImDrawList *dl = ImGui::GetWindowDrawList();
   const ImVec2 p1 = ImVec2(p0.x + size.x, p0.y + size.y);
-  dl->AddRectFilled(p0, p1, fw::theme::U32A(kPalette.bg, 0.85f), 4.f);
-  dl->AddRect(p0, p1, fw::theme::U32A(kPalette.border, 0.7f), 4.f);
+  dl->AddRectFilled(p0, p1, fw::theme::U32(kPalette.bg_alt), S(2.f));
+  dl->AddRect(p0, p1, fw::theme::U32(kPalette.border), S(2.f));
 
-  if (!st.has_preview) {
-    const char *msg = "no preview";
-    const ImVec2 ts = ImGui::CalcTextSize(msg);
-    dl->AddText(ImVec2(p0.x + (size.x - ts.x) * 0.5f,
+  if (st.ui == WaveSlotUi::Empty || !st.has_preview) {
+    ImFont *fs = fw::theme::g_fonts.caps;
+    const char *msg = "\u2014";
+    const ImVec2 ts = fs->CalcTextSizeA(fs->FontSize, FLT_MAX, 0.f, msg);
+    dl->AddText(fs, fs->FontSize,
+                ImVec2(p0.x + (size.x - ts.x) * 0.5f,
                        p0.y + (size.y - ts.y) * 0.5f),
-                fw::theme::U32(kPalette.text_dim), msg);
+                fw::theme::U32(kPalette.muted), msg);
     return;
   }
 
   const float mid = p0.y + size.y * 0.5f;
   dl->AddLine(ImVec2(p0.x + 2.f, mid), ImVec2(p1.x - 2.f, mid),
-              fw::theme::U32A(kPalette.border, 0.45f), 1.f);
-
+              fw::theme::U32A(kPalette.accent, 0.06f), 1.f);
+  const ImVec4 col = StatusColor(st.ui);
+  const float alpha = (st.ui == WaveSlotUi::Done) ? 1.f : 0.6f;
   const int n = WaveSlotState::kPreviewN;
   ImVec2 pts[WaveSlotState::kPreviewN];
   for (int i = 0; i < n; ++i) {
-    const float t = (n <= 1) ? 0.f : static_cast<float>(i) / static_cast<float>(n - 1);
-    const float y = mid - st.preview[i] * (size.y * 0.42f);
-    pts[i] = ImVec2(p0.x + 3.f + t * (size.x - 6.f), y);
+    const float t =
+        (n <= 1) ? 0.f : static_cast<float>(i) / static_cast<float>(n - 1);
+    const float y = mid - st.preview[i] * (size.y * 0.38f);
+    pts[i] = ImVec2(p0.x + S(3.f) + t * (size.x - S(6.f)), y);
   }
-  dl->AddPolyline(pts, n, fw::theme::U32(kPalette.accent), 0, 1.6f);
+  dl->AddPolyline(pts, n, fw::theme::U32A(col, 0.25f * alpha), 0, 3.f);
+  dl->AddPolyline(pts, n, fw::theme::U32A(col, alpha), 0, 1.2f);
 }
 
 void DrawSlotCard(App &app, int slot, const WaveSlotState &st, float card_w,
                   float card_h)
 {
+  ImFont *fs = fw::theme::g_fonts.mono_small;
+  ImFont *fm = fw::theme::g_fonts.mono;
+  const bool bus_online = app.bus.IsOpen() && !app.bus.BusFault();
+  const bool empty = (st.ui == WaveSlotUi::Empty);
+  const bool uploading =
+      (st.ui == WaveSlotUi::Uploading || st.ui == WaveSlotUi::Queued);
+
   ImGui::PushID(slot);
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, kPalette.panel);
+  ImGui::PushStyleColor(
+      ImGuiCol_Border,
+      uploading ? ImVec4(kPalette.warning.x, kPalette.warning.y,
+                         kPalette.warning.z, 0.30f)
+                : kPalette.border);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, S2(10.f, 8.f));
   ImGui::BeginChild("slot", ImVec2(card_w, card_h), ImGuiChildFlags_Borders);
+  ImGui::PopStyleVar();
 
-  ImDrawList *dl = ImGui::GetWindowDrawList();
-  const ImVec2 origin = ImGui::GetWindowPos();
-  dl->AddRectFilled(origin, ImVec2(origin.x + card_w, origin.y + 3.f),
-                    fw::theme::U32(StatusColor(st.ui)), 0.f);
-
-  const float pad = 6.f;
-  const float left_w = card_w * 0.48f - pad;
-  const float right_w = card_w - left_w - pad * 3.f;
-  const float body_h = card_h - 10.f;
-
-  ImGui::SetCursorPos(ImVec2(pad, 8.f));
-  ImGui::BeginChild("left", ImVec2(left_w, body_h), ImGuiChildFlags_None);
-
-  ImGui::TextColored(kPalette.accent, "w%d", slot);
-  ImGui::SameLine();
-  ImGui::TextDisabled("%s", SlotTitle(slot));
-
-  const std::string base = Basename(st.path);
-  if (base.empty()) {
-    ImGui::TextColored(kPalette.text_dim, "No file");
-  } else {
-    ImGui::TextUnformatted(base.c_str());
-  }
-  ImGui::TextColored(StatusColor(st.ui), "%s",
-                     st.status[0] ? st.status : "empty");
-
-  if (st.ui == WaveSlotUi::Uploading || st.ui == WaveSlotUi::Queued) {
-    fw::ui::ProgressBar("##p", st.progress, ImVec2(-1, 6));
-  } else if (st.ui == WaveSlotUi::Done) {
-    fw::ui::ProgressBar("##p", 1.f, ImVec2(-1, 6));
+  // Header: label + state
+  {
+    char lbl[4];
+    std::snprintf(lbl, sizeof(lbl), "w%d", slot);
+    MonoText(lbl, empty ? kPalette.muted : kPalette.accent, fm);
+    const char *state = StatusLabel(st.ui);
+    const float sw = fs->CalcTextSizeA(fs->FontSize, FLT_MAX, 0.f, state).x;
+    ImGui::SameLine(card_w - sw - S(12.f));
+    ImGui::SetCursorPosY(S(10.f));
+    MonoText(state, StatusColor(st.ui), fs);
   }
 
-  ImGui::BeginDisabled(app.waves.Busy());
-  if (ImGui::SmallButton("Browse")) {
-    const std::string picked = WaveCdc_PickRawFile();
-    if (!picked.empty()) {
-      app.waves.SetSlotPath(slot, picked);
+  // Waveform thumb
+  DrawWaveThumb(st, ImVec2(card_w - S(20.f), S(32.f)));
+
+  // Filename
+  {
+    const std::string base = Basename(st.path);
+    if (!base.empty()) {
+      ImGui::PushFont(fs);
+      ImGui::PushTextWrapPos(card_w - S(10.f));
+      ImGui::TextColored(kPalette.text_dim, "%s", base.c_str());
+      ImGui::PopTextWrapPos();
+      ImGui::PopFont();
+    } else {
+      MonoText("Drop .raw file or browse", kPalette.muted, fs);
     }
   }
-  ImGui::SameLine();
-  ImGui::BeginDisabled(st.path[0] == '\0');
-  if (ImGui::SmallButton("All")) {
-    AssignSameToAll(app, st.path);
-  }
-  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-    ImGui::SetTooltip("Assign this file to w0..w7");
-  }
-  ImGui::EndDisabled();
-  ImGui::SameLine();
-  if (ImGui::SmallButton("Clear")) {
-    app.waves.ClearSlot(slot);
-  }
-  ImGui::BeginDisabled(st.path[0] == '\0' || app.wave_cdc_path[0] == '\0');
-  if (ImGui::SmallButton("Upload")) {
-    app.waves.SetCdcPath(app.wave_cdc_path);
-    app.waves.StartUpload(app.log, slot);
-  }
-  ImGui::EndDisabled();
-  ImGui::EndDisabled();
 
-  ImGui::BeginDisabled(!app.bus.IsOpen() || app.play_mode != 1 ||
-                       app.waves.Busy());
-  if (ImGui::SmallButton("Play")) {
-    app.wave_slot = slot;
-    app.bus.QueuePlayWave(static_cast<uint8_t>(slot),
-                          static_cast<double>(app.wave_rate));
+  // Progress
+  if (st.ui == WaveSlotUi::Uploading) {
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    const float w = card_w - S(20.f);
+    dl->AddRectFilled(p0, ImVec2(p0.x + w, p0.y + S(3.f)),
+                      fw::theme::U32(kPalette.border), S(1.5f));
+    dl->AddRectFilled(
+        p0,
+        ImVec2(p0.x + w * std::clamp(st.progress, 0.f, 1.f), p0.y + S(3.f)),
+        fw::theme::U32(kPalette.warning), S(1.5f));
+    ImGui::Dummy(ImVec2(w, S(5.f)));
+  } else if (st.ui == WaveSlotUi::Done) {
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    const float w = card_w - S(20.f);
+    dl->AddRectFilled(p0, ImVec2(p0.x + w, p0.y + S(3.f)),
+                      fw::theme::U32(kPalette.accent), S(1.5f));
+    ImGui::Dummy(ImVec2(w, S(5.f)));
+  } else {
+    ImGui::Dummy(ImVec2(0, S(5.f)));
   }
-  ImGui::SameLine();
-  if (ImGui::SmallButton("Stop")) {
-    app.bus.QueueStopWave(static_cast<uint8_t>(slot));
+
+  // Rate (per-slot playback rate, Hz)
+  if (!empty) {
+    MonoText("Rate:", kPalette.muted, fs);
+    ImGui::SameLine(0.f, S(6.f));
+    ImGui::SetNextItemWidth(S(70.f));
+    float rate = app.wave_slot_rate[static_cast<std::size_t>(slot)];
+    ImGui::PushFont(fs);
+    if (ImGui::InputFloat("##rate", &rate, 0.f, 0.f, "%.0f")) {
+      app.wave_slot_rate[static_cast<std::size_t>(slot)] =
+          std::clamp(rate, 1000.f, 96000.f);
+    }
+    ImGui::PopFont();
+    ImGui::SameLine(0.f, S(6.f));
+    MonoText("Hz", kPalette.muted, fs);
+  } else {
+    ImGui::Dummy(ImVec2(0, S(20.f)));
   }
-  ImGui::EndDisabled();
+
+  // Actions
+  {
+    ImGui::BeginDisabled(app.waves.Busy() || app.file_dialog.Busy());
+    if (fw::ui::ChipBtn("Browse", false, BtnKind::Neutral)) {
+      app.file_dialog_kind = AsyncFileDialog::Kind::File;
+      app.file_dialog_slot = slot;
+      if (!app.file_dialog.BeginPickFile()) {
+        app.PushToastErr("file dialog busy");
+      }
+    }
+    ImGui::EndDisabled();
+    if (!empty) {
+      ImGui::SameLine(0.f, S(4.f));
+      ImGui::BeginDisabled(uploading);
+      if (fw::ui::ChipBtn("Clear", false, BtnKind::Danger)) {
+        app.waves.ClearSlot(slot);
+      }
+      ImGui::SameLine(0.f, S(4.f));
+      ImGui::BeginDisabled(app.wave_cdc_path[0] == '\0');
+      if (fw::ui::ChipBtn("Upload", false, BtnKind::Primary)) {
+        app.waves.SetCdcPath(app.wave_cdc_path);
+        app.waves.StartUpload(app.log, slot);
+      }
+      ImGui::EndDisabled();
+      ImGui::EndDisabled();
+      if (bus_online && st.ui == WaveSlotUi::Done) {
+        ImGui::SameLine(0.f, S(4.f));
+        if (fw::ui::ChipBtn("\u25B6 Play", false, BtnKind::Primary)) {
+          const double rate = static_cast<double>(
+              app.wave_slot_rate[static_cast<std::size_t>(slot)]);
+          app.log.Push(LogKind::Tx,
+                       "tx wave play w" + std::to_string(slot));
+          app.bus.QueuePlayWave(static_cast<uint8_t>(slot), rate);
+        }
+        ImGui::SameLine(0.f, S(4.f));
+        if (fw::ui::ChipBtn("\u25A0", false, BtnKind::Neutral)) {
+          app.log.Push(LogKind::Tx,
+                       "tx wave stop w" + std::to_string(slot));
+          app.bus.QueueStopWave(static_cast<uint8_t>(slot));
+        }
+      }
+    }
+  }
 
   ImGui::EndChild();
-
-  ImGui::SameLine(0.f, pad);
-  ImGui::BeginChild("right", ImVec2(right_w, body_h), ImGuiChildFlags_None);
-  ImGui::TextDisabled("shape");
-  DrawMiniWave(st, ImVec2(right_w - 4.f, body_h - 22.f));
-  ImGui::EndChild();
-
-  ImGui::EndChild();
+  ImGui::PopStyleColor(2);
   ImGui::PopID();
 }
 
 } // namespace
 
-void DrawPlayModeStrip(App &app)
-{
-  ImGui::TextDisabled("PLAYBACK");
-  ImGui::SameLine();
-  const char *modes[] = {"Notes", "Wave"};
-  int mode = app.play_mode;
-  fw::ui::SegmentedControl("##pm", modes, 2, &mode);
-  if (mode != app.play_mode) {
-    app.play_mode = mode;
-    if (app.bus.IsOpen()) {
-      app.bus.QueueMode(app.play_mode == 1 ? protocol::PlayMode::Wave
-                                           : protocol::PlayMode::Notes);
-    }
-  }
-}
-
 void DrawWaveBankPage(App &app)
 {
+  ImFont *fs = fw::theme::g_fonts.mono_small;
+
   std::array<WaveSlotState, 8> snap{};
   app.waves.Snapshot(snap);
+
+  if (!app.pending_drops.empty()) {
+    for (const auto &p : app.pending_drops) {
+      if (p.rfind("folder:", 0) == 0) {
+        AssignFolder(app, p.substr(7));
+      } else {
+        int dest = 0;
+        for (int s = 0; s < 8; ++s) {
+          if (snap[static_cast<std::size_t>(s)].path[0] == '\0') {
+            dest = s;
+            break;
+          }
+        }
+        app.waves.SetSlotPath(dest, p);
+        app.PushToastOk(std::string("assigned drop \u2192 w") +
+                        std::to_string(dest));
+      }
+    }
+    app.pending_drops.clear();
+    app.waves.Snapshot(snap);
+  }
 
   if (app.wave_cdc_path[0]) {
     app.waves.SetCdcPath(app.wave_cdc_path);
   }
 
-  /* Toolbar sizes to content — never clip Assign all / Upload all. */
-  ImGui::BeginChild("wave_toolbar", ImVec2(0, 0),
-                    ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
-
-  ImGui::TextColored(kPalette.accent, "WAVE BANK");
-  ImGui::SameLine();
-  ImGui::TextDisabled("  8 x 32 KiB  ·  CDC  ·  one-shot");
-  ImGui::SameLine(ImGui::GetContentRegionAvail().x > 280.f
-                      ? ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 200.f
-                      : 0.f);
-  DrawPlayModeStrip(app);
-
-  ImGui::Spacing();
-  if (!app.serial_ports.empty()) {
-    std::vector<const char *> items;
-    for (const auto &p : app.serial_ports) {
-      items.push_back(p.c_str());
+  const bool uploading = app.waves.Busy();
+  int assigned = 0;
+  for (const auto &s : snap) {
+    if (s.ui == WaveSlotUi::Assigned || s.ui == WaveSlotUi::Failed) {
+      ++assigned;
     }
-    if (app.wave_cdc_port_index < 0 ||
-        app.wave_cdc_port_index >= static_cast<int>(app.serial_ports.size())) {
-      app.wave_cdc_port_index = 0;
-      for (int i = 0; i < static_cast<int>(app.serial_ports.size()); ++i) {
-        const auto &p = app.serial_ports[static_cast<size_t>(i)];
-        if (p.find("usbmodem") != std::string::npos ||
-            p.find("ACM") != std::string::npos) {
-          app.wave_cdc_port_index = i;
-          break;
+  }
+
+  // ── Top bar
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, kPalette.bg_alt);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(16.f), 0.f));
+  ImGui::BeginChild("waves_bar", ImVec2(0, S(44.f)), ImGuiChildFlags_None);
+  {
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const ImVec2 wp = ImGui::GetWindowPos();
+    const ImVec2 wsz = ImGui::GetWindowSize();
+    dl->AddLine(ImVec2(wp.x, wp.y + wsz.y - 1.f),
+                ImVec2(wp.x + wsz.x, wp.y + wsz.y - 1.f),
+                fw::theme::U32(kPalette.border));
+
+    const float mid_y = S(11.f);
+    ImGui::SetCursorPos(ImVec2(S(16.f), mid_y + S(4.f)));
+    fw::ui::StatusDot(3.f, app.wave_cdc_path[0] ? kPalette.accent
+                                                : kPalette.muted,
+                      app.wave_cdc_path[0] != '\0');
+    ImGui::SameLine(0.f, S(8.f));
+    ImGui::SetCursorPosY(mid_y + S(5.f));
+    MonoText("WAVE CDC PORT", kPalette.text_dim, fs);
+    ImGui::SameLine(0.f, S(8.f));
+    ImGui::SetCursorPosY(mid_y);
+    ImGui::SetNextItemWidth(S(180.f));
+    if (!app.serial_ports.empty()) {
+      std::string preview = app.wave_cdc_path[0]
+                                ? app.wave_cdc_path
+                                : "\u2014 select \u2014";
+      ImGui::PushFont(fs);
+      if (ImGui::BeginCombo("##cdc", preview.c_str())) {
+        for (int i = 0; i < static_cast<int>(app.serial_ports.size()); ++i) {
+          const auto &p = app.serial_ports[static_cast<std::size_t>(i)];
+          if (ImGui::Selectable(p.c_str(), p == app.wave_cdc_path)) {
+            app.wave_cdc_port_index = i;
+            std::snprintf(app.wave_cdc_path, sizeof(app.wave_cdc_path), "%s",
+                          p.c_str());
+            app.waves.SetCdcPath(app.wave_cdc_path);
+            app.MarkSettingsDirty();
+          }
         }
+        ImGui::EndCombo();
+      }
+      ImGui::PopFont();
+    } else {
+      ImGui::PushFont(fs);
+      if (ImGui::InputTextWithHint("##cdcpath", "CDC path…",
+                                   app.wave_cdc_path,
+                                   sizeof(app.wave_cdc_path))) {
+        app.waves.SetCdcPath(app.wave_cdc_path);
+        app.MarkSettingsDirty();
+      }
+      ImGui::PopFont();
+    }
+
+    // divider
+    ImGui::SameLine(0.f, S(10.f));
+    {
+      const ImVec2 p = ImGui::GetCursorScreenPos();
+      dl->AddLine(ImVec2(p.x, wp.y + S(12.f)), ImVec2(p.x, wp.y + S(28.f)),
+                  fw::theme::U32(kPalette.border));
+      ImGui::Dummy(ImVec2(1.f, 0.f));
+    }
+
+    ImGui::SameLine(0.f, S(10.f));
+    ImGui::SetCursorPosY(mid_y);
+    ImGui::BeginDisabled(uploading || app.file_dialog.Busy());
+    if (fw::ui::Btn("\u229E Assign to All", ImVec2(0, S(22.f)),
+                    BtnKind::Neutral)) {
+      app.file_dialog_kind = AsyncFileDialog::Kind::File;
+      app.file_dialog_slot = -2;
+      if (!app.file_dialog.BeginPickFile()) {
+        app.PushToastErr("file dialog busy");
       }
     }
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.55f);
-    if (ImGui::Combo("CDC", &app.wave_cdc_port_index, items.data(),
-                     static_cast<int>(items.size()))) {
-      std::snprintf(app.wave_cdc_path, sizeof(app.wave_cdc_path), "%s",
-                    app.serial_ports[static_cast<size_t>(app.wave_cdc_port_index)]
-                        .c_str());
-      app.waves.SetCdcPath(app.wave_cdc_path);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Pick one file and assign it to all 8 slots");
     }
-    if (app.wave_cdc_path[0] == '\0') {
-      std::snprintf(app.wave_cdc_path, sizeof(app.wave_cdc_path), "%s",
-                    app.serial_ports[static_cast<size_t>(app.wave_cdc_port_index)]
-                        .c_str());
-      app.waves.SetCdcPath(app.wave_cdc_path);
+    ImGui::SameLine(0.f, S(6.f));
+    ImGui::SetCursorPosY(mid_y);
+    if (fw::ui::Btn("\u229F Auto-assign Folder", ImVec2(0, S(22.f)),
+                    BtnKind::Neutral)) {
+      app.file_dialog_kind = AsyncFileDialog::Kind::Folder;
+      app.file_dialog_slot = -1;
+      if (!app.file_dialog.BeginPickFolder()) {
+        app.PushToastErr("file dialog busy");
+      }
     }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(-1);
-    ImGui::SliderFloat("##rate", &app.wave_rate, 1000.f, 96000.f, "rate %.0f");
-  } else {
-    ImGui::InputText("CDC path", app.wave_cdc_path, sizeof(app.wave_cdc_path));
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(-1);
-    ImGui::SliderFloat("##rate", &app.wave_rate, 1000.f, 96000.f, "rate %.0f");
-  }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Pick a folder — assigns by w0…w7 name prefix");
+    }
+    ImGui::EndDisabled();
 
-  const float btn_w =
-      (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x * 4.f) /
-      5.f;
-  ImGui::BeginDisabled(app.waves.Busy());
-  if (fw::ui::GlowButton("Load folder", ImVec2(btn_w, 0))) {
-    AssignFolder(app, WaveCdc_PickFolder());
-  }
-  ImGui::SameLine();
-  if (fw::ui::GlowButton("Assign all", ImVec2(btn_w, 0))) {
-    AssignSameToAll(app, WaveCdc_PickRawFile());
-  }
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Pick one .raw and assign it to every slot");
-  }
-  ImGui::SameLine();
-  ImGui::BeginDisabled(app.wave_cdc_path[0] == '\0');
-  if (fw::ui::GlowButton("Upload all", ImVec2(btn_w, 0))) {
-    app.waves.SetCdcPath(app.wave_cdc_path);
-    if (app.waves.StartUpload(app.log, -1) && app.bus.IsOpen()) {
-      app.play_mode = 1;
-      app.bus.QueueMode(protocol::PlayMode::Wave);
+    // divider
+    ImGui::SameLine(0.f, S(10.f));
+    {
+      const ImVec2 p = ImGui::GetCursorScreenPos();
+      dl->AddLine(ImVec2(p.x, wp.y + S(12.f)), ImVec2(p.x, wp.y + S(28.f)),
+                  fw::theme::U32(kPalette.border));
+      ImGui::Dummy(ImVec2(1.f, 0.f));
     }
-  }
-  ImGui::EndDisabled();
-  ImGui::EndDisabled();
-  ImGui::SameLine();
-  ImGui::BeginDisabled(!app.waves.Busy());
-  if (fw::ui::GlowButton("Cancel", ImVec2(btn_w, 0), true)) {
-    app.waves.Cancel();
-  }
-  ImGui::EndDisabled();
-  ImGui::SameLine();
-  ImGui::BeginDisabled(!app.bus.IsOpen());
-  if (fw::ui::GlowButton(app.play_mode == 1 ? "Mode: WAVE" : "Mode: NOTES",
-                         ImVec2(btn_w, 0))) {
-    app.play_mode = app.play_mode == 1 ? 0 : 1;
-    app.bus.QueueMode(app.play_mode == 1 ? protocol::PlayMode::Wave
-                                         : protocol::PlayMode::Notes);
-  }
-  ImGui::EndDisabled();
 
-  if (app.waves.Busy()) {
-    ImGui::TextColored(kPalette.accent, "Uploading w%d", app.waves.CurrentSlot());
-    fw::ui::ProgressBar("##all", app.waves.OverallProgress(), ImVec2(-1, 8));
+    ImGui::SameLine(0.f, S(10.f));
+    ImGui::SetCursorPosY(mid_y);
+    {
+      char up[32];
+      std::snprintf(up, sizeof(up), "\u2191 Upload All (%d)", assigned);
+      ImGui::BeginDisabled(assigned == 0 || uploading ||
+                           app.wave_cdc_path[0] == '\0');
+      if (fw::ui::Btn(up, ImVec2(0, S(22.f)), BtnKind::Primary)) {
+        app.waves.SetCdcPath(app.wave_cdc_path);
+        if (app.waves.StartUpload(app.log, -1) && app.bus.IsOpen()) {
+          app.play_mode = 1;
+          app.bus.QueueMode(protocol::PlayMode::Wave);
+        }
+      }
+      ImGui::EndDisabled();
+    }
+    if (uploading) {
+      ImGui::SameLine(0.f, S(6.f));
+      ImGui::SetCursorPosY(mid_y);
+      if (fw::ui::Btn("\u2715 Cancel", ImVec2(0, S(22.f)),
+                      BtnKind::Danger)) {
+        app.waves.Cancel();
+      }
+      ImGui::SameLine(0.f, S(8.f));
+      ImGui::SetCursorPosY(mid_y + S(5.f));
+      char pct[16];
+      std::snprintf(pct, sizeof(pct), "%d%%",
+                    static_cast<int>(app.waves.OverallProgress() * 100.f +
+                                     0.5f));
+      MonoText(pct, kPalette.warning, fs);
+    }
+
+    // Right: mode warning
+    if (app.play_mode == 0) {
+      const char *warn_txt = "\u26A0 Mode is Notes \u2014";
+      const char *link_txt = "switch in Tone";
+      ImFont *cf = fw::theme::g_fonts.caps;
+      const float w1 = cf->CalcTextSizeA(cf->FontSize, FLT_MAX, 0.f, warn_txt).x;
+      const float w2 = cf->CalcTextSizeA(cf->FontSize, FLT_MAX, 0.f, link_txt).x;
+      ImGui::SameLine(std::max(ImGui::GetCursorPosX() + S(10.f),
+                               wsz.x - w1 - w2 - S(24.f)));
+      ImGui::SetCursorPosY(mid_y + S(4.f));
+      MonoText(warn_txt, kPalette.warning, cf);
+      ImGui::SameLine(0.f, S(4.f));
+      ImGui::SetCursorPosY(mid_y + S(4.f));
+      ImGui::PushFont(cf);
+      ImGui::TextColored(kPalette.accent, "%s", link_txt);
+      const ImVec2 mn = ImGui::GetItemRectMin();
+      const ImVec2 mx = ImGui::GetItemRectMax();
+      dl->AddLine(ImVec2(mn.x, mx.y - 1.f), ImVec2(mx.x, mx.y - 1.f),
+                  fw::theme::U32A(kPalette.accent, 0.7f));
+      ImGui::PopFont();
+      if (ImGui::IsItemClicked()) {
+        app.view = GuiView::Tone;
+        app.MarkSettingsDirty();
+      }
+    }
   }
   ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
 
-  ImGui::Spacing();
+  // ── CDC note strip
+  {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,
+                          ImVec4(kPalette.warning.x, kPalette.warning.y,
+                                 kPalette.warning.z, 0.04f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(16.f), 0.f));
+    ImGui::BeginChild("waves_note", ImVec2(0, S(40.f)), ImGuiChildFlags_None);
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const ImVec2 wp = ImGui::GetWindowPos();
+    const ImVec2 wsz = ImGui::GetWindowSize();
+    dl->AddLine(ImVec2(wp.x, wp.y + wsz.y - 1.f),
+                ImVec2(wp.x + wsz.x, wp.y + wsz.y - 1.f),
+                fw::theme::U32(kPalette.border));
+    ImGui::SetCursorPos(ImVec2(S(16.f), S(12.f)));
+    MonoText("\u229F", kPalette.warning, fs);
+    ImGui::SameLine(0.f, S(10.f));
+    ImGui::SetCursorPosY(S(12.f));
+    ImGui::PushFont(fs);
+    ImGui::TextColored(kPalette.text_dim,
+                       "Wave upload uses a separate USB CDC port from the "
+                       "RS485 control bus. Select the Channel USB modem port "
+                       "above — not the RS485 port in Setup.");
+    ImGui::PopFont();
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+  }
 
-  /* Slot grid fills remaining height; scrolls only if window is tiny. */
-  ImGui::BeginChild("wave_grid", ImVec2(0, 0), ImGuiChildFlags_None,
-                    ImGuiWindowFlags_AlwaysVerticalScrollbar);
-
-  const float gap = 8.f;
+  // ── 4-column slot grid
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, S2(12.f, 12.f));
+  ImGui::BeginChild("wave_grid", ImVec2(0, 0), ImGuiChildFlags_None);
+  ImGui::PopStyleVar();
+  const float gap = S(12.f);
   const float avail_w = ImGui::GetContentRegionAvail().x;
-  const float avail_h = ImGui::GetContentRegionAvail().y;
-  const float card_w = (avail_w - gap) * 0.5f;
-  /* Prefer fitting 4 rows without forcing min that overflows. */
-  float card_h = (avail_h - gap * 3.f) * 0.25f;
-  card_h = std::clamp(card_h, 96.f, 160.f);
+  const float card_w = (avail_w - gap * 3.f) / 4.f;
+  const float card_h = S(174.f);
 
-  for (int row = 0; row < 4; ++row) {
-    for (int col = 0; col < 2; ++col) {
-      const int slot = row * 2 + col;
+  for (int row = 0; row < 2; ++row) {
+    for (int col = 0; col < 4; ++col) {
+      const int slot = row * 4 + col;
       if (col) {
         ImGui::SameLine(0.f, gap);
       }
-      DrawSlotCard(app, slot, snap[static_cast<size_t>(slot)], card_w, card_h);
+      DrawSlotCard(app, slot, snap[static_cast<std::size_t>(slot)], card_w,
+                   card_h);
     }
+    ImGui::Spacing();
   }
   ImGui::EndChild();
 }

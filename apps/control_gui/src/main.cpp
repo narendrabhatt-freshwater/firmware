@@ -7,14 +7,21 @@
  */
 
 #include "app.hpp"
+#include "macos_app.hpp"
+#include "product.hpp"
+#include "settings.hpp"
 #include "theme.hpp"
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
+#include <string>
+#include <vector>
 
 #if defined(__APPLE__)
 #define GL_SILENCE_DEPRECATION
@@ -33,9 +40,23 @@
 namespace
 {
 
+App *g_app = nullptr;
+std::mutex g_drop_mu;
+std::vector<std::string> g_drops;
+
 void GlfwErrorCallback(int error, const char *description)
 {
   std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
+}
+
+void GlfwDropCallback(GLFWwindow *, int count, const char **paths)
+{
+  std::lock_guard<std::mutex> lock(g_drop_mu);
+  for (int i = 0; i < count; ++i) {
+    if (paths[i] && paths[i][0]) {
+      g_drops.emplace_back(paths[i]);
+    }
+  }
 }
 
 } // namespace
@@ -63,8 +84,8 @@ int main(int argc, char **argv)
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 #endif
 
-  GLFWwindow *window = glfwCreateWindow(1360, 900, "CMI",
-                                        nullptr, nullptr);
+  GLFWwindow *window =
+      glfwCreateWindow(1360, 900, fw::product::kTitle, nullptr, nullptr);
   if (!window) {
     std::fprintf(stderr, "glfwCreateWindow failed\n");
     glfwTerminate();
@@ -72,24 +93,77 @@ int main(int argc, char **argv)
   }
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
+  glfwSetDropCallback(window, GlfwDropCallback);
+  fw_macos_apply_branding();
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+  io.IniFilename = nullptr; // layout persistence is apps/settings.ini
+
+  App app;
+  g_app = &app;
+  fw::settings::Load(app);
+
+  // Effective UI scale = persisted user zoom × monitor content scale
+  // (content scale is a no-op on macOS — points already handle Retina).
+  fw::theme::SetUserZoom(app.ui_scale);
+  {
+    float sx = 1.f;
+    float sy = 1.f;
+    glfwGetWindowContentScale(window, &sx, &sy);
+    fw::theme::SetContentScale(sx);
+  }
+  glfwSetWindowContentScaleCallback(
+      window, [](GLFWwindow *, float sx, float) {
+        fw::theme::SetContentScale(sx);
+      });
+  (void)fw::theme::ConsumeFontsDirty(); // initial load below uses final scale
 
   ImGui::StyleColorsDark();
   fw::theme::Apply();
   fw::theme::LoadFonts(io);
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init(glsl_version);
-
-  App app;
+  // Clamp layout restored from a broken DPI-scaled save so panels fit.
+  app.nav_width = std::clamp(app.nav_width, 52.f, 180.f);
+  app.layout_log_h = std::clamp(app.layout_log_h, 56.f, 280.f);
+  app.layout_perform_voice_h =
+      std::clamp(app.layout_perform_voice_h, 56.f, 160.f);
+  app.layout_perform_piano_h =
+      std::clamp(app.layout_perform_piano_h, 72.f, 180.f);
   app.RefreshPortLists();
-  app.log.Push("CMI ready — connect MIDI and/or RS485, start from Perform");
+  {
+    char ready[160];
+    std::snprintf(ready, sizeof(ready),
+                  "%s %s ready — connect MIDI and/or RS485, start from Perform",
+                  fw::product::kTitle, fw::product::kVersion);
+    app.log.Push(ready);
+  }
+  if (app.auto_reconnect && app.serial_path_buf[0]) {
+    app.RequestConnectBus();
+  }
 
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
+
+    // Zoom / content-scale changed: rebake fonts + style outside the frame.
+    if (fw::theme::ConsumeFontsDirty()) {
+      ImGui_ImplOpenGL3_DestroyFontsTexture();
+      fw::theme::LoadFonts(io);
+      fw::theme::Apply();
+      ImGui_ImplOpenGL3_CreateFontsTexture();
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(g_drop_mu);
+      if (!g_drops.empty()) {
+        app.pending_drops.insert(app.pending_drops.end(), g_drops.begin(),
+                                 g_drops.end());
+        g_drops.clear();
+      }
+    }
 
     if (ImGui::IsKeyPressed(ImGuiKey_Space) && !io.WantTextInput) {
       app.AllNotesOff();
@@ -108,16 +182,18 @@ int main(int argc, char **argv)
     glfwGetFramebufferSize(window, &fb_w, &fb_h);
     glViewport(0, 0, fb_w, fb_h);
     glClearColor(fw::theme::kPalette.bg.x, fw::theme::kPalette.bg.y,
-                fw::theme::kPalette.bg.z, 1.f);
+                 fw::theme::kPalette.bg.z, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     glfwSwapBuffers(window);
   }
 
+  fw::settings::Save(app);
   app.AllNotesOff();
   app.DisconnectMidi();
   app.DisconnectBus();
   app.ShutdownAudio();
+  g_app = nullptr;
 
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();

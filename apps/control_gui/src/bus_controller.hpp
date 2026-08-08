@@ -16,6 +16,14 @@
 #include <memory>
 #include <string>
 
+enum class BusQueueResult : uint8_t
+{
+  Ok = 0,
+  Closed,
+  Halted,
+  Connecting,
+};
+
 /**
  * Owns the RS485 bus. Single-flight worker: note slot updates and
  * typed / raw console ops share one queue so half-duplex stays sane.
@@ -38,9 +46,16 @@ public:
             uint32_t atten_db,
             LogBuffer &log);
 
+  /** Non-blocking open on a background thread; UI polls IsConnecting(). */
+  void RequestOpen(const std::string &path,
+                   uint32_t baud,
+                   uint32_t atten_db,
+                   LogBuffer &log);
+
   void Close(LogBuffer &log);
 
   bool IsOpen() const { return open_.load(); }
+  bool IsConnecting() const { return connecting_.load(); }
   bool BusFault() const { return halted_.load(); }
   std::string Path() const;
 
@@ -54,22 +69,23 @@ public:
   void RequestRecover(LogBuffer &log);
 
   /** Queue arbitrary console line (c:/e:/ prefix optional). */
-  void QueueExec(protocol::Target target, std::string command);
+  BusQueueResult QueueExec(protocol::Target target, std::string command);
 
   /** Typed Channel / Effect ops run on the worker thread. */
-  void QueueChannel(ChannelOp op);
-  void QueueEffect(EffectOp op);
+  BusQueueResult QueueChannel(ChannelOp op);
+  BusQueueResult QueueEffect(EffectOp op);
 
-  void QueueMode(protocol::PlayMode mode);
-  void QueuePlayWave(uint8_t slot, double rate_hz);
-  void QueueStopWave(uint8_t slot);
+  BusQueueResult QueueMode(protocol::PlayMode mode);
+  BusQueueResult QueuePlayWave(uint8_t slot, double rate_hz);
+  BusQueueResult QueueStopWave(uint8_t slot);
 
   /** CH1 gain at next opportunity (also used from Transport slider). */
-  void QueueGain(uint8_t atten_db);
+  BusQueueResult QueueGain(uint8_t atten_db);
 
   uint32_t AttenDb() const { return atten_db_.load(); }
   uint32_t TimeoutCount() const;
   uint32_t ErrCount() const;
+  std::size_t QueueDepth() const;
 
 private:
   enum class JobKind : uint8_t
@@ -97,9 +113,10 @@ private:
   std::unique_ptr<Impl> impl_;
 
   std::atomic<bool> open_{false};
+  std::atomic<bool> connecting_{false};
   std::atomic<bool> halted_{false};
   std::atomic<uint32_t> atten_db_{6};
 
   void WorkerMain(LogBuffer *log);
-  void Enqueue(Job job);
+  BusQueueResult Enqueue(Job job);
 };
