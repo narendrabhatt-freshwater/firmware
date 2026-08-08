@@ -387,9 +387,10 @@ namespace fw::ui
         pts[static_cast<std::size_t>(i)] =
             ImVec2(pos.x + u * size.x, pos.y + size.y - t * size.y);
       }
-      dl->AddPolyline(pts.data(), count, U32A(kPalette.accent, 0.10f), 0, 6.f);
-      dl->AddPolyline(pts.data(), count, U32A(kPalette.accent, 0.24f), 0, 3.5f);
-      dl->AddPolyline(pts.data(), count, U32(kPalette.accent), 0, 1.6f);
+      const ImVec4 &trace = kPalette.scope_trace;
+      dl->AddPolyline(pts.data(), count, U32A(trace, 0.12f), 0, 6.f);
+      dl->AddPolyline(pts.data(), count, U32A(trace, 0.28f), 0, 3.5f);
+      dl->AddPolyline(pts.data(), count, U32(trace), 0, 1.6f);
       dl->PopClipRect();
     }
 
@@ -737,6 +738,129 @@ bool ToggleRow(const char *label, bool *value, bool enabled)
   ImGui::EndDisabled();
   ImGui::PopID();
   return changed;
+}
+
+bool TopTabs(const char *str_id, const char *const *labels, int count,
+             int *current)
+{
+  ImGui::PushID(str_id);
+  bool changed = false;
+  *current = std::clamp(*current, 0, count - 1);
+  for (int i = 0; i < count; ++i) {
+    if (i) {
+      ImGui::SameLine(0.f, 4.f);
+    }
+    ImGui::PushID(i);
+    const bool sel = (*current == i);
+    if (sel) {
+      ImGui::PushStyleColor(ImGuiCol_Button, kPalette.panel_high);
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kPalette.panel_high);
+      ImGui::PushStyleColor(ImGuiCol_Border,
+                            ImVec4(kPalette.accent.x, kPalette.accent.y,
+                                   kPalette.accent.z, 0.85f));
+      ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
+    }
+    const ImVec2 sz(ImGui::CalcTextSize(labels[i]).x + 28.f, 32.f);
+    if (ImGui::Button(labels[i], sz)) {
+      if (*current != i) {
+        *current = i;
+        changed = true;
+      }
+    }
+    if (sel) {
+      ImGui::PopStyleVar();
+      ImGui::PopStyleColor(3);
+      // Cyan underline
+      const ImVec2 rmin = ImGui::GetItemRectMin();
+      const ImVec2 rmax = ImGui::GetItemRectMax();
+      ImGui::GetWindowDrawList()->AddRectFilled(
+          ImVec2(rmin.x + 6.f, rmax.y - 2.f), ImVec2(rmax.x - 6.f, rmax.y),
+          U32(kPalette.accent_bright));
+    }
+    ImGui::PopID();
+  }
+  ImGui::PopID();
+  return changed;
+}
+
+bool RotaryKnob(const char *str_id, const char *label, float *value, float v_min,
+                float v_max, const char *format, float size)
+{
+  ImGui::PushID(str_id);
+  const ImVec2 pos = ImGui::GetCursorScreenPos();
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  ImGui::InvisibleButton("##knob", ImVec2(size, size + 28.f));
+  const bool active = ImGui::IsItemActive();
+  const bool hovered = ImGui::IsItemHovered();
+  bool changed = false;
+  if (active) {
+    const float dy = -ImGui::GetIO().MouseDelta.y;
+    const float range = v_max - v_min;
+    *value = std::clamp(*value + dy * range * 0.005f, v_min, v_max);
+    changed = (dy != 0.f);
+  }
+  const float t = (*value - v_min) / std::max(v_max - v_min, 1e-6f);
+  const float cx = pos.x + size * 0.5f;
+  const float cy = pos.y + size * 0.5f;
+  const float r = size * 0.42f;
+  dl->AddCircleFilled(ImVec2(cx, cy), r, U32(kPalette.panel_high), 48);
+  dl->AddCircle(ImVec2(cx, cy), r,
+                U32A(hovered || active ? kPalette.accent : kPalette.border, 0.9f),
+                48, 2.f);
+  // Arc track
+  const float a0 = 2.35619f;  // 135°
+  const float a1 = 7.06858f;  // 405°
+  const float ang = a0 + (a1 - a0) * t;
+  dl->PathArcTo(ImVec2(cx, cy), r - 3.f, a0, ang, 32);
+  dl->PathStroke(U32(kPalette.accent), 0, 3.f);
+  const float nx = std::cos(ang);
+  const float ny = std::sin(ang);
+  dl->AddLine(ImVec2(cx + nx * (r * 0.25f), cy + ny * (r * 0.25f)),
+              ImVec2(cx + nx * (r * 0.78f), cy + ny * (r * 0.78f)),
+              U32(kPalette.accent_bright), 2.5f);
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), format, static_cast<double>(*value));
+  if (theme::g_fonts.mono) {
+    ImGui::PushFont(theme::g_fonts.mono);
+  }
+  const ImVec2 vsz = ImGui::CalcTextSize(buf);
+  dl->AddText(ImVec2(cx - vsz.x * 0.5f, pos.y + size - 2.f), U32(kPalette.text),
+              buf);
+  if (theme::g_fonts.mono) {
+    ImGui::PopFont();
+  }
+  const ImVec2 lsz = ImGui::CalcTextSize(label);
+  dl->AddText(ImVec2(cx - lsz.x * 0.5f, pos.y + size + 12.f),
+              U32(kPalette.text_dim), label);
+  ImGui::PopID();
+  return changed;
+}
+
+void VerticalMeter(const char *str_id, float value01, const ImVec2 &size,
+                   float peak_hold01)
+{
+  ImGui::PushID(str_id);
+  const ImVec2 pos = ImGui::GetCursorScreenPos();
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  ImGui::InvisibleButton("##vmeter", size);
+  const float v = std::clamp(value01, 0.f, 1.f);
+  dl->AddRectFilled(pos, V2Add(pos, size), U32A(kPalette.bg_alt, 0.95f), 3.f);
+  const float fill_h = size.y * v;
+  if (fill_h > 1.f) {
+    const ImU32 c = v > 0.85f   ? U32(kPalette.danger)
+                    : v > 0.6f ? U32(kPalette.warning)
+                               : U32(kPalette.scope_trace);
+    dl->AddRectFilled(ImVec2(pos.x + 1.f, pos.y + size.y - fill_h),
+                      ImVec2(pos.x + size.x - 1.f, pos.y + size.y), c, 2.f);
+  }
+  if (peak_hold01 >= 0.f) {
+    const float py =
+        pos.y + size.y * (1.f - std::clamp(peak_hold01, 0.f, 1.f));
+    dl->AddLine(ImVec2(pos.x, py), ImVec2(pos.x + size.x, py),
+                U32A(kPalette.text, 0.9f), 2.f);
+  }
+  dl->AddRect(pos, V2Add(pos, size), U32A(kPalette.border, 0.7f), 3.f);
+  ImGui::PopID();
 }
 
 } // namespace fw::ui

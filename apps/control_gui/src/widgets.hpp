@@ -74,11 +74,24 @@ void ProgressBar(const char *str_id, float value01, const ImVec2 &size);
 bool NavDrawer(const char *str_id, const char *const *labels, int count,
                int *current, bool *expanded, float *anim_width);
 
+/** Top horizontal module tabs (Stitch shell). Returns true if selection changed. */
+bool TopTabs(const char *str_id, const char *const *labels, int count,
+             int *current);
+
 /** Drag grip between panels. `horizontal_bar` true → resize north/south. */
 float Splitter(const char *str_id, bool horizontal_bar, float thickness = 0.f,
                float cross_axis_size = 0.f);
 
 /** Toggle row: label left, GlowButton on/off cluster right. */
 bool ToggleRow(const char *label, bool *value, bool enabled = true);
+
+/** Rotary knob for scope TIME/DIV / VOLT/DIV. Drag vertically to change. */
+bool RotaryKnob(const char *str_id, const char *label, float *value,
+                float v_min, float v_max, const char *format,
+                float size = 72.f);
+
+/** Vertical LED-style level meter. */
+void VerticalMeter(const char *str_id, float value01, const ImVec2 &size,
+                   float peak_hold01 = -1.f);
 
 } // namespace fw::ui

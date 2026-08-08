@@ -95,9 +95,10 @@ add_executable(control_gui
   ${MIDI_HOST_SRC}/audio_engine.cpp
 )
 
-# Roboto-Medium.ttf ships with the vendored Dear ImGui source tree — reuse it
-# for the UI theme instead of adding a new font dependency.
+# Inter + JetBrains Mono ship under assets/fonts (Stitch design system).
+# Roboto from ImGui remains a fallback via FW_FONT_DIR.
 target_compile_definitions(control_gui PRIVATE
+  FW_UI_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts"
   FW_FONT_DIR="${imgui_SOURCE_DIR}/misc/fonts"
 )
 

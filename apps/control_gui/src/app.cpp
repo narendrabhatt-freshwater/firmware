@@ -13,6 +13,7 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -250,11 +251,11 @@ void App::DrawBusFaultBanner()
   }
   ImGui::PushStyleColor(ImGuiCol_ChildBg,
                         ImVec4(0.35f, 0.08f, 0.08f, 0.95f));
-  ImGui::BeginChild("fault_banner", ImVec2(0, S(36.f)), ImGuiChildFlags_Borders);
+  ImGui::BeginChild("fault_banner", ImVec2(0, 36.f), ImGuiChildFlags_Borders);
   ImGui::AlignTextToFramePadding();
   ImGui::TextColored(kPalette.danger, "BUS FAULT — note TX halted");
   ImGui::SameLine();
-  if (fw::ui::GlowButton("Recover", ImVec2(S(100.f), S(26.f)))) {
+  if (fw::ui::GlowButton("Recover", ImVec2(100.f, 26.f))) {
     bus.RequestRecover(log);
     PushToastOk("recover queued");
   }
@@ -262,41 +263,166 @@ void App::DrawBusFaultBanner()
   ImGui::PopStyleColor();
 }
 
-void App::DrawStatusBar()
+void App::DrawTopNav()
 {
-  const float h = S(Metrics::StatusBarH);
-  ImGui::BeginChild("statusbar", ImVec2(0, h), ImGuiChildFlags_None);
-  const char *bus_lbl = bus.IsConnecting() ? "connecting…"
-                        : bus.IsOpen()     ? (bus.BusFault() ? "FAULT" : "online")
-                                           : "offline";
-  ImGui::TextDisabled("BUS");
-  ImGui::SameLine();
-  ImGui::TextColored(bus.BusFault()     ? kPalette.danger
-                     : bus.IsOpen()     ? kPalette.success
-                     : bus.IsConnecting() ? kPalette.warning
-                                          : kPalette.text_dim,
-                     "%s", bus_lbl);
-  ImGui::SameLine(0.f, S(Metrics::SpaceL));
-  ImGui::TextDisabled("Q");
-  ImGui::SameLine();
-  ImGui::Text("%zu", bus.QueueDepth());
-  ImGui::SameLine(0.f, S(Metrics::SpaceL));
-  ImGui::TextDisabled("MIDI");
-  ImGui::SameLine();
-  if (midi_activity) {
-    ImGui::TextColored(kPalette.accent, "●");
-  } else {
-    ImGui::TextDisabled("○");
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, kPalette.bg_alt);
+  ImGui::BeginChild("topnav", ImVec2(0, Metrics::TopNavH), ImGuiChildFlags_None);
+  ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10.f);
+  ImGui::PushFont(fw::theme::g_fonts.large);
+  ImGui::TextColored(kPalette.text, "FRESHWATER");
+  ImGui::PopFont();
+  ImGui::SameLine(0.f, 28.f);
+  ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2.f);
+  const char *tabs[] = {"PERFORM", "TONE", "WAVES", "EFFECT", "LAB", "SETUP"};
+  int vi = static_cast<int>(view);
+  if (fw::ui::TopTabs("##tabs", tabs, 6, &vi)) {
+    view = static_cast<GuiView>(vi);
+    MarkSettingsDirty();
   }
-  ImGui::SameLine(0.f, S(Metrics::SpaceL));
-  ImGui::TextDisabled("to %u / err %u", bus.TimeoutCount(), bus.ErrCount());
-  ImGui::SameLine();
-  const float right = ImGui::GetContentRegionAvail().x;
-  const char *hint = "Space silence · ? shortcuts · 1–6 views";
-  const float hw = ImGui::CalcTextSize(hint).x;
-  ImGui::SameLine(ImGui::GetCursorPosX() + std::max(0.f, right - hw));
-  ImGui::TextDisabled("%s", hint);
+  // Master gain readout right
+  char gain_lbl[32];
+  std::snprintf(gain_lbl, sizeof(gain_lbl), "MASTER GAIN  -%d dB", gain_db);
+  const float gw = ImGui::CalcTextSize(gain_lbl).x + 16.f;
+  ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - gw);
+  if (fw::theme::g_fonts.mono) {
+    ImGui::PushFont(fw::theme::g_fonts.mono);
+  }
+  ImGui::TextColored(kPalette.success, "%s", gain_lbl);
+  if (fw::theme::g_fonts.mono) {
+    ImGui::PopFont();
+  }
   ImGui::EndChild();
+  ImGui::PopStyleColor();
+}
+
+void App::DrawActivityLog()
+{
+  layout_log_w = std::clamp(layout_log_w, 200.f, 420.f);
+  ImGui::BeginChild("activity_log", ImVec2(layout_log_w, 0),
+                    ImGuiChildFlags_Borders);
+  fw::theme::CapsLabel("ACTIVITY LOG", kPalette.text_dim);
+  ImGui::SameLine();
+  if (ImGui::SmallButton("Clear")) {
+    log.Clear();
+  }
+  ImGui::SetNextItemWidth(-1);
+  ImGui::InputTextWithHint("##logfilter", "filter…", log_filter,
+                           sizeof(log_filter));
+  ImGui::Separator();
+  ImGui::BeginChild("logscroll", ImVec2(0, 0), ImGuiChildFlags_None,
+                    ImGuiWindowFlags_HorizontalScrollbar);
+  if (fw::theme::g_fonts.mono) {
+    ImGui::PushFont(fw::theme::g_fonts.mono);
+  }
+  for (const auto &line : log_view) {
+    if (log_filter[0] && line.find(log_filter) == std::string::npos) {
+      continue;
+    }
+    const bool err = line.find("err") != std::string::npos ||
+                     line.find("FAULT") != std::string::npos ||
+                     line.find("fault") != std::string::npos ||
+                     line.find("Drop") != std::string::npos;
+    const bool ok = line.find("ok:") != std::string::npos ||
+                    line.find("Established") != std::string::npos;
+    if (err) {
+      ImGui::TextColored(kPalette.danger, "%s", line.c_str());
+    } else if (ok) {
+      ImGui::TextColored(kPalette.success, "%s", line.c_str());
+    } else {
+      ImGui::TextUnformatted(line.c_str());
+    }
+    if (ImGui::IsItemClicked()) {
+      ImGui::SetClipboardText(line.c_str());
+      PushToastOk("copied");
+    }
+  }
+  if (log_auto_scroll) {
+    ImGui::SetScrollHereY(1.f);
+  }
+  if (fw::theme::g_fonts.mono) {
+    ImGui::PopFont();
+  }
+  ImGui::EndChild();
+  ImGui::EndChild();
+}
+
+void App::DrawFooter()
+{
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, kPalette.bg_alt);
+  ImGui::BeginChild("footer", ImVec2(0, Metrics::FooterH), ImGuiChildFlags_None);
+  ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10.f);
+
+  auto Dot = [](const ImVec4 &c) {
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    dl->AddCircleFilled(ImVec2(p.x + 5.f, p.y + 7.f), 4.f, fw::theme::U32(c));
+    ImGui::Dummy(ImVec2(14.f, 14.f));
+  };
+
+  fw::theme::CapsLabel("BUS", kPalette.text_dim);
+  ImGui::SameLine();
+  Dot(bus.IsOpen() && !bus.BusFault() ? kPalette.success
+      : bus.BusFault()                  ? kPalette.danger
+                                        : kPalette.text_dim);
+  ImGui::SameLine(0.f, 0.f);
+  ImGui::TextColored(bus.IsOpen() && !bus.BusFault() ? kPalette.success
+                     : bus.BusFault()                  ? kPalette.danger
+                                                       : kPalette.text_dim,
+                     "%s",
+                     bus.IsConnecting() ? "CONNECTING"
+                     : bus.IsOpen()     ? (bus.BusFault() ? "FAULT" : "ONLINE")
+                                        : "OFFLINE");
+
+  ImGui::SameLine(0.f, 18.f);
+  fw::theme::CapsLabel("MIDI", kPalette.text_dim);
+  ImGui::SameLine();
+  Dot(midi_open ? kPalette.success : kPalette.text_dim);
+  ImGui::SameLine(0.f, 0.f);
+  ImGui::TextColored(midi_open ? kPalette.success : kPalette.text_dim, "%s",
+                     midi_open ? "ON" : "OFF");
+
+  ImGui::SameLine(0.f, 18.f);
+  fw::theme::CapsLabel("WAVE", kPalette.text_dim);
+  ImGui::SameLine();
+  ImGui::TextColored(waves.Busy() ? kPalette.accent : kPalette.text_dim, "%s",
+                     waves.Busy() ? "UPLOADING" : "IDLE");
+
+  ImGui::SameLine(0.f, 18.f);
+  if (fw::ui::GlowButton(play_mode == 1 ? "MODE  WAVE" : "MODE  NOTES",
+                         ImVec2(110.f, 28.f))) {
+    play_mode = play_mode == 1 ? 0 : 1;
+    if (bus.IsOpen()) {
+      bus.QueueMode(play_mode == 1 ? protocol::PlayMode::Wave
+                                   : protocol::PlayMode::Notes);
+    }
+    MarkSettingsDirty();
+  }
+
+  ImGui::SameLine(0.f, 18.f);
+  fw::theme::CapsLabel("GAIN", kPalette.text_dim);
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(160.f);
+  if (ImGui::SliderInt("##fgain", &gain_db, 0, 127, "0=LOUD  %d")) {
+    if (bus.IsOpen()) {
+      NotifyEnqueue(bus.QueueGain(static_cast<uint8_t>(gain_db)) ==
+                        BusQueueResult::Ok,
+                    QueueResultMsg(BusQueueResult::Closed));
+    }
+    MarkSettingsDirty();
+  }
+
+  const float right = ImGui::GetContentRegionAvail().x;
+  ImGui::SameLine(ImGui::GetCursorPosX() +
+                  std::max(0.f, right - 260.f));
+  if (fw::ui::GlowButton("RECOVER", ImVec2(90.f, 28.f))) {
+    bus.RequestRecover(log);
+  }
+  ImGui::SameLine();
+  if (fw::ui::GlowButton("SILENCE [SPACE]", ImVec2(150.f, 28.f), true)) {
+    AllNotesOff();
+  }
+  ImGui::EndChild();
+  ImGui::PopStyleColor();
 }
 
 void App::Tick()
@@ -341,6 +467,8 @@ void App::Tick()
 
   HandleKeyboardPiano();
 
+  preview.SetTimeDivMs(scope_time_div_ms);
+  preview.SetVoltDiv(scope_volt_div);
   preview.SetVoices(bank);
   preview.Render(48000.f);
 
@@ -617,11 +745,208 @@ void App::DrawLab()
   fw::ui::EndSection();
 }
 
+
+void App::DrawPerform()
+{
+  using fw::theme::Metrics;
+  // Telemetry strip
+  ImGui::BeginChild("telemetry", ImVec2(0, Metrics::TelemetryH), ImGuiChildFlags_Borders);
+  auto Cell = [&](const char *label, const char *value, const ImVec4 &vcol) {
+    ImGui::BeginGroup();
+    fw::theme::CapsLabel(label, kPalette.text_dim);
+    if (fw::theme::g_fonts.mono) ImGui::PushFont(fw::theme::g_fonts.mono);
+    ImGui::TextColored(vcol, "%s", value);
+    if (fw::theme::g_fonts.mono) ImGui::PopFont();
+    ImGui::EndGroup();
+    ImGui::SameLine(0.f, 28.f);
+  };
+  char b0[32], b1[32], b2[32], b3[32];
+  std::snprintf(b0, sizeof(b0), "48.0 kHz");
+  std::snprintf(b1, sizeof(b1), "%02d / 16", preview.ActiveCount());
+  const float peak_db = preview.Peak() > 1e-6f
+                            ? 20.f * std::log10(preview.Peak())
+                            : -60.f;
+  const float rms_db = preview.Rms() > 1e-6f
+                           ? 20.f * std::log10(preview.Rms())
+                           : -60.f;
+  std::snprintf(b2, sizeof(b2), "%+.1f / %+.1f dB",
+                static_cast<double>(peak_db), static_cast<double>(rms_db));
+  std::snprintf(b3, sizeof(b3), "%.2f", static_cast<double>(preview.PkPk()));
+  ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6.f);
+  Cell("SAMPLE RATE", b0, kPalette.text);
+  Cell("VOICES ACTIVE", b1, kPalette.success);
+  Cell("PEAK / RMS", b2, kPalette.danger);
+  Cell("PEAK-TO-PEAK", b3, kPalette.text);
+  ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 120.f);
+  fw::theme::CapsLabel("SHORTCUTS", kPalette.text_dim);
+  ImGui::SameLine();
+  ImGui::TextDisabled("1-6  SPC");
+  ImGui::EndChild();
+
+  const float piano_h = std::clamp(layout_perform_piano_h, 110.f, 200.f);
+  const float body_h = ImGui::GetContentRegionAvail().y - piano_h - 8.f;
+
+  ImGui::BeginChild("perform_mid", ImVec2(0, body_h), ImGuiChildFlags_None);
+  const float voice_w = 320.f;
+  const float scope_w = ImGui::GetContentRegionAvail().x - voice_w - 8.f;
+
+  // LOCAL PREVIEW
+  ImGui::BeginChild("scope", ImVec2(scope_w, 0), ImGuiChildFlags_Borders);
+  fw::theme::CapsLabel("LOCAL PREVIEW", kPalette.text_dim);
+  ImGui::SameLine();
+  ImGui::TextDisabled("SYNC: FREE");
+  ImGui::SameLine();
+  ImGui::TextDisabled("TRIG: AUTO");
+
+  const float knobs_w = 100.f;
+  const float meters_w = 28.f;
+  const float wave_w =
+      ImGui::GetContentRegionAvail().x - knobs_w - meters_w - 16.f;
+  const float wave_h = ImGui::GetContentRegionAvail().y - 8.f;
+
+  ImGui::BeginChild("wavebox", ImVec2(wave_w, wave_h), ImGuiChildFlags_None);
+  const float sc = preview.DisplayScale();
+  fw::ui::GlowWaveform("scope_wave", preview.Samples().data(),
+                       PreviewScope::kDisplaySamples, ImVec2(-1, -1), -sc, sc);
+  ImGui::EndChild();
+
+  ImGui::SameLine(0.f, 6.f);
+  ImGui::BeginChild("meters", ImVec2(meters_w, wave_h), ImGuiChildFlags_None);
+  fw::ui::VerticalMeter("vm", preview.Peak(), ImVec2(meters_w, wave_h - 4.f),
+                        peak_hold);
+  ImGui::EndChild();
+
+  ImGui::SameLine(0.f, 8.f);
+  ImGui::BeginChild("knobs", ImVec2(knobs_w, wave_h), ImGuiChildFlags_None);
+  if (fw::ui::RotaryKnob("##tdiv", "TIME/DIV", &scope_time_div_ms, 1.f, 100.f,
+                         "%.0f ms", 72.f)) {
+    MarkSettingsDirty();
+  }
+  ImGui::Dummy(ImVec2(0, 8.f));
+  if (fw::ui::RotaryKnob("##vdiv", "VOLT/DIV", &scope_volt_div, 0.05f, 1.f,
+                         "%.2f V", 72.f)) {
+    MarkSettingsDirty();
+  }
+  ImGui::EndChild();
+  ImGui::EndChild();
+
+  ImGui::SameLine(0.f, 8.f);
+  // VOICE ALLOCATION 4x4
+  ImGui::BeginChild("voices", ImVec2(0, 0), ImGuiChildFlags_Borders);
+  fw::theme::CapsLabel("VOICE ALLOCATION", kPalette.text_dim);
+  ImGui::SameLine();
+  ImGui::TextDisabled("16 CHANNELS");
+  const auto &slots = bank.Slots();
+  const float gap = 6.f;
+  const float cell_w = (ImGui::GetContentRegionAvail().x - gap * 3.f) / 4.f;
+  const float cell_h = (ImGui::GetContentRegionAvail().y - 24.f - gap * 3.f) / 4.f;
+  const float dt = ImGui::GetIO().DeltaTime;
+  for (int i = 0; i < 16; ++i) {
+    if (i % 4 != 0) ImGui::SameLine(0.f, gap);
+    ImGui::PushID(i);
+    const auto &s = slots[static_cast<std::size_t>(i)];
+    voice_glow[static_cast<std::size_t>(i)] = fw::anim::ExpApproach(
+        voice_glow[static_cast<std::size_t>(i)], s.active ? 1.f : 0.f, dt,
+        s.active ? 18.f : 4.f);
+    const bool sel = (selected_voice == i);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,
+                          s.active ? ImVec4(0.18f, 0.20f, 0.22f, 1.f)
+                                   : kPalette.panel_alt);
+    ImGui::BeginChild("vc", ImVec2(cell_w, cell_h), ImGuiChildFlags_Borders);
+    if (s.active || sel) {
+      ImDrawList *dl = ImGui::GetWindowDrawList();
+      const ImVec2 p = ImGui::GetWindowPos();
+      dl->AddRectFilled(p, ImVec2(p.x + cell_w, p.y + 3.f),
+                        fw::theme::U32(s.active ? kPalette.success
+                                                : kPalette.accent));
+    }
+    char id[8];
+    std::snprintf(id, sizeof(id), "n%x", i);
+    if (fw::theme::g_fonts.mono) ImGui::PushFont(fw::theme::g_fonts.mono);
+    ImGui::TextColored(sel ? kPalette.accent : kPalette.text_dim, "%s", id);
+    if (s.active) {
+      ImGui::Text("%s", midi_host::MidiNoteName(s.midi_key).c_str());
+      ImGui::TextDisabled("%.1fHz", static_cast<double>(s.freq_hz));
+    } else {
+      ImGui::TextDisabled("--");
+      ImGui::TextDisabled("0.0Hz");
+    }
+    if (fw::theme::g_fonts.mono) ImGui::PopFont();
+    if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(0)) {
+      selected_voice = i;
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopID();
+  }
+  ImGui::EndChild();
+  ImGui::EndChild();
+
+  layout_perform_piano_h = std::clamp(
+      layout_perform_piano_h - fw::ui::Splitter("##perf_piano", true), 110.f,
+      200.f);
+
+  // Piano strip
+  ImGui::BeginChild("piano", ImVec2(0, layout_perform_piano_h),
+                    ImGuiChildFlags_Borders);
+  fw::theme::CapsLabel("OCTAVE SHIFT", kPalette.text_dim);
+  ImGui::SameLine();
+  if (ImGui::SmallButton("-##oct")) {
+    piano_octave = std::max(piano_octave - 1, -2);
+    MarkSettingsDirty();
+  }
+  ImGui::SameLine();
+  ImGui::Text("C%d - C%d", 4 + piano_octave, 5 + piano_octave);
+  ImGui::SameLine();
+  if (ImGui::SmallButton("+##oct")) {
+    piano_octave = std::min(piano_octave + 1, 4);
+    MarkSettingsDirty();
+  }
+  ImGui::SameLine(0.f, 24.f);
+  fw::theme::CapsLabel("VELOCITY", kPalette.text_dim);
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(120.f);
+  ImGui::SliderInt("##vel", &piano_velocity, 1, 127);
+
+  const int base = 60 + piano_octave * 12;
+  static const int kOffsets[] = {0, 2, 4, 5, 7, 9, 11, 12};
+  static const char *kNames[] = {"C", "D", "E", "F", "G", "A", "B", "C"};
+  static const char *kMap[] = {"A", "S", "D", "F", "G", "H", "J", "K"};
+  const float key_gap = 4.f;
+  const float key_w =
+      (ImGui::GetContentRegionAvail().x - key_gap * 7.f) / 8.f;
+  const float key_h = ImGui::GetContentRegionAvail().y - 4.f;
+  for (int i = 0; i < 8; ++i) {
+    if (i) ImGui::SameLine(0.f, key_gap);
+    ImGui::PushID(i);
+    const int midi_key = base + kOffsets[i];
+    bool sounding = false;
+    for (const auto &slot : slots) {
+      if (slot.active && slot.midi_key == midi_key) {
+        sounding = true;
+        break;
+      }
+    }
+    char name[16];
+    std::snprintf(name, sizeof(name), "%s\n%s", kNames[i], kMap[i]);
+    fw::ui::PianoKey("key", name, ImVec2(key_w, key_h), sounding);
+    if (ImGui::IsItemActivated() && midi_key >= 0 && midi_key <= 127) {
+      ApplyBankEvents(bank.NoteOn(static_cast<uint8_t>(midi_key)));
+    }
+    if (ImGui::IsItemDeactivated() && midi_key >= 0 && midi_key <= 127) {
+      ApplyBankEvents(bank.NoteOff(static_cast<uint8_t>(midi_key)));
+    }
+    ImGui::PopID();
+  }
+  ImGui::EndChild();
+}
+
 void App::Draw()
 {
   const ImGuiViewport *vp = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(vp->WorkPos);
   ImGui::SetNextWindowSize(vp->WorkSize);
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, kPalette.bg);
   ImGui::Begin("CMI", nullptr,
                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoSavedSettings |
@@ -629,365 +954,66 @@ void App::Draw()
 
   ImGuiIO &io = ImGui::GetIO();
   if (!io.WantTextInput) {
-    if (ImGui::IsKeyPressed(ImGuiKey_1)) {
-      view = GuiView::Perform;
-      MarkSettingsDirty();
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_2)) {
-      view = GuiView::Tone;
-      MarkSettingsDirty();
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_3)) {
-      view = GuiView::Waves;
-      MarkSettingsDirty();
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_4)) {
-      view = GuiView::Effect;
-      MarkSettingsDirty();
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_5)) {
-      view = GuiView::Lab;
-      MarkSettingsDirty();
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_6)) {
-      view = GuiView::Setup;
-      MarkSettingsDirty();
-    }
+    if (ImGui::IsKeyPressed(ImGuiKey_1)) { view = GuiView::Perform; MarkSettingsDirty(); }
+    if (ImGui::IsKeyPressed(ImGuiKey_2)) { view = GuiView::Tone; MarkSettingsDirty(); }
+    if (ImGui::IsKeyPressed(ImGuiKey_3)) { view = GuiView::Waves; MarkSettingsDirty(); }
+    if (ImGui::IsKeyPressed(ImGuiKey_4)) { view = GuiView::Effect; MarkSettingsDirty(); }
+    if (ImGui::IsKeyPressed(ImGuiKey_5)) { view = GuiView::Lab; MarkSettingsDirty(); }
+    if (ImGui::IsKeyPressed(ImGuiKey_6)) { view = GuiView::Setup; MarkSettingsDirty(); }
     if (ImGui::IsKeyPressed(ImGuiKey_Slash) && io.KeyShift) {
       show_shortcuts = !show_shortcuts;
     }
   }
 
-  const char *nav_labels[] = {"Perform", "Tone", "Waves",
-                              "Effect",  "Lab",  "Setup"};
-  int vi = static_cast<int>(view);
-  const bool nav_was = nav_expanded;
-  fw::ui::NavDrawer("##nav", nav_labels, 6, &vi, &nav_expanded, &nav_width);
-  if (vi != static_cast<int>(view) || nav_was != nav_expanded) {
-    MarkSettingsDirty();
-  }
-  view = static_cast<GuiView>(vi);
-
-  ImGui::SameLine(0.f, S(Metrics::SpaceM));
-  ImGui::BeginChild("main_col", ImVec2(0, 0), ImGuiChildFlags_None);
-
-  // ── Top bar: status left, output cluster right ─────────────────────────
-  ImGui::BeginChild("topbar", ImVec2(0, S(Metrics::TopBarH)),
-                    ImGuiChildFlags_None);
-  fw::ui::StatusPill("tb_bus",
-                     bus.IsConnecting() ? "BUS …"
-                     : bus.IsOpen()
-                         ? (bus.BusFault() ? "BUS FAULT" : "BUS")
-                         : "BUS OFF",
-                     bus.IsOpen() || bus.IsConnecting(), bus.BusFault());
-  ImGui::SameLine();
-  fw::ui::StatusPill("tb_midi", midi_open ? "MIDI" : "MIDI OFF", midi_open);
-  ImGui::SameLine();
-  fw::ui::StatusPill("tb_mode", play_mode == 1 ? "WAVE" : "NOTES", true);
-  if (waves.Busy()) {
-    ImGui::SameLine();
-    fw::ui::StatusPill("tb_up", "UPLOADING", true);
-  }
-
-  const float kGainW = S(160.f);
-  const float kBtnW = S(90.f);
-  const float kGap = S(Metrics::SpaceS);
-  const float right_cluster = kGainW + S(36.f) + kGap + kBtnW + kGap + kBtnW;
-  const float right = ImGui::GetContentRegionAvail().x;
-  ImGui::SameLine(ImGui::GetCursorPosX() +
-                  std::max(0.f, right - right_cluster - S(12.f)));
-  // Subtle separator between status and actions.
-  {
-    ImDrawList *dl = ImGui::GetWindowDrawList();
-    const ImVec2 p = ImGui::GetCursorScreenPos();
-    dl->AddLine(ImVec2(p.x - S(10.f), p.y + S(6.f)),
-                ImVec2(p.x - S(10.f), p.y + S(Metrics::TopBarH) - S(10.f)),
-                fw::theme::U32A(kPalette.border, 0.7f), 1.f);
-  }
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextDisabled("Gain");
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(kGainW);
-  if (ImGui::SliderInt("##top_gain", &gain_db, 0, 127, "%d dB")) {
-    if (bus.IsOpen()) {
-      const auto r = bus.QueueGain(static_cast<uint8_t>(gain_db));
-      NotifyEnqueue(r == BusQueueResult::Ok, QueueResultMsg(r));
-    }
-    MarkSettingsDirty();
-  }
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("CS4304 atten %d dB (0 = loudest)", gain_db);
-  }
-  ImGui::SameLine(0.f, kGap);
-  if (fw::ui::GlowButton("Silence", ImVec2(kBtnW, S(28.f)), true)) {
-    AllNotesOff();
-  }
-  ImGui::SameLine(0.f, kGap);
-  if (fw::ui::GlowButton("Recover", ImVec2(kBtnW, S(28.f)))) {
-    bus.RequestRecover(log);
-  }
-  ImGui::EndChild();
-
+  DrawTopNav();
   DrawBusFaultBanner();
 
-  const float kSplit = S(Metrics::Splitter);
-  const float kLogMin = S(56.f);
-  const float kLogCollapsed = S(Metrics::StatusBarH + 4.f);
-  const float kBodyMin = S(160.f);
-  const float kStatus = S(Metrics::StatusBarH);
-  const float main_avail = ImGui::GetContentRegionAvail().y - kStatus;
-  float log_h = log_collapsed ? kLogCollapsed : layout_log_h;
-  if (!log_collapsed) {
-    layout_log_h =
-        std::clamp(layout_log_h, kLogMin,
-                   std::max(kLogMin, main_avail - kBodyMin - kSplit));
-    log_h = layout_log_h;
-  }
-  const float body_h = main_avail - log_h - (log_collapsed ? 0.f : kSplit);
-  ImGui::BeginChild("body", ImVec2(0, std::max(body_h, kBodyMin)),
-                    ImGuiChildFlags_None);
+  const float footer_h = fw::theme::Metrics::FooterH;
+  const float mid_h = ImGui::GetContentRegionAvail().y - footer_h;
+  ImGui::BeginChild("mid", ImVec2(0, mid_h), ImGuiChildFlags_None);
+
+  const float log_w = std::clamp(layout_log_w, 200.f, 420.f);
+  ImGui::BeginChild("content", ImVec2(-log_w - 6.f, 0), ImGuiChildFlags_None);
 
   if (view == GuiView::Perform) {
-    const auto &slots = bank.Slots();
-    const int base = 60 + piano_octave * 12;
-    static const int kOffsets[] = {0, 2, 4, 5, 7, 9, 11, 12};
-    static const char *kNames[] = {"C", "D", "E", "F", "G", "A", "B", "C"};
-
-    constexpr float kScopeMin = 120.f;
-    constexpr float kVoiceMin = 56.f;
-    constexpr float kPianoMin = 72.f;
-    const float perform_avail = ImGui::GetContentRegionAvail().y;
-    const float fixed_splits = kSplit * 2.f;
-    layout_perform_voice_h =
-        std::clamp(layout_perform_voice_h, kVoiceMin, 160.f);
-    layout_perform_piano_h =
-        std::clamp(layout_perform_piano_h, kPianoMin, 180.f);
-    float voice_h = layout_perform_voice_h;
-    float piano_h = layout_perform_piano_h;
-    float scope_h = perform_avail - voice_h - piano_h - fixed_splits;
-    if (scope_h < kScopeMin) {
-      const float deficit = kScopeMin - scope_h;
-      const float shrink_voice =
-          std::min(deficit, std::max(0.f, voice_h - kVoiceMin));
-      voice_h -= shrink_voice;
-      piano_h -= (deficit - shrink_voice);
-      piano_h = std::max(piano_h, kPianoMin);
-      scope_h = perform_avail - voice_h - piano_h - fixed_splits;
-      layout_perform_voice_h = voice_h;
-      layout_perform_piano_h = piano_h;
-    }
-
-    fw::ui::BeginSection("scope_hero", "PREVIEW SCOPE", ImVec2(0, scope_h));
-    ImGui::SameLine();
-    ImGui::TextDisabled("Local sine mix — not Channel DSP / DAC");
-    ImGui::Spacing();
-    {
-      const ImGuiStyle &st = ImGui::GetStyle();
-      auto Meas = [&](const char *label, const char *value) {
-        ImGui::BeginGroup();
-        ImGui::TextDisabled("%s", label);
-        ImGui::PushFont(fw::theme::g_fonts.hero);
-        ImGui::TextUnformatted(value);
-        ImGui::PopFont();
-        ImGui::EndGroup();
-        ImGui::SameLine(0.f, st.ItemSpacing.x * 2.f);
-      };
-      char buf[32];
-      std::snprintf(buf, sizeof(buf), "%.3f",
-                    static_cast<double>(preview.Peak()));
-      Meas("PEAK", buf);
-      std::snprintf(buf, sizeof(buf), "%.3f",
-                    static_cast<double>(preview.Rms()));
-      Meas("RMS", buf);
-      std::snprintf(buf, sizeof(buf), "%.3f",
-                    static_cast<double>(preview.PkPk()));
-      Meas("Pk-Pk", buf);
-      std::snprintf(buf, sizeof(buf), "%d / 16", preview.ActiveCount());
-      Meas("VOICES", buf);
-      std::snprintf(buf, sizeof(buf), "%.1f ms",
-                    static_cast<double>(preview.WindowMs()));
-      Meas("WINDOW", buf);
-      Meas("RATE", "48 kHz");
-      ImGui::NewLine();
-    }
-    const float meter_h = S(12.f);
-    const float header_used = ImGui::GetCursorPosY();
-    const float wave_h =
-        std::max(scope_h - header_used - meter_h -
-                     ImGui::GetStyle().ItemSpacing.y * 2.f - S(8.f),
-                 S(80.f));
-    fw::ui::GlowWaveform("scope_wave", preview.Samples().data(),
-                         PreviewScope::kDisplaySamples, ImVec2(-1, wave_h));
-    fw::ui::LevelMeter("peak_meter", preview.Peak(), ImVec2(-1, meter_h),
-                       peak_hold);
-    fw::ui::EndSection();
-
-    layout_perform_voice_h = std::clamp(
-        layout_perform_voice_h - fw::ui::Splitter("##scope_voice", true),
-        kVoiceMin, 160.f);
-
-    fw::ui::BeginSection("voice_strip", "VOICES", ImVec2(0, voice_h));
-    ImGui::SameLine();
-    ImGui::TextDisabled("%u active", bank.ActiveCount());
-    ImGui::Spacing();
-    {
-      const float detail_w = S(220.f);
-      const float gap = ImGui::GetStyle().ItemSpacing.x;
-      ImGui::BeginChild("voices",
-                        ImVec2(ImGui::GetContentRegionAvail().x - detail_w -
-                                   gap,
-                               0),
-                        ImGuiChildFlags_None);
-      const float dt = ImGui::GetIO().DeltaTime;
-      for (uint8_t i = 0; i < midi_host::kVoiceCount; ++i) {
-        const auto &s = slots[i];
-        voice_glow[i] =
-            fw::anim::ExpApproach(voice_glow[i], s.active ? 1.f : 0.f, dt,
-                                  s.active ? 18.f : 4.f);
-        ImGui::PushID(static_cast<int>(i));
-        char label[4];
-        std::snprintf(label, sizeof(label), "n%c", "0123456789abcdef"[i]);
-        char sub[16] = {};
-        if (s.active) {
-          std::snprintf(sub, sizeof(sub), "%s",
-                        midi_host::MidiNoteName(s.midi_key).c_str());
-        }
-        const bool sel = (selected_voice == static_cast<int>(i));
-        fw::ui::VoiceSlotBadge("badge", label, s.active, voice_glow[i],
-                               s.active ? sub : nullptr, sel);
-        if (ImGui::IsItemClicked()) {
-          selected_voice = static_cast<int>(i);
-        }
-        if (i + 1 < midi_host::kVoiceCount) {
-          ImGui::SameLine(0.f, S(3.f));
-        }
-        ImGui::PopID();
-      }
-      ImGui::EndChild();
-
-      ImGui::SameLine(0.f, gap);
-      ImGui::BeginChild("voice_detail", ImVec2(0, 0), ImGuiChildFlags_None);
-      const int sv = std::clamp(selected_voice, 0, 15);
-      const auto &s = slots[static_cast<std::size_t>(sv)];
-      ImGui::TextDisabled("SELECTED");
-      ImGui::SameLine();
-      ImGui::TextColored(kPalette.accent, "n%x", sv);
-      if (s.active) {
-        ImGui::Text("%s  ·  %.2f Hz",
-                    midi_host::MidiNoteName(s.midi_key).c_str(),
-                    static_cast<double>(s.freq_hz));
-      } else {
-        ImGui::TextDisabled("silent");
-      }
-      const float btn_w =
-          (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) *
-          0.5f;
-      if (fw::ui::GlowButton("Envelope", ImVec2(btn_w, S(26.f)))) {
-        view = GuiView::Tone;
-        MarkSettingsDirty();
-      }
-      ImGui::SameLine();
-      if (fw::ui::GlowButton("Waves", ImVec2(btn_w, S(26.f)))) {
-        view = GuiView::Waves;
-        MarkSettingsDirty();
-      }
-      ImGui::EndChild();
-    }
-    fw::ui::EndSection();
-
-    layout_perform_piano_h = std::clamp(
-        layout_perform_piano_h - fw::ui::Splitter("##voice_piano", true),
-        kPianoMin, 180.f);
-
-    fw::ui::BeginSection("piano", "KEYBOARD", ImVec2(0, piano_h));
-    ImGui::SameLine();
-    ImGui::TextDisabled("A–K / W E T Y U · Z/X octave (%d)", piano_octave);
-    ImGui::Spacing();
-    const float key_gap = ImGui::GetStyle().ItemSpacing.x;
-    const float key_w =
-        (ImGui::GetContentRegionAvail().x - key_gap * 7.f) / 8.f;
-    const float key_h = ImGui::GetContentRegionAvail().y;
-    for (int i = 0; i < 8; ++i) {
-      if (i) {
-        ImGui::SameLine();
-      }
-      ImGui::PushID(i);
-      const int midi_key = base + kOffsets[i];
-      bool sounding = false;
-      for (const auto &slot : slots) {
-        if (slot.active && slot.midi_key == midi_key) {
-          sounding = true;
-          break;
-        }
-      }
-      char name[8];
-      std::snprintf(name, sizeof(name), "%s%d", kNames[i],
-                    4 + piano_octave + (i == 7 ? 1 : 0));
-      fw::ui::PianoKey("key", name, ImVec2(key_w, key_h), sounding);
-      if (ImGui::IsItemActivated() && midi_key >= 0 && midi_key <= 127) {
-        ApplyBankEvents(bank.NoteOn(static_cast<uint8_t>(midi_key)));
-      }
-      if (ImGui::IsItemDeactivated() && midi_key >= 0 && midi_key <= 127) {
-        ApplyBankEvents(bank.NoteOff(static_cast<uint8_t>(midi_key)));
-      }
-      ImGui::PopID();
-    }
-    fw::ui::EndSection();
+    DrawPerform();
   } else if (view == GuiView::Tone) {
     if (!bus.IsOpen()) {
       DrawDisconnectedHint("Connect RS485 in Setup to send tone / envelope.");
     } else {
       DrawPlayModeStrip(*this);
-      ImGui::Dummy(ImVec2(0, S(Metrics::SpaceS)));
+      ImGui::Spacing();
       const float tone_avail_w = ImGui::GetContentRegionAvail().x;
       constexpr float kToneLeftMin = 220.f;
       constexpr float kToneRightMin = 280.f;
-      if (layout_tone_left_w <= 0.f) {
-        layout_tone_left_w = tone_avail_w * 0.34f;
-      }
+      if (layout_tone_left_w <= 0.f) layout_tone_left_w = tone_avail_w * 0.34f;
       layout_tone_left_w = std::clamp(
           layout_tone_left_w, kToneLeftMin,
-          std::max(kToneLeftMin, tone_avail_w - kToneRightMin - kSplit));
-
+          std::max(kToneLeftMin, tone_avail_w - kToneRightMin - 5.f));
       ImGui::BeginChild("tone_left", ImVec2(layout_tone_left_w, 0),
                         ImGuiChildFlags_None,
                         ImGuiWindowFlags_AlwaysVerticalScrollbar);
       if (play_mode == 0) {
         DrawOscillatorCard(*this);
-        ImGui::Dummy(ImVec2(0, S(Metrics::SpaceS)));
-      } else {
-        fw::ui::BeginSection("osc_hidden", "OSCILLATOR", ImVec2(0, S(72.f)));
         ImGui::Spacing();
-        ImGui::TextDisabled("Oscillator shapes are notes-mode only.");
-        ImGui::TextWrapped(
-            "Switch to Notes above, or open Waves for sample banks.");
-        fw::ui::EndSection();
-        ImGui::Dummy(ImVec2(0, S(Metrics::SpaceS)));
       }
       DrawFilterCard(*this);
-      ImGui::Dummy(ImVec2(0, S(Metrics::SpaceS)));
-      if (fw::ui::GlowButton("Open Wave Bank", ImVec2(-1, S(32.f)))) {
-        view = GuiView::Waves;
-        MarkSettingsDirty();
-      }
       ImGui::EndChild();
       const float tone_col_h = ImGui::GetItemRectSize().y;
-
       ImGui::SameLine(0.f, 0.f);
       layout_tone_left_w = std::clamp(
           layout_tone_left_w +
               fw::ui::Splitter("##tone_cols", false, 0.f, tone_col_h),
           kToneLeftMin,
-          std::max(kToneLeftMin, tone_avail_w - kToneRightMin - kSplit));
+          std::max(kToneLeftMin, tone_avail_w - kToneRightMin - 5.f));
       ImGui::SameLine(0.f, 0.f);
-
       ImGui::BeginChild("tone_right", ImVec2(0, 0), ImGuiChildFlags_None,
                         ImGuiWindowFlags_AlwaysVerticalScrollbar);
-      fw::ui::BeginSection("voice_overview", "ALL VOICES", ImVec2(0, S(192.f)));
+      fw::ui::BeginSection("voice_overview", "ALL VOICES", ImVec2(0, 192.f));
       ImGui::Spacing();
       DrawVoiceOverview(*this);
       fw::ui::EndSection();
-      ImGui::Dummy(ImVec2(0, S(Metrics::SpaceS)));
+      ImGui::Spacing();
       DrawEnvelopeEditor(*this);
       ImGui::EndChild();
     }
@@ -1001,102 +1027,31 @@ void App::Draw()
     DrawSetup();
   }
 
-  ImGui::EndChild();
+  ImGui::EndChild(); // content
 
-  if (!log_collapsed) {
-    layout_log_h = std::clamp(
-        layout_log_h - fw::ui::Splitter("##body_log", true), 56.f, 280.f);
-  }
+  ImGui::SameLine(0.f, 6.f);
+  DrawActivityLog();
 
-  // Collapsible log
-  ImGui::BeginChild("log", ImVec2(0, log_h), ImGuiChildFlags_Borders);
-  int err_count = 0;
-  for (const auto &line : log_view) {
-    if (line.find("err") != std::string::npos ||
-        line.find("FAULT") != std::string::npos) {
-      ++err_count;
-    }
-  }
-  if (ImGui::SmallButton(log_collapsed ? "Log ▸" : "Log ▾")) {
-    log_collapsed = !log_collapsed;
-    MarkSettingsDirty();
-  }
-  ImGui::SameLine();
-  if (err_count > 0) {
-    ImGui::TextColored(kPalette.danger, "%d", err_count);
-    ImGui::SameLine();
-  }
-  if (log_collapsed) {
-    if (!log_view.empty()) {
-      const std::string &last = log_view.back();
-      const bool err = last.find("err") != std::string::npos ||
-                       last.find("FAULT") != std::string::npos;
-      if (err) {
-        ImGui::TextColored(kPalette.danger, "%s", last.c_str());
-      } else {
-        ImGui::TextDisabled("%s", last.c_str());
-      }
-    } else {
-      ImGui::TextDisabled("(empty)");
-    }
-  } else {
-    ImGui::SameLine();
-    ImGui::Checkbox("auto-scroll", &log_auto_scroll);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(S(140.f));
-    ImGui::InputTextWithHint("##logfilter", "filter…", log_filter,
-                             sizeof(log_filter));
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Clear")) {
-      log.Clear();
-    }
-    ImGui::Separator();
-    ImGui::BeginChild("logscroll", ImVec2(0, 0), ImGuiChildFlags_None,
-                      ImGuiWindowFlags_HorizontalScrollbar);
-    for (const auto &line : log_view) {
-      if (log_filter[0] &&
-          line.find(log_filter) == std::string::npos) {
-        continue;
-      }
-      const bool err = line.find("err") != std::string::npos ||
-                       line.find("FAULT") != std::string::npos ||
-                       line.find("fault") != std::string::npos;
-      if (err) {
-        ImGui::TextColored(kPalette.danger, "%s", line.c_str());
-      } else {
-        ImGui::TextUnformatted(line.c_str());
-      }
-      if (ImGui::IsItemClicked()) {
-        ImGui::SetClipboardText(line.c_str());
-        PushToastOk("copied");
-      }
-    }
-    if (log_auto_scroll) {
-      ImGui::SetScrollHereY(1.f);
-    }
-    ImGui::EndChild();
-  }
-  ImGui::EndChild();
+  ImGui::EndChild(); // mid
 
-  DrawStatusBar();
-  ImGui::EndChild();
+  DrawFooter();
 
   if (show_shortcuts) {
     ImGui::SetNextWindowPos(
         ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + 80.f),
         ImGuiCond_Always, ImVec2(0.5f, 0.f));
-    ImGui::SetNextWindowSize(ImVec2(S(420.f), 0));
+    ImGui::SetNextWindowSize(ImVec2(420.f, 0));
     ImGui::Begin("Shortcuts", &show_shortcuts,
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
-    ImGui::TextUnformatted("1–6   Switch views");
-    ImGui::TextUnformatted("Space All notes off / silence");
-    ImGui::TextUnformatted("?     Toggle this overlay");
-    ImGui::TextUnformatted("A–K   Piano whites (Perform)");
-    ImGui::TextUnformatted("W E T Y U  Piano blacks");
-    ImGui::TextUnformatted("Z / X Octave down / up");
+    ImGui::TextUnformatted("1-6   Switch modules");
+    ImGui::TextUnformatted("Space Silence");
+    ImGui::TextUnformatted("?     This overlay");
+    ImGui::TextUnformatted("A-K / W E T Y U  Piano");
+    ImGui::TextUnformatted("Z / X Octave");
     ImGui::End();
   }
 
   toasts.Draw();
   ImGui::End();
+  ImGui::PopStyleColor();
 }

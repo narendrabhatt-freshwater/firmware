@@ -93,17 +93,18 @@ struct App
   char wave_cdc_path[256] = {};
   int wave_cdc_port_index = 0;
 
-  bool nav_expanded = true;
+  bool nav_expanded = true; // legacy settings key; unused by Stitch shell
   float nav_width = 148.f;
   bool log_collapsed = false;
+  float layout_log_w = 280.f; // right activity log width
   bool auto_reconnect = false;
   bool settings_dirty = false;
   float settings_save_countdown = 0.f;
 
-  /** Persisted panel sizes for drag splitters (logical pixels). */
-  float layout_log_h = 100.f;
+  /** Persisted panel sizes for drag splitters (window pixels). */
+  float layout_log_h = 100.f; // legacy
   float layout_perform_voice_h = 78.f;
-  float layout_perform_piano_h = 106.f;
+  float layout_perform_piano_h = 140.f;
   float layout_tone_left_w = 0.f; // 0 → seed from fraction on first draw
 
   int shape_mode = 0;
@@ -115,6 +116,9 @@ struct App
   bool env_apply_all = false;
   int selected_voice = 0;
   int piano_octave = 0; // offset from C4 (0 = C4–C5)
+  int piano_velocity = 100;
+  float scope_time_div_ms = 10.f;
+  float scope_volt_div = 0.25f;
   float peak_hold = 0.f;
   float peak_hold_timer = 0.f;
   bool midi_activity = false;
@@ -136,9 +140,12 @@ struct App
   void RefreshPortLists();
   void Tick();
   void Draw();
+  void DrawTopNav();
+  void DrawActivityLog();
+  void DrawFooter();
+  void DrawPerform();
   void DrawSetup();
   void DrawLab();
-  void DrawStatusBar();
   void DrawBusFaultBanner();
   void DrawDisconnectedHint(const char *action);
   void ApplyBankEvents(const std::vector<midi_host::BankEvent> &events);
