@@ -26,6 +26,9 @@ Fonts g_fonts{};
 
 namespace
 {
+// Window-coordinate UI scale. Keep at 1.0 under GLFW+ImGui: Retina is already
+// handled by DisplayFramebufferScale. Multiplying fonts/spacing by the monitor
+// content scale double-sizes everything and blows up the layout.
 float g_scale = 1.f;
 } // namespace
 
@@ -37,11 +40,12 @@ ImVec2 S2(float x, float y) { return ImVec2(S(x), S(y)); }
 
 bool SetContentScale(float content_scale_x)
 {
-  const float next = std::clamp(content_scale_x, 0.75f, 3.f);
-  if (std::fabs(next - g_scale) < 0.04f) {
+  (void)content_scale_x;
+  // Intentionally ignore monitor content scale — see g_scale comment.
+  if (std::fabs(g_scale - 1.f) < 0.001f) {
     return false;
   }
-  g_scale = next;
+  g_scale = 1.f;
   return true;
 }
 
@@ -120,25 +124,24 @@ void Apply()
   c[ImGuiCol_TextSelectedBg] =
       ImVec4(kPalette.accent.x, kPalette.accent.y, kPalette.accent.z, 0.35f);
 
-  const float sc = g_scale;
-  s.WindowRounding = 8.f * sc;
-  s.ChildRounding = 8.f * sc;
-  s.FrameRounding = 5.f * sc;
-  s.PopupRounding = 6.f * sc;
-  s.ScrollbarRounding = 6.f * sc;
-  s.GrabRounding = 5.f * sc;
-  s.TabRounding = 5.f * sc;
+  s.WindowRounding = 8.f;
+  s.ChildRounding = 8.f;
+  s.FrameRounding = 5.f;
+  s.PopupRounding = 6.f;
+  s.ScrollbarRounding = 6.f;
+  s.GrabRounding = 5.f;
+  s.TabRounding = 5.f;
   s.WindowBorderSize = 1.f;
   s.ChildBorderSize = 1.f;
   s.PopupBorderSize = 1.f;
   s.FrameBorderSize = 1.f;
-  s.WindowPadding = ImVec2(Metrics::SpaceM * sc, Metrics::SpaceS * sc);
-  s.FramePadding = ImVec2(7.f * sc, 4.f * sc);
-  s.ItemSpacing = ImVec2(Metrics::SpaceS * sc, 5.f * sc);
-  s.ItemInnerSpacing = ImVec2(6.f * sc, 4.f * sc);
-  s.IndentSpacing = 14.f * sc;
-  s.ScrollbarSize = 12.f * sc;
-  s.GrabMinSize = 8.f * sc;
+  s.WindowPadding = ImVec2(Metrics::SpaceM, Metrics::SpaceS);
+  s.FramePadding = ImVec2(7.f, 4.f);
+  s.ItemSpacing = ImVec2(Metrics::SpaceS, 5.f);
+  s.ItemInnerSpacing = ImVec2(6.f, 4.f);
+  s.IndentSpacing = 14.f;
+  s.ScrollbarSize = 12.f;
+  s.GrabMinSize = 8.f;
 }
 
 void LoadFonts(ImGuiIO &io)
@@ -170,15 +173,16 @@ void LoadFonts(ImGuiIO &io)
   }
   cfg.GlyphRanges = ranges.Data;
 
-  const float sc = g_scale;
 #ifdef FW_FONT_DIR
   const std::string path = std::string(FW_FONT_DIR) + "/Roboto-Medium.ttf";
+  /* Dense control-surface sizing in window coordinates; Retina sharpness
+   * comes from ImGui DisplayFramebufferScale, not bigger point sizes. */
   g_fonts.body =
-      io.Fonts->AddFontFromFileTTF(path.c_str(), Metrics::BodyFontPx * sc, &cfg);
+      io.Fonts->AddFontFromFileTTF(path.c_str(), Metrics::BodyFontPx, &cfg);
   g_fonts.large =
-      io.Fonts->AddFontFromFileTTF(path.c_str(), Metrics::LargeFontPx * sc, &cfg);
+      io.Fonts->AddFontFromFileTTF(path.c_str(), Metrics::LargeFontPx, &cfg);
   g_fonts.hero =
-      io.Fonts->AddFontFromFileTTF(path.c_str(), Metrics::HeroFontPx * sc, &cfg);
+      io.Fonts->AddFontFromFileTTF(path.c_str(), Metrics::HeroFontPx, &cfg);
 #endif
 
   if (!g_fonts.body) {

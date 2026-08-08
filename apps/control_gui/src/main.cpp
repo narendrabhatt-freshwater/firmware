@@ -14,6 +14,7 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -53,26 +54,6 @@ void GlfwDropCallback(GLFWwindow *, int count, const char **paths)
     if (paths[i] && paths[i][0]) {
       g_drops.emplace_back(paths[i]);
     }
-  }
-}
-
-void SyncDpi(GLFWwindow *window, ImGuiIO &io, bool force_rebuild)
-{
-  float xscale = 1.f;
-  float yscale = 1.f;
-  GLFWmonitor *mon = glfwGetWindowMonitor(window);
-  if (!mon) {
-    mon = glfwGetPrimaryMonitor();
-  }
-  if (mon) {
-    glfwGetMonitorContentScale(mon, &xscale, &yscale);
-  }
-  (void)yscale;
-  if (fw::theme::SetContentScale(xscale) || force_rebuild) {
-    fw::theme::Apply();
-    fw::theme::LoadFonts(io);
-    ImGui_ImplOpenGL3_DestroyDeviceObjects();
-    ImGui_ImplOpenGL3_CreateDeviceObjects();
   }
 }
 
@@ -118,16 +99,6 @@ int main(int argc, char **argv)
   io.IniFilename = nullptr; // layout persistence is apps/settings.ini
 
   ImGui::StyleColorsDark();
-  {
-    float xscale = 1.f;
-    float yscale = 1.f;
-    GLFWmonitor *mon = glfwGetPrimaryMonitor();
-    if (mon) {
-      glfwGetMonitorContentScale(mon, &xscale, &yscale);
-    }
-    (void)yscale;
-    fw::theme::SetContentScale(xscale);
-  }
   fw::theme::Apply();
   fw::theme::LoadFonts(io);
   ImGui_ImplGlfw_InitForOpenGL(window, true);
@@ -136,13 +107,19 @@ int main(int argc, char **argv)
   App app;
   g_app = &app;
   fw::settings::Load(app);
+  // Clamp layout restored from a broken DPI-scaled save so panels fit.
+  app.nav_width = std::clamp(app.nav_width, 52.f, 180.f);
+  app.layout_log_h = std::clamp(app.layout_log_h, 56.f, 280.f);
+  app.layout_perform_voice_h =
+      std::clamp(app.layout_perform_voice_h, 56.f, 160.f);
+  app.layout_perform_piano_h =
+      std::clamp(app.layout_perform_piano_h, 72.f, 180.f);
   app.RefreshPortLists();
   app.log.Push("CMI ready — connect MIDI and/or RS485, start from Perform");
   if (app.auto_reconnect && app.serial_path_buf[0]) {
     app.RequestConnectBus();
   }
 
-  float last_scale_check = 0.f;
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
 
@@ -157,12 +134,6 @@ int main(int argc, char **argv)
 
     if (ImGui::IsKeyPressed(ImGuiKey_Space) && !io.WantTextInput) {
       app.AllNotesOff();
-    }
-
-    const float now = static_cast<float>(glfwGetTime());
-    if (now - last_scale_check > 0.5f) {
-      SyncDpi(window, io, false);
-      last_scale_check = now;
     }
 
     app.Tick();

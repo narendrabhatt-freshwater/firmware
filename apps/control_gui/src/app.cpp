@@ -391,14 +391,13 @@ void App::DrawSetup()
       "Connections live here so the rest of the app stays clean.");
   ImGui::Dummy(ImVec2(0, S(Metrics::SpaceS)));
 
-  fw::ui::BeginSection("card_bus", "RS485 BUS", ImVec2(card_w, card_h));
-  ImGui::SameLine();
-  fw::ui::StatusPill("bus_pill",
-                     bus.IsConnecting() ? "connecting"
-                     : bus.IsOpen()
-                         ? (bus.BusFault() ? "fault" : "connected")
-                         : "offline",
-                     bus.IsOpen(), bus.BusFault());
+  ImGui::BeginChild("card_bus", ImVec2(card_w, card_h), ImGuiChildFlags_Borders);
+  fw::ui::SectionHeader("RS485 BUS", "bus_pill",
+                        bus.IsConnecting() ? "connecting"
+                        : bus.IsOpen()
+                            ? (bus.BusFault() ? "fault" : "connected")
+                            : "offline",
+                        bus.IsOpen(), bus.BusFault());
   ImGui::Spacing();
   if (ImGui::SmallButton("Refresh##bus")) {
     RefreshPortLists();
@@ -442,10 +441,10 @@ void App::DrawSetup()
   }
   ImGui::TextDisabled("timeouts %u  errs %u", bus.TimeoutCount(),
                       bus.ErrCount());
-  fw::ui::EndSection();
+  ImGui::EndChild();
 
   ImGui::SameLine(0.f, gap);
-  fw::ui::BeginSection("card_midi", "MIDI", ImVec2(card_w, card_h));
+  ImGui::BeginChild("card_midi", ImVec2(card_w, card_h), ImGuiChildFlags_Borders);
   std::string midi_preview = "(auto Launchkey)";
   if (midi_port_index >= 0 &&
       midi_port_index < static_cast<int>(midi_ports.size())) {
@@ -454,9 +453,9 @@ void App::DrawSetup()
             midi_ports[static_cast<std::size_t>(midi_port_index)].index) +
         ": " + midi_ports[static_cast<std::size_t>(midi_port_index)].name;
   }
-  ImGui::SameLine();
-  fw::ui::StatusPill("midi_pill", midi_open ? midi.PortName().c_str() : "closed",
-                     midi_open);
+  fw::ui::SectionHeader("MIDI", "midi_pill",
+                        midi_open ? midi.PortName().c_str() : "closed",
+                        midi_open);
   ImGui::Spacing();
   if (ImGui::SmallButton("Refresh##midi")) {
     RefreshPortLists();
@@ -486,10 +485,11 @@ void App::DrawSetup()
       DisconnectMidi();
     }
   }
-  fw::ui::EndSection();
+  ImGui::EndChild();
 
   ImGui::SameLine(0.f, gap);
-  fw::ui::BeginSection("card_out", "OUTPUT", ImVec2(card_w, card_h));
+  ImGui::BeginChild("card_out", ImVec2(card_w, card_h), ImGuiChildFlags_Borders);
+  fw::ui::SectionHeader("OUTPUT");
   ImGui::Spacing();
   {
     const char *out_items[] = {"Speakers", "Card", "Both"};
@@ -520,19 +520,20 @@ void App::DrawSetup()
   if (fw::ui::GlowButton("Recover", ImVec2(half_w, 0))) {
     bus.RequestRecover(log);
   }
-  fw::ui::EndSection();
+  ImGui::EndChild();
 
-  ImGui::Dummy(ImVec2(0, S(Metrics::SpaceM)));
-  fw::ui::BeginSection("cdc_hint", "WAVE USB CDC", ImVec2(0, S(96.f)));
+  ImGui::Dummy(ImVec2(0, Metrics::SpaceM));
+  ImGui::BeginChild("cdc_hint", ImVec2(0, 96.f), ImGuiChildFlags_Borders);
+  fw::ui::SectionHeader("WAVE USB CDC");
   ImGui::Spacing();
   ImGui::TextWrapped(
       "Wave uploads use a separate Channel Card USB port (cu.usbmodem…). "
       "Configure it on the Waves page — keep RS485 on the adapter above.");
-  if (fw::ui::GlowButton("Go to Waves", ImVec2(S(180.f), 0))) {
+  if (fw::ui::GlowButton("Go to Waves", ImVec2(180.f, 0))) {
     view = GuiView::Waves;
     MarkSettingsDirty();
   }
-  fw::ui::EndSection();
+  ImGui::EndChild();
 }
 
 void App::DrawLab()
@@ -752,20 +753,17 @@ void App::Draw()
     static const int kOffsets[] = {0, 2, 4, 5, 7, 9, 11, 12};
     static const char *kNames[] = {"C", "D", "E", "F", "G", "A", "B", "C"};
 
-    constexpr float kScopeMinL = 120.f;
-    constexpr float kVoiceMinL = 56.f;
-    constexpr float kPianoMinL = 72.f;
-    const float kScopeMin = S(kScopeMinL);
-    const float kVoiceMin = S(kVoiceMinL);
-    const float kPianoMin = S(kPianoMinL);
+    constexpr float kScopeMin = 120.f;
+    constexpr float kVoiceMin = 56.f;
+    constexpr float kPianoMin = 72.f;
     const float perform_avail = ImGui::GetContentRegionAvail().y;
     const float fixed_splits = kSplit * 2.f;
     layout_perform_voice_h =
-        std::clamp(layout_perform_voice_h, kVoiceMinL, 220.f);
+        std::clamp(layout_perform_voice_h, kVoiceMin, 160.f);
     layout_perform_piano_h =
-        std::clamp(layout_perform_piano_h, kPianoMinL, 220.f);
-    float voice_h = S(layout_perform_voice_h);
-    float piano_h = S(layout_perform_piano_h);
+        std::clamp(layout_perform_piano_h, kPianoMin, 180.f);
+    float voice_h = layout_perform_voice_h;
+    float piano_h = layout_perform_piano_h;
     float scope_h = perform_avail - voice_h - piano_h - fixed_splits;
     if (scope_h < kScopeMin) {
       const float deficit = kScopeMin - scope_h;
@@ -775,6 +773,8 @@ void App::Draw()
       piano_h -= (deficit - shrink_voice);
       piano_h = std::max(piano_h, kPianoMin);
       scope_h = perform_avail - voice_h - piano_h - fixed_splits;
+      layout_perform_voice_h = voice_h;
+      layout_perform_piano_h = piano_h;
     }
 
     fw::ui::BeginSection("scope_hero", "PREVIEW SCOPE", ImVec2(0, scope_h));
@@ -823,9 +823,8 @@ void App::Draw()
     fw::ui::EndSection();
 
     layout_perform_voice_h = std::clamp(
-        layout_perform_voice_h -
-            fw::ui::Splitter("##scope_voice", true) / std::max(fw::theme::Scale(), 0.01f),
-        kVoiceMinL, 220.f);
+        layout_perform_voice_h - fw::ui::Splitter("##scope_voice", true),
+        kVoiceMin, 160.f);
 
     fw::ui::BeginSection("voice_strip", "VOICES", ImVec2(0, voice_h));
     ImGui::SameLine();
@@ -897,9 +896,8 @@ void App::Draw()
     fw::ui::EndSection();
 
     layout_perform_piano_h = std::clamp(
-        layout_perform_piano_h -
-            fw::ui::Splitter("##voice_piano", true) / std::max(fw::theme::Scale(), 0.01f),
-        kPianoMinL, 220.f);
+        layout_perform_piano_h - fw::ui::Splitter("##voice_piano", true),
+        kPianoMin, 180.f);
 
     fw::ui::BeginSection("piano", "KEYBOARD", ImVec2(0, piano_h));
     ImGui::SameLine();
@@ -942,18 +940,16 @@ void App::Draw()
       DrawPlayModeStrip(*this);
       ImGui::Dummy(ImVec2(0, S(Metrics::SpaceS)));
       const float tone_avail_w = ImGui::GetContentRegionAvail().x;
-      const float kToneLeftMin = S(220.f);
-      const float kToneRightMin = S(280.f);
+      constexpr float kToneLeftMin = 220.f;
+      constexpr float kToneRightMin = 280.f;
       if (layout_tone_left_w <= 0.f) {
-        layout_tone_left_w = (tone_avail_w / std::max(fw::theme::Scale(), 0.01f)) * 0.34f;
+        layout_tone_left_w = tone_avail_w * 0.34f;
       }
-      const float left_px = S(layout_tone_left_w);
-      float clamped_left = std::clamp(left_px, kToneLeftMin,
-                                      std::max(kToneLeftMin, tone_avail_w -
-                                                                  kToneRightMin -
-                                                                  kSplit));
+      layout_tone_left_w = std::clamp(
+          layout_tone_left_w, kToneLeftMin,
+          std::max(kToneLeftMin, tone_avail_w - kToneRightMin - kSplit));
 
-      ImGui::BeginChild("tone_left", ImVec2(clamped_left, 0),
+      ImGui::BeginChild("tone_left", ImVec2(layout_tone_left_w, 0),
                         ImGuiChildFlags_None,
                         ImGuiWindowFlags_AlwaysVerticalScrollbar);
       if (play_mode == 0) {
@@ -978,11 +974,11 @@ void App::Draw()
       const float tone_col_h = ImGui::GetItemRectSize().y;
 
       ImGui::SameLine(0.f, 0.f);
-      const float d =
-          fw::ui::Splitter("##tone_cols", false, 0.f, tone_col_h) /
-          std::max(fw::theme::Scale(), 0.01f);
-      layout_tone_left_w = std::clamp(layout_tone_left_w + d, 220.f, 600.f);
-      MarkSettingsDirty();
+      layout_tone_left_w = std::clamp(
+          layout_tone_left_w +
+              fw::ui::Splitter("##tone_cols", false, 0.f, tone_col_h),
+          kToneLeftMin,
+          std::max(kToneLeftMin, tone_avail_w - kToneRightMin - kSplit));
       ImGui::SameLine(0.f, 0.f);
 
       ImGui::BeginChild("tone_right", ImVec2(0, 0), ImGuiChildFlags_None,
@@ -1009,9 +1005,7 @@ void App::Draw()
 
   if (!log_collapsed) {
     layout_log_h = std::clamp(
-        layout_log_h -
-            fw::ui::Splitter("##body_log", true) / std::max(fw::theme::Scale(), 0.01f),
-        56.f, 400.f);
+        layout_log_h - fw::ui::Splitter("##body_log", true), 56.f, 280.f);
   }
 
   // Collapsible log

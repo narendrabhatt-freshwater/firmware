@@ -55,25 +55,25 @@ struct Metrics
   static constexpr float HeroFontPx = 22.f;
 };
 
-/** Current UI scale (1.0 = 96 DPI / 1× content scale). */
+/** UI scale in window coordinates. Always 1.0 under GLFW+ImGui — Retina is
+ * handled by DisplayFramebufferScale, not by enlarging fonts/spacing. */
 float Scale();
 
-/** Scale a logical pixel value by the current DPI factor. */
+/** Named-token helper (identity while Scale() is 1). Prefer Metrics::* for
+ * readability at call sites. */
 float S(float logical_px);
 
 ImVec2 S2(float x, float y);
 
 /** Sets ImGuiStyle colors, rounding, and spacing. Call once after
- * ImGui::CreateContext(), and again after a DPI change (fonts must be
- * rebuilt separately via LoadFonts). */
+ * ImGui::CreateContext(). */
 void Apply();
 
-/** Loads Roboto-Medium at body/large/hero sizes × Scale(). Clears and
- * rebuilds the font atlas. Falls back to the default ImGui font. */
+/** Loads Roboto-Medium at body/large/hero sizes. Clears and rebuilds the
+ * font atlas. Falls back to the default ImGui font. */
 void LoadFonts(ImGuiIO &io);
 
-/** Update Scale() from a GLFW monitor content-scale factor. Returns true
- * when the scale changed enough that fonts/style should be rebuilt. */
+/** Kept for call-site compatibility; forces Scale() back to 1.0. */
 bool SetContentScale(float content_scale_x);
 
 ImU32 U32(const ImVec4 &c);
