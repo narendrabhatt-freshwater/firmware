@@ -4,6 +4,7 @@
 #include "env_editor.hpp"
 #include "note_event.hpp"
 #include "host_io/serial_port.hpp"
+#include "product.hpp"
 #include "protocol/types.hpp"
 #include "settings.hpp"
 #include "theme.hpp"
@@ -23,6 +24,32 @@ namespace
 using fw::theme::kPalette;
 using fw::theme::S;
 using fw::theme::Metrics;
+
+/* Classic 1-2-5 oscilloscope timebase (µs per division, 10 divisions wide). */
+constexpr int kScopeTimeDivUs[] = {50,    100,   200,   500,   1000,  2000,
+                                   5000,  10000, 20000, 50000, 100000,
+                                   200000, 500000};
+constexpr int kScopeTimeDivCount =
+    static_cast<int>(sizeof(kScopeTimeDivUs) / sizeof(kScopeTimeDivUs[0]));
+
+constexpr float kScopeVoltDiv[] = {0.05f, 0.1f, 0.2f, 0.5f, 1.0f};
+constexpr int kScopeVoltDivCount =
+    static_cast<int>(sizeof(kScopeVoltDiv) / sizeof(kScopeVoltDiv[0]));
+
+void FormatScopeTimeDiv(int us, char *buf, std::size_t n)
+{
+  if (us < 1000) {
+    std::snprintf(buf, n, "%d us", us);
+  } else if (us < 1000000) {
+    if (us % 1000 == 0) {
+      std::snprintf(buf, n, "%d ms", us / 1000);
+    } else {
+      std::snprintf(buf, n, "%.1f ms", us / 1000.0);
+    }
+  } else {
+    std::snprintf(buf, n, "%.1f s", us / 1000000.0);
+  }
+}
 
 const char *QueueResultMsg(BusQueueResult r)
 {
@@ -269,8 +296,17 @@ void App::DrawTopNav()
   ImGui::BeginChild("topnav", ImVec2(0, Metrics::TopNavH), ImGuiChildFlags_None);
   ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10.f);
   ImGui::PushFont(fw::theme::g_fonts.large);
-  ImGui::TextColored(kPalette.text, "FRESHWATER");
+  ImGui::TextColored(kPalette.accent, "%s", fw::product::kName);
   ImGui::PopFont();
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("About %s", fw::product::kTitle);
+  }
+  if (ImGui::IsItemClicked()) {
+    show_about = true;
+  }
+  ImGui::SameLine(0.f, 10.f);
+  ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4.f);
+  ImGui::TextColored(kPalette.text_dim, "CONTROL");
   ImGui::SameLine(0.f, 28.f);
   ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2.f);
   const char *tabs[] = {"PERFORM", "TONE", "WAVES", "EFFECT", "LAB", "SETUP"};
@@ -293,6 +329,57 @@ void App::DrawTopNav()
   }
   ImGui::EndChild();
   ImGui::PopStyleColor();
+}
+
+void App::DrawAbout()
+{
+  if (!show_about) {
+    return;
+  }
+  const ImGuiViewport *vp = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos(
+      ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f,
+             vp->WorkPos.y + vp->WorkSize.y * 0.5f),
+      ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowSize(ImVec2(440.f, 0.f));
+  if (!ImGui::Begin("About", &show_about,
+                    ImGuiWindowFlags_NoCollapse |
+                        ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::End();
+    return;
+  }
+  ImGui::PushFont(fw::theme::g_fonts.hero);
+  ImGui::TextColored(kPalette.accent, "%s", fw::product::kName);
+  ImGui::PopFont();
+  ImGui::SameLine();
+  ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 18.f);
+  ImGui::TextColored(kPalette.text, "Control");
+  ImGui::Spacing();
+  ImGui::TextColored(kPalette.text_dim, "%s", fw::product::kTagline);
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+  if (fw::theme::g_fonts.mono) {
+    ImGui::PushFont(fw::theme::g_fonts.mono);
+  }
+  ImGui::Text("Version   %s", fw::product::kVersion);
+  ImGui::Text("Build     %s", fw::product::kBuildType);
+  if (fw::theme::g_fonts.mono) {
+    ImGui::PopFont();
+  }
+  ImGui::Spacing();
+  ImGui::TextWrapped(
+      "RS485 console · MIDI input · USB CDC wave upload · host preview");
+  ImGui::Spacing();
+  ImGui::TextDisabled("Dear ImGui · GLFW · RtMidi · RtAudio");
+  ImGui::Spacing();
+  if (ImGui::Button("Keyboard shortcuts", ImVec2(-1.f, 0.f))) {
+    show_shortcuts = true;
+  }
+  if (ImGui::Button("Close", ImVec2(-1.f, 0.f))) {
+    show_about = false;
+  }
+  ImGui::End();
 }
 
 void App::DrawActivityLog()
@@ -467,8 +554,13 @@ void App::Tick()
 
   HandleKeyboardPiano();
 
-  preview.SetTimeDivMs(scope_time_div_ms);
-  preview.SetVoltDiv(scope_volt_div);
+  scope_time_div_idx =
+      std::clamp(scope_time_div_idx, 0, kScopeTimeDivCount - 1);
+  scope_volt_div_idx =
+      std::clamp(scope_volt_div_idx, 0, kScopeVoltDivCount - 1);
+  preview.SetTimeDivUs(
+      static_cast<float>(kScopeTimeDivUs[scope_time_div_idx]));
+  preview.SetVoltDiv(kScopeVoltDiv[scope_volt_div_idx]);
   preview.SetVoices(bank);
   preview.Render(48000.f);
 
@@ -662,6 +754,28 @@ void App::DrawSetup()
     MarkSettingsDirty();
   }
   ImGui::EndChild();
+
+  ImGui::Dummy(ImVec2(0, Metrics::SpaceM));
+  ImGui::BeginChild("about_card", ImVec2(0, 88.f), ImGuiChildFlags_Borders);
+  fw::ui::SectionHeader("ABOUT");
+  ImGui::Spacing();
+  if (fw::theme::g_fonts.mono) {
+    ImGui::PushFont(fw::theme::g_fonts.mono);
+  }
+  ImGui::Text("%s  v%s  (%s)", fw::product::kTitle, fw::product::kVersion,
+              fw::product::kBuildType);
+  if (fw::theme::g_fonts.mono) {
+    ImGui::PopFont();
+  }
+  ImGui::SameLine();
+  if (ImGui::SmallButton("About…")) {
+    show_about = true;
+  }
+  ImGui::SameLine();
+  if (ImGui::SmallButton("Shortcuts")) {
+    show_shortcuts = true;
+  }
+  ImGui::EndChild();
 }
 
 void App::DrawLab()
@@ -818,14 +932,22 @@ void App::DrawPerform()
 
   ImGui::SameLine(0.f, 8.f);
   ImGui::BeginChild("knobs", ImVec2(knobs_w, wave_h), ImGuiChildFlags_None);
-  if (fw::ui::RotaryKnob("##tdiv", "TIME/DIV", &scope_time_div_ms, 1.f, 100.f,
-                         "%.0f ms", 72.f)) {
-    MarkSettingsDirty();
-  }
-  ImGui::Dummy(ImVec2(0, 8.f));
-  if (fw::ui::RotaryKnob("##vdiv", "VOLT/DIV", &scope_volt_div, 0.05f, 1.f,
-                         "%.2f V", 72.f)) {
-    MarkSettingsDirty();
+  {
+    char tlabel[24];
+    FormatScopeTimeDiv(kScopeTimeDivUs[scope_time_div_idx], tlabel,
+                       sizeof(tlabel));
+    if (fw::ui::RotaryKnobStepped("##tdiv", "TIME/DIV", &scope_time_div_idx,
+                                  kScopeTimeDivCount, tlabel, 72.f)) {
+      MarkSettingsDirty();
+    }
+    ImGui::Dummy(ImVec2(0, 8.f));
+    char vlabel[24];
+    std::snprintf(vlabel, sizeof(vlabel), "%.2g V",
+                  static_cast<double>(kScopeVoltDiv[scope_volt_div_idx]));
+    if (fw::ui::RotaryKnobStepped("##vdiv", "VOLT/DIV", &scope_volt_div_idx,
+                                  kScopeVoltDivCount, vlabel, 72.f)) {
+      MarkSettingsDirty();
+    }
   }
   ImGui::EndChild();
   ImGui::EndChild();
@@ -947,7 +1069,7 @@ void App::Draw()
   ImGui::SetNextWindowPos(vp->WorkPos);
   ImGui::SetNextWindowSize(vp->WorkSize);
   ImGui::PushStyleColor(ImGuiCol_WindowBg, kPalette.bg);
-  ImGui::Begin("CMI", nullptr,
+  ImGui::Begin(fw::product::kTitle, nullptr,
                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                    ImGuiWindowFlags_NoSavedSettings |
                    ImGuiWindowFlags_NoBringToFrontOnFocus);
@@ -960,6 +1082,9 @@ void App::Draw()
     if (ImGui::IsKeyPressed(ImGuiKey_4)) { view = GuiView::Effect; MarkSettingsDirty(); }
     if (ImGui::IsKeyPressed(ImGuiKey_5)) { view = GuiView::Lab; MarkSettingsDirty(); }
     if (ImGui::IsKeyPressed(ImGuiKey_6)) { view = GuiView::Setup; MarkSettingsDirty(); }
+    if (ImGui::IsKeyPressed(ImGuiKey_F1)) {
+      show_about = !show_about;
+    }
     if (ImGui::IsKeyPressed(ImGuiKey_Slash) && io.KeyShift) {
       show_shortcuts = !show_shortcuts;
     }
@@ -978,45 +1103,52 @@ void App::Draw()
   if (view == GuiView::Perform) {
     DrawPerform();
   } else if (view == GuiView::Tone) {
+    /* Editable offline for UI / software testing; Apply stays bus-gated. */
     if (!bus.IsOpen()) {
-      DrawDisconnectedHint("Connect RS485 in Setup to send tone / envelope.");
-    } else {
-      DrawPlayModeStrip(*this);
-      ImGui::Spacing();
-      const float tone_avail_w = ImGui::GetContentRegionAvail().x;
-      constexpr float kToneLeftMin = 220.f;
-      constexpr float kToneRightMin = 280.f;
-      if (layout_tone_left_w <= 0.f) layout_tone_left_w = tone_avail_w * 0.34f;
-      layout_tone_left_w = std::clamp(
-          layout_tone_left_w, kToneLeftMin,
-          std::max(kToneLeftMin, tone_avail_w - kToneRightMin - 5.f));
-      ImGui::BeginChild("tone_left", ImVec2(layout_tone_left_w, 0),
-                        ImGuiChildFlags_None,
-                        ImGuiWindowFlags_AlwaysVerticalScrollbar);
-      if (play_mode == 0) {
-        DrawOscillatorCard(*this);
-        ImGui::Spacing();
+      ImGui::TextColored(kPalette.warning,
+                         "Bus offline — edit freely; Apply / send needs Setup.");
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Open Setup")) {
+        view = GuiView::Setup;
+        MarkSettingsDirty();
       }
-      DrawFilterCard(*this);
-      ImGui::EndChild();
-      const float tone_col_h = ImGui::GetItemRectSize().y;
-      ImGui::SameLine(0.f, 0.f);
-      layout_tone_left_w = std::clamp(
-          layout_tone_left_w +
-              fw::ui::Splitter("##tone_cols", false, 0.f, tone_col_h),
-          kToneLeftMin,
-          std::max(kToneLeftMin, tone_avail_w - kToneRightMin - 5.f));
-      ImGui::SameLine(0.f, 0.f);
-      ImGui::BeginChild("tone_right", ImVec2(0, 0), ImGuiChildFlags_None,
-                        ImGuiWindowFlags_AlwaysVerticalScrollbar);
-      fw::ui::BeginSection("voice_overview", "ALL VOICES", ImVec2(0, 192.f));
       ImGui::Spacing();
-      DrawVoiceOverview(*this);
-      fw::ui::EndSection();
-      ImGui::Spacing();
-      DrawEnvelopeEditor(*this);
-      ImGui::EndChild();
     }
+    DrawPlayModeStrip(*this);
+    ImGui::Spacing();
+    const float tone_avail_w = ImGui::GetContentRegionAvail().x;
+    constexpr float kToneLeftMin = 220.f;
+    constexpr float kToneRightMin = 280.f;
+    if (layout_tone_left_w <= 0.f) layout_tone_left_w = tone_avail_w * 0.34f;
+    layout_tone_left_w = std::clamp(
+        layout_tone_left_w, kToneLeftMin,
+        std::max(kToneLeftMin, tone_avail_w - kToneRightMin - 5.f));
+    ImGui::BeginChild("tone_left", ImVec2(layout_tone_left_w, 0),
+                      ImGuiChildFlags_None,
+                      ImGuiWindowFlags_AlwaysVerticalScrollbar);
+    if (play_mode == 0) {
+      DrawOscillatorCard(*this);
+      ImGui::Spacing();
+    }
+    DrawFilterCard(*this);
+    ImGui::EndChild();
+    const float tone_col_h = ImGui::GetItemRectSize().y;
+    ImGui::SameLine(0.f, 0.f);
+    layout_tone_left_w = std::clamp(
+        layout_tone_left_w +
+            fw::ui::Splitter("##tone_cols", false, 0.f, tone_col_h),
+        kToneLeftMin,
+        std::max(kToneLeftMin, tone_avail_w - kToneRightMin - 5.f));
+    ImGui::SameLine(0.f, 0.f);
+    ImGui::BeginChild("tone_right", ImVec2(0, 0), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_AlwaysVerticalScrollbar);
+    fw::ui::BeginSection("voice_overview", "ALL VOICES", ImVec2(0, 192.f));
+    ImGui::Spacing();
+    DrawVoiceOverview(*this);
+    fw::ui::EndSection();
+    ImGui::Spacing();
+    DrawEnvelopeEditor(*this);
+    ImGui::EndChild();
   } else if (view == GuiView::Waves) {
     DrawWaveBankPage(*this);
   } else if (view == GuiView::Effect) {
@@ -1045,12 +1177,14 @@ void App::Draw()
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
     ImGui::TextUnformatted("1-6   Switch modules");
     ImGui::TextUnformatted("Space Silence");
+    ImGui::TextUnformatted("F1    About");
     ImGui::TextUnformatted("?     This overlay");
     ImGui::TextUnformatted("A-K / W E T Y U  Piano");
     ImGui::TextUnformatted("Z / X Octave");
     ImGui::End();
   }
 
+  DrawAbout();
   toasts.Draw();
   ImGui::End();
   ImGui::PopStyleColor();

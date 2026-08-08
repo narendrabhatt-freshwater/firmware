@@ -1578,18 +1578,24 @@ _set_port_arg() {
 # ── Control GUI (apps/control_gui — Dear ImGui + GLFW) ─────────────────────
 
 control_dir() { echo "$ROOT/apps/control_gui"; }
-control_bin() { echo "$(control_dir)/build/control_gui"; }
+control_bin() {
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    echo "$(control_dir)/build/CMI Control.app/Contents/MacOS/CMI Control"
+  else
+    echo "$(control_dir)/build/control_gui"
+  fi
+}
 
 cmd_control_build() {
   local dir bin
   dir="$(control_dir)"
   bin="$(control_bin)"
   need_cmd cmake
-  info "build control_gui (Dear ImGui + GLFW)"
+  info "build CMI Control (Dear ImGui + GLFW, Release)"
   (
     cd "$dir"
-    cmake -S . -B build
-    cmake --build build
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+    cmake --build build --config Release
   )
   ok "$(relpath "$bin")"
 }
@@ -1598,7 +1604,7 @@ ensure_control_built() {
   local bin
   bin="$(control_bin)"
   if [[ ! -x "$bin" ]]; then
-    warn "control_gui not built yet — building"
+    warn "CMI Control not built yet — building"
     cmd_control_build
   fi
 }
@@ -1617,6 +1623,14 @@ cmd_control() {
     shift || true
   fi
   ensure_control_built
+  # Launch via the .app on macOS so CFBundleName feeds the menu bar / About.
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    local app
+    app="$(control_dir)/build/CMI Control.app"
+    if [[ -d "$app" ]]; then
+      exec open -n "$app" --args "$@"
+    fi
+  fi
   exec "$(control_bin)" "$@"
 }
 

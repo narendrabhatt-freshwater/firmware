@@ -2,7 +2,7 @@
 
 #include "imgui.h"
 
-/** Animated, custom-drawn widgets for the Freshwater Control theme. All are
+/** Animated, custom-drawn widgets for the CMI Control theme. All are
  * self-contained (own eased state keyed by ImGuiID) so callers just pass
  * current values each frame, immediate-mode style. */
 namespace fw::ui
@@ -89,6 +89,13 @@ bool ToggleRow(const char *label, bool *value, bool enabled = true);
 bool RotaryKnob(const char *str_id, const char *label, float *value,
                 float v_min, float v_max, const char *format,
                 float size = 72.f);
+
+/**
+ * Stepped rotary (classic scope TIME/DIV style). Drag or scroll wheel moves
+ * one detent at a time through [0, count). value_label is drawn under the dial.
+ */
+bool RotaryKnobStepped(const char *str_id, const char *label, int *index,
+                       int count, const char *value_label, float size = 72.f);
 
 /** Vertical LED-style level meter. */
 void VerticalMeter(const char *str_id, float value01, const ImVec2 &size,

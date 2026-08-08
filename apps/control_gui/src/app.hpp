@@ -86,6 +86,7 @@ struct App
   int lab_history_index = -1;
   char log_filter[64] = {};
   bool show_shortcuts = false;
+  bool show_about = false;
 
   int play_mode = 0;
   int wave_slot = 0;
@@ -117,8 +118,10 @@ struct App
   int selected_voice = 0;
   int piano_octave = 0; // offset from C4 (0 = C4–C5)
   int piano_velocity = 100;
-  float scope_time_div_ms = 10.f;
-  float scope_volt_div = 0.25f;
+  /** Index into classic 1-2-5 TIME/DIV table (µs/div). Default 10 ms/div. */
+  int scope_time_div_idx = 7;
+  /** Index into classic 1-2-5 VOLT/DIV table. Default 0.2 V/div. */
+  int scope_volt_div_idx = 2;
   float peak_hold = 0.f;
   float peak_hold_timer = 0.f;
   bool midi_activity = false;
@@ -146,6 +149,7 @@ struct App
   void DrawPerform();
   void DrawSetup();
   void DrawLab();
+  void DrawAbout();
   void DrawBusFaultBanner();
   void DrawDisconnectedHint(const char *action);
   void ApplyBankEvents(const std::vector<midi_host::BankEvent> &events);

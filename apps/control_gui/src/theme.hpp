@@ -2,7 +2,7 @@
 
 #include "imgui.h"
 
-/** Freshwater Control visual identity — aligned to the Stitch "Modern
+/** CMI Control visual identity — aligned to the Stitch "Modern
  * Industrial Console" design system (dark void, cyber cyan, neon green). */
 namespace fw::theme
 {

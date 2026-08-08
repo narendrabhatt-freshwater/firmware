@@ -7,6 +7,8 @@
  */
 
 #include "app.hpp"
+#include "macos_app.hpp"
+#include "product.hpp"
 #include "settings.hpp"
 #include "theme.hpp"
 
@@ -82,7 +84,8 @@ int main(int argc, char **argv)
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 #endif
 
-  GLFWwindow *window = glfwCreateWindow(1360, 900, "CMI", nullptr, nullptr);
+  GLFWwindow *window =
+      glfwCreateWindow(1360, 900, fw::product::kTitle, nullptr, nullptr);
   if (!window) {
     std::fprintf(stderr, "glfwCreateWindow failed\n");
     glfwTerminate();
@@ -91,6 +94,7 @@ int main(int argc, char **argv)
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
   glfwSetDropCallback(window, GlfwDropCallback);
+  fw_macos_apply_branding();
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
@@ -115,7 +119,13 @@ int main(int argc, char **argv)
   app.layout_perform_piano_h =
       std::clamp(app.layout_perform_piano_h, 72.f, 180.f);
   app.RefreshPortLists();
-  app.log.Push("CMI ready — connect MIDI and/or RS485, start from Perform");
+  {
+    char ready[160];
+    std::snprintf(ready, sizeof(ready),
+                  "%s %s ready — connect MIDI and/or RS485, start from Perform",
+                  fw::product::kTitle, fw::product::kVersion);
+    app.log.Push(ready);
+  }
   if (app.auto_reconnect && app.serial_path_buf[0]) {
     app.RequestConnectBus();
   }

@@ -1,13 +1,16 @@
 cmake_minimum_required(VERSION 3.16)
-project(control_gui CXX)
+project(control_gui VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-  set(CMAKE_BUILD_TYPE RelWithDebInfo)
+  set(CMAKE_BUILD_TYPE Release)
 endif()
+
+set(CMI_VERSION "${PROJECT_VERSION}")
+set(CMI_BUNDLE_ID "com.cmi.control")
 
 include(FetchContent)
 
@@ -75,7 +78,7 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../libs/host_io"
 
 set(MIDI_HOST_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../midi_host/src")
 
-add_executable(control_gui
+set(CONTROL_GUI_SOURCES
   src/main.cpp
   src/app.cpp
   src/bus_controller.cpp
@@ -94,12 +97,23 @@ add_executable(control_gui
   ${MIDI_HOST_SRC}/voice_bank.cpp
   ${MIDI_HOST_SRC}/audio_engine.cpp
 )
+if(APPLE)
+  list(APPEND CONTROL_GUI_SOURCES src/macos_app.mm)
+endif()
+
+add_executable(control_gui ${CONTROL_GUI_SOURCES})
+if(APPLE)
+  set_source_files_properties(src/macos_app.mm PROPERTIES
+    COMPILE_FLAGS "-fobjc-arc")
+endif()
 
 # Inter + JetBrains Mono ship under assets/fonts (Stitch design system).
 # Roboto from ImGui remains a fallback via FW_FONT_DIR.
 target_compile_definitions(control_gui PRIVATE
   FW_UI_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts"
   FW_FONT_DIR="${imgui_SOURCE_DIR}/misc/fonts"
+  CMI_VERSION="${CMI_VERSION}"
+  CMI_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
 )
 
 target_include_directories(control_gui PRIVATE
@@ -134,6 +148,27 @@ if(APPLE)
     ${COCOA_FRAMEWORK}
     ${IOKIT_FRAMEWORK}
     ${COREVIDEO_FRAMEWORK}
+  )
+  # Package as CMI Control.app so the menu bar / Dock / About use CMI, not
+  # the raw binary name "control_gui".
+  set(CMI_APP_NAME "CMI Control")
+  set(CMI_APP_BUNDLE "${CMAKE_CURRENT_BINARY_DIR}/${CMI_APP_NAME}.app")
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/Info.plist"
+    @ONLY
+  )
+  add_custom_command(TARGET control_gui POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${CMI_APP_BUNDLE}/Contents/MacOS"
+            "${CMI_APP_BUNDLE}/Contents/Resources"
+    COMMAND ${CMAKE_COMMAND} -E copy
+            "${CMAKE_CURRENT_BINARY_DIR}/Info.plist"
+            "${CMI_APP_BUNDLE}/Contents/Info.plist"
+    COMMAND ${CMAKE_COMMAND} -E copy
+            "$<TARGET_FILE:control_gui>"
+            "${CMI_APP_BUNDLE}/Contents/MacOS/${CMI_APP_NAME}"
+    COMMENT "Packaging ${CMI_APP_NAME}.app"
   )
 elseif(WIN32)
   target_link_libraries(control_gui PRIVATE winmm)

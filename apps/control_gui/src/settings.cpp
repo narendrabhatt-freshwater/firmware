@@ -24,6 +24,34 @@ std::string ConfigDir()
 #if defined(_WIN32)
   char buf[MAX_PATH] = {};
   if (SUCCEEDED(SHGetFolderPathA(nullptr, CSIDL_APPDATA, nullptr, 0, buf))) {
+    return std::string(buf) + "\\CMI";
+  }
+  return ".";
+#elif defined(__APPLE__)
+  const char *home = std::getenv("HOME");
+  if (home && home[0]) {
+    return std::string(home) + "/Library/Application Support/CMI";
+  }
+  return ".";
+#else
+  const char *xdg = std::getenv("XDG_CONFIG_HOME");
+  if (xdg && xdg[0]) {
+    return std::string(xdg) + "/cmi";
+  }
+  const char *home = std::getenv("HOME");
+  if (home && home[0]) {
+    return std::string(home) + "/.config/cmi";
+  }
+  return ".";
+#endif
+}
+
+/** Pre-CMI branding path — read once if the new config is absent. */
+std::string LegacyConfigDir()
+{
+#if defined(_WIN32)
+  char buf[MAX_PATH] = {};
+  if (SUCCEEDED(SHGetFolderPathA(nullptr, CSIDL_APPDATA, nullptr, 0, buf))) {
     return std::string(buf) + "\\Freshwater";
   }
   return ".";
@@ -103,7 +131,12 @@ bool Load(App &app)
 {
   std::ifstream in(Path());
   if (!in) {
-    return false;
+    /* One-shot migration from the pre-CMI config directory. */
+    const std::string legacy = LegacyConfigDir() + "/control_gui.ini";
+    in.open(legacy);
+    if (!in) {
+      return false;
+    }
   }
   std::string line;
   std::string key;
@@ -168,7 +201,7 @@ bool Save(const App &app)
   if (!out) {
     return false;
   }
-  out << "# Freshwater control_gui settings\n";
+  out << "# CMI Control settings\n";
   WriteKV(out, "view", static_cast<int>(app.view));
   WriteKV(out, "nav_expanded", app.nav_expanded);
   WriteKV(out, "nav_width", app.nav_width);

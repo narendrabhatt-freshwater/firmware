@@ -783,6 +783,45 @@ bool TopTabs(const char *str_id, const char *const *labels, int count,
   return changed;
 }
 
+namespace
+{
+
+void DrawRotaryDial(ImDrawList *dl, ImVec2 pos, float size, float t01,
+                    bool hot, const char *value_label, const char *label)
+{
+  const float cx = pos.x + size * 0.5f;
+  const float cy = pos.y + size * 0.5f;
+  const float r = size * 0.42f;
+  dl->AddCircleFilled(ImVec2(cx, cy), r, U32(kPalette.panel_high), 48);
+  dl->AddCircle(ImVec2(cx, cy), r,
+                U32A(hot ? kPalette.accent : kPalette.border, 0.9f), 48, 2.f);
+  const float a0 = 2.35619f; // 135°
+  const float a1 = 7.06858f; // 405°
+  const float t = std::clamp(t01, 0.f, 1.f);
+  const float ang = a0 + (a1 - a0) * t;
+  dl->PathArcTo(ImVec2(cx, cy), r - 3.f, a0, ang, 32);
+  dl->PathStroke(U32(kPalette.accent), 0, 3.f);
+  const float nx = std::cos(ang);
+  const float ny = std::sin(ang);
+  dl->AddLine(ImVec2(cx + nx * (r * 0.25f), cy + ny * (r * 0.25f)),
+              ImVec2(cx + nx * (r * 0.78f), cy + ny * (r * 0.78f)),
+              U32(kPalette.accent_bright), 2.5f);
+  if (theme::g_fonts.mono) {
+    ImGui::PushFont(theme::g_fonts.mono);
+  }
+  const ImVec2 vsz = ImGui::CalcTextSize(value_label);
+  dl->AddText(ImVec2(cx - vsz.x * 0.5f, pos.y + size - 2.f), U32(kPalette.text),
+              value_label);
+  if (theme::g_fonts.mono) {
+    ImGui::PopFont();
+  }
+  const ImVec2 lsz = ImGui::CalcTextSize(label);
+  dl->AddText(ImVec2(cx - lsz.x * 0.5f, pos.y + size + 12.f),
+              U32(kPalette.text_dim), label);
+}
+
+} // namespace
+
 bool RotaryKnob(const char *str_id, const char *label, float *value, float v_min,
                 float v_max, const char *format, float size)
 {
@@ -800,38 +839,72 @@ bool RotaryKnob(const char *str_id, const char *label, float *value, float v_min
     changed = (dy != 0.f);
   }
   const float t = (*value - v_min) / std::max(v_max - v_min, 1e-6f);
-  const float cx = pos.x + size * 0.5f;
-  const float cy = pos.y + size * 0.5f;
-  const float r = size * 0.42f;
-  dl->AddCircleFilled(ImVec2(cx, cy), r, U32(kPalette.panel_high), 48);
-  dl->AddCircle(ImVec2(cx, cy), r,
-                U32A(hovered || active ? kPalette.accent : kPalette.border, 0.9f),
-                48, 2.f);
-  // Arc track
-  const float a0 = 2.35619f;  // 135°
-  const float a1 = 7.06858f;  // 405°
-  const float ang = a0 + (a1 - a0) * t;
-  dl->PathArcTo(ImVec2(cx, cy), r - 3.f, a0, ang, 32);
-  dl->PathStroke(U32(kPalette.accent), 0, 3.f);
-  const float nx = std::cos(ang);
-  const float ny = std::sin(ang);
-  dl->AddLine(ImVec2(cx + nx * (r * 0.25f), cy + ny * (r * 0.25f)),
-              ImVec2(cx + nx * (r * 0.78f), cy + ny * (r * 0.78f)),
-              U32(kPalette.accent_bright), 2.5f);
   char buf[32];
   std::snprintf(buf, sizeof(buf), format, static_cast<double>(*value));
-  if (theme::g_fonts.mono) {
-    ImGui::PushFont(theme::g_fonts.mono);
+  DrawRotaryDial(dl, pos, size, t, hovered || active, buf, label);
+  ImGui::PopID();
+  return changed;
+}
+
+bool RotaryKnobStepped(const char *str_id, const char *label, int *index,
+                       int count, const char *value_label, float size)
+{
+  if (!index || count < 1) {
+    return false;
   }
-  const ImVec2 vsz = ImGui::CalcTextSize(buf);
-  dl->AddText(ImVec2(cx - vsz.x * 0.5f, pos.y + size - 2.f), U32(kPalette.text),
-              buf);
-  if (theme::g_fonts.mono) {
-    ImGui::PopFont();
+  *index = std::clamp(*index, 0, count - 1);
+  ImGui::PushID(str_id);
+  const ImVec2 pos = ImGui::GetCursorScreenPos();
+  ImDrawList *dl = ImGui::GetWindowDrawList();
+  ImGui::InvisibleButton("##knob", ImVec2(size, size + 28.f));
+  const bool active = ImGui::IsItemActive();
+  const bool hovered = ImGui::IsItemHovered();
+  bool changed = false;
+
+  /* Accumulate drag so each detent needs a deliberate flick, not a pixel nudge. */
+  ImGuiStorage *st = ImGui::GetStateStorage();
+  const ImGuiID accum_id = ImGui::GetID("##accum");
+  float accum = st->GetFloat(accum_id, 0.f);
+  if (active) {
+    accum += -ImGui::GetIO().MouseDelta.y;
+  } else if (!hovered) {
+    accum = 0.f;
   }
-  const ImVec2 lsz = ImGui::CalcTextSize(label);
-  dl->AddText(ImVec2(cx - lsz.x * 0.5f, pos.y + size + 12.f),
-              U32(kPalette.text_dim), label);
+  if (hovered) {
+    const float wheel = ImGui::GetIO().MouseWheel;
+    if (wheel > 0.f) {
+      accum += 18.f;
+    } else if (wheel < 0.f) {
+      accum -= 18.f;
+    }
+  }
+  constexpr float kDetent = 14.f;
+  while (accum >= kDetent) {
+    if (*index + 1 < count) {
+      ++(*index);
+      changed = true;
+    }
+    accum -= kDetent;
+  }
+  while (accum <= -kDetent) {
+    if (*index > 0) {
+      --(*index);
+      changed = true;
+    }
+    accum += kDetent;
+  }
+  if (*index == 0 && accum < 0.f) {
+    accum = 0.f;
+  }
+  if (*index == count - 1 && accum > 0.f) {
+    accum = 0.f;
+  }
+  st->SetFloat(accum_id, accum);
+
+  const float t =
+      (count <= 1) ? 0.f : static_cast<float>(*index) / static_cast<float>(count - 1);
+  DrawRotaryDial(dl, pos, size, t, hovered || active,
+                 value_label ? value_label : "", label);
   ImGui::PopID();
   return changed;
 }

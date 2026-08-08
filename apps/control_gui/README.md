@@ -1,4 +1,4 @@
-# control_gui — Freshwater Control (Dear ImGui)
+# CMI Control (Dear ImGui)
 
 Cross-platform desktop GUI for MIDI + RS485 console control of Channel and
 Effect cards. Same ASCII protocol as `apps/console` / any serial terminal;
@@ -6,13 +6,13 @@ voice allocation matches `apps/midi_host`.
 
 ## Framework
 
-| Layer | Choice |
-| --- | --- |
-| UI | **Dear ImGui** 1.91 |
-| Window / input | **GLFW** 3.4 |
-| Graphics | **OpenGL 3** (macOS Core Profile / Linux / Windows) |
-| MIDI / local audio | RtMidi + RtAudio (same as `midi_host`) |
-| Bus | [`libs/host_io`](../../libs/host_io) + [`libs/protocol`](../../libs/protocol) |
+| Layer              | Choice                                                                        |
+| ------------------ | ----------------------------------------------------------------------------- |
+| UI                 | **Dear ImGui** 1.91                                                           |
+| Window / input     | **GLFW** 3.4                                                                  |
+| Graphics           | **OpenGL 3** (macOS Core Profile / Linux / Windows)                           |
+| MIDI / local audio | RtMidi + RtAudio (same as `midi_host`)                                        |
+| Bus                | [`libs/host_io`](../../libs/host_io) + [`libs/protocol`](../../libs/protocol) |
 
 Runs on **macOS, Linux, and Windows** with CMake + a C++17 toolchain.
 Dependencies are pulled by FetchContent on first configure (needs network once).
@@ -31,11 +31,11 @@ cmake --build apps/control_gui/build
 
 ### Host packages (typical)
 
-| OS | Notes |
-| --- | --- |
-| macOS | Xcode CLI tools; OpenGL via system frameworks |
-| Linux | `build-essential cmake`, GLFW deps (`libgl1-mesa-dev` `libx11-dev` …), ALSA/Pulse for RtAudio |
-| Windows | MSVC or MinGW; OpenGL from system |
+| OS      | Notes                                                                                         |
+| ------- | --------------------------------------------------------------------------------------------- |
+| macOS   | Xcode CLI tools; OpenGL via system frameworks                                                 |
+| Linux   | `build-essential cmake`, GLFW deps (`libgl1-mesa-dev` `libx11-dev` …), ALSA/Pulse for RtAudio |
+| Windows | MSVC or MinGW; OpenGL from system                                                             |
 
 ## Views
 
@@ -52,17 +52,19 @@ cmake --build apps/control_gui/build
 - Top bar: connection pills left · gain / Silence / Recover right
 - Collapsible log strip + status bar (queue depth, MIDI activity)
 - DPI-aware spacing/typography (`theme::Scale`)
-- Layout and ports persisted to `~/Library/Application Support/Freshwater/control_gui.ini` (macOS) or the XDG config path on Linux
+- Layout and ports persisted to `~/Library/Application Support/CMI/control_gui.ini` (macOS) or `~/.config/cmi/` on Linux
+- About: click **CMI** in the top bar, **Setup → About…**, or **F1**
 
 ## Shortcuts
 
-| Key | Action |
-| --- | --- |
-| `1`–`6` | Switch views |
-| `Space` | All notes off / silence |
-| `?` | Shortcuts overlay |
-| `A`–`K`, `W E T Y U` | Piano (Perform) |
-| `Z` / `X` | Octave down / up |
+| Key                  | Action                  |
+| -------------------- | ----------------------- |
+| `1`–`6`              | Switch views            |
+| `Space`              | All notes off / silence |
+| `F1`                 | About                   |
+| `?`                  | Shortcuts overlay       |
+| `A`–`K`, `W E T Y U` | Piano (Perform)         |
+| `Z` / `X`            | Octave down / up        |
 
 Envelope programs match firmware: odd token lists, `slope±k` glued (e.g. `10+1`, `2.0-0.5`), 2–10 segments including release.
 
@@ -71,10 +73,10 @@ bit-exact Channel DSP or DAC probe.
 
 ## Output modes
 
-| Mode | Behavior |
-| --- | --- |
+| Mode     | Behavior                             |
+| -------- | ------------------------------------ |
 | Speakers | Local RtAudio only (no bus required) |
-| Card | RS485 note TX only |
-| Both | Local hear + card |
+| Card     | RS485 note TX only                   |
+| Both     | Local hear + card                    |
 
 Effect echo is forced off at session open (MIDI / burst safe).

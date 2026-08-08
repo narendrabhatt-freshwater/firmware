@@ -15,6 +15,11 @@ public:
   void SetVoices(const midi_host::VoiceBank &bank);
   /** Oscilloscope timebase: milliseconds per horizontal division (10 divs). */
   void SetTimeDivMs(float ms_per_div) { time_div_ms_ = ms_per_div; }
+  /** Oscilloscope timebase: microseconds per horizontal division (10 divs). */
+  void SetTimeDivUs(float us_per_div)
+  {
+    time_div_ms_ = (us_per_div > 1.f ? us_per_div : 1.f) / 1000.f;
+  }
   /** Oscilloscope vertical scale: amplitude units per vertical division. */
   void SetVoltDiv(float units_per_div) { volt_div_ = units_per_div; }
 
