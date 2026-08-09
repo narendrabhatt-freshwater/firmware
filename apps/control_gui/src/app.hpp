@@ -162,6 +162,9 @@ struct App
   void DrawDisconnectedHint(const char *action);
   void SendConsole(const char *cmd);
   void ApplyBankEvents(const std::vector<midi_host::BankEvent> &events);
+
+  /** Local preview / VoiceBank only — card already got the console command. */
+  void ApplyLocalBankEvents(const std::vector<midi_host::BankEvent> &events);
   void AllNotesOff();
   bool EnsureAudio();
   void ShutdownAudio();

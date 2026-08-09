@@ -1355,12 +1355,12 @@ static void Console_CmdNoteSlot(char *line)
   Console_SetNoteFreq(note, hz, scale);
 }
 
-/** Playback mode: m / m 0 (notes) / m 1 (wave). */
+/** Playback mode: m / m 0|1, plus legacy mode notes|wave. */
 static void Console_CmdMode(char *line)
 {
   unsigned int v;
 
-  if (strcmp(line, "m") == 0)
+  if (strcmp(line, "m") == 0 || strcmp(line, "mode") == 0)
   {
     if (PlayMode_Get() == PLAY_MODE_WAVE)
     {
@@ -1372,24 +1372,37 @@ static void Console_CmdMode(char *line)
     }
     return;
   }
-  if (sscanf(line, "m %u", &v) != 1)
-  {
-    RS485_Reply("err:syntax\r\n");
-    return;
-  }
-  if (v == 0u)
+  if (strcmp(line, "mode notes") == 0 || strcmp(line, "m 0") == 0)
   {
     (void)PlayMode_Set(PLAY_MODE_NOTES);
     RS485_Reply("ok: m 0\r\n");
     return;
   }
-  if (v == 1u)
+  if (strcmp(line, "mode wave") == 0 || strcmp(line, "m 1") == 0)
   {
     (void)PlayMode_Set(PLAY_MODE_WAVE);
     RS485_Reply("ok: m 1\r\n");
     return;
   }
-  RS485_Reply("err:range\r\n");
+  /* Allow "m 00" etc. via integer parse; reject other tokens. */
+  if (sscanf(line, "m %u", &v) == 1)
+  {
+    if (v == 0u)
+    {
+      (void)PlayMode_Set(PLAY_MODE_NOTES);
+      RS485_Reply("ok: m 0\r\n");
+      return;
+    }
+    if (v == 1u)
+    {
+      (void)PlayMode_Set(PLAY_MODE_WAVE);
+      RS485_Reply("ok: m 1\r\n");
+      return;
+    }
+    RS485_Reply("err:range\r\n");
+    return;
+  }
+  RS485_Reply("err:syntax\r\n");
 }
 
 static void Console_CmdWaveQuery(void)
@@ -1530,8 +1543,10 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- m / m 0|1: playback mode (0=notes, 1=wave) ---- */
-  if (line[0] == 'm' && (line[1] == '\0' || line[1] == ' '))
+  /* ---- m / m 0|1 / mode notes|wave: playback mode ---- */
+  if ((line[0] == 'm' && (line[1] == '\0' || line[1] == ' ')) ||
+      (strncmp(line, "mode", 4) == 0 &&
+       (line[4] == '\0' || line[4] == ' ')))
   {
     Console_CmdMode(line);
     return;

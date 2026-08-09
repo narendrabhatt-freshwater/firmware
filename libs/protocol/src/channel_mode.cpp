@@ -14,7 +14,15 @@ namespace protocol
 
   Result ChannelClient::SetMode(PlayMode mode)
   {
-    return Send(FormatMode(mode));
+    Result r = Send(FormatMode(mode));
+    /* Pre-shortening firmware only understood "mode notes|wave". */
+    if (!r.ok() && r.status == Status::Err)
+    {
+      const char *legacy =
+          (mode == PlayMode::Wave) ? "mode wave" : "mode notes";
+      r = Send(legacy);
+    }
+    return r;
   }
 
 } // namespace protocol

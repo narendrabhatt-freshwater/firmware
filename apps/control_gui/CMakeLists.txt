@@ -82,6 +82,7 @@ set(CONTROL_GUI_SOURCES
   src/main.cpp
   src/app.cpp
   src/bus_controller.cpp
+  src/console_mirror.cpp
   src/preview_scope.cpp
   src/env_editor.cpp
   src/theme.cpp

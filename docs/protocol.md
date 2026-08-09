@@ -130,6 +130,8 @@ to integers if you care about equal temperament.
 | `m 0`   | DDS note bank (`s`/`p`/`t`, `n0`…`nf`) — default |
 | `m 1`   | One-shot waveform player on slots 0–7            |
 
+Legacy aliases (same behavior): `mode`, `mode notes`, `mode wave`.
+
 Switching mode hard-stops active voices. Wave sample data in AXI is kept
 while powered; it is lost on reset (re-upload over USB CDC).
 

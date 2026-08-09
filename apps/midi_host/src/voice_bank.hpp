@@ -50,6 +50,15 @@ public:
   /** Turn every active slot off (MIDI All Notes Off / clean shutdown). */
   std::vector<BankEvent> AllOff();
 
+  /**
+   * Force one slot from console `nX <hz>` (hz≤0 clears). Updates FIFO and
+   * nearest-MIDI label for Perform; does not allocate by key.
+   */
+  std::vector<BankEvent> SetSlotFreq(uint8_t slot, double freq_hz);
+
+  /** Force all 16 slots (`n <hz>` / `n 0`). */
+  std::vector<BankEvent> SetAllFreq(double freq_hz);
+
   uint8_t ActiveCount() const;
   const std::array<VoiceSlot, kVoiceCount>& Slots() const { return slots_; }
 

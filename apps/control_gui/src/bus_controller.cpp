@@ -1,11 +1,13 @@
 #include "bus_controller.hpp"
 
+#include <algorithm>
 #include <array>
 #include <condition_variable>
 #include <cstdio>
 #include <mutex>
 #include <queue>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -57,6 +59,7 @@ struct BusController::Impl
   std::array<double, midi_host::kVoiceCount> desired_hz_{};
   std::array<double, midi_host::kVoiceCount> sent_hz_{};
   std::queue<Job> jobs_;
+  std::vector<UiMirrorPatch> ui_mirror_;
   std::atomic<bool> run_{false};
   std::thread worker_;
   std::thread open_thread_;
@@ -98,6 +101,41 @@ std::size_t BusController::QueueDepth() const
   }
   std::lock_guard<std::mutex> lock(impl_->mu_);
   return impl_->jobs_.size();
+}
+
+std::vector<UiMirrorPatch> BusController::DrainUiMirror()
+{
+  std::vector<UiMirrorPatch> out;
+  if (!impl_) {
+    return out;
+  }
+  std::lock_guard<std::mutex> lock(impl_->mu_);
+  out.swap(impl_->ui_mirror_);
+  return out;
+}
+
+void BusController::AcknowledgeSlotHz(uint8_t slot, double hz)
+{
+  if (!impl_ || slot >= midi_host::kVoiceCount) {
+    return;
+  }
+  const double v = ClampNoteHz(hz);
+  std::lock_guard<std::mutex> lock(impl_->mu_);
+  impl_->desired_hz_[slot] = v;
+  impl_->sent_hz_[slot] = v;
+}
+
+void BusController::AcknowledgeAllHz(double hz)
+{
+  if (!impl_) {
+    return;
+  }
+  const double v = ClampNoteHz(hz);
+  std::lock_guard<std::mutex> lock(impl_->mu_);
+  for (uint8_t i = 0; i < midi_host::kVoiceCount; ++i) {
+    impl_->desired_hz_[i] = v;
+    impl_->sent_hz_[i] = v;
+  }
 }
 
 BusQueueResult BusController::Enqueue(Job job)
@@ -391,6 +429,18 @@ void BusController::WorkerMain(LogBuffer *log)
         const auto r = impl_->bus.Exec(
             static_cast<protocol::Target>(job.target), job.command);
         LogResult(push, job.target, r);
+        if (r.ok()) {
+          UiMirrorPatch patch =
+              ParseConsoleMirror(job.target, job.command, r);
+          if (patch.Any()) {
+            if (patch.has_gain_db) {
+              atten_db_.store(static_cast<uint32_t>(
+                  std::clamp(patch.gain_db, 0, 127)));
+            }
+            std::lock_guard<std::mutex> lock(impl_->mu_);
+            impl_->ui_mirror_.push_back(std::move(patch));
+          }
+        }
         if (r.status == protocol::Status::Timeout) {
           halted_.store(true);
           push("*** bus fault — Soft Recover or reconnect");

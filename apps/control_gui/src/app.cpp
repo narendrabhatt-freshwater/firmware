@@ -381,6 +381,21 @@ void App::ApplyBankEvents(const std::vector<midi_host::BankEvent> &events)
   }
 }
 
+void App::ApplyLocalBankEvents(
+    const std::vector<midi_host::BankEvent> &events)
+{
+  const bool want_speakers =
+      (out_mode == OutMode::Speakers || out_mode == OutMode::Both);
+  if (want_speakers) {
+    EnsureAudio();
+  }
+  for (const auto &ev : events) {
+    if (want_speakers && audio) {
+      audio->ApplyBankEvent(ev);
+    }
+  }
+}
+
 void App::AllNotesOff()
 {
   const auto evs = bank.AllOff();
@@ -482,6 +497,98 @@ void App::Tick()
 {
   const float dt = ImGui::GetIO().DeltaTime;
   toasts.Tick(dt);
+
+  /* Last-sent sync from successful Log+Console Exec. */
+  {
+    const auto patches = bus.DrainUiMirror();
+    bool dirty = false;
+    for (const auto &p : patches) {
+      if (p.has_play_mode) {
+        play_mode = (p.play_mode == 1) ? 1 : 0;
+        dirty = true;
+      }
+      if (p.has_gain_db) {
+        gain_db = std::clamp(p.gain_db, 0, 127);
+        dirty = true;
+      }
+      if (p.has_shape) {
+        shape_mode = std::clamp(p.shape_mode, 0, 2);
+        shape_param = std::clamp(p.shape_param, 0.1f, 0.9f);
+        dirty = true;
+      }
+      if (p.has_filter_hz) {
+        filter_hz_f = std::clamp(p.filter_hz_f, 20.f, 20000.f);
+        dirty = true;
+      }
+      if (p.has_filter_q) {
+        filter_q_f = std::clamp(p.filter_q_f, 0.5f, 10.f);
+        dirty = true;
+      }
+      if (p.has_filter_k) {
+        filter_k_f = std::clamp(p.filter_k_f, 0.f, 10.f);
+        dirty = true;
+      }
+      if (p.has_filter_bypass) {
+        filter_bypass = p.filter_bypass;
+        dirty = true;
+      }
+      if (p.has_filter_voice) {
+        filter_voice = std::clamp(p.filter_voice, 0, 7);
+        dirty = true;
+      }
+      if (p.has_wave) {
+        wave_slot = std::clamp(p.wave_slot, 0, 7);
+        wave_rate = std::clamp(p.wave_rate, 1.f, 192000.f);
+        wave_slot_rate[static_cast<std::size_t>(wave_slot)] = wave_rate;
+        dirty = true;
+      }
+      if (p.has_fx_phantom) {
+        effect.phantom = p.fx_phantom;
+        dirty = true;
+      }
+      if (p.has_fx_audio_en) {
+        effect.audio_en = p.fx_audio_en;
+        dirty = true;
+      }
+      if (p.has_fx_echo) {
+        effect.echo = p.fx_echo;
+        dirty = true;
+      }
+      if (p.has_fx_led_flash) {
+        effect.led_flash = p.fx_led_flash;
+        dirty = true;
+      }
+      if (p.has_fx_led_red) {
+        effect.led_red = p.fx_led_red;
+        dirty = true;
+      }
+      if (p.has_fx_led_yellow) {
+        effect.led_yellow = p.fx_led_yellow;
+        dirty = true;
+      }
+      if (p.has_fx_usb_adc_ch) {
+        effect.usb_adc_ch = std::clamp(p.fx_usb_adc_ch, 1, 8);
+        dirty = true;
+      }
+      if (p.has_note) {
+        std::vector<midi_host::BankEvent> evs;
+        if (p.note_slot < 0) {
+          evs = bank.SetAllFreq(p.note_hz);
+          bus.AcknowledgeAllHz(p.note_hz);
+        } else {
+          const uint8_t slot =
+              static_cast<uint8_t>(std::clamp(p.note_slot, 0, 15));
+          evs = bank.SetSlotFreq(slot, p.note_hz);
+          bus.AcknowledgeSlotHz(slot, p.note_hz);
+        }
+        ApplyLocalBankEvents(evs);
+        dirty = true;
+      }
+    }
+    if (dirty) {
+      MarkSettingsDirty();
+    }
+  }
 
   if (settings_dirty) {
     settings_save_countdown -= dt;

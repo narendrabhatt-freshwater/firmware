@@ -1,5 +1,6 @@
 #pragma once
 
+#include "console_mirror.hpp"
 #include "log_buffer.hpp"
 #include "voice_bank.hpp"
 
@@ -15,6 +16,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 enum class BusQueueResult : uint8_t
 {
@@ -86,6 +88,16 @@ public:
   uint32_t TimeoutCount() const;
   uint32_t ErrCount() const;
   std::size_t QueueDepth() const;
+
+  /** Drain last-sent UI patches from successful Log+Console Exec (UI thread). */
+  std::vector<UiMirrorPatch> DrainUiMirror();
+
+  /**
+   * Align worker desired/sent Hz with a note already applied on the card
+   * (console mirror) so a later PublishBank does not fight or drop it.
+   */
+  void AcknowledgeSlotHz(uint8_t slot, double hz);
+  void AcknowledgeAllHz(double hz);
 
 private:
   enum class JobKind : uint8_t

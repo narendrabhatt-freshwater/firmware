@@ -125,4 +125,49 @@ std::vector<BankEvent> VoiceBank::AllOff()
   return events;
 }
 
+std::vector<BankEvent> VoiceBank::SetSlotFreq(uint8_t slot, double freq_hz)
+{
+  std::vector<BankEvent> events;
+  if (slot >= kVoiceCount) {
+    return events;
+  }
+
+  if (freq_hz <= 0.0) {
+    if (!slots_[slot].active) {
+      return events;
+    }
+    BankEvent off = MakeEvent(BankEventKind::Off, slot);
+    slots_[slot].active = false;
+    slots_[slot].midi_key = 0;
+    slots_[slot].freq_hz = 0.0;
+    RemoveFromFifo(slot);
+    off.active_count = ActiveCount();
+    events.push_back(off);
+    return events;
+  }
+
+  const bool was_active = slots_[slot].active;
+  slots_[slot].active = true;
+  slots_[slot].freq_hz = freq_hz;
+  slots_[slot].midi_key = HzToNearestMidi(freq_hz);
+  RemoveFromFifo(slot);
+  fifo_.push_back(slot);
+  events.push_back(MakeEvent(
+      was_active ? BankEventKind::Retrig : BankEventKind::On, slot));
+  return events;
+}
+
+std::vector<BankEvent> VoiceBank::SetAllFreq(double freq_hz)
+{
+  std::vector<BankEvent> events;
+  if (freq_hz <= 0.0) {
+    return AllOff();
+  }
+  for (uint8_t i = 0; i < kVoiceCount; ++i) {
+    auto more = SetSlotFreq(i, freq_hz);
+    events.insert(events.end(), more.begin(), more.end());
+  }
+  return events;
+}
+
 } // namespace midi_host
