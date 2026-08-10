@@ -1,9 +1,18 @@
 .DS_Store
 **/.DS_Store
 
-apps/channel_card/docs/img/
-apps/effect_card/docs/img/
+# Build output and tool caches (per-app .gitignore files also cover these)
+**/build/
+.cache/
+**/.cache/
+compile_commands.json
 
-# Ignoring these folders for now will be removed later
+# Dear ImGui window-layout state (cmi_control writes it to the launch cwd)
+imgui.ini
+
+# Local photo dumps, not part of the product tree
+docs/img/
+
+# Local agent state and unversioned assets
 .serena/
 public/

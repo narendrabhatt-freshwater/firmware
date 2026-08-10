@@ -1,19 +1,20 @@
-# Freshwater CMI — Firmware Handover Manual
+# Freshwater CMI — Firmware and Host Tools
 
 Common quick-start for **both** cards. Per-card detail lives in each
-project's own `README.md` (to be expanded).
+project's own `README.md`; the host↔card wire contract lives in
+[`docs/protocol.md`](docs/protocol.md).
 
 | Card         | Folder               | MCU         | CMake target  | CubeMX file       |
 | ------------ | -------------------- | ----------- | ------------- | ----------------- |
-| Channel Card | `apps/channel_card/` | STM32H725xG | `channel_MCU` | `channel_MCU.ioc` |
-| Effect Card  | `apps/effect_card/`  | STM32H743xx | `effect_card` | `effect_card.ioc` |
+| Channel Card | `channel_card/` | STM32H725xG | `channel_MCU` | `channel_MCU.ioc` |
+| Effect Card  | `effect_card/`  | STM32H743xx | `effect_card` | `effect_card.ioc` |
 
 Both are standalone CMake projects — build them independently. Each is
 self-contained: all dependencies (HAL, CMSIS, TinyUSB) are vendored
-in-tree, so a copy-paste of either `apps/channel_card/` or
-`apps/effect_card/` folder builds as-is with no package manager or
+in-tree, so a copy-paste of either `channel_card/` or
+`effect_card/` folder builds as-is with no package manager or
 submodule fetch. PC-side tooling (the `fw` CLI in `scripts/`, the
-standalone RS485 console in `apps/console/`) is separate from the two
+standalone RS485 console in `protocol/console/`) is separate from the two
 firmware projects — see §6.
 
 ---
@@ -46,7 +47,7 @@ conversion failed.
 
 ## 2. Building
 
-From inside a project folder (`apps/channel_card/` or `apps/effect_card/`):
+From inside a project folder (`channel_card/` or `effect_card/`):
 
 ```bash
 cmake --preset Debug
@@ -119,9 +120,9 @@ Any source you add there disappears on the next regeneration.
 
 Add hand-written sources to the **top-level `CMakeLists.txt`** instead,
 under `target_sources(${CMAKE_PROJECT_NAME} PRIVATE …)`. This is already
-done for e.g. `Core/Src/cs4304.c` and `Core/Src/audio_bridge.c` on the
-Channel Card — both were dropped by a regeneration once, which is why
-they now live in the top-level file.
+done for e.g. `Core/Src/drivers/cs4304.c` and
+`Core/Src/audio/audio_bridge.c` on the Channel Card — both were dropped
+by a regeneration once, which is why they now live in the top-level file.
 
 ### 4.3 `Middlewares/` belongs to CubeMX — third-party code goes in `ThirdParty/`
 
@@ -159,13 +160,14 @@ CODE blocks, but check anyway):
 
 ## 5. Repository layout (same shape in both projects)
 
-Both firmware projects live under `apps/` (`apps/channel_card/`,
-`apps/effect_card/`), alongside the standalone PC-side console app
-(`apps/console/`, see §6). The `fw` CLI wrapping all of this lives in
-`scripts/` at the repo root.
+The firmware projects live at the repo root (`channel_card/`,
+`effect_card/`), alongside the PC-side protocol stack (`protocol/`,
+which bundles the `cardproto`/`cardlink` libraries, the `midi_bridge`
+app and the RS485 `console/` CLI — see §6) and the `cmi_control` GUI.
+The `fw` CLI wrapping all of this lives in `scripts/` at the repo root.
 
 ```
-<project>/    (apps/channel_card/ or apps/effect_card/)
+<project>/    (channel_card/ or effect_card/)
 ├── CMakeLists.txt            ← hand-written sources + TinyUSB go HERE
 ├── CMakePresets.json         ← Debug / Release presets
 ├── <project>.ioc             ← STM32CubeMX project (source of truth)
@@ -183,48 +185,57 @@ Both firmware projects live under `apps/` (`apps/channel_card/`,
 
 **TinyUSB versions differ per card** (deliberately):
 
-- Effect Card → `ThirdParty/tinyusb-0.18` (0.17 kept alongside as a
-  rollback; switch by editing the paths in `CMakeLists.txt`)
+- Effect Card → `ThirdParty/tinyusb-0.18`
 - Channel Card → `ThirdParty/tinyusb` (0.17)
 
 The Effect Card was upgraded for dwc2 isochronous-IN fixes. Do not
-"tidy up" by forcing both to one version without re-testing audio.
+unify the versions without re-testing audio on both cards. Both vendor
+trees are pruned to `src/` + license; a 0.17 rollback for the Effect
+Card is recoverable from version-control history.
 
 ---
 
 ## 6. Consoles — how to talk to the boards
 
-**Channel Card** (this branch): N0–NF note bank + gain on RS485 and USB CDC —
+Both cards run the same line-based console over RS485 and USB CDC.
+[`docs/protocol.md`](docs/protocol.md) is the normative command
+reference; the summary:
 
-| Command                        | Meaning                                                       |
-| ------------------------------ | ------------------------------------------------------------- |
-| `N0`                           | Session defaults: **bypass on** + **gain 1 0**                |
-| `N0`…`NF` `0` / `<Hz> [scale]` | Note off/on; optional scale 0..1 (default 1.0); summed on CH1 |
-| `gain <ch> <dB>`               | CS4304 DAC atten on CH1..4 (e.g. `gain 1 40` = −40 dB)        |
+**Channel Card** — 8 SAMPLE voices (`n0`…`n7`, summed on CH1), global
+shape (`s`/`p`/`t`), sample upload/assignment (`al`/`bl`/`ar`/`aw`/`a`/`vq`),
+per-voice envelope (`en`/`ek`) and LPF (`f`/`fk`), DAC gain (`g`), CPU
+probe (`cpu`).
 
-Examples: `n0 440 0.5`, `n1 550` (scale 1.0), `n2 660 0.1`.
+| Command                        | Meaning                                                         |
+| ------------------------------ | --------------------------------------------------------------- |
+| `n0`                           | Session defaults: **bypass on** + **g 1 0**                     |
+| `n0`…`n7` `0` / `<Hz> [scale]` | Note off/on; optional scale 0..1 (default 0.125); summed on CH1 |
+| `g <ch> <dB>`                  | CS4304 DAC atten on CH1..4, dB 0..127                           |
 
-Entering `fw rs485` sends bare `n0` once (bypass on + gain 1 0). Boot does the same.
+Examples: `n0 440 0.5`, `n1 550` (scale 0.125), `n2 660 0.1`.
 
-Addressing on the shared RS485 bus is unchanged (`c:` / `e:` / `*:`). Effect
-Card still has its own full console.
+Entering `fw rs485` sends bare `n0` once (bypass on + `g 1 0`). Boot does the same.
+
+Addressing on the shared RS485 bus: `c:` / `e:` / `*:`. The Effect Card
+console covers 48 V, ADC registers, USB channel select and LEDs — see
+`docs/protocol.md` §3.
 
 ```bash
 fw rs485 list
-fw rs485 send channel "N0 440 0.5" --port /dev/cu.usbserial-XXXX
+fw rs485 send channel "n0 440 0.5" --port /dev/cu.usbserial-XXXX
 fw rs485 channel --port /dev/cu.usbserial-XXXX   # REPL: 440, n1 550, …
 ```
 
-See [`apps/console/README.md`](apps/console/README.md),
+See [`protocol/console/README.md`](protocol/console/README.md),
 [`docs/protocol.md`](docs/protocol.md) (host↔card protocol), and
-[`docs/rs485_console_architecture.md`](docs/rs485_console_architecture.md)
+[`docs/reference/rs485_console_architecture.md`](docs/reference/rs485_console_architecture.md)
 (bus framing).
-Per-voice digital LPF: [`docs/note_filter_butterworth.md`](docs/note_filter_butterworth.md).
+Per-voice digital LPF: [`docs/reference/note_filter_butterworth.md`](docs/reference/note_filter_butterworth.md).
 
-**USB CDC** — same Channel Card `N0`…`NF` parser on `/dev/cu.usbmodemCHCARD*`.
-Effect Card CDC is unchanged (`fw console effect`).
+**USB CDC** — same Channel Card parser on `/dev/cu.usbmodem*`.
+Effect Card CDC runs its own console (`fw console effect`).
 
-**MIDI host** (any MIDI keyboard → Mac speakers, or Channel Card over RS485) —
+**MIDI bridge** (any MIDI keyboard → Mac speakers, or Channel Card over RS485) —
 
 ```bash
 fw midi build
@@ -234,7 +245,7 @@ fw midi --midi 0                           # speakers, any MIDI device
 fw midi channel --rs485 /dev/cu.usbserial-XXXX --midi 0
 ```
 
-See [`apps/midi_host/README.md`](apps/midi_host/README.md).
+See [`protocol/midi_bridge/README.md`](protocol/midi_bridge/README.md).
 
 **Control GUI** (Dear ImGui + GLFW — MIDI + console + preview scope; macOS / Linux / Windows) —
 
@@ -243,7 +254,7 @@ fw control build
 fw control
 ```
 
-See [`apps/control_gui/README.md`](apps/control_gui/README.md).
+See [`cmi_control/README.md`](cmi_control/README.md).
 
 ---
 
@@ -252,7 +263,8 @@ See [`apps/control_gui/README.md`](apps/control_gui/README.md).
 Windows caches USB descriptors **per VID/PID**. If you change a
 descriptor (endpoint size, interfaces, controls) and keep the same PID,
 Windows may serve stale cached data and the device misbehaves in ways
-that look like firmware bugs — this cost a full debugging session once.
+that look like firmware bugs; this failure mode has produced multi-hour
+misdiagnoses on this project.
 
 **Rule: change a descriptor → bump `idProduct` in
 `USB_APP/usb_descriptors.c`.** Current values are `0xCafe/0x401x`
@@ -268,28 +280,25 @@ If a device behaves strangely after a firmware change: Device Manager →
 Both cards currently build clean (no warnings) and are working on
 hardware:
 
-- **Channel Card** — USB audio playback (UAC2 speaker, mono 32-bit
-  96 kHz) → CS4304 DAC, plus tone/DC generators on CH2–CH4, RS485 +
-  USB CDC consoles.
+- **Channel Card** — 8 SAMPLE voices: USB audio (UAC2 speaker,
+  8-channel 16-bit 48 kHz, one channel per voice) feeds per-voice
+  sustain; rate-scaled attack heads uploaded over CDC; CS4304 DAC out;
+  DC control voltages on CH2–CH4 (0 V at boot); RS485 + USB CDC
+  consoles.
 - **Effect Card** — 8-channel capture from two TLV320ADC6140 ADCs over
   TDM/SAI, one selectable channel streamed to the PC (UAC2 microphone,
   mono 32-bit 96 kHz), 48 V phantom rail control, RS485 + USB CDC
   consoles.
-- **`apps/console`** — standalone C++ RS485 console (`fw rs485 ...`, §6)
+- **`protocol/console`** — standalone C++ RS485 console (`fw rs485 ...`, §6)
   reaching either board over the shared bus with no USB CDC dependency.
-  Verified against a mock firmware responder; not yet run against the
-  real RS485↔PC adapter (not connected as of this writing).
-- **`apps/midi_host`** — Launchkey MIDI → 16-voice FIFO sine bank → Mac
-  speakers (RtMidi + RtAudio). See [`apps/midi_host/README.md`](apps/midi_host/README.md).
-- **`apps/control_gui`** — Dear ImGui + GLFW control surface (MIDI, RS485
-  console, local preview scope). See [`apps/control_gui/README.md`](apps/control_gui/README.md).
-- **`libs/protocol`** — Wire API only (`namespace protocol`: format / parse /
-  typed clients; no serial). See [`libs/protocol/README.md`](libs/protocol/README.md).
-- **`libs/host_io`** — PC host transports: shared serial, RS485 tagged bus / `Bus`,
-  USB CDC + wave upload. See [`libs/host_io/README.md`](libs/host_io/README.md).
-
-> **Not under version control yet.** Initialising a git repo at
-> `firmware/` and committing this baseline is strongly recommended
-> before further work — several issues in development were caused by
-> regenerations silently removing files, which a `git diff` would have
-> caught immediately.
+- **`protocol/midi_bridge`** — MIDI keyboard → 8-voice FIFO allocator →
+  Mac speakers or Channel Card notes (RtMidi + RtAudio). See
+  [`protocol/midi_bridge/README.md`](protocol/midi_bridge/README.md).
+- **`cmi_control`** — Dear ImGui + GLFW control surface (MIDI, RS485
+  console, local preview scope). See [`cmi_control/README.md`](cmi_control/README.md).
+- **`protocol/libs/cardproto`** — Wire API only (`namespace cardproto`:
+  format / parse / typed clients; no serial). See
+  [`protocol/libs/cardproto/README.md`](protocol/libs/cardproto/README.md).
+- **`protocol/libs/cardlink`** — PC host transports: shared serial,
+  RS485 tagged bus / `Bus`, USB CDC + sample upload. See
+  [`protocol/libs/cardlink/README.md`](protocol/libs/cardlink/README.md).

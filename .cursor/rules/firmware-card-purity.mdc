@@ -1,0 +1,43 @@
+---
+description: Card firmware stays self-contained — no host/tool repo coupling in comments or APIs
+globs: channel_card/Core/**/*,effect_card/Core/**/*,channel_card/USB_APP/**/*,effect_card/USB_APP/**/*
+alwaysApply: false
+---
+
+# Firmware Card Purity
+
+MCU card code (`channel_card` / `effect_card` application sources) is a
+**standalone product surface**. Comments, headers, and public names describe
+what the card does — sizes, rates, protocol verbs, hazards — not how a Mac
+app or generator script happens to produce payloads.
+
+## Do
+
+- Document card facts in card units: `BODY_BANK_LEN` samples @ 48 kHz, CDC
+  `bl`/`al`/`ar`, `phase_inc = note_hz / root_hz`.
+- Name USB roles abstractly when needed (`UAC IN`, `CDC host`, `upstream
+  MIDI session`) — not repo paths or binary names.
+- Keep host/tools as the side that must match the card: generators and
+  uploaders cite firmware constants / protocol, never the reverse.
+
+## Do not
+
+- Reference host tree paths or tools in card comments
+  (`tools/gen_sample_waves.py`, `cmi_control/...`, `sample48/`).
+- Name host binaries or libs as authorities (`midi_bridge`, `cmi_control`,
+  `cardlink`) in card comments — describe the failure/protocol instead.
+- Encode “matches the GUI/script” as the reason for a `#define`; state the
+  hardware/audio constraint (length, sample rate, loop period).
+
+```c
+/* BAD — card documents the host tree */
+/** Loop length — matches tools/gen_sample_waves.py. */
+#define BODY_BANK_LEN 9600u
+
+/* GOOD — card owns the contract */
+/** Samples per sustain loop @ 48 kHz (~200 ms). */
+#define BODY_BANK_LEN 9600u
+```
+
+Host-side docs may say “must match `BODY_BANK_LEN` on the card.” Card-side
+docs must not say “must match the Python generator.”

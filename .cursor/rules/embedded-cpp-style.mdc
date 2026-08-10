@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Embedded C Style (firmware)
 
-MCU firmware is **C today**. Host `apps/console` is C++. A future C++ firmware
+MCU firmware is **C today**. Host `protocol/console` is C++. A future C++ firmware
 migration is intentional but must be an explicit project — see
 `firmware-modules-and-robustness.mdc`. Until then, write and extract in C.
 

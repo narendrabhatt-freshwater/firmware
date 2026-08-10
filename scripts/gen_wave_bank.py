@@ -20,7 +20,7 @@ from pathlib import Path
 N = 16384
 PERIOD = 128  # samples per fundamental cycle
 F0 = 1.0 / PERIOD  # cycles per sample
-OUT_DIR = Path(__file__).resolve().parents[1] / "apps" / "control_gui" / "waves"
+OUT_DIR = Path(__file__).resolve().parents[1] / "cmi_control" / "waves"
 
 
 def clamp(x: float, lo: float = -1.0, hi: float = 1.0) -> float:

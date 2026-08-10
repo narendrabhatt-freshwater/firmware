@@ -29,7 +29,7 @@ SERIAL_PORT="${FW_SERIAL_PORT:-}"     # e.g. /dev/cu.usbmodemCHCARD_0013
 SERIAL_BAUD="${FW_SERIAL_BAUD:-115200}"
 SEND_WAIT_SECS="${FW_SEND_WAIT:-1.5}"
 
-# RS485 console (apps/console — talks to the shared bus, no USB CDC needed)
+# RS485 console (protocol/console — talks to the shared bus, no USB CDC needed)
 RS485_PORT="${FW_RS485_PORT:-}"       # e.g. /dev/cu.usbserial-XXXX (the adapter, not a card)
 RS485_BAUD="${FW_RS485_BAUD:-460800}"
 RS485_TARGET="${FW_RS485_TARGET:-channel}" # channel | effect | all
@@ -119,8 +119,8 @@ usage() {
     "  fw send channel help    send one command, print reply"
     "  fw send channel status"
     ""
-    "RS485 console (apps/console — no USB CDC needed, either board)"
-    "  fw rs485 build                    build apps/console (once, or after editing it)"
+    "RS485 console (protocol/console — no USB CDC needed, either board)"
+    "  fw rs485 build                    build protocol/console (once, or after editing it)"
     "  fw rs485 list                     candidate RS485 adapter serial ports"
     "  fw rs485 console --port PATH      interactive REPL, default target 'all'"
     "  fw rs485 console channel --port PATH   interactive REPL, target 'channel'"
@@ -129,8 +129,8 @@ usage() {
     "  --manual-rts   toggle RTS around TX (dongles without auto-direction)"
     "  --timeout-ms N / --retries N      reply-wait tuning (defaults 300 / 2)"
     ""
-    "MIDI host (apps/midi_host — any MIDI keyboard → speakers or Channel Card)"
-    "  fw midi build                     build apps/midi_host (FetchContent once)"
+    "MIDI host (protocol/midi_bridge — any MIDI keyboard → speakers or Channel Card)"
+    "  fw midi build                     build protocol/midi_bridge (FetchContent once)"
     "  fw midi list                      list MIDI input ports"
     "  fw midi                           speakers (auto-pick Launchkey MIDI Out)"
     "  fw midi --midi 0                  speakers, MIDI port index 0 (any device)"
@@ -142,9 +142,14 @@ usage() {
     "  --port /dev/...                   RS485 adapter path (with channel)"
     "  FW_RS485_PORT / FW_MIDI_GAIN      channel-mode defaults"
     ""
-    "Control GUI (apps/control_gui — Dear ImGui + GLFW, macOS/Linux/Windows)"
-    "  fw control build                  build apps/control_gui (FetchContent once)"
+    "Control GUI (cmi_control — Dear ImGui + GLFW, macOS/Linux/Windows)"
+    "  fw control build                  build cmi_control (FetchContent once)"
     "  fw control                        run GUI (builds if needed)"
+    ""
+    "SVN publishing (docs/reference/svn_publishing.md)"
+    "  fw svn-publish <product> <wc> [--tag vX.Y] [--dry-run]"
+    "                                    export a product dir into its SVN trunk"
+    "                                    products: channel_card effect_card protocol cmi_control"
     ""
     "Cards"
     "  channel    channel_MCU   STM32H725   /dev/cu.usbmodemCHCARD*"
@@ -180,8 +185,8 @@ usage() {
 
 card_dir() {
   case "$1" in
-    channel|c) echo "$ROOT/apps/channel_card" ;;
-    effect|e)  echo "$ROOT/apps/effect_card" ;;
+    channel|c) echo "$ROOT/channel_card" ;;
+    effect|e)  echo "$ROOT/effect_card" ;;
     *) die "unknown card: $1 (use channel|effect|all)" ;;
   esac
 }
@@ -1141,9 +1146,9 @@ cmd_ports() {
   [[ "$found" -eq 0 ]] && row "-" "(none)"
 }
 
-# ── RS485 console (apps/console — talks to the shared bus directly) ────────
+# ── RS485 console (protocol/console — talks to the shared bus directly) ────────
 
-console_dir() { echo "$ROOT/apps/console"; }
+console_dir() { echo "$ROOT/protocol/console"; }
 console_bin() { echo "$(console_dir)/build/rs485_console"; }
 
 cmd_rs485_build() {
@@ -1160,7 +1165,7 @@ cmd_rs485_build() {
   ok "$(relpath "$bin")"
 }
 
-# Builds apps/console only if the binary is missing — 'fw rs485 build' is
+# Builds protocol/console only if the binary is missing — 'fw rs485 build' is
 # the explicit rebuild-after-editing path.
 ensure_rs485_built() {
   local bin
@@ -1328,17 +1333,17 @@ cmd_rs485() {
   exec "$(console_bin)" "${common[@]}" --target "$target"
 }
 
-# ── MIDI host (apps/midi_host — Launchkey → speakers) ──────────────────────
+# ── MIDI host (protocol/midi_bridge — Launchkey → speakers) ──────────────────────
 
-midi_dir() { echo "$ROOT/apps/midi_host"; }
-midi_bin() { echo "$(midi_dir)/build/midi_host"; }
+midi_dir() { echo "$ROOT/protocol/midi_bridge"; }
+midi_bin() { echo "$(midi_dir)/build/midi_bridge"; }
 
 cmd_midi_build() {
   local dir bin
   dir="$(midi_dir)"
   bin="$(midi_bin)"
   need_cmd cmake
-  info "build midi_host"
+  info "build midi_bridge"
   (
     cd "$dir"
     cmake -S . -B build
@@ -1347,13 +1352,13 @@ cmd_midi_build() {
   ok "$(relpath "$bin")"
 }
 
-# Builds apps/midi_host only if the binary is missing — 'fw midi build' is
+# Builds protocol/midi_bridge only if the binary is missing — 'fw midi build' is
 # the explicit rebuild-after-editing path.
 ensure_midi_built() {
   local bin
   bin="$(midi_bin)"
   if [[ ! -x "$bin" ]]; then
-    warn "midi_host not built yet — building"
+    warn "midi_bridge not built yet — building"
     cmd_midi_build
   fi
 }
@@ -1368,7 +1373,7 @@ list_midi_ports() {
   else
     while IFS= read -r line; do
       [[ -n "$line" ]] || continue
-      # midi_host prints "N: name"
+      # midi_bridge prints "N: name"
       if [[ "$line" =~ ^([0-9]+):\ (.*)$ ]]; then
         row "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
       else
@@ -1575,14 +1580,14 @@ _set_port_arg() {
   fi
 }
 
-# ── Control GUI (apps/control_gui — Dear ImGui + GLFW) ─────────────────────
+# ── Control GUI (cmi_control — Dear ImGui + GLFW) ─────────────────────
 
-control_dir() { echo "$ROOT/apps/control_gui"; }
+control_dir() { echo "$ROOT/cmi_control"; }
 control_bin() {
   if [[ "$(uname -s)" == "Darwin" ]]; then
     echo "$(control_dir)/build/CMI Control.app/Contents/MacOS/CMI Control"
   else
-    echo "$(control_dir)/build/control_gui"
+    echo "$(control_dir)/build/cmi_control"
   fi
 }
 
@@ -1655,6 +1660,7 @@ main() {
     rs485) cmd_rs485 "$@" ;;
     midi) cmd_midi "$@" ;;
     control|gui) cmd_control "$@" ;;
+    svn-publish) exec "$ROOT/scripts/svn_publish.sh" "$@" ;;
     clean)  cmd_clean "$@" ;;
     status|info) cmd_status "$@" ;;
     help|-h|--help) usage ;;

@@ -15,8 +15,9 @@ alwaysApply: false
 - **Never step a parameter instantaneously** if it's continuously read by
   DMA (gain, DC level, frequency) — slew-limit it like `DC_SLEW_STEP` in
   `audio_bridge.c` to avoid filter-ringing/output spikes.
-- **Sample rate: 96 kHz is the current bring-up / boss-bench rate**
-  (`AUDIO_SAMPLE_RATE_HZ` in `apps/channel_card/Core/Inc/audio/audio_rate.h`).
+- **Sample rate: 48 kHz is the current Channel Card rate**
+  (`AUDIO_SAMPLE_RATE_HZ` in `channel_card/Core/Inc/audio/audio_rate.h`;
+  the Effect Card's USB capture runs at 96 kHz).
   Changing it requires lockstep: `.ioc` I2S1/I2S2 `AudioFreq`,
   `CS4304_SAMPLE_RATE_ACTIVE`, phase-increment denominators, and filter
   design `fs`. Never hardcode the rate in new generator code — always

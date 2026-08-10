@@ -27,7 +27,7 @@ alwaysApply: true
   Explain *why*, especially for hardware workarounds — future readers (and
   future agents) can't see the oscilloscope trace that justified a change.
 - **Never commit `build/` output.** Already covered by the per-project
-  `apps/channel_card/.gitignore` / `apps/effect_card/.gitignore` (`build`,
+  `channel_card/.gitignore` / `effect_card/.gitignore` (`build`,
   `mx.scratch`) — don't `git add -f` around it.
 - **`.ioc`-derived regenerated files** (`cmake/stm32cubemx/**`) should only be
   committed alongside a note in the commit body confirming the post-regen

@@ -1,0 +1,17 @@
+sample48 pure-sine polyphony bank
+=================================
+
+Rebuild: python3 tools/build_sample48_sines.py
+Long seamless sine loops at widely spaced pitches so polyphony
+is easy to hear (no rich harmonics / no evolving beds).
+
+Slot  name      Hz
+----  --------  ----------
+w0   sine_a3   220.0000 Hz
+w1   sine_c4   261.6352 Hz
+w2   sine_e4   329.6223 Hz
+w3   sine_g4   392.0008 Hz
+w4   sine_c5   523.2558 Hz
+w5   sine_e5   659.2446 Hz
+w6   sine_g5   784.0200 Hz
+w7   sine_c6   1046.5262 Hz

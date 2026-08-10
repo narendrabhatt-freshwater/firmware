@@ -12,7 +12,7 @@ alwaysApply: true
 - **Intended direction is C++** for application/DSP layers when we deliberately
   migrate (extern "C" at HAL/USB boundaries, no heap, same realtime rules).
   Until that migration is an explicit task: **extend in C**.
-- **Host tools** (`apps/console`) stay **C++17**. Do not mix that stack into
+- **Host tools** (`protocol/console`) stay **C++17**. Do not mix that stack into
   card firmware CMake.
 
 ## Extraction — deliberate, not drive-by

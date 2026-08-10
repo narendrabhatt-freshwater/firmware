@@ -1,6 +1,6 @@
 ---
 description: STM32CubeMX regeneration rules — how to safely edit generated projects
-globs: apps/channel_card/**,apps/effect_card/**
+globs: channel_card/**,effect_card/**
 alwaysApply: false
 ---
 

@@ -2,7 +2,8 @@
 
 Host ↔ Channel Card and Effect Card over RS485 (and the same command
 set over USB CDC). One ASCII line in, one reply line out. That is the
-protocol — there is no separate binary control frame.
+protocol — there is no separate binary control frame; the only binary
+payloads are the CDC sample uploads (`al` / `bl`, §4).
 
 Baud on the RS485 UARTs is **460800 8N1**.
 
@@ -10,10 +11,10 @@ Type `h` (or `help` or `?`) on either card for the live one-line menu.
 If this document and the firmware disagree, trust the firmware.
 
 Host apps should prefer the C++ wire wrapper in
-[`libs/protocol`](../libs/protocol) (`namespace protocol`: format / parse /
+[`protocol/libs/cardproto`](../protocol/libs/cardproto) (`namespace cardproto`: format / parse /
 typed clients). That package has **no serial I/O** — inject a transport or
 send the `Format*` strings yourself. Freshwater PC tools use
-[`libs/host_io`](../libs/host_io) for the actual RS485/CDC pipe. This document
+[`protocol/libs/cardlink`](../protocol/libs/cardlink) for the actual RS485/CDC pipe. This document
 remains the normative wire contract.
 
 ---
@@ -81,19 +82,23 @@ return `ok: …` with the value.
 | `err:syntax`                            | Could not parse the line                      |
 | `err:range`                             | Number or slot out of allowed range (Channel) |
 | `err:unknown`                           | No such command                               |
+| `err:usb`                               | CDC-only command (`al` / `bl`) sent on RS485  |
 | `err:rxdrop`                            | Channel UART RX overrun between lines         |
 | `err: ar …` / `err: aw …` / `err: adc…` | Effect I2C / ADC failure                      |
-
-There is no binary command frame. Notes are ASCII Hz text only.
 
 ---
 
 ## 2. Channel Card commands
 
-Sixteen note slots: `n0` … `nf` (hex digits `0`–`f` = voices 0–15).
-They mix onto DAC channel 1. Global shape (`s` / `p` / `t`) applies to
-all slots. Digital LPF commands cover voices **0–7** only
-(`f0`…`f7`, `fk0`…`fk7`); voices 8–15 stay at boot bypass.
+Eight note slots: `n0` … `n7` (voices 0–7). Slot digits `8`–`f` parse
+but reply `err:range`. All voices mix onto DAC channel 1.
+
+Each voice is a **SAMPLE voice**: when its assigned wave id has a
+loaded attack head, note-on plays that head rate-scaled to the note's
+pitch, then sustains from the voice's host-streamed USB audio channel
+(§4). Voices without a loaded wave synthesize the global DDS shape
+(`s` / `p` / `t`). Envelope (`en`) and per-voice LPF (`f`) apply to
+either source.
 
 Boot / bare `n0` also turns the analog bypass path on and sets CH1 DAC
 trim to 0 dB (`g 1 0`). Frequency changes do not touch gain or bypass.
@@ -109,12 +114,12 @@ trim to 0 dB (`g 1 0`). Frequency changes do not touch gain or bypass.
 | Command                | Meaning                                                                           |
 | ---------------------- | --------------------------------------------------------------------------------- |
 | `n0`                   | Session defaults only (bypass on, `g 1 0`). Does not start a tone.                |
-| `n0`…`nf <Hz> [scale]` | Set that slot. Hz in **[20, 20000)**. Scale in **[0, 1]**; if omitted, **0.125**. |
-| `n0`…`nf 0`            | Turn that slot off (Hz ≤ 0).                                                      |
-| `n <Hz> [scale]`       | Same rules for all 16 slots.                                                      |
-| `n 0`                  | Silence all 16.                                                                   |
+| `n0`…`n7 <Hz> [scale]` | Set that slot. Hz in **[20, 20000)**. Scale in **[0, 1]**; if omitted, **0.125**. |
+| `n0`…`n7 0`            | Turn that slot off (Hz ≤ 0).                                                      |
+| `n <Hz> [scale]`       | Same rules for all 8 slots.                                                       |
+| `n 0`                  | Silence all 8.                                                                    |
 
-Bare `n1`…`nf` (no Hz) is a syntax error. Only bare `n0` is the session
+Bare `n1`…`n7` (no Hz) is a syntax error. Only bare `n0` is the session
 shortcut.
 
 Success reply for sets: `ok`.
@@ -122,40 +127,29 @@ Success reply for sets: `ok`.
 Fractional Hz is intentional (e.g. `261.625565` for C4). Do not round
 to integers if you care about equal temperament.
 
-### Playback mode
+### Sample bank (attack heads + assignments)
 
-| Command | Meaning                                          |
-| ------- | ------------------------------------------------ |
-| `m`     | Query: `ok: m 0` (notes) or `ok: m 1` (wave)     |
-| `m 0`   | DDS note bank (`s`/`p`/`t`, `n0`…`nf`) — default |
-| `m 1`   | One-shot waveform player on slots 0–7            |
+Eight wave ids (`0`…`7`). Each id holds one **attack head** of 256
+int32 samples (1024 bytes) in AXI RAM, with a root pitch used for
+on-card rate scaling. Upload is USB CDC only (§4); assignment and
+queries work on both transports. Contents survive mode-free operation
+while powered and are lost on reset.
 
-Legacy aliases (same behavior): `mode`, `mode notes`, `mode wave`.
+| Command             | Meaning                                                             |
+| ------------------- | ------------------------------------------------------------------- |
+| `al <id> 1024`      | **USB CDC only.** Begin attack-head upload; exactly **1024** bytes  |
+| `bl <id> <nbytes>`  | **USB CDC only.** Begin body-loop upload; even, **[2, 19200]**      |
+| `ar <id> <Hz>`      | Set the wave's root pitch (Hz > 0)                                  |
+| `aw <voice> <id>`   | Assign wave `<id>` to voice `<voice>` (both 0..7)                   |
+| `a`                 | Voice→wave map; `*` marks ids with a loaded attack                  |
+| `vq`                | Active-voice mask (hex) + per-voice stream-ring fill (quarters 0–4) |
 
-Switching mode hard-stops active voices. Wave sample data in AXI is kept
-while powered; it is lost on reset (re-upload over USB CDC).
+Replies: `ok: ar <id> <Hz>`, `ok: aw <voice> <id>`,
+`ok: a 0:0* 1:1 …`, `ok:vq <mask> q0 … q7`.
 
-### Waveform (wave mode)
-
-Eight AXI banks × 32 KiB (16384 int16 LE samples max). Path:
-wave → amp/env → LPF → CH1. Playback rate (samples/s) = pitch_Hz × 128;
-filter tracking uses pitch = rate / 128.
-
-| Command              | Meaning                                                       |
-| -------------------- | ------------------------------------------------------------- |
-| `w`                  | Query lengths / playing (`*` = playing)                       |
-| `w0`…`w7`            | Query one slot                                                |
-| `w0`…`w7 <rate>`     | Play/restart at `rate` samples/s (1…192000)                   |
-| `w0`…`w7 0`          | Stop slot                                                     |
-| `wl <slot> <nbytes>` | **USB CDC only.** Begin binary upload; `nbytes` even, 2…32768 |
-
-`n0`…`n7` in wave mode start the same one-shot with
-`rate = Hz × 128` and respect envelope sustain/release. End of wave
-silences that slot even if the key is still held. `err:mode` if `w*`
-while in notes mode; `err:usb` if `wl` over RS485; `err:empty` if no
-samples loaded.
-
-Wave upload framing is defined in §4 (USB CDC).
+Playback pitch of the attack head = `note_Hz / root_Hz` rate scaling.
+Sustain does not use the body loop when the host streams per-voice
+audio (§4); `bl` remains for hosts that preload a sustain loop instead.
 
 ### Oscillator shape (global)
 
@@ -164,6 +158,8 @@ Wave upload framing is defined in §4 (USB CDC).
 | `s`            | Sine                                              |
 | `p <0.1..0.9>` | Pulse; argument is duty                           |
 | `t <0.1..0.9>` | Triangle; argument is asymmetry (0.5 = symmetric) |
+
+Applies to voices whose assigned wave id has no loaded attack head.
 
 ### Amplitude envelope
 
@@ -174,11 +170,14 @@ segment is always 0. Last segment is release to 0.
 | Command               | Meaning                                |
 | --------------------- | -------------------------------------- |
 | `en`                  | List which slots have a program        |
-| `en <tokens…>`        | Program **all** 16 voices              |
+| `en <tokens…>`        | Program all 8 voices                   |
 | `en 0`                | Clear all voices (unprogrammed bypass) |
-| `en0`…`enf`           | Query one voice                        |
-| `en0`…`enf <tokens…>` | Program one voice                      |
-| `en0`…`enf 0`         | Clear one voice (unprogrammed bypass)  |
+| `en0`…`en7`           | Query one voice                        |
+| `en0`…`en7 <tokens…>` | Program one voice                      |
+| `en0`…`en7 0`         | Clear one voice (unprogrammed bypass)  |
+
+Slot digits `8`–`f` are accepted by the parser (the envelope bank is
+16 deep for historical reasons) but drive no audible voice.
 
 Token list rules:
 
@@ -211,15 +210,15 @@ higher notes.
 
 | Command                       | Meaning                                      |
 | ----------------------------- | -------------------------------------------- |
-| `ek`                          | Dump k for all voices                        |
+| `ek`                          | Dump k for all 8 voices                      |
 | `ek <k>`                      | Set the same k on all segments of all voices |
-| `ek0`…`ekf` / `ek0`…`ekf <k>` | Query / bulk-set one voice                   |
+| `ek0`…`ek7` / `ek0`…`ek7 <k>` | Query / bulk-set one voice                   |
 
 `k` is in **[−10, 10]**. Default **0** (no pitch effect). `ek` is a bulk
 override; prefer `slope±k` on `en` for per-segment values. Query prints one
 value when all segments share k, otherwise one k per segment.
 
-### Digital low-pass filter (voices 0–7)
+### Digital low-pass filter
 
 | Command            | Meaning                             |
 | ------------------ | ----------------------------------- |
@@ -270,10 +269,16 @@ audio. Not a normal musical control.
 
 | Command             | Meaning                              |
 | ------------------- | ------------------------------------ |
-| `cpu`               | On, 16 voices, DMA-style probe       |
-| `cpu N`             | On, N voices (1..16)                 |
+| `cpu`               | On, all 8 voices, DMA-style probe    |
+| `cpu N`             | On, N voices (1..8)                  |
 | `cpu q` / `cpu q N` | Soft-queue style probe               |
 | `cpu 0`             | Off; clear notes; LED chaser resumes |
+
+### Removed commands
+
+`m` / `mode`, `w0`…`w7`, `wl`, `sw`, `tone1`, `dc`, `scf`, `duty` and
+`gain` no longer exist; they reply `err:unknown` (or parse as another
+command). Sample upload replaced `wl` with `al` / `bl`.
 
 ### Channel quick examples
 
@@ -287,8 +292,9 @@ c:f0 300
 c:fk0 1
 c:n0 523.25
 c:en0 1.0 10+1 0.2
-c:m 1
-c:w0 48000
+c:aw 0 0
+c:a
+c:vq
 c:n 0
 ```
 
@@ -321,7 +327,11 @@ I2C ADCs, USB ADC channel select, and RS485 echo.
 Default echo is **off**. Use `ec 1` only when you want the card to
 echo keystrokes back on the bus.
 
-ADC7-bit addresses used at init: ADC1 `0x4C`, ADC2 `0x4D`.
+ADC 7-bit addresses used at init: ADC1 `0x4C`, ADC2 `0x4D`.
+
+Note the card-local meaning of `ar` / `aw`: on Effect they are ADC
+register read/write; on Channel they are sample root-pitch / wave
+assignment. Always address a specific card on a shared bus.
 
 ### Effect quick examples
 
@@ -336,16 +346,17 @@ e:ar 1 0
 
 ---
 
-## 4. USB CDC protocol
+## 4. USB protocol (Channel Card)
 
 Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 
-| Interface            | Role                                                                    |
-| -------------------- | ----------------------------------------------------------------------- |
-| **UAC2** (speaker)   | Isochronous audio into CH1 — OS volume / DAW stream. Not this document. |
-| **CDC ACM** (serial) | Same ASCII console as RS485, plus binary wave upload (`wl`).            |
+| Interface            | Role                                                                     |
+| -------------------- | ------------------------------------------------------------------------ |
+| **UAC2** (speaker)   | Isochronous audio out of the host: **8 channels × 16-bit × 48 kHz**, one channel per voice. Sustain for each active SAMPLE voice streams here into the per-voice ring (`vq` shows fill). |
+| **CDC ACM** (serial) | Same ASCII console as RS485, plus the binary sample uploads (`al` / `bl`). |
 
-Effect Card also has CDC for its console; it has no wave bank / `wl`.
+Effect Card also has CDC for its console (no uploads) and a UAC2
+microphone (mono, 32-bit, 96 kHz) carrying the selected ADC channel.
 
 ### CDC vs RS485 (console)
 
@@ -357,75 +368,68 @@ Effect Card also has CDC for its console; it has no wave bank / `wl`.
 | Reply tag      | `[C] ` / `[E] `                             | None — body only                                                               |
 | Echo           | Channel: off. Effect: `ec` (default off)    | Local keystroke echo on                                                        |
 | Baud           | **460800 8N1** on the UART                  | Host may open any rate (e.g. 115200); TinyUSB CDC ignores line coding for data |
-| `wl` upload    | Rejected (`err:usb`)                        | Allowed                                                                        |
+| `al` / `bl`    | Rejected (`err:usb`)                        | Allowed                                                                        |
 
 Typical host path on macOS / Linux: Channel `cu.usbmodem*` / `ttyACM*`.
 USB–UART adapters (`cu.usbserial*`, `ttyUSB*`) are the RS485 dongle — wrong
-port for `wl`.
+port for uploads.
 
-### Wave upload session (`wl`)
+### Upload session (`al` / `bl`)
 
 Binary payload rides on the **same** CDC pipe as ASCII. After `ok:ready`,
-the console leaves line mode: CDC RX bytes go to `WaveUpload_Feed` only
-(no echo, no `\r` line framing, no command parse).
+the console leaves line mode: CDC RX bytes go to the upload sink only
+(no echo, no `\r` line framing, no command parse) until the byte count
+is met.
 
 Constraints:
 
-- Slot **0…7**
-- `nbytes` even, in **[2, 32768]** (max one bank)
-- Samples are **int16 little-endian**, contiguous
+| Command            | Payload                                             |
+| ------------------ | --------------------------------------------------- |
+| `al <id> <nbytes>` | Exactly **1024** bytes = 256 × int32 LE attack head |
+| `bl <id> <nbytes>` | Even, **[2, 19200]** bytes of int16 LE body loop    |
 
-**Console reply API (what the card writes):** exactly two success lines for
-a full transfer — nothing in between, even if USB delivers the payload in
-many `tud_cdc_read` / `WaveUpload_Feed` calls.
+Wave `<id>` is **0…7** for both.
 
-| When                                  | Card writes (`USB_CDC_WriteStr`) |
-| ------------------------------------- | -------------------------------- |
-| `wl` accepted                         | `ok:ready\r\n`                   |
-| During the `nbytes` of sample data    | *(no console reply)*             |
-| Last byte received and bank committed | `ok:wave <slot> <nsamp>\r\n`     |
+**Console reply API (what the card writes):** exactly two success lines
+for a full transfer — nothing in between, even if USB delivers the
+payload in many reads.
 
-There is no per-chunk / per-`Feed` ACK. Mid-payload console traffic would
-serialize Full-Speed CDC and is intentionally omitted.
+| When                                  | Card writes                                     |
+| ------------------------------------- | ----------------------------------------------- |
+| `al` / `bl` accepted                  | `ok:ready\r\n`                                  |
+| During the `nbytes` of payload        | *(no console reply)*                            |
+| Last byte received and bank committed | `ok:attack <id>\r\n` / `ok:body <id> <n>\r\n`   |
+
+There is no per-chunk ACK. Mid-payload console traffic would serialize
+Full-Speed CDC and is intentionally omitted.
 
 Sequence:
 
 ```text
-Host →  wl 0 8192\r
+Host →  al 0 1024\r
 Card →  ok:ready\r\n          ← console write #1
-Host →  <8192 raw bytes>      ← opaque; card may Feed() many times
-Card →  ok:wave 0 4096\r\n    ← console write #2 (nsamp = nbytes/2)
+Host →  <1024 raw bytes>      ← opaque to the console parser
+Card →  ok:attack 0\r\n       ← console write #2
 ```
 
-Errors you may see instead of `ok:ready` / `ok:wave`:
+Errors you may see instead of `ok:ready` / `ok:attack` / `ok:body`:
 
 | Body         | Meaning                                          |
 | ------------ | ------------------------------------------------ |
-| `err:usb`    | `wl` sent on RS485                               |
-| `err:syntax` | Bad `wl` line                                    |
-| `err:range`  | Slot / size / concurrent upload / commit failure |
+| `err:usb`    | `al` / `bl` sent on RS485                        |
+| `err:syntax` | Bad command line                                 |
+| `err:range`  | Id / size / concurrent upload / commit failure   |
 
 Notes:
 
-1. Keep the CDC session open across slots when loading a bank; reopen cost
-   dominates, not the 32 KiB transfer.
-2. While waiting for `ok:wave`, keep reading the CDC RX path — do not
-   discard pending replies.
-3. Upload only loads AXI RAM. To hear it: `m 1`, then `w0 <rate>` (or
-   `n0 <Hz>` in wave mode). Data survives mode switches until power-cycle.
+1. Keep the CDC session open across ids when loading a bank; reopen cost
+   dominates, not the transfer.
+2. While waiting for the completion line, keep reading the CDC RX path —
+   do not discard pending replies.
+3. Upload only loads AXI RAM (lost on reset). To hear it: `ar <id> <rootHz>`,
+   `aw <voice> <id>`, then `nX <Hz>` — and stream sustain audio on the
+   voice's UAC channel.
 
-Example (one slot, then play):
-
-```text
-wl 3 32768\r
-ok:ready
-<32768 bytes>
-ok:wave 3 16384
-m 1\r
-ok: m 1
-w3 48000\r
-ok
-```
 ---
 
 ## 5. Half-duplex and pitch text

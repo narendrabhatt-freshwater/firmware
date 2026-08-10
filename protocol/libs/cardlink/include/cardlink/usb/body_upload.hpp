@@ -1,0 +1,46 @@
+/**
+ * @file body_upload.hpp
+ * @brief USB CDC binary body-loop upload (`bl` session, int16 LE).
+ */
+
+#ifndef HOST_IO_USB_BODY_UPLOAD_HPP
+#define HOST_IO_USB_BODY_UPLOAD_HPP
+
+#include "cardlink/serial_port.hpp"
+#include "cardlink/usb/wave_upload.hpp"
+
+#include <cstdint>
+#include <functional>
+#include <string>
+
+namespace cardlink {
+namespace usb {
+
+struct BodyUploadResult {
+  bool ok = false;
+  std::string message;
+  uint16_t wave_id = 0;
+};
+
+class BodyUploader {
+public:
+  explicit BodyUploader(cardlink::SerialPort &cdc_port);
+
+  BodyUploadResult Upload(uint16_t wave_id,
+                          const uint8_t *data,
+                          size_t nbytes,
+                          const std::function<void(float)> &on_progress = {});
+
+  BodyUploadResult UploadFile(
+      uint16_t wave_id,
+      const std::string &file_path,
+      const std::function<void(float)> &on_progress = {});
+
+private:
+  cardlink::SerialPort &port_;
+};
+
+} // namespace usb
+} // namespace cardlink
+
+#endif /* HOST_IO_USB_BODY_UPLOAD_HPP */
