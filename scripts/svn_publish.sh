@@ -101,6 +101,13 @@ copy_doc() { # copy_doc <src-rel-to-root> <dst-rel-to-trunk-docs>
     cp "$ROOT/$1" "$DOCS_DIR/$2"
   fi
 }
+# Card trees carry their own docs/protocol.md; it must match the
+# shared copy or the SVN trunk would disagree with the monorepo spec.
+if [ -f "$SRC/docs/protocol.md" ]; then
+  if ! cmp -s "$ROOT/docs/protocol.md" "$SRC/docs/protocol.md"; then
+    err "docs/protocol.md differs from $PRODUCT/docs/protocol.md — keep them identical"
+  fi
+fi
 copy_doc docs/protocol.md protocol.md
 case "$PRODUCT" in
   channel_card)

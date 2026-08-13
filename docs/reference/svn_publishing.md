@@ -38,10 +38,10 @@ The script (`scripts/svn_publish.sh`):
   `.gitignore` files and — for `cmi_control` — the generated `waves/`
   banks;
 - copies the shared docs the export needs to stand alone into
-  `trunk/docs/`: `protocol.md` always, the root README as
-  `firmware_handbook.md` for the cards, the filter reference and
-  diagrams for the Channel card, `rs485_console_architecture.md` for
-  the host products;
+  `trunk/docs/`: `protocol.md` (must match `$PRODUCT/docs/protocol.md`
+  when that file exists), the root README as `firmware_handbook.md`
+  for the cards, the filter reference and diagrams for the Channel
+  card, `rs485_console_architecture.md` for the host products;
 - registers adds/removals with `svn add` / `svn rm` and commits with
   the git SHA and branch in the message;
 - with `--tag vX.Y`, copies `^/trunk` to `^/tags/vX.Y`.

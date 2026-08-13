@@ -47,8 +47,7 @@ void Audio_Bridge_SetDacHandle(CS4304_HandleTypeDef *h)
 _Static_assert((AUDIO_SAMPLE_RATE_HZ % 1000u) == 0u,
                "I2S half must be an integer millisecond at AUDIO_SAMPLE_RATE_HZ");
 
-/* I2S2 (CH3/CH4) enabled. Slave TX on SPI2 requires two workarounds
- * (full story in BRINGUP_REPORT.md):
+/* I2S2 (CH3/CH4) enabled. Slave TX on SPI2 requires two workarounds:
  *  1. UDR wedge — the H7 slave halts on underrun until the flag is
  *     cleared; the TIM7 pump clears it every tick.
  *  2. IOSWP — the H7 slave transmits on MISO, but the board wires PC1

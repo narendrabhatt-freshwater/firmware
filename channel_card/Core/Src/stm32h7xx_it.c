@@ -256,7 +256,7 @@ void OTG_HS_IRQHandler(void)
 
 /**
  * @brief SPI2 global interrupt — used to arm I2S2; data is fed by the
- *        TIM7 FIFO pump (see audio_bridge.c / BRINGUP_REPORT.md).
+ *        TIM7 FIFO pump (see audio_bridge.c).
  */
 extern I2S_HandleTypeDef hi2s2;
 void SPI2_IRQHandler(void)

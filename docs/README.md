@@ -1,8 +1,9 @@
 # Freshwater documentation
 
-`protocol.md` lives at this level because it is the single normative
-host ↔ card wire contract — every component README links here rather
-than duplicating command tables. Everything else is grouped below.
+`protocol.md` is the single normative host ↔ card wire contract. Identical
+copies ship in each card tree (`channel_card/docs/protocol.md`,
+`effect_card/docs/protocol.md`) so an SVN trunk stands alone. Keep those
+three files in lockstep. Everything else is grouped below.
 
 | Location | Contents |
 | -------- | -------- |

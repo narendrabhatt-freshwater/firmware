@@ -1,10 +1,11 @@
 # Effect Card — Firmware
 
-> **Start with [`../README.md`](../README.md)** — toolchain setup, build
-> commands, DFU flashing and the STM32CubeMX regeneration rules are
-> common to both cards and documented there. Standalone exports of this
-> card (SVN trunk) ship that handbook and the wire protocol reference
-> under `docs/` in the repository root.
+Standalone checkouts (SVN trunk) ship the toolchain handbook as
+[`docs/firmware_handbook.md`](docs/firmware_handbook.md) and the wire
+contract as [`docs/protocol.md`](docs/protocol.md). In the git monorepo
+those same files live at the repository root (`README.md`,
+[`docs/protocol.md`](docs/protocol.md) here and
+[`../docs/protocol.md`](../docs/protocol.md)).
 
 | | |
 |---|---|
@@ -42,7 +43,8 @@ cmake --build build/Debug
 ```
 
 Then flash `build/Debug/effect_card.hex` over DFU — see
-[`../README.md`](../README.md) §3.
+[`docs/firmware_handbook.md`](docs/firmware_handbook.md) in an SVN
+checkout, or [`../README.md`](../README.md) §3 in the git monorepo.
 
 ## Source map
 

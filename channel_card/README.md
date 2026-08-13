@@ -1,34 +1,37 @@
 # Channel Card — Firmware
 
-> **Start with [`../README.md`](../README.md)** — toolchain setup, build
-> commands, DFU flashing and the STM32CubeMX regeneration rules are
-> common to both cards and documented there. Standalone exports of this
-> card (SVN trunk) ship that handbook and the wire protocol reference
-> under `docs/` in the repository root.
+Standalone checkouts (SVN trunk) ship the toolchain handbook as
+[`docs/firmware_handbook.md`](docs/firmware_handbook.md) and the wire
+contract as [`docs/protocol.md`](docs/protocol.md). In the git monorepo
+those same files live at the repository root (`README.md`,
+[`docs/protocol.md`](docs/protocol.md) here and
+[`../docs/protocol.md`](../docs/protocol.md)).
 
-|                |                                                   |
-| -------------- | ------------------------------------------------- |
-| MCU            | STM32H725xG                                       |
-| CMake target   | `channel_MCU`                                     |
-| CubeMX project | `channel_MCU.ioc`                                 |
-| Linker script  | `STM32H725xG_flash.ld`                            |
-| USB stack      | TinyUSB 0.17 (`ThirdParty/tinyusb`)               |
-| USB device     | UAC2 speaker (mono, 32-bit, 48 kHz) + CDC console |
-| RS485 address  | `c:`                                              |
+|                |                                                              |
+| -------------- | ------------------------------------------------------------ |
+| MCU            | STM32H725xG                                                  |
+| CMake target   | `channel_MCU`                                                |
+| CubeMX project | `channel_MCU.ioc`                                            |
+| Linker script  | `STM32H725xG_flash.ld`                                       |
+| USB stack      | TinyUSB 0.17 (`ThirdParty/tinyusb`)                          |
+| USB device     | UAC2 speaker (8 ch, 16-bit, 48 kHz) + CDC console            |
+| RS485 address  | `c:`                                                         |
 
 ## What this card does
 
-Receives USB audio from the PC and plays it out of a **CS4304 4-channel
-DAC** over I2S, alongside an 8-voice sample/note bank summed onto CH1.
+Receives USB audio from the PC into **per-voice sustain rings**, and
+plays the 8-voice SAMPLE / note bank out of a **CS4304 4-channel DAC**
+over I2S.
 
-- **CH1** — USB audio playback from the host, plus the `n0..n7` note bank
+- **CH1** — SAMPLE note-bank mix (`n0..n7`). UAC dry audio fills the
+  per-voice rings used for sustain; it is not mixed onto CH1 as PCM.
 - **CH2–CH4** — firmware-generated DC control voltages, clocked purely
   by I2S with no USB involvement (0 V at boot)
 - Console over RS485 (`c:` prefix) and USB CDC
 
 ## Audio signal path
 
-![Channel Card audio flow](../docs/diagrams/channel_card_audio_flow.jpg)
+![Channel Card audio flow](docs/diagrams/channel_card_audio_flow.jpg)
 
 Green = audio, dashed red = control, tan boxes = analog switches driven
 by GPIO. Every tan box maps to one entry in the `switches[]` table in
@@ -41,7 +44,7 @@ channel and three control voltages**:
 
 | DAC ch | Role                                                | Set with                              |
 | ------ | --------------------------------------------------- | ------------------------------------- |
-| CH1    | **Audio** — USB playback + `n0..n7` note bank       | host volume / `g 1 <dB>`              |
+| CH1    | **Audio** — SAMPLE note-bank mix (`n0..n7`)         | `g 1 <dB>`                            |
 | CH2    | **CV → VCA** gain                                   | `Audio_SetDCLevel(2, …)` (boot: 0 V)  |
 | CH3    | **CV → VCF cutoff**                                 | `Audio_SetDCLevel(3, …)` (boot: 0 V)  |
 | CH4    | **CV → VCF resonance**                              | `Audio_SetDCLevel(4, …)` (boot: 0 V)  |
@@ -119,7 +122,7 @@ measures NoteBank fill busy-time on LED_Y (now around that main-loop fill).
 | `cpu q` / `cpu q N` | Soft-queue LED probe                             |
 | `cpu 0`             | Clear notes, stop probe, resume LED chaser       |
 
-### Boss bench: 8 voices + 8 filters @ 48 kHz
+### Load check: 8 voices + 8 filters @ 48 kHz
 
 Sample rate is compile-time (`AUDIO_SAMPLE_RATE_HZ` in `Core/Inc/audio/audio_rate.h`,
 currently **48 kHz**). Flash this build, then:
@@ -151,7 +154,8 @@ cmake --build build/Debug
 ```
 
 Then flash `build/Debug/channel_MCU.hex` over DFU — see
-[`../README.md`](../README.md) §3.
+[`docs/firmware_handbook.md`](docs/firmware_handbook.md) in an SVN
+checkout, or [`../README.md`](../README.md) §3 in the git monorepo.
 
 ## Source map
 
@@ -164,7 +168,7 @@ Hand-written modules live under `Core/Src/<domain>/` (and matching
 | `Core/Src/main.c`                          | Bring-up, DAC init, main loop wiring                              |
 | `Core/Src/console/channel_console.c`       | RS485 + USB CDC console, `cpu`, LED chaser                        |
 | `Core/Src/console/uart5_rx.c`              | Interrupt-driven UART5 RX ring buffer                             |
-| `Core/Src/audio/audio_bridge.c`            | **USB→I2S audio engine** — ring buffer, tone/DC, I2S2 workarounds |
+| `Core/Src/audio/audio_bridge.c`            | USB → per-voice stream rings; CH1 note-bank mix; I2S DMA |
 | `Core/Src/audio/note_bank.c`               | n0–n7 8-voice bank (sine / pulse / tri / sample)                  |
 | `Core/Src/filters/note_filter.c`           | Per-voice LPF wrapper (base/effective cutoff, pitch-k, q/Q31)     |
 | `Core/Src/filters/butterworth_four_pole.c` | Reusable 4-pole DF4 Butterworth kernel                            |
@@ -173,13 +177,11 @@ Hand-written modules live under `Core/Src/<domain>/` (and matching
 
 ### `audio_bridge.c` — handle with care
 
-This file holds the tuned playback path and its behaviour was
-hard-won on hardware. Notable parts, all commented in-place:
+This file holds the playback path as measured on the board. Notable
+parts, all commented in-place:
 
-- **USB→I2S ring buffer** with a write pointer deliberately started half
-  a buffer ahead of the DMA read point, plus a drift guard that
-  re-centres it. Writing per-DMA-half instead caused continuous
-  glitching.
+- **UAC dry** is demuxed into per-voice stream rings (8ch int16 @ 48 kHz).
+  CH1 I2S is always the note-bank mix.
 - **I2S start order matters** — the I2S1 master must be running before
   the I2S2 slave is enabled, or the slave never shifts.
 - **I2S2 slave workarounds** — UDR wedge clearing via the TIM7 pump, and
@@ -226,7 +228,7 @@ Type `h` / `help` / `?` on the card for the live list.
 | `s`                                       | Note-bank shape: sine                                                                                                                                                                                                              |
 | `p <0.1..0.9>`                            | Note-bank shape: pulse (duty)                                                                                                                                                                                                      |
 | `t <0.1..0.9>`                            | Note-bank shape: triangle (asymmetry)                                                                                                                                                                                              |
-| `f0`…`f7` `<Hz>` `[q]` / `f` `<Hz>` `[q]` | LPF **base** cutoff at C4 on voices **0..7** (20..20000; **`0` or `20000` = bypass**). Optional **`q`** = DF4 **g** **0.5..10** (default **1.0**). See [`docs/reference/note_filter_butterworth.md`](../docs/reference/note_filter_butterworth.md). |
+| `f0`…`f7` `<Hz>` `[q]` / `f` `<Hz>` `[q]` | LPF **base** cutoff at C4 on voices **0..7** (20..20000; **`0` or `20000` = bypass**). Optional **`q`** = DF4 **g** **0.5..10** (default **1.0**). See [`docs/reference/note_filter_butterworth.md`](docs/reference/note_filter_butterworth.md). |
 | `fk0`…`fk7` `[k]` / `fk` `[k]`            | Filter pitch-track **k** (0..10, default **0**): `fc = fbase × (note/C4)^k`. Same C4 as envelope `slope±k` / `ek`.                                                                                                                 |
 | `en0`…`en7` `<end slope[±k] …>` / `en`    | Multi-segment amplitude envelope per voice (bare = query; `en0 0` / `en 0` = clear)                                                                                                                                                |
 | `ek0`…`ek7` `<k>` / `ek <k>`              | Envelope pitch-track **k** (−10..10, rate ∝ (f/C4)^k)                                                                                                                                                                              |
