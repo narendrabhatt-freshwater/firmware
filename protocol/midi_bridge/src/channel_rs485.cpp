@@ -19,7 +19,10 @@ namespace
 {
 
 constexpr unsigned kVqVoices = 8;
-constexpr auto kVqPollInterval = std::chrono::milliseconds(10);
+/* Release envelopes are tens of ms to seconds. 10 ms hammered the half-duplex
+ * bus during USB ISO; a late poll was treated as a fatal fault. */
+constexpr auto kVqPollInterval = std::chrono::milliseconds(50);
+constexpr int kVqMissLimit = 16;
 
 double ClampNoteHz(double hz)
 {
@@ -89,6 +92,7 @@ struct ChannelRs485Out::Impl
   std::array<double, kVoiceCount> sent_hz_{};
   /** Host should keep streaming / watching until card reports idle. */
   std::array<bool, kVqVoices> watch_idle_{};
+  int vq_misses_ = 0;
   std::array<bool, kVqVoices> root_dirty_{};
   std::array<double, kVqVoices> pending_root_hz_{};
   IdleHandler idle_handler_;
@@ -186,8 +190,8 @@ struct ChannelRs485Out::Impl
   {
     sent_hz_[slot] = hz;
     if (slot < kVqVoices) {
-      /* Note-on and note-off both need watch until card idle (release). */
-      watch_idle_[slot] = true;
+      /* Poll only after note-off, until the card finishes release. */
+      watch_idle_[slot] = (hz <= 0.0);
     }
   }
 
@@ -203,6 +207,7 @@ struct ChannelRs485Out::Impl
       desired_hz_.fill(0.0);
       sent_hz_.fill(0.0);
       watch_idle_.fill(false);
+      vq_misses_ = 0;
     }
     cv_.notify_all();
 
@@ -361,21 +366,45 @@ struct ChannelRs485Out::Impl
       if (do_vq) {
         cardproto::Result r = bus.Channel().QueryVoiceStatus();
         if (r.ok()) {
+          vq_misses_ = 0;
           HandleVqReply(r);
           continue;
         }
-        if (r.status == cardproto::Status::IoError) {
-          TripHalt("serial I/O error on vq");
-          continue;
-        }
-        if (r.status == cardproto::Status::Timeout) {
-          TripHalt("no [C]ok for vq");
+        if (r.status == cardproto::Status::IoError ||
+            r.status == cardproto::Status::Timeout) {
+          /* Status poll only — do not halt note TX on a late USB/ISO stall. */
+          ++vq_misses_;
+          std::fprintf(stderr, "warn: vq timeout (%d/%d)\n", vq_misses_,
+                       kVqMissLimit);
+          if (vq_misses_ >= kVqMissLimit) {
+            IdleHandler handler;
+            std::array<bool, kVqVoices> become_idle{};
+            {
+              std::lock_guard<std::mutex> lock(mu_);
+              handler = idle_handler_;
+              for (uint8_t i = 0; i < kVqVoices; ++i) {
+                if (watch_idle_[i]) {
+                  watch_idle_[i] = false;
+                  become_idle[i] = true;
+                }
+              }
+              vq_misses_ = 0;
+            }
+            std::fprintf(stderr, "warn: vq stalled — stopped UAC watch\n");
+            if (handler) {
+              for (uint8_t i = 0; i < kVqVoices; ++i) {
+                if (become_idle[i]) {
+                  handler(i);
+                }
+              }
+            }
+          }
           continue;
         }
         /* Err / BadReply: log and keep watching; notes still work. */
         std::fprintf(stderr, "warn: vq failed status=%d raw=%s\n",
-                     static_cast<int>(r.status),
-                     r.raw[0] != '\0' ? r.raw : "(empty)");
+                    static_cast<int>(r.status),
+                    r.raw[0] != '\0' ? r.raw : "(empty)");
       }
     }
   }
@@ -385,6 +414,7 @@ struct ChannelRs485Out::Impl
     desired_hz_.fill(0.0);
     sent_hz_.fill(0.0);
     watch_idle_.fill(false);
+    vq_misses_ = 0;
     root_dirty_.fill(false);
     pending_root_hz_.fill(0.0);
     halted_ = false;
@@ -398,6 +428,7 @@ struct ChannelRs485Out::Impl
       std::lock_guard<std::mutex> lock(mu_);
       desired_hz_.fill(0.0);
       watch_idle_.fill(false);
+      vq_misses_ = 0;
       run_ = false;
     }
     cv_.notify_all();

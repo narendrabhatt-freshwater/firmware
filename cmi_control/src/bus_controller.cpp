@@ -15,7 +15,11 @@ namespace
 {
 
 constexpr unsigned kVqVoices = 8;
-constexpr auto kVqPollInterval = std::chrono::milliseconds(10);
+/* Release envelopes are tens of ms to seconds. 10 ms hammered the half-duplex
+ * bus during USB ISO (blocking [C]ok:vq TX) and a single late poll was treated
+ * as a fatal fault + Soft Recover. */
+constexpr auto kVqPollInterval = std::chrono::milliseconds(50);
+constexpr int kVqMissLimit = 16;
 
 double ClampNoteHz(double hz)
 {
@@ -98,6 +102,7 @@ struct BusController::Impl
   std::array<double, midi_host::kVoiceCount> sent_hz_{};
   std::array<bool, kVqVoices> watch_idle_{};
   std::array<bool, kVqVoices> underrun_logged_{};
+  int vq_misses_ = 0;
   IdleHandler idle_handler_;
   std::queue<Job> jobs_;
   std::vector<UiMirrorPatch> ui_mirror_;
@@ -130,7 +135,8 @@ struct BusController::Impl
   {
     sent_hz_[slot] = hz;
     if (slot < kVqVoices) {
-      watch_idle_[slot] = true;
+      /* Poll only after note-off, until the card finishes release. */
+      watch_idle_[slot] = (hz <= 0.0);
       underrun_logged_[slot] = false;
     }
   }
@@ -139,6 +145,7 @@ struct BusController::Impl
   {
     watch_idle_.fill(false);
     underrun_logged_.fill(false);
+    vq_misses_ = 0;
   }
 };
 
@@ -200,8 +207,7 @@ void BusController::AcknowledgeSlotHz(uint8_t slot, double hz)
   impl_->desired_hz_[slot] = v;
   impl_->sent_hz_[slot] = v;
   if (slot < kVqVoices) {
-    /* Note-on and note-off both need vq watch until card idle (release). */
-    impl_->watch_idle_[slot] = true;
+    impl_->watch_idle_[slot] = (v <= 0.0);
     impl_->underrun_logged_[slot] = false;
   }
 }
@@ -217,12 +223,11 @@ void BusController::AcknowledgeAllHz(double hz)
     impl_->desired_hz_[i] = v;
     impl_->sent_hz_[i] = v;
   }
-  /* Keep watching so UAC dry stops after card release / hard-off idle. */
+  /* Silence (hz==0): watch until card idle so UAC dry can stop. */
   for (uint8_t i = 0; i < kVqVoices; ++i) {
-    impl_->watch_idle_[i] = true;
+    impl_->watch_idle_[i] = (v <= 0.0);
     impl_->underrun_logged_[i] = false;
   }
-  (void)v;
 }
 
 void BusController::SetIdleHandler(IdleHandler handler)
@@ -689,18 +694,46 @@ void BusController::WorkerMain(LogBuffer *log)
     if (do_vq) {
       const cardproto::Result r = impl_->bus.Channel().QueryVoiceStatus();
       if (r.ok()) {
+        {
+          std::lock_guard<std::mutex> lock(impl_->mu_);
+          impl_->vq_misses_ = 0;
+        }
         handle_vq(r);
       } else if (r.status == cardproto::Status::Timeout ||
                  r.status == cardproto::Status::IoError) {
-        halted_.store(true);
-        push("*** RS485 fault on vq — note TX stopped");
-        if (!impl_->bus.SoftRecover()) {
-          impl_->bus.ForceClearBus();
+        /* Status poll only — a late USB/ISO stall must not halt notes. */
+        int misses = 0;
+        bool give_up = false;
+        IdleHandler handler;
+        std::array<bool, kVqVoices> become_idle{};
+        {
+          std::lock_guard<std::mutex> lock(impl_->mu_);
+          ++impl_->vq_misses_;
+          misses = impl_->vq_misses_;
+          give_up = misses >= kVqMissLimit;
+          if (give_up) {
+            handler = impl_->idle_handler_;
+            for (uint8_t i = 0; i < kVqVoices; ++i) {
+              if (impl_->watch_idle_[i]) {
+                impl_->watch_idle_[i] = false;
+                become_idle[i] = true;
+              }
+            }
+            impl_->vq_misses_ = 0;
+          }
         }
-        std::lock_guard<std::mutex> lock(impl_->mu_);
-        impl_->desired_hz_.fill(0.0);
-        impl_->sent_hz_.fill(0.0);
-        impl_->ClearWatchLocked();
+        push_poll("warn: vq timeout (" + std::to_string(misses) + "/" +
+                  std::to_string(kVqMissLimit) + ")");
+        if (give_up) {
+          push_poll("warn: vq stalled — stopped UAC watch");
+          if (handler) {
+            for (uint8_t i = 0; i < kVqVoices; ++i) {
+              if (become_idle[i]) {
+                handler(i);
+              }
+            }
+          }
+        }
       } else {
         push_poll(std::string("warn: vq failed — ") +
                   (r.raw[0] ? r.raw : "bad reply"));

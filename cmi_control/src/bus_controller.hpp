@@ -79,7 +79,7 @@ public:
   void RequestRecover(LogBuffer &log);
 
   /**
-   * Optional buffer for vq / ring-fill chatter (underrun, bad reply).
+   * Optional buffer for vq / ring-fill chatter (timeout, underrun, bad reply).
    * Kept out of the main activity log. Not owned.
    */
   void SetPollLog(LogBuffer *poll_log);

@@ -45,15 +45,6 @@ extern "C"
   /** Pop one dry sample as Q31; 0 on underrun. */
   int32_t StreamRing_NextSample(uint8_t voice);
 
-  /**
-   * @brief After the head: find the UAC sample one step beyond (y0, y1)
-   *        in value and slope, consume through it, return it as Q31.
-   *        Returns 1 and sets *out_q31 on lock; 0 if nothing is close
-   *        (ring unchanged — hold y1).
-   */
-  uint8_t StreamRing_LockContinuity(uint8_t voice, int32_t y0, int32_t y1,
-                                    int32_t *out_q31);
-
   uint32_t StreamRing_FillLevel(uint8_t voice);
 
   /** Fill level as 0..4 quarters of STREAM_RING_SAMPLES (4 = full). */

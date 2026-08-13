@@ -14,8 +14,8 @@ namespace midi_host
 
 /**
  * Channel Card notes over RS485 — one ASCII nX command per event, strict ACK.
- * Also polls `vq` while voices may still be releasing so the host can stop
- * UAC dry streams when the card reports idle.
+ * After note-off, polls `vq` until the card reports idle so the host can
+ * stop UAC dry streams. Sustain does not poll.
  */
 class ChannelRs485Out
 {
