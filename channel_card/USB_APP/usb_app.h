@@ -32,6 +32,12 @@ extern "C"
     void USB_App_Task(void);
 
     /**
+     * @brief Drain TinyUSB events from the USB ISR so ISO OUT is re-armed
+     *        before the next SOF (queued tud_task in the main loop is too late).
+     */
+    void USB_App_TaskFromIsr(void);
+
+    /**
      * @brief Write a NUL-terminated string to the CDC console.
      * @param s String to send; NULL or closed port is a no-op.
      */

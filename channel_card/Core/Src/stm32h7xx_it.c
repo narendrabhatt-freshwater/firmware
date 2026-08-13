@@ -60,6 +60,7 @@ extern DMA_HandleTypeDef hdma_spi2_tx;
 extern PCD_HandleTypeDef hpcd_USB_OTG_HS;
 /* USER CODE BEGIN EV */
 #include "tusb.h" /* tud_int_handler for OTG_HS_IRQHandler */
+#include "usb_app.h"
 /* USER CODE END EV */
 
 /******************************************************************************/
@@ -240,6 +241,8 @@ void OTG_HS_IRQHandler(void)
    * rhport 0: this part has a single USB core, which TinyUSB's STM32
    * port maps onto controller index 0. */
   tud_int_handler(0);
+  /* Re-arm ISO OUT before the next SOF; see USB_App_TaskFromIsr(). */
+  USB_App_TaskFromIsr();
   return;
 
   /* USER CODE END OTG_HS_IRQn 0 */

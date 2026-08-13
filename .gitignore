@@ -1,6 +1,10 @@
 .DS_Store
 **/.DS_Store
 
+# Python bytecode from tools/ and scripts/
+**/__pycache__/
+*.py[cod]
+
 # Build output and tool caches (per-app .gitignore files also cover these)
 **/build/
 .cache/

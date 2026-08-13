@@ -36,11 +36,16 @@ void Audio_Bridge_SetDacHandle(CS4304_HandleTypeDef *h)
  * Each I2S frame = 2 × 32-bit words (L + R) = 8 bytes
  * DMA buffer is double-buffered: half/full IRQs each refill one half.
  *
- * AUDIO_I2S_BUF_FRAMES: stereo frames in the full DMA ring.
- * 192 frames = 4 ms full ring; half = 96 frames = 2 ms @ 48 kHz.
+ * Full-speed UAC OUT is one packet per 1 ms SOF. Size the DMA half to
+ * AUDIO_SAMPLE_RATE_HZ/1000 frames so I2S consume and USB fill lockstep.
+ * (Was hardcoded 192/96 from the 96 kHz bring-up; at 48 kHz that half
+ * was 2 ms and the stream ring underran.)
  */
-#define AUDIO_I2S_BUF_FRAMES 192                      /* 4 ms full; half = 96 = 2 ms @ 48 kHz */
-#define AUDIO_I2S_BUF_SIZE (AUDIO_I2S_BUF_FRAMES * 2) /* × 2 for L+R, in 32-bit words */
+#define AUDIO_I2S_HALF_FRAMES (AUDIO_SAMPLE_RATE_HZ / 1000u)
+#define AUDIO_I2S_BUF_FRAMES (AUDIO_I2S_HALF_FRAMES * 2u)
+#define AUDIO_I2S_BUF_SIZE (AUDIO_I2S_BUF_FRAMES * 2u) /* × 2 for L+R, 32-bit words */
+_Static_assert((AUDIO_SAMPLE_RATE_HZ % 1000u) == 0u,
+               "I2S half must be an integer millisecond at AUDIO_SAMPLE_RATE_HZ");
 
 /* I2S2 (CH3/CH4) enabled. Slave TX on SPI2 requires two workarounds
  * (full story in BRINGUP_REPORT.md):
@@ -79,11 +84,12 @@ void Audio_SetUSBMute(uint8_t mute) { usb_muted = mute ? 1u : 0u; }
 
 static volatile uint8_t dma_active_half = 0; /* 0 = playing first half (write to second), 1 = playing second half (write to first) */
 
-/* I2S1 sample fill runs in main (Audio_I2S1_Poll), not in the DMA IRQ.
- * ISR only updates USB half bookkeeping and posts which half is free. */
-static volatile uint8_t i2s1_fill_pending = 0;
-static volatile uint8_t i2s1_fill_half = 0; /* 0 = first half, 1 = second half */
-volatile uint32_t g_i2s1_fill_late = 0;     /* ISR saw pending still set (debugger) */
+/* I2S1 sample fill runs in the DMA half/full ISR. Main-loop fill missed
+ * the 1 ms half whenever USB or RS485 ran first — DMA then replayed the
+ * previous half (a short jump on the DAC). 8 voices @ 48 kHz fits the
+ * ISR budget; the old overrun was >13 voices @ 96 kHz. */
+static volatile uint8_t i2s1_fill_busy = 0;
+volatile uint32_t g_i2s1_fill_late = 0;
 
 static void Audio_FillTestTone(int32_t *buf, uint32_t num_frames,
                                uint8_t chL, uint8_t chR);
@@ -435,8 +441,10 @@ static void I2S2_PumpTimerInit(void)
   TIM7->PSC = 274; /* 275 MHz / 275 = 1 MHz            */
   TIM7->ARR = 9;   /* 1 MHz / 10 = 100 kHz tick        */
   TIM7->DIER = TIM_DIER_UIE;
-  HAL_NVIC_SetPriority(TIM7_IRQn, 0, 0); /* must not be starved: the FIFO
-                                            is only ~20 µs deep at 96 kHz */
+  /* prio 1: USB ISO (prio 0) must preempt this 100 kHz tick; this must
+   * still preempt the I2S1 DMA fill (prio 2 after dma.c) so a long mix
+   * cannot wedge the I2S2 slave. FIFO is ~40 µs deep at 48 kHz. */
+  HAL_NVIC_SetPriority(TIM7_IRQn, 1, 0);
   HAL_NVIC_EnableIRQ(TIM7_IRQn);
   TIM7->CR1 = TIM_CR1_CEN;
 }
@@ -495,8 +503,8 @@ static HAL_StatusTypeDef I2S2_Start(void)
 }
 
 /**
- * Fill one free half of i2s1_tx_buf (CH2 right + CH1 left). Called from
- * Audio_I2S1_Poll in the main loop — never from the DMA IRQ.
+ * Fill one free half of i2s1_tx_buf (CH2 right + CH1 left).
+ * Called from the I2S1 DMA half/full ISR.
  */
 static void Audio_I2S1_FillHalf(uint8_t half)
 {
@@ -504,66 +512,34 @@ static void Audio_I2S1_FillHalf(uint8_t half)
       (half == 0u) ? &i2s1_tx_buf[0] : &i2s1_tx_buf[AUDIO_I2S_BUF_FRAMES];
   const uint32_t frames = AUDIO_I2S_BUF_FRAMES / 2u;
 
+  if (i2s1_fill_busy != 0u)
+  {
+    g_i2s1_fill_late++;
+  }
+  i2s1_fill_busy = 1u;
   Audio_FillToneSlot(buf, frames, 1, 1);
   Audio_RefillCh1Slot(buf, frames);
+  i2s1_fill_busy = 0u;
 }
 
 /**
- * @brief  Service a pending I2S1 half-buffer refill. Call first in while(1).
+ * @brief  I2S1 fill is in the DMA ISR. Kept so the main loop still has a
+ *         documented audio slot; no work here.
  */
 void Audio_I2S1_Poll(void)
 {
-  uint8_t half;
-  uint32_t primask;
-
-  if (i2s1_fill_pending == 0u)
-  {
-    return;
-  }
-
-  /* Claim half under IRQ mask so a DMA edge cannot overwrite mid-read. */
-  primask = __get_PRIMASK();
-  __disable_irq();
-  if (i2s1_fill_pending == 0u)
-  {
-    if (!primask)
-    {
-      __enable_irq();
-    }
-    return;
-  }
-  half = i2s1_fill_half;
-  i2s1_fill_pending = 0u;
-  if (!primask)
-  {
-    __enable_irq();
-  }
-
-  Audio_I2S1_FillHalf(half);
 }
 
 /**
  * @brief  I2S1 DMA half transfer complete callback.
- *         Bookkeeping + post first-half fill to main; do not generate samples.
+ *         DMA now plays the second half → refill the first.
  */
 void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 {
   if (hi2s->Instance == SPI1)
   {
-    /*
-     * DMA now plays the second half → first half is free for writing.
-     * Must run every half-period for USB↔I2S handoff (dma_active_half).
-     * Sample fill is deferred to Audio_I2S1_Poll() so NoteBank does not
-     * starve the main loop from IRQ context.
-     */
     HalfTransfer_CallBack_HS();
-
-    if (i2s1_fill_pending != 0u)
-    {
-      g_i2s1_fill_late++;
-    }
-    i2s1_fill_half = 0u;
-    i2s1_fill_pending = 1u;
+    Audio_I2S1_FillHalf(0u);
   }
   else if (hi2s->Instance == SPI2)
   {
@@ -573,21 +549,14 @@ void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 
 /**
  * @brief  I2S DMA full transfer complete callback.
- *         SPI1: bookkeeping + post second-half fill to main.
+ *         SPI1: DMA wrapped → refill the second half.
  */
 void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s)
 {
   if (hi2s->Instance == SPI1)
   {
-    /* DMA wrapped: now playing the first half → second half is writable. */
     TransferComplete_CallBack_HS();
-
-    if (i2s1_fill_pending != 0u)
-    {
-      g_i2s1_fill_late++;
-    }
-    i2s1_fill_half = 1u;
-    i2s1_fill_pending = 1u;
+    Audio_I2S1_FillHalf(1u);
   }
   else if (hi2s->Instance == SPI2)
   {

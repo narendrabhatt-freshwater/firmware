@@ -98,6 +98,7 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
     if (NoteEnv_IsActive(note) == 0u)
     {
       note_active[note] = 0u;
+      StreamRing_Release(note);
       AttackBank_Stop(note);
       NoteFilter_Reset(note);
       return 0;
@@ -193,6 +194,7 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
     }
     note_freq_hz[note] = 0.0;
     note_active[note] = 0u;
+    StreamRing_Release(note);
     AttackBank_Stop(note);
     NoteFilter_Reset(note);
     return;
@@ -210,8 +212,9 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
   wid = note_wave_id[note];
   phase_inc = NoteBank_PhaseInc(note, wid, freq_hz);
 
-  /* Drop stale UAC dry; attack head covers fill latency when present. */
-  StreamRing_Reset(note);
+  /* Keep the newest ~2 ms of live UAC; emptying the ring made the first
+   * sustain DMA half pop zeros when the attack was shorter than one packet. */
+  StreamRing_Prime(note);
 
   note_freq_hz[note] = freq_hz;
   note_scale[note] = scale;
@@ -226,6 +229,7 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
     {
       note_freq_hz[note] = 0.0;
       note_active[note] = 0u;
+      StreamRing_Release(note);
       return;
     }
   }

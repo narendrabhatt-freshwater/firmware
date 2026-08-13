@@ -22,6 +22,16 @@ esac
 
 export FW_ROOT="${_FW_ROOT}"
 
+# STM32CubeProgrammer CLI (fw flash). Current .app layout is Resources/bin.
+_CUBE_CLI_BIN="/Applications/STMicroelectronics/STM32Cube/STM32CubeProgrammer/STM32CubeProgrammer.app/Contents/Resources/bin"
+if [ -x "${_CUBE_CLI_BIN}/STM32_Programmer_CLI" ]; then
+  case ":${PATH}:" in
+    *":${_CUBE_CLI_BIN}:"*) ;;
+    *) export PATH="${_CUBE_CLI_BIN}:${PATH}" ;;
+  esac
+fi
+unset _CUBE_CLI_BIN
+
 # Tab completion
 if [ -n "${ZSH_VERSION:-}" ]; then
   # Ensure completion system is up (no-op if already initialized)

@@ -13,6 +13,7 @@ typedef struct
 {
   volatile uint32_t wr;
   volatile uint32_t rd;
+  volatile uint8_t consuming;
   int16_t data[STREAM_RING_SAMPLES];
 } StreamRing_t;
 
@@ -39,6 +40,34 @@ void StreamRing_Reset(uint8_t voice)
   }
   s_rings[voice].wr = 0u;
   s_rings[voice].rd = 0u;
+  s_rings[voice].consuming = 0u;
+}
+
+void StreamRing_Prime(uint8_t voice)
+{
+  StreamRing_t *r;
+  uint32_t wr;
+
+  if (voice >= SAMPLE_VOICES)
+  {
+    return;
+  }
+  r = &s_rings[voice];
+  wr = r->wr;
+  if ((wr - r->rd) > STREAM_RING_PRIME)
+  {
+    r->rd = wr - STREAM_RING_PRIME;
+  }
+  r->consuming = 1u;
+}
+
+void StreamRing_Release(uint8_t voice)
+{
+  if (voice >= SAMPLE_VOICES)
+  {
+    return;
+  }
+  s_rings[voice].consuming = 0u;
 }
 
 void StreamRing_ResetAll(void)
@@ -68,7 +97,12 @@ void StreamRing_WriteInterleaved(const int16_t *interleaved, uint32_t nframes)
       uint32_t avail = StreamRing_Avail(r);
       if (avail >= STREAM_RING_SAMPLES)
       {
-        /* Drop oldest sample to keep newest (prefer latency over stall). */
+        if (r->consuming != 0u)
+        {
+          /* Playhead is live: dropping rd would skip DAC samples. */
+          continue;
+        }
+        /* Idle: drop oldest so the ring holds the most recent UAC. */
         r->rd++;
       }
       r->data[r->wr % STREAM_RING_SAMPLES] = interleaved[f * SAMPLE_VOICES + ch];

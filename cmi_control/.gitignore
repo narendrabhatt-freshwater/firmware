@@ -2,3 +2,6 @@ build/
 .cache/
 _deps/
 imgui.ini
+
+# Generated sample banks (rebuild with tools/build_sample48_*.py)
+waves/

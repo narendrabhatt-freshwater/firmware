@@ -215,8 +215,8 @@ int main(void)
     /* USER CODE BEGIN 3 */
 
     Audio_I2S1_Poll();     /* I2S1 half refill (flagged by DMA IRQ) — first */
+    USB_App_Task();        /* ISO OUT before RS485: missed SOF has no retry */
     ChannelConsole_Poll(); /* RS485 console + LED chaser */
-    USB_App_Task();        /* TinyUSB stack + CDC console */
     Audio_CpuLoad_Poll();  /* queue-mode NoteBank producer (no-op otherwise) */
   }
   /* USER CODE END 3 */

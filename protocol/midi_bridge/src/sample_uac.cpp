@@ -94,7 +94,10 @@ bool SampleUacOut::Start(const std::string &name_needle, std::string &err)
   params.nChannels = cardlink::audio::kSampleVoices;
   params.firstChannel = 0;
 
-  unsigned buffer_frames = 128;
+  /* One USB FS packet is 48 frames. 128 is not a multiple of 48; CoreAudio
+   * often promotes it to 1024 (21×48 + 16 leftover) and the remainder
+   * shows up as a periodic hole. Request an integer number of packets. */
+  unsigned buffer_frames = 480;
   RtAudioErrorType e = impl_->dac.openStream(
       &params, nullptr, RTAUDIO_SINT16, cardlink::audio::kSampleRateHz,
       &buffer_frames, &AudioCb, this);

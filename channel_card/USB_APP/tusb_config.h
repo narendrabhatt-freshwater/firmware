@@ -76,8 +76,11 @@ extern "C" {
   TUD_AUDIO_EP_SIZE(CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE,              \
                     CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX,        \
                     CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX)
+/* ISO has no retry. 4 packets (~4 ms) was smaller than a CoreAudio 1024-frame
+ * period (~21 ms) and smaller than an RS485 vq reply stall. 32 ms of FIFO
+ * holds a full host callback until tud_task drains it into stream_ring. */
 #define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ                          \
-  (4 * CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX)
+  (32 * CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX)
 
 #define CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP                  1
 #define CFG_TUD_AUDIO_ENABLE_FEEDBACK_FORMAT_CORRECTION   1

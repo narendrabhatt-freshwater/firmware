@@ -57,6 +57,7 @@ static void USB_LowLevel_Init(void)
 
   __HAL_RCC_USB_OTG_HS_CLK_ENABLE();
 
+  /* ISO OUT has no retry — USB must preempt I2S1 DMA fill (prio 2). */
   HAL_NVIC_SetPriority(OTG_HS_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(OTG_HS_IRQn);
 }
@@ -163,9 +164,31 @@ static void CDC_Console_Poll(void)
   }
 }
 
+/* ISO OUT is armed from tud_task, not the DCD ISR. If that waits for the
+ * main loop, a 1 ms DMA fill can miss the next SOF (no retry). Run tud_task
+ * from the USB ISR after the DCD handler; skip if the main loop is already
+ * inside it (OS_NONE queue is not re-entrant). */
+static volatile uint8_t s_tud_task_busy;
+
+static void USB_App_RunTudTask(void)
+{
+  if (s_tud_task_busy != 0u)
+  {
+    return;
+  }
+  s_tud_task_busy = 1u;
+  tud_task();
+  s_tud_task_busy = 0u;
+}
+
+void USB_App_TaskFromIsr(void)
+{
+  USB_App_RunTudTask();
+}
+
 void USB_App_Task(void)
 {
-  tud_task();
+  USB_App_RunTudTask();
   CDC_Console_Poll();
 }
 
@@ -332,14 +355,11 @@ bool tud_audio_set_itf_close_EP_cb(uint8_t rhport,
   return true;
 }
 
-/** Feedback strategy: manual/fixed.
+/** Feedback strategy: manual/fixed 48.000 samples per SOF.
  *
- * The driver's FIFO_COUNT method regulates TinyUSB's own FIFO to half
- * full, which assumes the FIFO is the elastic buffer.  Here the elastic
- * buffer is the I2S ring (with its NDTR-derived write lead and drift
- * re-centring) and the FIFO is drained completely every packet, so
- * FIFO_COUNT would fight that loop.  Report the nominal rate instead and
- * let the proven ring-buffer guard absorb drift. */
+ * FIFO_COUNT would regulate TinyUSB's ISO FIFO, which is drained every
+ * packet. The elastic buffer is the stream ring. Report the nominal rate;
+ * I2S and USB SOF already share ~40 ppm (same 1 ms tick). */
 void tud_audio_feedback_params_cb(uint8_t func_id, uint8_t alt_itf,
                                   audio_feedback_params_t *feedback_param)
 {

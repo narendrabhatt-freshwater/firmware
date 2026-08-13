@@ -81,10 +81,10 @@ extern "C"
 
   /* ---------------- I2S DMA callbacks (internal, kept public) -------------- */
 
-  /** @brief I2S1 DMA full-transfer callback (sets main-loop refill flag). */
+  /** @brief I2S1 DMA full-transfer callback. */
   void TransferComplete_CallBack_HS(void);
 
-  /** @brief I2S1 DMA half-transfer callback (sets main-loop refill flag). */
+  /** @brief I2S1 DMA half-transfer callback. */
   void HalfTransfer_CallBack_HS(void);
 
   /* ---------------- Console / application API ------------------------------ */
@@ -112,9 +112,7 @@ extern "C"
   Audio_CH1_Source_t Audio_GetCh1Source(void);
 
   /**
-   * @brief I2S1 half-buffer refill from main loop.
-   * @note DMA callbacks only set a pending flag; call this first in while(1)
-   *       so NoteBank work does not run in IRQ context.
+   * @brief I2S1 half-buffer refill hook (no-op: fill runs in the DMA ISR).
    */
   void Audio_I2S1_Poll(void);
 

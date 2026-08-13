@@ -225,9 +225,12 @@ resolve_cube_cli() {
     return 0
   fi
   local candidate path
+  # Current CubeProgrammer.app puts the CLI in Resources/bin (universal
+  # 2.20+). Older packages used Contents/MacOs/bin; CubeCLT uses /opt/ST.
   for candidate in \
-    /opt/ST/STM32CubeCLT_*/STM32CubeProgrammer/bin/STM32_Programmer_CLI \
-    /Applications/STMicroelectronics/STM32Cube/STM32CubeProgrammer/STM32CubeProgrammer.app/Contents/MacOs/bin/STM32_Programmer_CLI
+    /Applications/STMicroelectronics/STM32Cube/STM32CubeProgrammer/STM32CubeProgrammer.app/Contents/Resources/bin/STM32_Programmer_CLI \
+    /Applications/STMicroelectronics/STM32Cube/STM32CubeProgrammer/STM32CubeProgrammer.app/Contents/MacOs/bin/STM32_Programmer_CLI \
+    /opt/ST/STM32CubeCLT_*/STM32CubeProgrammer/bin/STM32_Programmer_CLI
   do
     for path in $candidate; do
       if [[ -x "$path" ]]; then

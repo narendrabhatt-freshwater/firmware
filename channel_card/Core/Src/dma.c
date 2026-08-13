@@ -43,11 +43,11 @@ void MX_DMA_Init(void)
   __HAL_RCC_DMA1_CLK_ENABLE();
 
   /* DMA interrupt init */
-  /* Preempt 1 — below UART5 (0) so a held 16-voice NoteBank refill cannot
-   * starve RS485 RX (dropped nX → no ACK). CubeMX may reset these to 0. */
-  HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 1, 0);
+  /* Preempt 2 — below USB (0) and TIM7 UDR guard (1). CubeMX may reset
+   * these to 0; a long I2S1 mix must not starve ISO OUT or I2S2. */
+  HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 2, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
-  HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 1, 0);
+  HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 2, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream1_IRQn);
 
 }
