@@ -1,9 +1,10 @@
 /**
  ******************************************************************************
  * @file    stream_ring.h
- * @brief   Per-voice dry int16 rings filled from UAC OUT (8 ch @ 48 kHz).
+ * @brief   Per-voice body rings: 8 slots × 256 int16, filled from UAC.
  *
- * Host-pitched sustain: card consumes 1:1 (no rate-scale). Expands to Q31.
+ * UAC frames are tagged (ch0 = route, ch1..7 = samples). Card pitches via
+ * a Q16.16 source-index playhead in note_bank — this ring is storage only.
  ******************************************************************************
  */
 
@@ -17,38 +18,51 @@ extern "C"
 
 #include <stdint.h>
 
-#include "attack_bank.h" /* SAMPLE_VOICES */
+#include "attack_bank.h" /* SAMPLE_VOICES, SAMPLE_CROSSFADE_LEN */
 
-/** Samples per voice ring (~42 ms @ 48 kHz). */
-#define STREAM_RING_SAMPLES 2048u
+#define STREAM_SLOTS 8u
+#define STREAM_SLOT_LEN 256u
+#define STREAM_RING_SAMPLES (STREAM_SLOTS * STREAM_SLOT_LEN)
+
+/**
+ * ch0 is a tag, not PCM. Host sends (TAG_BASE | voice | SOF). Near-silence
+ * is idle — voice 0 must not be encoded as 0 (OS zero-pad / mute).
+ */
+#define STREAM_UAC_TAG_BASE 0x7F00u
+#define STREAM_UAC_IDLE 0xFFu
+#define STREAM_UAC_SOF 0x10u
 
   void StreamRing_Init(void);
   void StreamRing_Reset(uint8_t voice);
   void StreamRing_ResetAll(void);
 
   /**
-   * @brief Note-on: empty the ring and store this note's UAC (keep oldest
-   *        on overflow). Head plays from attack RAM.
+   * @brief Arm consume. Does not clear queued samples (prefill must survive
+   *        nX). Host sends SOF (route | 0x10) to start a new body.
    */
   void StreamRing_Prime(uint8_t voice);
 
-  /** Stop consuming: overflow drops oldest so the ring tracks live UAC. */
   void StreamRing_Release(uint8_t voice);
 
   /**
-   * @brief Push interleaved int16 frame (SAMPLE_VOICES channels) from UAC.
-   * @param interleaved  ch0,ch1,..ch7, ch0,ch1,...
-   * @param nframes      Number of multi-channel frames
+   * @brief Push tagged UAC frames: ch0 route, ch1..7 body int16.
    */
   void StreamRing_WriteInterleaved(const int16_t *interleaved, uint32_t nframes);
 
-  /** Pop one dry sample as Q31; 0 on underrun. */
-  int32_t StreamRing_NextSample(uint8_t voice);
+  /**
+   * @brief Body sample at absolute index from last SOF (0 = first prefill).
+   * @retval 0 ok, *out set
+   * @retval -1 missing (underrun / not yet written)
+   */
+  int StreamRing_Get(uint8_t voice, uint32_t body_idx, int16_t *out);
+
+  /** Drop samples strictly before body_idx (playhead has moved on). */
+  void StreamRing_DropBefore(uint8_t voice, uint32_t body_idx);
 
   uint32_t StreamRing_FillLevel(uint8_t voice);
 
-  /** Fill level as 0..4 quarters of STREAM_RING_SAMPLES (4 = full). */
-  uint8_t StreamRing_FillQuarters(uint8_t voice);
+  /** Complete free slots 0..8 (partial write slot does not count as free). */
+  uint8_t StreamRing_FreeSlots(uint8_t voice);
 
 #ifdef __cplusplus
 }

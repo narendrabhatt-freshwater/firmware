@@ -234,7 +234,7 @@ static const SwitchDef_t switches[] = {
  *   s / p <d> / t <a> — global note-bank shape (sine / pulse duty / tri asym)
  *   al/bl <id> <len>  — CDC attack-head / body-loop sample upload
  *   ar <id> <Hz>      — sample root pitch;  aw <voice> <id> — assign wave
- *   a / vq            — voice→wave map / active-voice + ring-fill query
+ *   a / vq            — voice→wave map / hungriest voice + free slots
  *   en0..enf / en     — envelope: end slope[±k] … release_slope[±k]
  *                       (en0 0 / en 0 = clear → unprogrammed bypass)
  *   ek0..ekf / ek     — env pitch-track k (−10..10, rate ∝ (f/C4)^k)
@@ -1265,26 +1265,22 @@ static void Console_CmdCpu(char *line, char *b, size_t bsz)
 }
 
 /**
- * vq — voice / ring status for host pacing.
- * Reply: ok:vq <mask_hex> <q0>..<q7>  (mask bit i = NoteBank_IsActive;
- * each qi = StreamRing fill in quarters 0..4).
+ * vq — hungriest voice + free slot counts for host UAC mux.
+ * Reply: ok:vq <mask_hex> <best> <s0>..<s7>
+ *   mask bit i = NoteBank_IsActive; best = 0..7 or 255; si = free slots 0..8.
  */
 static void Console_CmdVoiceQuery(void)
 {
   char b[96];
   int n;
   uint8_t mask = 0u;
+  uint8_t best = 0xFFu;
+  uint8_t slots[NOTE_BANK_VOICES];
   uint8_t i;
 
-  for (i = 0u; i < NOTE_BANK_VOICES; i++)
-  {
-    if (NoteBank_IsActive(i) != 0u)
-    {
-      mask = (uint8_t)(mask | (uint8_t)(1u << i));
-    }
-  }
+  NoteBank_VoiceQuery(&mask, &best, slots);
 
-  n = snprintf(b, sizeof b, "ok:vq %02x", (unsigned)mask);
+  n = snprintf(b, sizeof b, "ok:vq %02x %u", (unsigned)mask, (unsigned)best);
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
     if (n < 0 || (size_t)n >= sizeof b)
@@ -1292,8 +1288,7 @@ static void Console_CmdVoiceQuery(void)
       RS485_Reply("err:buf\r\n");
       return;
     }
-    n += snprintf(b + n, sizeof b - (size_t)n, " %u",
-                  (unsigned)StreamRing_FillQuarters(i));
+    n += snprintf(b + n, sizeof b - (size_t)n, " %u", (unsigned)slots[i]);
   }
   if (n < 0 || (size_t)n >= sizeof b - 2u)
   {

@@ -1,6 +1,7 @@
 #include "cardproto/channel.hpp"
 
 #include <cstdio>
+#include <cstring>
 
 namespace cardproto
 {
@@ -111,5 +112,40 @@ namespace cardproto
   Result ChannelClient::AllNotesOff() { return Send("n 0"); }
 
   Result ChannelClient::QueryVoiceStatus() { return Send("vq"); }
+
+  bool ParseVoiceQuery(const char *raw, VoiceQuery &out)
+  {
+    if (raw == nullptr) {
+      return false;
+    }
+    const char *p = raw;
+    if (std::strncmp(p, "ok:", 3) == 0) {
+      p += 3;
+    }
+    while (*p == ' ') {
+      ++p;
+    }
+    if (std::strncmp(p, "vq", 2) == 0) {
+      p += 2;
+    }
+    unsigned mask = 0;
+    unsigned best = 0;
+    unsigned s[8] = {};
+    const int n = std::sscanf(p, " %x %u %u %u %u %u %u %u %u %u", &mask, &best,
+                              &s[0], &s[1], &s[2], &s[3], &s[4], &s[5], &s[6],
+                              &s[7]);
+    if (n != 10 || mask > 0xffu || best > 0xffu) {
+      return false;
+    }
+    for (unsigned i = 0; i < 8; ++i) {
+      if (s[i] > 8u) {
+        return false;
+      }
+      out.free_slots[i] = static_cast<uint8_t>(s[i]);
+    }
+    out.mask = static_cast<uint8_t>(mask);
+    out.best = static_cast<uint8_t>(best);
+    return true;
+  }
 
 } // namespace cardproto

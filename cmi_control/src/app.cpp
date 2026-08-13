@@ -352,6 +352,27 @@ bool App::EnsureAttackCdc(std::string &err)
   return true;
 }
 
+bool App::EnsureSampleUac()
+{
+  if (sample_uac && sample_uac->Running())
+  {
+    return true;
+  }
+  if (!sample_uac)
+  {
+    sample_uac = std::make_unique<SampleUacOut>();
+  }
+  std::string err;
+  if (!sample_uac->Start("Channel Card", err))
+  {
+    log.Push("err: " + err);
+    PushToastErr(err);
+    return false;
+  }
+  log.Push("ok: UAC dry stream open");
+  return true;
+}
+
 bool App::EnsureAudio()
 {
   if (audio_open)
@@ -465,11 +486,9 @@ void App::ApplyBankEvents(const std::vector<midi_host::BankEvent> &events)
   {
     EnsureAudio();
   }
-
-  if (want_card && bus.IsOpen())
+  if (want_card)
   {
-    /* n0 before UAC body so the card head starts before body[0] is gated. */
-    bus.PublishBank(bank);
+    (void)EnsureSampleUac();
   }
 
   for (const auto &ev : events)
@@ -478,7 +497,6 @@ void App::ApplyBankEvents(const std::vector<midi_host::BankEvent> &events)
     {
       audio->ApplyBankEvent(ev);
     }
-    /* SAMPLE body rides UAC dry (host-pitched); Silence via bus vq idle. */
     if (sample_uac && sample_uac->Running() &&
         ev.slot < cardlink::audio::kSampleVoices)
     {
@@ -491,6 +509,11 @@ void App::ApplyBankEvents(const std::vector<midi_host::BankEvent> &events)
         sample_uac->Mixer().NoteOn(ev.slot, ev.slot, ev.freq_hz);
       }
     }
+  }
+
+  if (want_card && bus.IsOpen())
+  {
+    bus.PublishBank(bank);
   }
 }
 
@@ -854,6 +877,12 @@ void App::Tick()
                       path.c_str());
         slot.body_in_mixer = false;
         pending_sample_folder = std::string("body:") +
+                                std::to_string(sample_file_voice) + ":" + path;
+      }
+      else if (sample_file_pick == SampleFilePick::Wave &&
+               sample_file_voice >= 0 && sample_file_voice < 8)
+      {
+        pending_sample_folder = std::string("wave:") +
                                 std::to_string(sample_file_voice) + ":" + path;
       }
       else if (file_dialog_kind == AsyncFileDialog::Kind::Folder)

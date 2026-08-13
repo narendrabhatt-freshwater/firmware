@@ -45,6 +45,7 @@ enum class SampleFilePick : int8_t
   Folder = 1,
   Head = 2,
   Body = 3,
+  Wave = 4,
 };
 
 struct SampleSlotState
@@ -181,6 +182,7 @@ struct App
    * CDC (cu.usbmodem*CHCARD* preferred). Updates wave_cdc_path on success.
    */
   bool EnsureAttackCdc(std::string &err);
+  bool EnsureSampleUac();
   void Tick();
   void Draw();
   void DrawSidebar();

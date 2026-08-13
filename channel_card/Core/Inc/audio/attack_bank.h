@@ -23,6 +23,9 @@ extern "C"
 #define ATTACK_BANK_COUNT SAMPLE_VOICES
 #define ATTACK_BANK_LEN 256u
 #define ATTACK_BANK_BYTES (ATTACK_BANK_LEN * 4u)
+/** Source-index overlap of attack tail with body head. */
+#define SAMPLE_CROSSFADE_LEN 32u
+#define SAMPLE_BODY_ORIGIN (ATTACK_BANK_LEN - SAMPLE_CROSSFADE_LEN)
 
   void AttackBank_Init(void);
 
@@ -61,6 +64,9 @@ extern "C"
    *        when the head ends (not 0).
    */
   int32_t AttackBank_NextSample(uint8_t voice);
+
+  /** Table sample as Q31; 0 if id/index invalid or unloaded. */
+  int32_t AttackBank_SampleAt(uint16_t wave_id, uint32_t index);
 
 #ifdef __cplusplus
 }

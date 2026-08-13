@@ -15,6 +15,7 @@
 #include "sample_uac.hpp"
 #include "voice_bank.hpp"
 
+#include "cardlink/audio/wave_loader.hpp"
 #include "cardlink/rs485/bus.hpp"
 
 #include <atomic>
@@ -154,16 +155,15 @@ void ApplyBankEvents(const std::vector<BankEvent>& events,
     if (audio) {
       audio->ApplyBankEvent(ev);
     }
-    if (channel) {
-      channel->ApplyBankEvent(ev, bank);
-    }
     if (uac && ev.slot < cardlink::audio::kSampleVoices) {
-      /* wave_id == slot by default (aw mapping on card matches). */
       if (ev.kind == BankEventKind::Off) {
         uac->Mixer().NoteOff(ev.slot);
       } else {
         uac->Mixer().NoteOn(ev.slot, ev.slot, ev.freq_hz);
       }
+    }
+    if (channel) {
+      channel->ApplyBankEvent(ev, bank);
     }
     PrintBankEvent(ev, channel != nullptr);
   }
@@ -183,19 +183,35 @@ bool LoadSampleBodies(SampleUacOut& uac,
   for (unsigned i = 0; i < cardlink::audio::kSampleVoices; ++i) {
     const std::string prefix = "w" + std::to_string(i) + "_";
     std::string body_path;
+    std::string head_path;
     for (const auto& ent : fs::directory_iterator(root)) {
       const auto name = ent.path().filename().string();
-      if (name.rfind(prefix, 0) == 0 &&
-          name.find("_body.i16") != std::string::npos) {
+      if (name.rfind(prefix, 0) != 0) {
+        continue;
+      }
+      if (name.find("_body.i16") != std::string::npos) {
         body_path = ent.path().string();
-        break;
+      }
+      if (name.find("_head.i32") != std::string::npos) {
+        head_path = ent.path().string();
       }
     }
     if (body_path.empty()) {
       err = "missing " + prefix + "*_body.i16 in " + dir;
       return false;
     }
-    if (!uac.Mixer().LoadBodyFile(static_cast<uint16_t>(i), body_path, err)) {
+    if (!head_path.empty()) {
+      std::vector<int16_t> body;
+      if (!cardlink::audio::BodyWithHeadOverlap(head_path, body_path, body,
+                                                err)) {
+        return false;
+      }
+      if (!uac.Mixer().SetBody(static_cast<uint16_t>(i), body.data(),
+                               body.size(), err)) {
+        return false;
+      }
+    } else if (!uac.Mixer().LoadBodyFile(static_cast<uint16_t>(i), body_path,
+                                         err)) {
       return false;
     }
   }

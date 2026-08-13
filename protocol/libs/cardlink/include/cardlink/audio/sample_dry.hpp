@@ -1,9 +1,9 @@
 /**
  * @file sample_dry.hpp
- * @brief Host-side dry SAMPLE mixer: 8 int16 body streams → interleaved UAC.
+ * @brief Host body feeder: unpitched int16 → tagged UAC frames.
  *
- * No envelope/filter — card owns DSP. Bodies are resampled to MIDI pitch
- * (freq_hz / root_hz). Thread-safe note on/off + Render.
+ * Card owns pitch / env / filter. Each UAC frame: ch0 = route, ch1..7 = samples
+ * for one voice (hungriest). Prefill before nX: SOF then ≥kPrefillSamples.
  */
 
 #ifndef HOST_IO_AUDIO_SAMPLE_DRY_HPP
@@ -21,6 +21,13 @@ namespace audio {
 constexpr unsigned kSampleVoices = 8;
 constexpr unsigned kSampleRateHz = 48000;
 constexpr unsigned kAttackSamples = 256;
+constexpr unsigned kCrossfadeSamples = 32;
+constexpr unsigned kBodyOrigin = kAttackSamples - kCrossfadeSamples;
+constexpr unsigned kPrefillSamples = 256;
+constexpr uint16_t kUacTagBase = 0x7F00;
+constexpr uint8_t kUacIdle = 0xFF;
+constexpr uint8_t kUacSof = 0x10;
+constexpr unsigned kRingSamples = 2048;
 /** Default root when a body has no roots.txt entry (middle C). */
 constexpr double kDefaultBodyRootHz = 261.625565;
 
@@ -28,70 +35,58 @@ class SampleDryMixer {
 public:
   SampleDryMixer();
 
-  /** Load int16 LE body file for wave_id. Root stays previous/default. */
   bool LoadBodyFile(uint16_t wave_id, const std::string &path, std::string &err);
 
-  /**
-   * Set native pitch of a loaded body (Hz of the recording).
-   * Playback rate = note_freq_hz / root_hz.
-   */
-  void SetBodyRootHz(uint16_t wave_id, double root_hz);
+  /** Replace body samples (already 48 kHz int16, starts at file sample 224). */
+  bool SetBody(uint16_t wave_id, const int16_t *data, size_t nsamp,
+               std::string &err);
 
+  void SetBodyRootHz(uint16_t wave_id, double root_hz);
   double BodyRootHz(uint16_t wave_id) const;
 
-  /**
-   * Load `roots.txt` lines: `<wave_id> <root_hz> [loop|oneshot]`
-   * (comments with #). Missing mode defaults to loop.
-   * Returns false only on I/O hard fail; missing file is ok (false + err).
-   */
   bool LoadRootsFile(const std::string &path, std::string &err);
 
-  /** If true, Render holds silence after the last body sample (no wrap). */
   void SetBodyOneshot(uint16_t wave_id, bool oneshot);
-
   bool BodyOneshot(uint16_t wave_id) const;
 
-  /** Arm body stream; pitch from freq_hz vs body root.
-   *  Phase starts at 0 of the body file (source sample 256) immediately.
-   *  The card plays the 256-sample head first and skips any leading
-   *  UAC zeros until that body[0] arrives. */
+  /** Arm unpitched cursor at 0; next Render frames SOF+prefill this voice. */
   void NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz);
 
-  /**
-   * Key-up. Does **not** stop the dry stream: the card still needs body
-   * samples while NoteEnv runs release. Call Silence() when the card
-   * reports the voice idle (vq poll).
-   */
   void NoteOff(uint8_t voice);
-
-  /** Stop rendering one voice (card finished release / idle). */
   void Silence(uint8_t voice);
-
   void AllNotesOff();
 
-  /** True if any voice is still rendering dry body into UAC. */
   bool AnyActive() const;
 
   /**
-   * Fill interleaved int16 frames: ch0..ch7 per frame.
-   * Loop bodies wrap; oneshot bodies hold 0 after the end (card may still
-   * need dry frames through NoteEnv release until vq idle → Silence).
+   * Fill interleaved int16 UAC frames (8 ch). ch0 = route, ch1..7 = body.
    */
   void Render(int16_t *interleaved, unsigned nframes);
+
+  /** Host estimate of queued-minus-consumed source samples (mux). */
+  void SetPitchHz(uint8_t voice, double freq_hz);
 
 private:
   struct Voice {
     bool active = false;
+    bool sof_pending = false;
     uint16_t wave_id = 0;
-    double phase = 0.0;     /**< fractional sample index into body */
-    double phase_inc = 1.0; /**< samples of body per output sample */
+    double freq_hz = 0.0;
+    double cursor = 0.0;     /**< next body sample to send */
+    double queued = 0.0;     /**< source samples delivered this note */
+    double consumed = 0.0;   /**< estimated card consume (inc per frame) */
   };
+
+  uint8_t PickVoiceLocked();
+  int16_t NextBodyLocked(Voice &v);
+  double IncLocked(const Voice &v) const;
 
   mutable std::mutex mu_;
   std::array<Voice, kSampleVoices> voices_{};
   std::array<std::vector<int16_t>, 256> bodies_{};
   std::array<double, 256> root_hz_{};
   std::array<bool, 256> oneshot_{};
+  uint8_t rr_ = 0;
 };
 
 } // namespace audio

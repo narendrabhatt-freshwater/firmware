@@ -1,11 +1,7 @@
 /**
  ******************************************************************************
  * @file    note_bank.h
- * @brief   SAMPLE voice bank: attack head → dry UAC ring → env → filter → mix.
- *
- * Voices n0..n7 (SAMPLE_VOICES). Each note-on plays the assigned attack
- * table then continues from the per-voice dry stream ring. Envelope and
- * LPF run for the full voice lifetime on the card.
+ * @brief   SAMPLE voice bank: one playhead over attack RAM + body slots.
  ******************************************************************************
  */
 
@@ -56,6 +52,16 @@ extern "C"
   uint8_t NoteBank_IsActive(uint8_t note);
   uint8_t NoteBank_AnyActive(void);
   int32_t NoteBank_NextSample(void);
+
+  /**
+   * @brief vq payload: active mask, hungriest voice (0xFF if none), free slots
+   *        0..8 per voice.
+   */
+  void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out,
+                           uint8_t *free_slots);
+
+  /** UAC SOF for this voice: restart source-index (new body / retrigger). */
+  void NoteBank_OnBodySof(uint8_t voice);
 
 #ifdef __cplusplus
 }

@@ -4,6 +4,7 @@
 #include "theme.hpp"
 #include "widgets.hpp"
 
+#include "cardlink/audio/wave_loader.hpp"
 #include "cardlink/usb/attack_upload.hpp"
 #include "cardlink/usb/wave_upload.hpp"
 #include "cardproto/types.hpp"
@@ -12,7 +13,9 @@
 
 #include <array>
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -65,7 +68,8 @@ void SetLabelFromHead(SampleSlotState &slot)
       base[2] == '_') {
     base = base.substr(3);
   }
-  for (const char *suf : {"_head.i32", "_body.i16", ".i32", ".i16", ".wav"}) {
+  for (const char *suf :
+       {"_head.i32", "_body.i16", ".i32", ".i16", ".wav", ".raw"}) {
     const std::size_t n = std::strlen(suf);
     if (base.size() > n &&
         base.compare(base.size() - n, n, suf) == 0) {
@@ -109,6 +113,64 @@ bool UploadHeadToCard(App &app, uint16_t id, const std::string &path)
   return true;
 }
 
+bool HasExtI(const std::string &path, const char *ext)
+{
+  const std::size_t n = std::strlen(ext);
+  if (path.size() < n) {
+    return false;
+  }
+  for (std::size_t i = 0; i < n; ++i) {
+    const unsigned char a =
+        static_cast<unsigned char>(path[path.size() - n + i]);
+    const unsigned char b = static_cast<unsigned char>(ext[i]);
+    if (std::tolower(a) != std::tolower(b)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool LooksLikeWaveFile(const std::string &path)
+{
+  return HasExtI(path, ".wav") || HasExtI(path, ".raw");
+}
+
+bool UploadAttackBytes(App &app, uint16_t id, const int32_t *q31,
+                       std::size_t nsamp)
+{
+  if (q31 == nullptr || nsamp != cardlink::audio::kAttackSamples) {
+    app.log.Push("err: attack must be 256 Q31 samples");
+    app.PushToastErr("attack must be 256 samples");
+    return false;
+  }
+  std::string cdc_err;
+  if (!app.EnsureAttackCdc(cdc_err)) {
+    app.log.Push(cdc_err);
+    app.PushToastErr(cdc_err);
+    return false;
+  }
+  cardlink::SerialPort port;
+  std::string err;
+  if (!cardlink::usb::WaveUploader::OpenCdcPort(port, app.wave_cdc_path, err)) {
+    app.log.Push(err);
+    app.PushToastErr(err);
+    return false;
+  }
+  cardlink::usb::AttackUploader up(port);
+  auto r = up.Upload(id, reinterpret_cast<const uint8_t *>(q31),
+                     nsamp * sizeof(int32_t));
+  if (!r.ok) {
+    app.log.Push(r.message);
+    app.PushToastErr(r.message);
+    return false;
+  }
+  char msg[48];
+  std::snprintf(msg, sizeof msg, "ok: attack head w%u → card",
+                static_cast<unsigned>(id));
+  app.log.Push(msg);
+  return true;
+}
+
 bool SetRootOnCard(App &app, uint16_t id, double hz)
 {
   std::string cdc_err;
@@ -135,11 +197,22 @@ bool SetRootOnCard(App &app, uint16_t id, double hz)
 
 bool LoadBodyToMixer(App &app, uint16_t id, const std::string &path)
 {
-  /* Host-pitched UAC dry body; card owns attack / env / filter. */
   if (!app.sample_uac) {
     app.sample_uac = std::make_unique<SampleUacOut>();
   }
   std::string err;
+  auto &slot = app.sample_slots[id];
+  if (slot.head_path[0] != '\0') {
+    std::vector<int16_t> body;
+    if (cardlink::audio::BodyWithHeadOverlap(slot.head_path, path, body, err)) {
+      if (!app.sample_uac->Mixer().SetBody(id, body.data(), body.size(), err)) {
+        app.log.Push("err: " + err);
+        app.PushToastErr(err);
+        return false;
+      }
+      return true;
+    }
+  }
   if (!app.sample_uac->Mixer().LoadBodyFile(id, path, err)) {
     app.log.Push("err: " + err);
     app.PushToastErr(err);
@@ -229,10 +302,58 @@ bool FindPairsFallback(const fs::path &dir,
   return n > 0;
 }
 
+bool ApplyWaveFile(App &app, int voice, const std::string &path)
+{
+  if (voice < 0 || voice >= kVoices || path.empty()) {
+    return false;
+  }
+  cardlink::audio::LoadedWave wave;
+  std::string err;
+  if (!cardlink::audio::LoadWaveFile(path, 0, wave, err)) {
+    app.log.Push("err: " + err);
+    app.PushToastErr(err);
+    return false;
+  }
+  auto &slot = app.sample_slots[static_cast<std::size_t>(voice)];
+  std::snprintf(slot.head_path, sizeof(slot.head_path), "%s", path.c_str());
+  std::snprintf(slot.body_path, sizeof(slot.body_path), "%s", path.c_str());
+  SetLabelFromHead(slot);
+
+  const uint16_t id = static_cast<uint16_t>(voice);
+  if (!UploadAttackBytes(app, id, wave.attack.data(), wave.attack.size())) {
+    slot.head_on_card = false;
+    slot.body_in_mixer = false;
+    return false;
+  }
+  slot.head_on_card = true;
+
+  if (!app.sample_uac) {
+    app.sample_uac = std::make_unique<SampleUacOut>();
+  }
+  if (!app.sample_uac->Mixer().SetBody(id, wave.body.data(), wave.body.size(),
+                                       err)) {
+    slot.body_in_mixer = false;
+    app.log.Push("err: " + err);
+    app.PushToastErr(err);
+    return false;
+  }
+  slot.body_in_mixer = true;
+  AssignAw(app, voice, id);
+  char msg[64];
+  std::snprintf(msg, sizeof msg, "ok: wav w%u SRC 48 kHz → card + UAC",
+                static_cast<unsigned>(id));
+  app.log.Push(msg);
+  app.PushToastOk(msg);
+  return true;
+}
+
 bool ApplyHead(App &app, int voice, const std::string &path)
 {
   if (voice < 0 || voice >= kVoices || path.empty()) {
     return false;
+  }
+  if (LooksLikeWaveFile(path)) {
+    return ApplyWaveFile(app, voice, path);
   }
   auto &slot = app.sample_slots[static_cast<std::size_t>(voice)];
   std::snprintf(slot.head_path, sizeof(slot.head_path), "%s", path.c_str());
@@ -250,6 +371,9 @@ bool ApplyBody(App &app, int voice, const std::string &path)
 {
   if (voice < 0 || voice >= kVoices || path.empty()) {
     return false;
+  }
+  if (LooksLikeWaveFile(path)) {
+    return ApplyWaveFile(app, voice, path);
   }
   auto &slot = app.sample_slots[static_cast<std::size_t>(voice)];
   std::snprintf(slot.body_path, sizeof(slot.body_path), "%s", path.c_str());
@@ -382,18 +506,29 @@ void DrainPending(App &app)
     ApplyBody(app, voice, pending.substr(c1 + 1));
     return;
   }
+  if (pending.rfind("wave:", 0) == 0) {
+    const auto c1 = pending.find(':', 5);
+    if (c1 == std::string::npos) {
+      return;
+    }
+    const int voice = std::atoi(pending.c_str() + 5);
+    ApplyWaveFile(app, voice, pending.substr(c1 + 1));
+    return;
+  }
   LoadFolder(app, pending);
 }
 
 void NoteOn(App &app, int voice, double hz)
 {
-  char cmd[48];
-  std::snprintf(cmd, sizeof cmd, "n%d %.2f", voice, hz);
-  app.bus.QueueExec(cardproto::Target::Channel, cmd);
+  /* SOF + prefill must reach the ring before nX arms consume. */
+  (void)app.EnsureSampleUac();
   if (app.sample_uac) {
     app.sample_uac->Mixer().NoteOn(static_cast<uint8_t>(voice),
                                    static_cast<uint16_t>(voice), hz);
   }
+  char cmd[48];
+  std::snprintf(cmd, sizeof cmd, "n%d %.2f", voice, hz);
+  app.bus.QueueExec(cardproto::Target::Channel, cmd);
 }
 
 void NoteOff(App &app, int voice)
@@ -481,6 +616,10 @@ void DrawVoiceCard(App &app, int voice, float card_w, float card_h)
   ImGui::SameLine(0.f, S(4.f));
   if (fw::ui::ChipBtn("Body", false, BtnKind::Neutral)) {
     BeginPick(app, SampleFilePick::Body, voice);
+  }
+  ImGui::SameLine(0.f, S(4.f));
+  if (fw::ui::ChipBtn("Wave", false, BtnKind::Neutral)) {
+    BeginPick(app, SampleFilePick::Wave, voice);
   }
   ImGui::EndDisabled();
   ImGui::SameLine(0.f, S(8.f));
@@ -616,7 +755,7 @@ void DrawSamplePage(App &app)
   {
     MonoText("LIBRARY", kPalette.text_dim, fs);
     ImGui::SameLine(0.f, S(12.f));
-    MonoText("folder auto-load · per-voice Head/Body browse", kPalette.muted,
+    MonoText("folder auto-load · Head/Body split files · Wave wav/raw", kPalette.muted,
              fs);
 
     ImGui::Spacing();
@@ -707,7 +846,7 @@ void DrawSamplePage(App &app)
   const float gap = S(12.f);
   const float avail_w = ImGui::GetContentRegionAvail().x;
   const float card_w = (avail_w - gap * 3.f) / 4.f;
-  const float card_h = S(130.f);
+  const float card_h = S(148.f);
 
   for (int row = 0; row < 2; ++row) {
     for (int col = 0; col < 4; ++col) {
@@ -721,16 +860,16 @@ void DrawSamplePage(App &app)
   }
 
   ImGui::Spacing();
-  fw::ui::BeginSection("sample_help", "SIGNAL PATH", ImVec2(0, S(88.f)));
+  fw::ui::BeginSection("sample_help", "SIGNAL PATH", ImVec2(0, S(100.f)));
   ImGui::NewLine();
   ImGui::Spacing();
-  MonoText("Attack head on card (CDC)  ·  Body via UAC dry (host-pitched)",
+  MonoText("Attack on card (CDC)  ·  Body via UAC (card pitches, hungry mux)",
            kPalette.text, fw::theme::g_fonts.mono);
   ImGui::Spacing();
-  MonoText("RS485 n0..n7 + vq idle  ·  card owns env / filter / mix.",
+  MonoText("Prefill UAC then RS485 n0..n7  ·  vq 10 ms  ·  env / filter on card.",
            kPalette.text_dim, fs);
   ImGui::Spacing();
-  MonoText("Load folder: CDC attack heads + host bodies for UAC (w0\u2026w7).",
+  MonoText("Wave: wav/raw SRC to 48 kHz. Folder: wN_head.i32 + wN_body.i16.",
            kPalette.text_dim, fs);
   fw::ui::EndSection();
 

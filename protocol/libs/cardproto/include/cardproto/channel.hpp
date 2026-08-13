@@ -21,6 +21,7 @@
 #include "cardproto/result.hpp"
 #include "cardproto/transport.hpp"
 
+#include <array>
 #include <cstdint>
 #include <string>
 
@@ -109,8 +110,8 @@ public:
   Result AllNotesOff();
 
   /**
-   * @brief Query active-voice mask and per-voice UAC ring fill (quarters).
-   * @return Exchange result for wire `vq` (`ok:vq <mask_hex> q0..q7`).
+   * @brief Query active-voice mask, hungriest voice, free slot counts 0..8.
+   * @return Exchange result for wire `vq` (`ok:vq <mask> <best> s0..s7`).
    */
   Result QueryVoiceStatus();
 
@@ -446,6 +447,15 @@ std::string FormatGain(uint8_t ch, uint8_t atten_db);
 std::string FormatCpu(CpuProbe kind, uint8_t nvoices = 0);
 
 /** @} */
+
+struct VoiceQuery {
+  uint8_t mask = 0;
+  uint8_t best = 0xFF; /**< Hungriest voice, or 0xFF if none. */
+  std::array<uint8_t, 8> free_slots{};
+};
+
+/** Parse `ok:vq <mask_hex> <best> s0..s7` from a reply body. */
+bool ParseVoiceQuery(const char *raw, VoiceQuery &out);
 
 } // namespace cardproto
 

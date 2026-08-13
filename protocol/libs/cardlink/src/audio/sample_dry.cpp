@@ -15,8 +15,7 @@ SampleDryMixer::SampleDryMixer()
 }
 
 bool SampleDryMixer::LoadBodyFile(uint16_t wave_id,
-                                  const std::string &path,
-                                  std::string &err)
+                                  const std::string &path, std::string &err)
 {
   if (wave_id >= bodies_.size()) {
     err = "wave_id out of range";
@@ -33,14 +32,28 @@ bool SampleDryMixer::LoadBodyFile(uint16_t wave_id,
     err = "body must be even int16 LE bytes";
     return false;
   }
-  std::lock_guard<std::mutex> lock(mu_);
-  auto &dst = bodies_[wave_id];
-  dst.resize(raw.size() / 2);
-  for (size_t i = 0; i < dst.size(); ++i) {
-    dst[i] = static_cast<int16_t>(
+  std::vector<int16_t> tmp(raw.size() / 2);
+  for (size_t i = 0; i < tmp.size(); ++i) {
+    tmp[i] = static_cast<int16_t>(
         static_cast<uint8_t>(raw[i * 2]) |
         (static_cast<uint16_t>(static_cast<uint8_t>(raw[i * 2 + 1])) << 8));
   }
+  return SetBody(wave_id, tmp.data(), tmp.size(), err);
+}
+
+bool SampleDryMixer::SetBody(uint16_t wave_id, const int16_t *data, size_t nsamp,
+                             std::string &err)
+{
+  if (wave_id >= bodies_.size()) {
+    err = "wave_id out of range";
+    return false;
+  }
+  if (data == nullptr || nsamp == 0) {
+    err = "empty body";
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(mu_);
+  bodies_[wave_id].assign(data, data + nsamp);
   return true;
 }
 
@@ -102,7 +115,6 @@ bool SampleDryMixer::LoadRootsFile(const std::string &path, std::string &err)
     if (id < root_hz_.size() && hz > 0.0 && std::isfinite(hz)) {
       SetBodyRootHz(static_cast<uint16_t>(id), hz);
     }
-    /* Optional third field: loop (default) | oneshot */
     if (iss >> mode) {
       bool one = (mode == "oneshot" || mode == "one-shot" || mode == "1");
       if (id < oneshot_.size()) {
@@ -111,6 +123,22 @@ bool SampleDryMixer::LoadRootsFile(const std::string &path, std::string &err)
     }
   }
   return true;
+}
+
+double SampleDryMixer::IncLocked(const Voice &v) const
+{
+  const double root = root_hz_[v.wave_id];
+  double inc = 1.0;
+  if (root > 0.0 && v.freq_hz > 0.0) {
+    inc = v.freq_hz / root;
+  }
+  if (inc > 16.0) {
+    inc = 16.0;
+  }
+  if (inc < (1.0 / 16.0)) {
+    inc = 1.0 / 16.0;
+  }
+  return inc;
 }
 
 void SampleDryMixer::NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz)
@@ -122,29 +150,30 @@ void SampleDryMixer::NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz)
   if (bodies_[wave_id].empty()) {
     return;
   }
-  const double root = root_hz_[wave_id];
-  double inc = 1.0;
-  if (root > 0.0 && std::isfinite(root) && freq_hz > 0.0 &&
-      std::isfinite(freq_hz)) {
-    inc = freq_hz / root;
+  auto &v = voices_[voice];
+  v.active = true;
+  v.sof_pending = true;
+  v.wave_id = wave_id;
+  v.freq_hz = freq_hz;
+  v.cursor = 0.0;
+  v.queued = 0.0;
+  v.consumed = 0.0;
+}
+
+void SampleDryMixer::SetPitchHz(uint8_t voice, double freq_hz)
+{
+  if (voice >= kSampleVoices) {
+    return;
   }
-  /* Match card attack pitch clamp. */
-  if (inc > 16.0) {
-    inc = 16.0;
+  std::lock_guard<std::mutex> lock(mu_);
+  if (voices_[voice].active) {
+    voices_[voice].freq_hz = freq_hz;
   }
-  if (inc < (1.0 / 16.0)) {
-    inc = 1.0 / 16.0;
-  }
-  voices_[voice].active = true;
-  voices_[voice].wave_id = wave_id;
-  voices_[voice].phase = 0.0;
-  voices_[voice].phase_inc = inc;
 }
 
 void SampleDryMixer::NoteOff(uint8_t voice)
 {
   (void)voice;
-  /* Keep looping through card release — Silence() when vq reports idle. */
 }
 
 void SampleDryMixer::Silence(uint8_t voice)
@@ -153,18 +182,14 @@ void SampleDryMixer::Silence(uint8_t voice)
     return;
   }
   std::lock_guard<std::mutex> lock(mu_);
-  voices_[voice].active = false;
-  voices_[voice].phase = 0.0;
-  voices_[voice].phase_inc = 1.0;
+  voices_[voice] = Voice{};
 }
 
 void SampleDryMixer::AllNotesOff()
 {
   std::lock_guard<std::mutex> lock(mu_);
   for (auto &v : voices_) {
-    v.active = false;
-    v.phase = 0.0;
-    v.phase_inc = 1.0;
+    v = Voice{};
   }
 }
 
@@ -179,6 +204,82 @@ bool SampleDryMixer::AnyActive() const
   return false;
 }
 
+int16_t SampleDryMixer::NextBodyLocked(Voice &v)
+{
+  auto &body = bodies_[v.wave_id];
+  const size_t n = body.size();
+  if (n == 0) {
+    v.active = false;
+    return 0;
+  }
+  const bool oneshot = oneshot_[v.wave_id];
+  double ph = v.cursor;
+  const double n_d = static_cast<double>(n);
+  if (oneshot && ph >= n_d) {
+    v.cursor = n_d;
+    return 0;
+  }
+  if (!oneshot) {
+    if (ph >= n_d || ph < 0.0) {
+      ph = std::fmod(ph, n_d);
+      if (ph < 0.0) {
+        ph += n_d;
+      }
+    }
+  } else if (ph < 0.0) {
+    ph = 0.0;
+  }
+  const size_t i0 = std::min(static_cast<size_t>(ph), n - 1u);
+  const int16_t s = body[i0];
+  ph += 1.0;
+  if (oneshot) {
+    if (ph > n_d) {
+      ph = n_d;
+    }
+  } else if (ph >= n_d) {
+    ph = std::fmod(ph, n_d);
+  }
+  v.cursor = ph;
+  return s;
+}
+
+uint8_t SampleDryMixer::PickVoiceLocked()
+{
+  uint8_t best = 0xFF;
+  double best_rem = 1e300;
+  uint8_t npre = 0;
+  uint8_t pre[kSampleVoices];
+
+  for (uint8_t i = 0; i < kSampleVoices; ++i) {
+    auto &v = voices_[i];
+    if (!v.active) {
+      continue;
+    }
+    const double fill = v.queued - v.consumed;
+    const double room = static_cast<double>(kRingSamples) - fill;
+    if (room < 8.0) {
+      continue;
+    }
+    if (v.queued < static_cast<double>(kPrefillSamples)) {
+      pre[npre++] = i;
+    }
+    const double rem = v.queued - v.consumed;
+    if (rem < best_rem) {
+      best_rem = rem;
+      best = i;
+    }
+  }
+  if (npre != 0) {
+    /* Prefill contract: new notes before hunger mux. */
+    rr_ = static_cast<uint8_t>((rr_ + 1u) % npre);
+    return pre[rr_ % npre];
+  }
+  if (best != 0xFF) {
+    return best;
+  }
+  return 0xFF;
+}
+
 void SampleDryMixer::Render(int16_t *interleaved, unsigned nframes)
 {
   if (!interleaved || nframes == 0) {
@@ -186,68 +287,42 @@ void SampleDryMixer::Render(int16_t *interleaved, unsigned nframes)
   }
   std::lock_guard<std::mutex> lock(mu_);
   for (unsigned f = 0; f < nframes; ++f) {
-    for (unsigned ch = 0; ch < kSampleVoices; ++ch) {
-      int16_t s = 0;
-      auto &v = voices_[ch];
-      if (v.active) {
-        const auto &body = bodies_[v.wave_id];
-        const size_t n = body.size();
-        if (n == 0) {
-          v.active = false;
-        } else if (n == 1) {
-          s = body[0];
-          v.phase += v.phase_inc;
-        } else {
-          const bool oneshot = oneshot_[v.wave_id];
-          double ph = v.phase;
-          const double n_d = static_cast<double>(n);
-          if (oneshot && ph >= n_d) {
-            /* Past end: silence; keep streaming zeros until Silence(). */
-            s = 0;
-            v.phase = n_d;
-          } else {
-            if (!oneshot) {
-              if (ph >= n_d || ph < 0.0) {
-                ph = std::fmod(ph, n_d);
-                if (ph < 0.0) {
-                  ph += n_d;
-                }
-              }
-            } else if (ph < 0.0) {
-              ph = 0.0;
-            }
-            const size_t i0 = static_cast<size_t>(ph);
-            size_t i1 = i0 + 1u;
-            double b_s;
-            if (i1 >= n) {
-              if (oneshot) {
-                b_s = 0.0;
-              } else {
-                i1 = 0u;
-                b_s = static_cast<double>(body[i1]);
-              }
-            } else {
-              b_s = static_cast<double>(body[i1]);
-            }
-            const double frac = ph - static_cast<double>(i0);
-            const double a_s = static_cast<double>(body[std::min(i0, n - 1u)]);
-            const double y = a_s + (b_s - a_s) * frac;
-            s = static_cast<int16_t>(
-                std::lround(std::clamp(y, -32768.0, 32767.0)));
-            ph += v.phase_inc;
-            if (oneshot) {
-              if (ph > n_d) {
-                ph = n_d;
-              }
-            } else if (ph >= n_d) {
-              ph = std::fmod(ph, n_d);
-            }
-            v.phase = ph;
-          }
-        }
+    int16_t *fr = &interleaved[f * kSampleVoices];
+    /* Card consumes one body sample per output sample once in the body
+     * region. Tick every voice every frame or the mux latches "full"
+     * and never sends again after the first fill. */
+    for (uint8_t i = 0; i < kSampleVoices; ++i) {
+      auto &v = voices_[i];
+      if (!v.active) {
+        continue;
       }
-      interleaved[f * kSampleVoices + ch] = s;
+      v.consumed += IncLocked(v);
+      double fill = v.queued - v.consumed;
+      if (fill < 0.0) {
+        v.consumed = v.queued;
+      } else if (fill > static_cast<double>(kRingSamples)) {
+        v.queued = v.consumed + static_cast<double>(kRingSamples);
+      }
     }
+    const uint8_t voice = PickVoiceLocked();
+    if (voice == 0xFF) {
+      fr[0] = 0;
+      for (unsigned ch = 1; ch < kSampleVoices; ++ch) {
+        fr[ch] = 0;
+      }
+      continue;
+    }
+    auto &v = voices_[voice];
+    uint8_t route = voice;
+    if (v.sof_pending) {
+      route = static_cast<uint8_t>(voice | kUacSof);
+      v.sof_pending = false;
+    }
+    fr[0] = static_cast<int16_t>(kUacTagBase | route);
+    for (unsigned ch = 1; ch < kSampleVoices; ++ch) {
+      fr[ch] = NextBodyLocked(v);
+    }
+    v.queued += static_cast<double>(kSampleVoices - 1u);
   }
 }
 

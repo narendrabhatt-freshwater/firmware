@@ -27,6 +27,7 @@ add_library(cardlink STATIC
   src/usb/attack_upload.cpp
   src/usb/body_upload.cpp
   src/audio/sample_dry.cpp
+  src/audio/wave_loader.cpp
 )
 
 add_library(cardlink::cardlink ALIAS cardlink)

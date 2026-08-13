@@ -93,12 +93,12 @@ return `ok: …` with the value.
 Eight note slots: `n0` … `n7` (voices 0–7). Slot digits `8`–`f` parse
 but reply `err:range`. All voices mix onto DAC channel 1.
 
-Each voice is a **SAMPLE voice**: when its assigned wave id has a
-loaded attack head, note-on plays that head rate-scaled to the note's
-pitch, then sustains from the voice's host-streamed USB audio channel
-(§4). Voices without a loaded wave synthesize the global DDS shape
-(`s` / `p` / `t`). Envelope (`en`) and per-voice LPF (`f`) apply to
-either source.
+Each voice is a **SAMPLE voice**: note-on plays the assigned attack head
+from AXI RAM, then the UAC body slots, through one on-card playhead
+(pitch, filter, envelope). Host streams unpitched body; the card rate-scales
+(`note_Hz / root_Hz`). Voices without a loaded wave synthesize the global
+DDS shape (`s` / `p` / `t`). Envelope (`en`) and per-voice LPF (`f`) apply
+to either source.
 
 Boot / bare `n0` also turns the analog bypass path on and sets CH1 DAC
 trim to 0 dB (`g 1 0`). Frequency changes do not touch gain or bypass.
@@ -142,14 +142,16 @@ while powered and are lost on reset.
 | `ar <id> <Hz>`      | Set the wave's root pitch (Hz > 0)                                  |
 | `aw <voice> <id>`   | Assign wave `<id>` to voice `<voice>` (both 0..7)                   |
 | `a`                 | Voice→wave map; `*` marks ids with a loaded attack                  |
-| `vq`                | Active-voice mask (hex) + per-voice stream-ring fill (quarters 0–4) |
+| `vq`                | Active mask + hungriest voice + free slots 0–8 per ring               |
 
 Replies: `ok: ar <id> <Hz>`, `ok: aw <voice> <id>`,
-`ok: a 0:0* 1:1 …`, `ok:vq <mask> q0 … q7`.
+`ok: a 0:0* 1:1 …`, `ok:vq <mask> <best> s0 … s7` (best 0–7 or 255; si = free slots).
 
-Playback pitch of the attack head = `note_Hz / root_Hz` rate scaling.
-Sustain does not use the body loop when the host streams per-voice
-audio (§4); `bl` remains for hosts that preload a sustain loop instead.
+Playback pitch is on-card: `phase_inc = note_Hz / root_Hz` over a single
+source-index playhead (attack RAM, then UAC body slots). Live `nX` while a
+voice is active slews `phase_inc`. A tagged UAC SOF restarts the playhead
+(new body / retrigger). Sustain does not use the on-card body loop when the
+host streams UAC (§4); `bl` remains for hosts that preload a sustain loop.
 
 ### Oscillator shape (global)
 
@@ -352,7 +354,7 @@ Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 
 | Interface            | Role                                                                     |
 | -------------------- | ------------------------------------------------------------------------ |
-| **UAC2** (speaker)   | Isochronous audio out of the host: **8 channels × 16-bit × 48 kHz**, one channel per voice. Sustain for each active SAMPLE voice streams here into the per-voice ring (`vq` shows fill). |
+| **UAC2** (speaker)   | Isochronous 8ch int16 @ 48 kHz. ch0 = `0x7F00 | voice | 0x10(SOF)` (0 = idle); ch1–7 = unpitched body. Card pitches. `vq` reports free slots. |
 | **CDC ACM** (serial) | Same ASCII console as RS485, plus the binary sample uploads (`al` / `bl`). |
 
 Effect Card also has CDC for its console (no uploads) and a UAC2

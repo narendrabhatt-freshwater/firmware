@@ -237,15 +237,8 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport,
     case AUDIO_FU_CTRL_MUTE:
       TU_VERIFY(p_request->wLength == sizeof(audio_control_cur_1_t));
       mute[channelNum] = ((audio_control_cur_1_t *)pBuff)->bCur;
-      {
-        uint8_t any = mute[0];
-        uint8_t i;
-        for (i = 1u; i <= CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX; i++)
-        {
-          any = (uint8_t)(any || mute[i]);
-        }
-        Audio_SetUSBMute(any);
-      }
+      /* UAC is a tagged body pipe, not analog PCM. macOS mutes unused
+       * channels 2–8; OR-ing those would idle the rings and kill sustain. */
       return true;
 
     default:

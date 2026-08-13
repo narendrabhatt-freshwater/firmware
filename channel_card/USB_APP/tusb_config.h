@@ -1,7 +1,7 @@
 /* TinyUSB configuration — Channel Card
  *
  * Composite device on USB1_OTG_HS (full-speed, embedded PHY):
- *   - UAC2 speaker, 8ch int16 / 48 kHz dry → per-voice stream rings
+ *   - UAC2 speaker, 8ch int16 / 48 kHz tagged body → per-voice slot rings
  *   - CDC-ACM console + attack-head binary load
  */
 
