@@ -57,7 +57,8 @@ extern "C"
   uint8_t AttackBank_IsPlaying(uint8_t voice);
 
   /**
-   * @brief Next Q31 sample for voice (rate-scaled), or 0 if finished/idle.
+   * @brief Next Q31 sample for voice (rate-scaled). Last table sample
+   *        when the head ends (not 0).
    */
   int32_t AttackBank_NextSample(uint8_t voice);
 

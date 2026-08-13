@@ -51,7 +51,10 @@ public:
 
   bool BodyOneshot(uint16_t wave_id) const;
 
-  /** Arm body stream; pitch from freq_hz vs body root. */
+  /** Arm body stream; pitch from freq_hz vs body root.
+   *  Phase starts at 0 of the body file (source sample 256) immediately.
+   *  The card plays the 256-sample head first and skips any leading
+   *  UAC zeros until that body[0] arrives. */
   void NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz);
 
   /**

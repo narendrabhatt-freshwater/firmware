@@ -4,7 +4,10 @@
  * @brief   SAMPLE voices: pitched attack → UAC dry ring → env → LPF.
  *
  * Attack is rate-scaled on-card (phase_inc = note_hz / root_hz). Sustain is
- * host-pitched UAC into stream_ring, consumed 1:1.
+ * host-pitched UAC into stream_ring, consumed 1:1. Head is source [0,256);
+ * body file is source [256,…). After the head, the ring is locked to the
+ * last two head samples (value + slope) so the DAC continues the same
+ * wave instead of jumping to a later UAC phase.
  ******************************************************************************
  */
 
@@ -31,6 +34,9 @@ static int32_t note_amp_q15[NOTE_BANK_VOICES];
 static uint8_t note_active[NOTE_BANK_VOICES];
 static uint16_t note_wave_id[NOTE_BANK_VOICES];
 static float note_phase_inc[NOTE_BANK_VOICES];
+static int32_t note_last_sample[NOTE_BANK_VOICES];
+static int32_t note_prev_sample[NOTE_BANK_VOICES];
+static uint8_t note_await_body[NOTE_BANK_VOICES];
 static NoteBank_Shape_t note_shape = NOTE_SHAPE_SINE;
 static double note_shape_param = 0.5;
 
@@ -72,6 +78,31 @@ static float NoteBank_PhaseInc(uint8_t note, uint16_t wave_id, double freq_hz)
 }
 
 /**
+ * After the head: lock onto the UAC pair that continues the wave, else hold.
+ */
+static inline int32_t NoteBank_PullBody(uint8_t note)
+{
+  int32_t s;
+
+  if (note_await_body[note] == 0u)
+  {
+    if (StreamRing_FillLevel(note) != 0u)
+    {
+      return StreamRing_NextSample(note);
+    }
+    return 0;
+  }
+
+  if (StreamRing_LockContinuity(note, note_prev_sample[note],
+                                note_last_sample[note], &s) != 0u)
+  {
+    note_await_body[note] = 0u;
+    return s;
+  }
+  return note_last_sample[note];
+}
+
+/**
  * Dry sample: rate-scaled attack head, then 1:1 UAC stream ring.
  * Env/filter always applied while the voice is active.
  */
@@ -86,10 +117,17 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
   if (AttackBank_IsPlaying(note) != 0u)
   {
     s = AttackBank_NextSample(note);
+    note_prev_sample[note] = note_last_sample[note];
+    note_last_sample[note] = s;
   }
   else
   {
-    s = StreamRing_NextSample(note);
+    s = NoteBank_PullBody(note);
+    if (note_await_body[note] == 0u)
+    {
+      note_prev_sample[note] = note_last_sample[note];
+      note_last_sample[note] = s;
+    }
   }
 
   if (NoteEnv_IsProgrammed(note) != 0u)
@@ -101,6 +139,9 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
       StreamRing_Release(note);
       AttackBank_Stop(note);
       NoteFilter_Reset(note);
+      note_await_body[note] = 0u;
+      note_last_sample[note] = 0;
+      note_prev_sample[note] = 0;
       return 0;
     }
   }
@@ -151,6 +192,9 @@ void NoteBank_Init(void)
     note_active[i] = 0u;
     note_wave_id[i] = i;
     note_phase_inc[i] = 1.0f;
+    note_last_sample[i] = 0;
+    note_prev_sample[i] = 0;
+    note_await_body[i] = 0u;
   }
 }
 
@@ -166,6 +210,9 @@ void NoteBank_PanicAll(void)
     note_scale[i] = 0.0;
     note_amp_q15[i] = 0;
     note_active[i] = 0u;
+    note_last_sample[i] = 0;
+    note_prev_sample[i] = 0;
+    note_await_body[i] = 0u;
     NoteFilter_Reset(i);
     if (NoteEnv_IsProgrammed(i) != 0u)
     {
@@ -197,6 +244,9 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
     StreamRing_Release(note);
     AttackBank_Stop(note);
     NoteFilter_Reset(note);
+    note_await_body[note] = 0u;
+    note_last_sample[note] = 0;
+    note_prev_sample[note] = 0;
     return;
   }
 
@@ -212,9 +262,11 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
   wid = note_wave_id[note];
   phase_inc = NoteBank_PhaseInc(note, wid, freq_hz);
 
-  /* Keep the newest ~2 ms of live UAC; emptying the ring made the first
-   * sustain DMA half pop zeros when the attack was shorter than one packet. */
+  /* Capture this note's UAC during the head (lock to it after). */
   StreamRing_Prime(note);
+  note_await_body[note] = 0u;
+  note_last_sample[note] = 0;
+  note_prev_sample[note] = 0;
 
   note_freq_hz[note] = freq_hz;
   note_scale[note] = scale;
@@ -232,6 +284,7 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
       StreamRing_Release(note);
       return;
     }
+    note_await_body[note] = 1u;
   }
 
   /* Sustain comes from UAC stream_ring (host-pitched); no body_bank required. */

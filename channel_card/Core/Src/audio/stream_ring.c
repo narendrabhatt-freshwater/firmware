@@ -45,20 +45,13 @@ void StreamRing_Reset(uint8_t voice)
 
 void StreamRing_Prime(uint8_t voice)
 {
-  StreamRing_t *r;
-  uint32_t wr;
-
   if (voice >= SAMPLE_VOICES)
   {
     return;
   }
-  r = &s_rings[voice];
-  wr = r->wr;
-  if ((wr - r->rd) > STREAM_RING_PRIME)
-  {
-    r->rd = wr - STREAM_RING_PRIME;
-  }
-  r->consuming = 1u;
+  s_rings[voice].wr = 0u;
+  s_rings[voice].rd = 0u;
+  s_rings[voice].consuming = 1u;
 }
 
 void StreamRing_Release(uint8_t voice)
@@ -129,6 +122,70 @@ int32_t StreamRing_NextSample(uint8_t voice)
   r->rd++;
   /* int16 → Q31: place in high half */
   return ((int32_t)s16) << 16;
+}
+
+uint8_t StreamRing_LockContinuity(uint8_t voice, int32_t y0, int32_t y1,
+                                  int32_t *out_q31)
+{
+  StreamRing_t *r;
+  uint32_t avail;
+  uint32_t i;
+  uint32_t best_i;
+  uint32_t best_err;
+  int16_t t0;
+  int16_t t1;
+  int32_t want_d;
+  const uint32_t kMaxErr = 2048u;
+
+  if (voice >= SAMPLE_VOICES || out_q31 == NULL)
+  {
+    return 0u;
+  }
+  r = &s_rings[voice];
+  avail = StreamRing_Avail(r);
+  if (avail > STREAM_RING_SAMPLES)
+  {
+    avail = STREAM_RING_SAMPLES;
+  }
+  if (avail < 2u)
+  {
+    return 0u;
+  }
+
+  t0 = (int16_t)(y0 >> 16);
+  t1 = (int16_t)(y1 >> 16);
+  want_d = (int32_t)t1 - (int32_t)t0;
+  best_i = 0u;
+  best_err = 0xFFFFFFFFu;
+
+  /* Next UAC sample should be one step beyond the last head sample. */
+  {
+    int32_t want_a = (int32_t)t1 + want_d;
+    uint32_t lim = (avail > 1u) ? (avail - 1u) : 0u;
+    for (i = 0u; i < lim; i++)
+    {
+      int16_t a = r->data[(r->rd + i) % STREAM_RING_SAMPLES];
+      int16_t b = r->data[(r->rd + i + 1u) % STREAM_RING_SAMPLES];
+      int32_t da = (int32_t)a - want_a;
+      int32_t ds = ((int32_t)b - (int32_t)a) - want_d;
+      uint32_t epos = (uint32_t)((da >= 0) ? da : -da);
+      uint32_t eslp = (uint32_t)((ds >= 0) ? ds : -ds);
+      if (epos + eslp < best_err)
+      {
+        best_err = epos + eslp;
+        best_i = i;
+      }
+    }
+  }
+
+  if (best_err > kMaxErr)
+  {
+    return 0u;
+  }
+
+  r->rd += best_i;
+  *out_q31 = StreamRing_NextSample(voice);
+  return 1u;
 }
 
 uint32_t StreamRing_FillLevel(uint8_t voice)

@@ -22,18 +22,13 @@ extern "C"
 /** Samples per voice ring (~42 ms @ 48 kHz). */
 #define STREAM_RING_SAMPLES 2048u
 
-/** Note-on playhead: keep this many of the newest samples (~2 ms = two
- * USB packets). Emptying the ring made the first sustain I2S half pop
- * zeros whenever the attack was shorter than one packet. */
-#define STREAM_RING_PRIME 96u
-
   void StreamRing_Init(void);
   void StreamRing_Reset(uint8_t voice);
   void StreamRing_ResetAll(void);
 
   /**
-   * @brief Keep the newest STREAM_RING_PRIME samples and mark the voice
-   *        as being consumed (overflow drops incoming, not the playhead).
+   * @brief Note-on: empty the ring and store this note's UAC (keep oldest
+   *        on overflow). Head plays from attack RAM.
    */
   void StreamRing_Prime(uint8_t voice);
 
@@ -49,6 +44,15 @@ extern "C"
 
   /** Pop one dry sample as Q31; 0 on underrun. */
   int32_t StreamRing_NextSample(uint8_t voice);
+
+  /**
+   * @brief After the head: find the UAC sample one step beyond (y0, y1)
+   *        in value and slope, consume through it, return it as Q31.
+   *        Returns 1 and sets *out_q31 on lock; 0 if nothing is close
+   *        (ring unchanged — hold y1).
+   */
+  uint8_t StreamRing_LockContinuity(uint8_t voice, int32_t y0, int32_t y1,
+                                    int32_t *out_q31);
 
   uint32_t StreamRing_FillLevel(uint8_t voice);
 

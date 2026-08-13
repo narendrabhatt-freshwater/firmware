@@ -273,15 +273,9 @@ def build_one(
             root = float(f0 if f0 is not None else hint_hz or 261.625565)
 
     head = make_head(x)
-    # Blend last head samples toward body[0].
     body_src = x[ATTACK:] if len(x) > ATTACK else [0.0]
     if not body_src:
         body_src = [0.0]
-    body0 = body_src[0]
-    for i in range(32):
-        idx = ATTACK - 32 + i
-        a = i / 31.0
-        head[idx] = clamp(head[idx] * (1.0 - a) + body0 * a)
 
     head_path = OUT / f"w{slot}_{name}_head.i32"
     body_path = OUT / f"w{slot}_{name}_body.i16"

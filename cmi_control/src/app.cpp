@@ -466,6 +466,12 @@ void App::ApplyBankEvents(const std::vector<midi_host::BankEvent> &events)
     EnsureAudio();
   }
 
+  if (want_card && bus.IsOpen())
+  {
+    /* n0 before UAC body so the card head starts before body[0] is gated. */
+    bus.PublishBank(bank);
+  }
+
   for (const auto &ev : events)
   {
     if (want_speakers && audio)
@@ -485,11 +491,6 @@ void App::ApplyBankEvents(const std::vector<midi_host::BankEvent> &events)
         sample_uac->Mixer().NoteOn(ev.slot, ev.slot, ev.freq_hz);
       }
     }
-  }
-
-  if (want_card && bus.IsOpen())
-  {
-    bus.PublishBank(bank);
   }
 }
 

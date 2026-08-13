@@ -233,11 +233,6 @@ def make_head(x: list[float]) -> list[float]:
         a = i / 47.0
         a = a * a * (3.0 - 2.0 * a)
         head[i] *= a
-    body0 = x[ATTACK] if len(x) > ATTACK else head[-1]
-    for i in range(32):
-        idx = ATTACK - 32 + i
-        a = i / 31.0
-        head[idx] = clamp(head[idx] * (1.0 - a) + body0 * a)
     return head
 
 

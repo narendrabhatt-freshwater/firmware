@@ -186,14 +186,14 @@ int32_t AttackBank_NextSample(uint8_t voice)
   {
     v->playing = 0u;
     v->phase = 0.0f;
-    return 0;
+    return s_data[wid][ATTACK_BANK_LEN - 1u];
   }
 
   i0 = (uint32_t)ph;
   if (i0 >= ATTACK_BANK_LEN)
   {
     v->playing = 0u;
-    return 0;
+    return s_data[wid][ATTACK_BANK_LEN - 1u];
   }
   i1 = i0 + 1u;
   frac = ph - (float)i0;

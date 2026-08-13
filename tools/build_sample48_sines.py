@@ -40,12 +40,26 @@ def clamp(x: float, lo: float = -1.0, hi: float = 1.0) -> float:
     return lo if x < lo else hi if x > hi else x
 
 
-def make_sine_cell(hz: float) -> list[float]:
+def make_head(hz: float) -> list[float]:
+    """First ATTACK samples of the same sine the body continues."""
+    out: list[float] = []
+    for i in range(ATTACK):
+        s = TARGET_PEAK * math.sin(TWO_PI * hz * i / SR)
+        if i < 48:
+            a = i / 47.0
+            a = a * a * (3.0 - 2.0 * a)
+            s *= a
+        out.append(clamp(s))
+    return out
+
+
+def make_sine_cell(hz: float, phase0: int = 0) -> list[float]:
     # 200 ms @ 260 Hz = exactly 52 cycles in 9600 samples.
     n = 9600
     cycles = int(round(n * hz / SR))
     return [
-        TARGET_PEAK * math.sin(TWO_PI * cycles * i / n) for i in range(n)
+        TARGET_PEAK * math.sin(TWO_PI * cycles * (i + phase0) / n)
+        for i in range(n)
     ]
 
 
@@ -76,29 +90,12 @@ def write_wav(path: Path, samples: list[float]) -> None:
         )
 
 
-def make_head(hz: float) -> list[float]:
-    out: list[float] = []
-    for i in range(ATTACK):
-        s = TARGET_PEAK * math.sin(TWO_PI * hz * i / SR)
-        if i < 48:
-            a = i / 47.0
-            a = a * a * (3.0 - 2.0 * a)
-            s *= a
-        out.append(clamp(s))
-    body0 = 0.0
-    for i in range(32):
-        idx = ATTACK - 32 + i
-        a = i / 31.0
-        out[idx] = clamp(out[idx] * (1.0 - a) + body0 * a)
-    return out
-
-
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     for p in OUT.glob("w*_*.*"):
         p.unlink()
 
-    cell = make_sine_cell(ROOT_HZ)
+    cell = make_sine_cell(ROOT_HZ, ATTACK)
     head = make_head(ROOT_HZ)
     cycles = int(round(len(cell) * ROOT_HZ / SR))
     root = cycles * SR / len(cell)
@@ -115,6 +112,7 @@ def main() -> None:
         f"All slots: pure sine @ {root:.4f} Hz, root={root:.4f}.",
         "Host/card pitch with rate = note_hz / root. A C-E-G chord must",
         "sound like three clear pitches; same pitch on every key = bug.",
+        "Head is sine[0:256]; body continues from sample 256 (one timeline).",
         "",
         "Slot  name     Hz",
         "----  -------- ----------",
