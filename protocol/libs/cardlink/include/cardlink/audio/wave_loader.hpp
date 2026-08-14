@@ -27,7 +27,7 @@ struct LoadedWave {
 bool LoadWaveFile(const std::string &path, uint32_t raw_rate_hz,
                   LoadedWave &out, std::string &err);
 
-/** body.i16 starts at file 256; prepend last K samples of head.i32 as int16. */
+/** Prepend last kCrossfadeSamples of head.i32 (int16) so the join matches. */
 bool BodyWithHeadOverlap(const std::string &head_i32_path,
                          const std::string &body_i16_path,
                          std::vector<int16_t> &body_out, std::string &err);

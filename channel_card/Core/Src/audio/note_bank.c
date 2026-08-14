@@ -3,15 +3,14 @@
  * @file    note_bank.c
  * @brief   SAMPLE voices: attack RAM + body slots → sample → LPF → env.
  *
- * Attack is a long AXI head (8-tap sinc). Body is the UAC FIFO
- * (8-tap when the ring has the neighbourhood). Live nX slews phase_inc.
+ * Attack is a long AXI head. Body is the UAC FIFO. Pitch uses 2-tap
+ * linear interpolation. Live nX slews phase_inc.
  ******************************************************************************
  */
 
 #include "note_bank.h"
 
 #include "attack_bank.h"
-#include "interp8.h"
 #include "note_envelope.h"
 #include "note_filter.h"
 #include "stream_ring.h"
@@ -42,6 +41,10 @@ static uint32_t note_body_frac[NOTE_BANK_VOICES];
 static int32_t note_hold[NOTE_BANK_VOICES];
 static uint32_t note_inc[NOTE_BANK_VOICES];
 static uint32_t note_inc_tgt[NOTE_BANK_VOICES];
+/* Late body: fade hold → FIFO over SAMPLE_CROSSFADE_LEN output samples. */
+static uint8_t note_missed_join[NOTE_BANK_VOICES];
+static uint8_t note_join_left[NOTE_BANK_VOICES];
+static int32_t note_join_from[NOTE_BANK_VOICES];
 static NoteBank_Shape_t note_shape = NOTE_SHAPE_SINE;
 static double note_shape_param = 0.5;
 
@@ -108,44 +111,17 @@ static int NoteBank_BodyAtRel(uint8_t note, uint32_t offset, int32_t *out)
 
 static int32_t NoteBank_InterpAttack(uint16_t wid, uint32_t phase)
 {
-  const int32_t *tab = AttackBank_Table(wid);
-  if (tab == NULL)
-  {
-    return NoteBank_LerpQ31(NoteBank_AttackAt(wid, phase >> 16),
-                            NoteBank_AttackAt(wid, (phase >> 16) + 1u),
-                            phase & 0xFFFFu);
-  }
-  return Interp8_Q31(tab, ATTACK_BANK_LEN, phase, 0u);
+  return NoteBank_LerpQ31(NoteBank_AttackAt(wid, phase >> 16),
+                          NoteBank_AttackAt(wid, (phase >> 16) + 1u),
+                          phase & 0xFFFFu);
 }
 
 static int NoteBank_InterpBody(uint8_t note, int32_t *out)
 {
   uint32_t i0 = note_body_frac[note] >> 16;
   uint32_t frac = note_body_frac[note] & 0xFFFFu;
-  int16_t tap[8];
-  uint32_t t;
   int32_t a;
   int32_t b;
-
-  for (t = 0u; t < 8u; t++)
-  {
-    int32_t off = (int32_t)i0 + (int32_t)t - 3;
-    int16_t s16;
-    if (off < 0)
-    {
-      off = 0;
-    }
-    if (StreamRing_GetRel(note, (uint32_t)off, &s16) != 0)
-    {
-      break;
-    }
-    tap[t] = s16;
-  }
-  if (t == 8u)
-  {
-    *out = Interp8_S16(tap, 8u, (3u << 16) | (frac & 0xFFFFu), 0u);
-    return 0;
-  }
 
   if (NoteBank_BodyAtRel(note, i0, &a) != 0)
   {
@@ -168,6 +144,43 @@ static void NoteBank_AdvanceBody(uint8_t note)
     StreamRing_Advance(note, 1u);
     note_body_frac[note] -= PHASE_ONE;
   }
+}
+
+static void NoteBank_ClearPlayhead(uint8_t note)
+{
+  note_phase[note] = 0u;
+  note_body_frac[note] = 0u;
+  note_hold[note] = 0;
+  note_missed_join[note] = 0u;
+  note_join_left[note] = 0u;
+  note_join_from[note] = 0;
+}
+
+static void NoteBank_StartVoice(uint8_t note, uint32_t inc)
+{
+  StreamRing_Prime(note);
+  NoteBank_ClearPlayhead(note);
+  note_inc[note] = inc;
+  NoteFilter_Reset(note);
+  NoteEnv_NoteOn(note, (float)note_freq_hz[note]);
+  note_active[note] = 1u;
+}
+
+static int32_t NoteBank_LateJoin(uint8_t note, int32_t body)
+{
+  uint8_t left = note_join_left[note];
+  uint32_t t;
+  int32_t y;
+
+  if (left == 0u)
+  {
+    return body;
+  }
+  t = ((uint32_t)(SAMPLE_CROSSFADE_LEN - (uint32_t)left) << 16) /
+      SAMPLE_CROSSFADE_LEN;
+  y = NoteBank_LerpQ31(note_join_from[note], body, t);
+  note_join_left[note] = (uint8_t)(left - 1u);
+  return y;
 }
 
 static void NoteBank_SlewInc(uint8_t note)
@@ -222,6 +235,11 @@ static int32_t NoteBank_Sample(uint8_t note)
         uint32_t t = (uint32_t)(((phase - fade0) << 16) / span);
         y = NoteBank_LerpQ31(atk, body, t);
         NoteBank_AdvanceBody(note);
+        note_missed_join[note] = 0u;
+      }
+      else
+      {
+        note_missed_join[note] = 1u;
       }
     }
     note_phase[note] = phase + (uint64_t)note_inc[note];
@@ -231,8 +249,16 @@ static int32_t NoteBank_Sample(uint8_t note)
 
   if (NoteBank_InterpBody(note, &y) != 0)
   {
+    note_missed_join[note] = 1u;
     return note_hold[note];
   }
+  if (note_missed_join[note] != 0u)
+  {
+    note_missed_join[note] = 0u;
+    note_join_from[note] = note_hold[note];
+    note_join_left[note] = (uint8_t)SAMPLE_CROSSFADE_LEN;
+  }
+  y = NoteBank_LateJoin(note, y);
   NoteBank_AdvanceBody(note);
   note_phase[note] = phase + (uint64_t)note_inc[note];
   note_hold[note] = y;
@@ -300,7 +326,6 @@ void NoteBank_Init(void)
 {
   uint8_t i;
 
-  Interp8_Init();
   note_shape = NOTE_SHAPE_SINE;
   note_shape_param = 0.5;
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
@@ -314,6 +339,9 @@ void NoteBank_Init(void)
     note_hold[i] = 0;
     note_inc[i] = PHASE_ONE;
     note_inc_tgt[i] = PHASE_ONE;
+    note_missed_join[i] = 0u;
+    note_join_left[i] = 0u;
+    note_join_from[i] = 0;
   }
 }
 
@@ -334,6 +362,9 @@ void NoteBank_PanicAll(void)
     note_hold[i] = 0;
     note_inc[i] = PHASE_ONE;
     note_inc_tgt[i] = PHASE_ONE;
+    note_missed_join[i] = 0u;
+    note_join_left[i] = 0u;
+    note_join_from[i] = 0;
     NoteFilter_Reset(i);
     if (NoteEnv_IsProgrammed(i) != 0u)
     {
@@ -386,23 +417,25 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
     inc = PHASE_INC_MAX;
   }
 
-  note_freq_hz[note] = freq_hz;
-  note_scale[note] = scale;
-  note_amp_q15[note] = NoteBank_ScaleToQ15(scale);
-  note_inc_tgt[note] = inc;
-  NoteFilter_OnNoteFreq(note, freq_hz);
-
-  if (note_active[note] != 0u)
+  /* Legato: already gated with a pitch. Release (freq==0, still active)
+   * then nX must retrigger — host SOF wipes the FIFO; a live slew would
+   * hold the last sample (flat line). */
   {
-    return;
-  }
+    const uint8_t legato =
+        (uint8_t)((note_active[note] != 0u) && (note_freq_hz[note] > 0.0));
 
-  StreamRing_Prime(note);
-  note_phase[note] = 0u;
-  note_body_frac[note] = 0u;
-  note_inc[note] = inc;
-  NoteEnv_NoteOn(note, (float)freq_hz);
-  note_active[note] = 1u;
+    note_freq_hz[note] = freq_hz;
+    note_scale[note] = scale;
+    note_amp_q15[note] = NoteBank_ScaleToQ15(scale);
+    note_inc_tgt[note] = inc;
+    NoteFilter_OnNoteFreq(note, freq_hz);
+
+    if (legato != 0u)
+    {
+      return;
+    }
+    NoteBank_StartVoice(note, inc);
+  }
 }
 
 double NoteBank_GetFreq(uint8_t note)
@@ -559,8 +592,25 @@ void NoteBank_OnBodySof(uint8_t voice)
   {
     return;
   }
-  /* New body session. Attack phase is independent of the FIFO. */
+  /* New UAC session: FIFO was wiped. Restart the head so a re-press
+   * during release is not a body underrun hold. */
   note_body_frac[voice] = 0u;
+  if (note_active[voice] == 0u && !(note_freq_hz[voice] > 0.0))
+  {
+    return;
+  }
+  note_phase[voice] = 0u;
+  note_hold[voice] = 0;
+  note_missed_join[voice] = 0u;
+  note_join_left[voice] = 0u;
+  StreamRing_Prime(voice);
+  if (note_freq_hz[voice] > 0.0)
+  {
+    note_inc[voice] = note_inc_tgt[voice];
+    NoteFilter_Reset(voice);
+    NoteEnv_NoteOn(voice, (float)note_freq_hz[voice]);
+    note_active[voice] = 1u;
+  }
 }
 
 int32_t NoteBank_NextSample(void)

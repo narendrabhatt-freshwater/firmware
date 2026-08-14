@@ -262,9 +262,22 @@ bool BodyWithHeadOverlap(const std::string &head_i32_path,
   if (!ReadAll(head_i32_path, head, err) || !ReadAll(body_i16_path, body, err)) {
     return false;
   }
-  if (head.size() != kAttackSamples * 4u) {
-    err = "head size must match kAttackSamples";
+  if (head.empty() || (head.size() & 3u) != 0u) {
+    err = "head must be int32 LE";
     return false;
+  }
+  if (head.size() > kAttackSamples * 4u) {
+    err = "head longer than kAttackSamples";
+    return false;
+  }
+  if (head.size() < kAttackSamples * 4u) {
+    int32_t last = 0;
+    std::memcpy(&last, head.data() + head.size() - 4u, 4);
+    const size_t old = head.size();
+    head.resize(kAttackSamples * 4u);
+    for (size_t i = old; i < head.size(); i += 4u) {
+      std::memcpy(head.data() + i, &last, 4);
+    }
   }
   if (body.size() < 2 || (body.size() & 1u) != 0u) {
     err = "body must be even int16 LE";

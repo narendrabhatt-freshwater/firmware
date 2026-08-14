@@ -145,8 +145,8 @@ while powered and are lost on reset.
 Replies: `ok: ar <v> <Hz>`, `ok: aw <v> <v>`,
 `ok: a 0* 1 2* …`, `ok:vq <mask> <best> s0 … s7` (best 0–7 or 255; si = free slots).
 
-Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 8-tap
-Hann-sinc. The 8192-sample attack always plays to the end. Body is the
+Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 2-tap
+linear. The 8192-sample attack always plays to the end. Body is the
 UAC FIFO. Live `nX` slews `phase_inc` only. `bl` replies `err:unsupported`.
 
 ### Oscillator shape (global)
