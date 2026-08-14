@@ -230,7 +230,7 @@ static const SwitchDef_t switches[] = {
  *   n0..n7 <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 0.125)
  *   n <Hz> [sc]       — all 8 voices (n 0 = silence)
  *   s / p <d> / t <a> — global note-bank shape (sine / pulse duty / tri asym)
- *   al <id> <len>     — CDC attack-head upload (16384 bytes)
+ *   al <id> <len>     — CDC attack-head upload (ATTACK_BANK_BYTES)
  *   ar <id> <Hz>      — sample root pitch (id = voice); a — loaded heads
  *   a / vq            — loaded heads per voice / hungriest + free slots
  *   en0..enf / en     — envelope: end slope[±k] … release_slope[±k]
@@ -405,12 +405,16 @@ static uint8_t Console_CpuLoad_Parse(const char *arg, uint8_t *mode_out,
 
 static void Console_Help(void)
 {
+  char b[256];
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
-  RS485_Reply("ok: SAMPLE n0..n7 Hz [sc] | s|p d|t a | aw v id | "
-              "al v 16384 | ar v Hz | a | vq | "
-              "en0..en7 end slope[±k] ... rel[±k]|0 | ek0..ek7 k | "
-              "f0..f7 Hz [q] | fk0..fk7 k | g ch dB | "
-              "cpu [0|N|q N]\r\n");
+  snprintf(b, sizeof b,
+           "ok: SAMPLE n0..n7 Hz [sc] | s|p d|t a | aw v id | "
+           "al v %u | ar v Hz | a | vq | "
+           "en0..en7 end slope[±k] ... rel[±k]|0 | ek0..ek7 k | "
+           "f0..f7 Hz [q] | fk0..fk7 k | g ch dB | "
+           "cpu [0|N|q N]\r\n",
+           (unsigned)ATTACK_BANK_BYTES);
+  RS485_Reply(b);
 }
 
 /** Hex slot char for replies (0..15 → '0'..'9','a'..'f'). */
@@ -1517,7 +1521,7 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- al <id> 16384: CDC attack head upload ---- */
+  /* ---- al <id> ATTACK_BANK_BYTES: CDC attack head upload ---- */
   if (strncmp(line, "al ", 3) == 0)
   {
     Console_CmdAttackLoad(line);

@@ -24,7 +24,7 @@ namespace audio {
 
 constexpr unsigned kSampleVoices = 8;
 constexpr unsigned kSampleRateHz = 48000;
-constexpr unsigned kAttackSamples = 4096;
+constexpr unsigned kAttackSamples = 8192;
 constexpr unsigned kCrossfadeSamples = 32;
 constexpr unsigned kBodyOrigin = kAttackSamples - kCrossfadeSamples;
 /** Hungry-voice boost until this many body samples are queued. Not a wait. */

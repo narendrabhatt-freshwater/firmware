@@ -130,13 +130,13 @@ to integers if you care about equal temperament.
 ### Sample bank (per-voice attack heads)
 
 Eight voices (`0`…`7`). Voice **N** owns AXI attack head **N**
-(4096 int32 / 16384 bytes) and its UAC body FIFO. Heads are not shared.
+(8192 int32 / 32768 bytes) and its UAC body FIFO. Heads are not shared.
 Upload is USB CDC only (§4). Contents survive mode-free operation
 while powered and are lost on reset.
 
 | Command             | Meaning                                                             |
 | ------------------- | ------------------------------------------------------------------- |
-| `al <v> 16384`      | **USB CDC only.** Load voice `<v>`'s attack head (**16384** bytes)  |
+| `al <v> 32768`      | **USB CDC only.** Load voice `<v>`'s attack head (**32768** bytes)  |
 | `ar <v> <Hz>`       | Set voice `<v>`'s root pitch (Hz > 0)                               |
 | `aw <v> <v>`        | Identity only; `<voice>` must equal `<id>` or `err:range`           |
 | `a`                 | Loaded heads; `*` marks a voice with an attack in RAM               |
@@ -146,7 +146,7 @@ Replies: `ok: ar <v> <Hz>`, `ok: aw <v> <v>`,
 `ok: a 0* 1 2* …`, `ok:vq <mask> <best> s0 … s7` (best 0–7 or 255; si = free slots).
 
 Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 8-tap
-Hann-sinc. The 4096-sample attack always plays to the end. Body is the
+Hann-sinc. The 8192-sample attack always plays to the end. Body is the
 UAC FIFO. Live `nX` slews `phase_inc` only. `bl` replies `err:unsupported`.
 
 ### Oscillator shape (global)
@@ -383,7 +383,7 @@ Constraints:
 
 | Command            | Payload                                               |
 | ------------------ | ----------------------------------------------------- |
-| `al <id> <nbytes>` | Exactly **16384** bytes = 4096 × int32 LE attack head |
+| `al <id> <nbytes>` | Exactly **32768** bytes = 8192 × int32 LE attack head |
 
 Wave `<id>` is **0…7**. `bl` is retired (`err:unsupported`).
 
@@ -403,9 +403,9 @@ Full-Speed CDC and is intentionally omitted.
 Sequence:
 
 ```text
-Host →  al 0 16384\r
+Host →  al 0 32768\r
 Card →  ok:ready\r\n          ← console write #1
-Host →  <16384 raw bytes>     ← opaque to the console parser
+Host →  <32768 raw bytes>     ← opaque to the console parser
 Card →  ok:attack 0\r\n       ← console write #2
 ```
 

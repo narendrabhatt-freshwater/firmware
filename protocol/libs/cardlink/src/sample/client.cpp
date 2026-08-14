@@ -171,7 +171,7 @@ bool Client::UploadAttack(uint8_t voice, const int32_t *q31, size_t nsamp,
 {
   if (voice >= cardlink::audio::kSampleVoices || q31 == nullptr ||
       nsamp != cardlink::audio::kAttackSamples) {
-    err = "err: attack must be 4096 Q31 samples";
+    err = "err: attack must be 8192 Q31 samples";
     return false;
   }
   if (cdc_path_.empty()) {
