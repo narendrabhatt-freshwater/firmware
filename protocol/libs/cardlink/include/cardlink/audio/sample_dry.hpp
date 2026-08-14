@@ -31,7 +31,7 @@ constexpr unsigned kSampleRateHz = 48000;
 constexpr unsigned kAttackSamples = 8192;
 constexpr unsigned kCrossfadeSamples = 32;
 constexpr unsigned kBodyOrigin = kAttackSamples - kCrossfadeSamples;
-constexpr unsigned kRingSamples = 2048;
+constexpr unsigned kRingSamples = 4096;
 /** Mux boost until the card FIFO is full. Extra USB is dropped. */
 constexpr unsigned kPrefillSamples = kRingSamples;
 constexpr uint16_t kUacTagBase = 0x7F00;

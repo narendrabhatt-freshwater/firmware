@@ -76,7 +76,7 @@ flowchart TB
 
   subgraph usb [USB FS]
     Tag["UAC frame: ch0 = 0x7F00 | session | SOF | voice; 0x7FFF idle"]
-    Slots["8 slots x 256 int16 DTCM"]
+    Slots["2 x 2048 int16 DTCM ping-pong"]
     Body --> Tag --> Slots
   end
 
@@ -85,7 +85,7 @@ flowchart TB
     Inc["phase_inc = note_Hz / root_Hz; slew toward target"]
     Join{"phase vs len-32 / len"}
     AtkOnly["attack lerp"]
-    Xfade["overlap mix K=32"]
+    Xfade["overlap: attack out, body consume"]
     BodyOnly["body lerp from ring rd"]
     Lpf["note_filter DF4"]
     Env["note_envelope"]

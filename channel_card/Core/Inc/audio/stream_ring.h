@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    stream_ring.h
- * @brief   Per-voice body FIFO: 8 slots × 256 int16, filled from UAC.
+ * @brief   Per-voice body FIFO: 2 × 2048 int16 (ping-pong), filled from UAC.
  *
  * SPSC: USB writes, the playhead reads. A full FIFO drops the write
  * (never unread samples). An empty FIFO is an underrun for the reader.
@@ -25,9 +25,13 @@ extern "C"
 
 #include "attack_bank.h" /* SAMPLE_VOICES, SAMPLE_CROSSFADE_LEN */
 
-#define STREAM_SLOTS 8u
+/** One bank is a full jitter buffer; USB fills the other while it plays. */
+#define STREAM_BANK_LEN 2048u
+#define STREAM_BANKS 2u
+#define STREAM_RING_SAMPLES (STREAM_BANKS * STREAM_BANK_LEN)
+/** vq reports free space in 256-sample units, capped at 8. */
 #define STREAM_SLOT_LEN 256u
-#define STREAM_RING_SAMPLES (STREAM_SLOTS * STREAM_SLOT_LEN)
+#define STREAM_SLOTS 8u
 
 /**
  * ch0 is a tag, not PCM. Near-silence must not decode as voice 0

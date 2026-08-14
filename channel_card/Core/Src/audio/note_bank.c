@@ -325,20 +325,15 @@ static int32_t NoteBank_Sample(uint8_t note)
 
   if (phase < fade1)
   {
-    int32_t atk = NoteBank_InterpAttack(wid, phase);
-    y = atk;
+    /* Overlap is for FIFO alignment only. Mixing Q31 attack with
+     * int16<<16 body of the same samples drops the low bits over
+     * the window and shows up as an amplitude sag. */
+    y = NoteBank_InterpAttack(wid, phase);
     if (phase >= fade0 && note_body_skip[note] == 0u)
     {
       int32_t body;
       if (NoteBank_InterpBody(note, &body) == 0)
       {
-        uint64_t span = fade1 - fade0;
-        uint32_t t = 0u;
-        if (span > 0u)
-        {
-          t = (uint32_t)(((phase - fade0) << 16) / span);
-        }
-        y = NoteBank_LerpQ31(atk, body, t);
         NoteBank_AdvanceBody(note);
       }
     }
