@@ -102,8 +102,9 @@ AttackUploadResult AttackUploader::Upload(
   if (wave_id >= 8u) {
     return Fail("err: wave_id 0..7");
   }
-  if (data == nullptr || nbytes != kAttackBytes) {
-    return Fail("err: attack head size must match kAttackSamples");
+  if (data == nullptr || nbytes < 4u || nbytes > kAttackBytes ||
+      (nbytes & 3u) != 0u) {
+    return Fail("err: attack head must be 1..kAttackSamples int32 LE");
   }
 
   DrainRx(port_);
@@ -180,15 +181,6 @@ AttackUploadResult AttackUploader::UploadFile(
   }
   if (data.size() > kAttackBytes) {
     return Fail("err: head longer than kAttackSamples");
-  }
-  if (data.size() < kAttackBytes) {
-    int32_t last = 0;
-    std::memcpy(&last, data.data() + data.size() - 4u, 4);
-    const size_t old = data.size();
-    data.resize(kAttackBytes);
-    for (size_t i = old; i < kAttackBytes; i += 4u) {
-      std::memcpy(data.data() + i, &last, 4);
-    }
   }
   return Upload(wave_id, data.data(), data.size(), on_progress);
 }

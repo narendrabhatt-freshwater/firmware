@@ -31,7 +31,7 @@ extern "C"
   void AttackBank_Init(void);
 
   /**
-   * @brief Replace one head with int32 LE bytes (exactly ATTACK_BANK_BYTES).
+   * @brief Replace one head with int32 LE bytes (4..ATTACK_BANK_BYTES).
    * @retval 0 ok
    * @retval -1 bad id / size / null
    */
@@ -40,10 +40,13 @@ extern "C"
   /** Direct write pointer for CDC upload (ATTACK_BANK_LEN int32). */
   int32_t *AttackBank_WritePtr(uint16_t wave_id);
 
-  /** Mark head present after streaming into WritePtr. */
-  int AttackBank_Commit(uint16_t wave_id);
+  /** Mark head present; nsamp is the real table length (not a hold-pad). */
+  int AttackBank_Commit(uint16_t wave_id, uint32_t nsamp);
 
   uint8_t AttackBank_IsLoaded(uint16_t wave_id);
+
+  /** Committed samples (0 if empty). Join is at this index, not ATTACK_BANK_LEN. */
+  uint32_t AttackBank_GetLen(uint16_t wave_id);
 
   void AttackBank_SetRootHz(uint16_t wave_id, float root_hz);
   float AttackBank_GetRootHz(uint16_t wave_id);

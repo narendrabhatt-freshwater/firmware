@@ -30,12 +30,6 @@ double Lanczos(double x)
   return Sinc(x) * Sinc(x / static_cast<double>(kLanczosA));
 }
 
-int16_t FToI16(double y)
-{
-  y = std::clamp(y, -1.0, 1.0);
-  return static_cast<int16_t>(std::lround(y * 32767.0));
-}
-
 int32_t FToQ31(double y)
 {
   y = std::clamp(y, -1.0, 1.0);
@@ -202,22 +196,21 @@ bool ParseRawI16(const std::vector<uint8_t> &bytes, std::vector<double> &mono,
 
 void Split48k(const std::vector<double> &x, LoadedWave &out)
 {
-  out.attack.assign(kAttackSamples, 0);
   const size_t n = x.size();
   const size_t alen = std::min(n, static_cast<size_t>(kAttackSamples));
+  out.attack.resize(alen);
   for (size_t i = 0; i < alen; ++i) {
     out.attack[i] = FToQ31(x[i]);
   }
-  if (alen > 0 && alen < kAttackSamples) {
-    const int32_t hold = out.attack[alen - 1];
-    for (size_t i = alen; i < kAttackSamples; ++i) {
-      out.attack[i] = hold;
-    }
-  }
-  const size_t b0 = std::min(n, static_cast<size_t>(kBodyOrigin));
+  const size_t fade = std::min(static_cast<size_t>(kCrossfadeSamples), alen);
+  const size_t b0 = alen - fade;
   out.body.resize(n > b0 ? (n - b0) : 0);
-  for (size_t i = b0; i < n; ++i) {
-    out.body[i - b0] = FToI16(x[i]);
+  for (size_t i = 0; i < out.body.size(); ++i) {
+    if (i < fade) {
+      out.body[i] = static_cast<int16_t>(out.attack[b0 + i] >> 16);
+    } else {
+      out.body[i] = static_cast<int16_t>(FToQ31(x[b0 + i]) >> 16);
+    }
   }
 }
 
@@ -270,23 +263,16 @@ bool BodyWithHeadOverlap(const std::string &head_i32_path,
     err = "head longer than kAttackSamples";
     return false;
   }
-  if (head.size() < kAttackSamples * 4u) {
-    int32_t last = 0;
-    std::memcpy(&last, head.data() + head.size() - 4u, 4);
-    const size_t old = head.size();
-    head.resize(kAttackSamples * 4u);
-    for (size_t i = old; i < head.size(); i += 4u) {
-      std::memcpy(head.data() + i, &last, 4);
-    }
-  }
   if (body.size() < 2 || (body.size() & 1u) != 0u) {
     err = "body must be even int16 LE";
     return false;
   }
+  const size_t head_n = head.size() / 4u;
+  const size_t fade = std::min(static_cast<size_t>(kCrossfadeSamples), head_n);
   body_out.clear();
-  body_out.reserve(kCrossfadeSamples + body.size() / 2);
-  const size_t start = (kAttackSamples - kCrossfadeSamples) * 4u;
-  for (unsigned i = 0; i < kCrossfadeSamples; ++i) {
+  body_out.reserve(fade + body.size() / 2);
+  const size_t start = (head_n - fade) * 4u;
+  for (size_t i = 0; i < fade; ++i) {
     int32_t q = 0;
     std::memcpy(&q, head.data() + start + i * 4u, 4);
     body_out.push_back(static_cast<int16_t>(q >> 16));

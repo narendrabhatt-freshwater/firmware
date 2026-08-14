@@ -1,6 +1,6 @@
 /**
  * @file wave_loader.hpp
- * @brief Load wav/raw → 48 kHz, split attack[0, kAttackSamples) + body.
+ * @brief Load wav/raw → 48 kHz, split attack[0, min(n,kAttackSamples)) + body.
  */
 
 #ifndef HOST_IO_AUDIO_WAVE_LOADER_HPP
@@ -16,8 +16,8 @@ namespace cardlink {
 namespace audio {
 
 struct LoadedWave {
-  std::vector<int32_t> attack; /**< kAttackSamples Q31 @ 48 kHz */
-  std::vector<int16_t> body;   /**< from kBodyOrigin, 48 kHz int16 */
+  std::vector<int32_t> attack; /**< Q31 @ 48 kHz, length ≤ kAttackSamples */
+  std::vector<int16_t> body;   /**< from (len-overlap), 48 kHz int16 */
   uint32_t src_rate_hz = kSampleRateHz;
 };
 
@@ -27,7 +27,7 @@ struct LoadedWave {
 bool LoadWaveFile(const std::string &path, uint32_t raw_rate_hz,
                   LoadedWave &out, std::string &err);
 
-/** Prepend last kCrossfadeSamples of head.i32 (int16) so the join matches. */
+/** Prepend last overlap of the real head (Q31>>16), no hold-pad. */
 bool BodyWithHeadOverlap(const std::string &head_i32_path,
                          const std::string &body_i16_path,
                          std::vector<int16_t> &body_out, std::string &err);

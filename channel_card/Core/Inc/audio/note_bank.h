@@ -33,9 +33,8 @@ extern "C"
 
   /**
    * @brief Note on/off. freq_hz <= 0 releases/stops.
-   * >0 starts the attack unless the voice is already gated (legato slew).
-   * A re-press after note-off retriggers even if release is still running.
-   * Voice N always uses attack slot N.
+   * freq_hz > 0 is always a note-on (restarts attack + body). Applied on
+   * the next I2S sample. Voice N always uses attack slot N.
    */
   void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale);
 
@@ -62,8 +61,7 @@ extern "C"
   void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out,
                            uint8_t *free_slots);
 
-  /** New UAC body session: reset FIFO playhead and restart the attack. */
-  void NoteBank_OnBodySof(uint8_t voice);
+  /** New UAC body session: same as note-on (FIFO was wiped). */
 
 #ifdef __cplusplus
 }

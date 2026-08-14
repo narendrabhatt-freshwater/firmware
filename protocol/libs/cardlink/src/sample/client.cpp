@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <system_error>
 #include <fstream>
 #include <vector>
 
@@ -170,8 +171,8 @@ bool Client::UploadAttack(uint8_t voice, const int32_t *q31, size_t nsamp,
                           std::string &err)
 {
   if (voice >= cardlink::audio::kSampleVoices || q31 == nullptr ||
-      nsamp != cardlink::audio::kAttackSamples) {
-    err = "err: attack must be 8192 Q31 samples";
+      nsamp == 0 || nsamp > cardlink::audio::kAttackSamples) {
+    err = "err: attack must be 1..8192 Q31 samples";
     return false;
   }
   if (cdc_path_.empty()) {
@@ -189,6 +190,7 @@ bool Client::UploadAttack(uint8_t voice, const int32_t *q31, size_t nsamp,
     err = r.message;
     return false;
   }
+  mixer_.SetAttackLen(voice, static_cast<unsigned>(nsamp));
   return true;
 }
 
@@ -208,6 +210,11 @@ bool Client::UploadAttackFile(uint8_t voice, const std::string &path,
   if (!r.ok) {
     err = r.message;
     return false;
+  }
+  std::error_code ec;
+  const auto bytes = fs::file_size(path, ec);
+  if (!ec && bytes >= 4u && (bytes % 4u) == 0u) {
+    mixer_.SetAttackLen(voice, static_cast<unsigned>(bytes / 4u));
   }
   return true;
 }
@@ -319,6 +326,13 @@ bool Client::LoadBody(uint8_t voice, const std::string &path, std::string &err)
     if (!mixer_.SetBody(voice, body.data(), body.size(), err)) {
       slot.body_ready = false;
       return false;
+    }
+    {
+      std::error_code ec;
+      const auto bytes = fs::file_size(slot.head_path, ec);
+      if (!ec && bytes >= 4u && (bytes % 4u) == 0u) {
+        mixer_.SetAttackLen(voice, static_cast<unsigned>(bytes / 4u));
+      }
     }
     slot.body_ready = true;
     return true;

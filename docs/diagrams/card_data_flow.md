@@ -41,7 +41,7 @@ flowchart TB
 
   RS485 -->|"c: nX en f vq"| ChCon
   RS485 -->|"e: u echo"| FxCon
-  CDC -->|"al 32768 Q31"| ChAtk
+  CDC -->|"al nbytes Q31"| ChAtk
   CDC --> ChCon
   CDC --> FxCon
   UacOut -->|"ch0 tag ch1..9 body"| ChRing
@@ -55,10 +55,11 @@ flowchart TB
 
 ## 2. Channel — SAMPLE voice (one of n0..n7)
 
-Attack and body are storage. The 8192-sample head always plays to the end.
-Body is a FIFO from the UAC ring, consumed with Q16.16 interpolation.
-Live `nX` slews `phase_inc` only. A new UAC session (`SOF` + session 0–6)
-starts a new body FIFO; a repeated frame with the same session does not.
+Attack and body are storage. The head plays to its committed length
+(≤ 8192). Body is a FIFO from the UAC ring, consumed with Q16.16
+interpolation. `nX > 0` is always a note-on. A new UAC session
+(`SOF` + session 0–6) starts a new body FIFO; a repeated frame with
+the same session does not.
 The host paces USB frames by `phase_inc` (credit per output sample).
 Missing body holds the last sample until USB catches up. The producer
 never overwrites unread FIFO samples.
@@ -67,8 +68,8 @@ never overwrites unread FIFO samples.
 flowchart TB
   subgraph store [Storage]
     File["48 kHz stream"]
-    Atk["Attack AXI: file 0..8191 Q31"]
-    Body["Host body: file 8160..end int16"]
+    Atk["Attack AXI: file 0..len-1 Q31"]
+    Body["Host body: file (len-32)..end int16"]
     File --> Atk
     File --> Body
   end
@@ -82,7 +83,7 @@ flowchart TB
   subgraph play [Playhead — I2S1 DMA ISR]
     Ph["uint64 Q16.16 phase"]
     Inc["phase_inc = note_Hz / root_Hz; slew toward target"]
-    Join{"phase vs 8160 / 8192"}
+    Join{"phase vs len-32 / len"}
     AtkOnly["attack lerp"]
     Xfade["overlap mix K=32"]
     BodyOnly["body lerp from ring rd"]
@@ -94,9 +95,9 @@ flowchart TB
     Atk --> Xfade
     Slots --> Xfade
     Slots --> BodyOnly
-    Join -->|lt 8160| AtkOnly
-    Join -->|8160..8192| Xfade
-    Join -->|ge 8192| BodyOnly
+    Join -->|lt len-32| AtkOnly
+    Join -->|overlap| Xfade
+    Join -->|ge len| BodyOnly
     AtkOnly --> Lpf
     Xfade --> Lpf
     BodyOnly --> Lpf
@@ -112,10 +113,12 @@ flowchart TB
 `vq` reports `ok:vq <mask_hex> <best> s0..s7` (`si` = free slots 0..8).
 Need-score is `filled / max(phase_inc, target_inc)`. The host mux does
 not use `vq` while a note is sounding — it paces from `phase_inc`.
-UAC and `nX` start together. The 8192-sample attack covers the join;
-the host does not wait for FIFO prefill. `StreamRing_Prime` arms consume
-and does not clear the ring. New voices get USB first until 256 samples
-are queued.
+UAC and `nX` start together. The attack plays to its committed length;
+body consume starts at `len − 32` with the same source fraction. The
+host does not wait for FIFO prefill. `StreamRing_Prime` arms consume
+and does not clear the ring. The host fills the body FIFO, then holds
+the file cursor until the playhead reaches the join — dropped USB must
+not skip ahead in the wav.
 
 Voices with no loaded attack head play body from the FIFO immediately.
 `en` / `f` / `fk` still apply.

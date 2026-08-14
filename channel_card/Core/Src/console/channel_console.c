@@ -230,7 +230,7 @@ static const SwitchDef_t switches[] = {
  *   n0..n7 <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 0.125)
  *   n <Hz> [sc]       — all 8 voices (n 0 = silence)
  *   s / p <d> / t <a> — global note-bank shape (sine / pulse duty / tri asym)
- *   al <id> <len>     — CDC attack-head upload (ATTACK_BANK_BYTES)
+ *   al <id> <len>     — CDC attack-head upload (4..ATTACK_BANK_BYTES)
  *   ar <id> <Hz>      — sample root pitch (id = voice); a — loaded heads
  *   a / vq            — loaded heads per voice / hungriest + free slots
  *   en0..enf / en     — envelope: end slope[±k] … release_slope[±k]
@@ -409,11 +409,10 @@ static void Console_Help(void)
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   snprintf(b, sizeof b,
            "ok: SAMPLE n0..n7 Hz [sc] | s|p d|t a | aw v id | "
-           "al v %u | ar v Hz | a | vq | "
+           "al v n | ar v Hz | a | vq | "
            "en0..en7 end slope[±k] ... rel[±k]|0 | ek0..ek7 k | "
            "f0..f7 Hz [q] | fk0..fk7 k | g ch dB | "
-           "cpu [0|N|q N]\r\n",
-           (unsigned)ATTACK_BANK_BYTES);
+           "cpu [0|N|q N]\r\n");
   RS485_Reply(b);
 }
 
@@ -1448,7 +1447,7 @@ static void Console_CmdAttackQuery(void)
   RS485_Reply(b);
 }
 
-/** al <wave_id> <nbytes> — CDC binary load (ATTACK_BANK_BYTES). */
+/** al <wave_id> <nbytes> — CDC binary load (4..ATTACK_BANK_BYTES). */
 static void Console_CmdAttackLoad(char *line)
 {
   unsigned int wid;
@@ -1521,7 +1520,7 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- al <id> ATTACK_BANK_BYTES: CDC attack head upload ---- */
+  /* ---- al <id> nbytes: CDC attack head upload ---- */
   if (strncmp(line, "al ", 3) == 0)
   {
     Console_CmdAttackLoad(line);

@@ -6,6 +6,10 @@
  * samples for one voice. Mux is a credit scheduler: each output frame
  * adds phase_inc credits; a sent frame costs 9.
  *
+ * The card does not consume body until the attack join. The host models
+ * that FIFO: fill to kRingSamples, then do not advance the cursor until
+ * the playhead is past fade0. Dropped USB must not skip the file.
+ *
  * Render() is the UAC callback — no mutex. UI posts to a SPSC command
  * queue; Render drains it at the start of the buffer.
  */
@@ -27,14 +31,14 @@ constexpr unsigned kSampleRateHz = 48000;
 constexpr unsigned kAttackSamples = 8192;
 constexpr unsigned kCrossfadeSamples = 32;
 constexpr unsigned kBodyOrigin = kAttackSamples - kCrossfadeSamples;
-/** Hungry-voice boost until this many body samples are queued. Not a wait. */
-constexpr unsigned kPrefillSamples = 256;
+constexpr unsigned kRingSamples = 2048;
+/** Mux boost until the card FIFO is full. Extra USB is dropped. */
+constexpr unsigned kPrefillSamples = kRingSamples;
 constexpr uint16_t kUacTagBase = 0x7F00;
 constexpr uint8_t kUacIdle = 0xFF;
 constexpr uint8_t kUacSof = 0x10;
 constexpr unsigned kUacSessionShift = 5;
 constexpr unsigned kUacSessionMod = 7;
-constexpr unsigned kRingSamples = 2048;
 constexpr unsigned kUacChannels = 10;
 constexpr unsigned kUacBodyPerFrame = kUacChannels - 1u;
 constexpr double kDefaultBodyRootHz = 261.625565;
@@ -45,10 +49,14 @@ public:
 
   bool LoadBodyFile(uint16_t wave_id, const std::string &path, std::string &err);
 
-  /** Replace body samples (48 kHz int16, starts at kBodyOrigin).
+  /** Replace body samples (48 kHz int16, from head_len − overlap).
    *  Rejected while a voice is playing this id (callback reads the table). */
   bool SetBody(uint16_t wave_id, const int16_t *data, size_t nsamp,
                std::string &err);
+
+  /** Committed AXI head length. 0 = consume body from note-on. */
+  void SetAttackLen(uint16_t wave_id, unsigned nsamp);
+  unsigned AttackLen(uint16_t wave_id) const;
 
   void SetBodyRootHz(uint16_t wave_id, double root_hz);
   double BodyRootHz(uint16_t wave_id) const;
@@ -97,6 +105,9 @@ private:
     double freq_hz = 0.0;
     double cursor = 0.0;
     double credit = 0.0;
+    double phase = 0.0;
+    double queued = 0.0;
+    unsigned attack_len = 0;
   };
 
   static constexpr unsigned kCmdCap = 32;
@@ -107,6 +118,9 @@ private:
   uint8_t PickVoice() const;
   int16_t NextBody(Voice &v);
   double IncOf(const Voice &v) const;
+  static double Fade0Of(unsigned attack_len);
+  void AdvancePlayheads();
+  static bool HasRoom(const Voice &v);
   static int16_t EncodeTag(uint8_t session, uint8_t route_low);
   bool WaveInUse(uint16_t wave_id) const;
 
@@ -122,6 +136,7 @@ private:
   std::array<std::vector<int16_t>, 256> bodies_{};
   std::array<std::atomic<double>, 256> root_hz_{};
   std::array<std::atomic<bool>, 256> oneshot_{};
+  std::array<std::atomic<unsigned>, 256> attack_len_{};
 };
 
 } // namespace audio

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -404,6 +405,41 @@ void BusController::RequestRecover(LogBuffer &log)
 BusQueueResult BusController::QueueExec(cardproto::Target target,
                                         std::string command)
 {
+  /* nX must last-win. Queueing every tap/release on RS485 delivers a
+   * stale nX 0 after the hold's UAC session has already started. */
+  if (target == cardproto::Target::Channel && impl_) {
+    const char *s = command.c_str();
+    if (s[0] == 'c' && s[1] == ':') {
+      s += 2;
+    }
+    unsigned slot = 0;
+    double hz = 0.0;
+    if (s[0] == 'n' && std::isdigit(static_cast<unsigned char>(s[1])) &&
+        std::sscanf(s, "n%u %lf", &slot, &hz) == 2 &&
+        slot < midi_host::kVoiceCount) {
+      if (connecting_.load()) {
+        return BusQueueResult::Connecting;
+      }
+      if (!open_.load()) {
+        return BusQueueResult::Closed;
+      }
+      if (halted_.load()) {
+        return BusQueueResult::Halted;
+      }
+      const double v = ClampNoteHz(hz);
+      {
+        std::lock_guard<std::mutex> lock(impl_->mu_);
+        impl_->desired_hz_[slot] = v;
+        if (slot < kVqVoices) {
+          impl_->watch_idle_[slot] = (v <= 0.0);
+          impl_->underrun_logged_[slot] = false;
+        }
+      }
+      impl_->cv_.notify_one();
+      return BusQueueResult::Ok;
+    }
+  }
+
   Job j;
   j.kind = JobKind::Exec;
   j.target = target;

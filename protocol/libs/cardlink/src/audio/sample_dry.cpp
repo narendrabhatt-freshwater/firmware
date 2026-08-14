@@ -18,6 +18,9 @@ SampleDryMixer::SampleDryMixer()
   for (auto &o : oneshot_) {
     o.store(false, std::memory_order_relaxed);
   }
+  for (auto &n : attack_len_) {
+    n.store(0, std::memory_order_relaxed);
+  }
   for (uint8_t i = 0; i < kSampleVoices; ++i) {
     sent_[i].store(0, std::memory_order_relaxed);
     live_[i].store(false, std::memory_order_relaxed);
@@ -80,6 +83,25 @@ bool SampleDryMixer::SetBody(uint16_t wave_id, const int16_t *data, size_t nsamp
   }
   bodies_[wave_id].assign(data, data + nsamp);
   return true;
+}
+
+void SampleDryMixer::SetAttackLen(uint16_t wave_id, unsigned nsamp)
+{
+  if (wave_id >= attack_len_.size()) {
+    return;
+  }
+  if (nsamp > kAttackSamples) {
+    nsamp = kAttackSamples;
+  }
+  attack_len_[wave_id].store(nsamp, std::memory_order_release);
+}
+
+unsigned SampleDryMixer::AttackLen(uint16_t wave_id) const
+{
+  if (wave_id >= attack_len_.size()) {
+    return 0;
+  }
+  return attack_len_[wave_id].load(std::memory_order_acquire);
 }
 
 void SampleDryMixer::SetBodyRootHz(uint16_t wave_id, double root_hz)
@@ -162,6 +184,44 @@ double SampleDryMixer::IncOf(const Voice &v) const
   return inc;
 }
 
+double SampleDryMixer::Fade0Of(unsigned attack_len)
+{
+  if (attack_len > kCrossfadeSamples) {
+    return static_cast<double>(attack_len - kCrossfadeSamples);
+  }
+  return 0.0;
+}
+
+void SampleDryMixer::AdvancePlayheads()
+{
+  for (uint8_t i = 0; i < kSampleVoices; ++i) {
+    auto &v = voices_[i];
+    if (!v.active) {
+      continue;
+    }
+    const double inc = IncOf(v);
+    v.phase += inc;
+    if (v.phase >= Fade0Of(v.attack_len) && v.queued > 0.0) {
+      const double take = (inc < v.queued) ? inc : v.queued;
+      v.queued -= take;
+    }
+  }
+}
+
+bool SampleDryMixer::HasRoom(const Voice &v)
+{
+  /* After the start is in the FIFO, wait until the card has played
+   * that many source samples past fade0. Sending sooner is dropped
+   * and the cursor skips (gap after the AXI head). */
+  if (v.attack_len > 0u &&
+      v.cursor >= static_cast<double>(kRingSamples) &&
+      v.phase < Fade0Of(v.attack_len) + static_cast<double>(kRingSamples)) {
+    return false;
+  }
+  return v.queued + static_cast<double>(kUacBodyPerFrame) <=
+         static_cast<double>(kRingSamples);
+}
+
 int16_t SampleDryMixer::EncodeTag(uint8_t session, uint8_t route_low)
 {
   const uint8_t low = static_cast<uint8_t>((session << kUacSessionShift) | route_low);
@@ -227,6 +287,9 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
   v.wave_id = c.wave_id;
   v.freq_hz = c.freq_hz;
   v.credit = static_cast<double>(kPrefillSamples);
+  v.phase = 0.0;
+  v.queued = 0.0;
+  v.attack_len = attack_len_[c.wave_id].load(std::memory_order_acquire);
   sent_[c.voice].store(0, std::memory_order_release);
   live_wave_[c.voice].store(c.wave_id, std::memory_order_release);
   live_[c.voice].store(true, std::memory_order_release);
@@ -406,7 +469,7 @@ uint8_t SampleDryMixer::PickVoice() const
 
   for (uint8_t i = 0; i < kSampleVoices; ++i) {
     const auto &v = voices_[i];
-    if (!v.active) {
+    if (!v.active || !HasRoom(v)) {
       continue;
     }
     double c = v.credit;
@@ -429,6 +492,7 @@ void SampleDryMixer::Render(int16_t *interleaved, unsigned nframes)
   DrainCmds();
   for (unsigned f = 0; f < nframes; ++f) {
     int16_t *fr = &interleaved[f * kUacChannels];
+    AdvancePlayheads();
     for (uint8_t i = 0; i < kSampleVoices; ++i) {
       auto &v = voices_[i];
       if (v.active) {
@@ -453,6 +517,7 @@ void SampleDryMixer::Render(int16_t *interleaved, unsigned nframes)
     for (unsigned ch = 1; ch < kUacChannels; ++ch) {
       fr[ch] = NextBody(v);
     }
+    v.queued += static_cast<double>(kUacBodyPerFrame);
     const unsigned n = sent_[voice].load(std::memory_order_relaxed) + kUacBodyPerFrame;
     sent_[voice].store(n, std::memory_order_release);
     v.credit -= static_cast<double>(kUacBodyPerFrame);

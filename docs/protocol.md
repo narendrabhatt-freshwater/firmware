@@ -130,13 +130,13 @@ to integers if you care about equal temperament.
 ### Sample bank (per-voice attack heads)
 
 Eight voices (`0`…`7`). Voice **N** owns AXI attack head **N**
-(8192 int32 / 32768 bytes) and its UAC body FIFO. Heads are not shared.
-Upload is USB CDC only (§4). Contents survive mode-free operation
-while powered and are lost on reset.
+(up to 8192 int32 / 32768 bytes) and its UAC body FIFO. Heads are not
+shared. Upload is USB CDC only (§4). Contents survive mode-free
+operation while powered and are lost on reset.
 
 | Command             | Meaning                                                             |
 | ------------------- | ------------------------------------------------------------------- |
-| `al <v> 32768`      | **USB CDC only.** Load voice `<v>`'s attack head (**32768** bytes)  |
+| `al <v> <nbytes>`   | **USB CDC only.** Load voice `<v>`'s attack head (4…32768 bytes)    |
 | `ar <v> <Hz>`       | Set voice `<v>`'s root pitch (Hz > 0)                               |
 | `aw <v> <v>`        | Identity only; `<voice>` must equal `<id>` or `err:range`           |
 | `a`                 | Loaded heads; `*` marks a voice with an attack in RAM               |
@@ -146,8 +146,10 @@ Replies: `ok: ar <v> <Hz>`, `ok: aw <v> <v>`,
 `ok: a 0* 1 2* …`, `ok:vq <mask> <best> s0 … s7` (best 0–7 or 255; si = free slots).
 
 Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 2-tap
-linear. The 8192-sample attack always plays to the end. Body is the
-UAC FIFO. Live `nX` slews `phase_inc` only. `bl` replies `err:unsupported`.
+linear. The attack plays to its committed length (not a hold-pad to
+8192). Body starts at `len − 32` with the same source index and
+fraction as the attack. `nX > 0` is always a note-on. `bl` replies
+`err:unsupported`.
 
 ### Oscillator shape (global)
 
@@ -383,7 +385,7 @@ Constraints:
 
 | Command            | Payload                                               |
 | ------------------ | ----------------------------------------------------- |
-| `al <id> <nbytes>` | Exactly **32768** bytes = 8192 × int32 LE attack head |
+| `al <id> <nbytes>` | 4…32768 bytes = 1…8192 × int32 LE (real length, no hold-pad) |
 
 Wave `<id>` is **0…7**. `bl` is retired (`err:unsupported`).
 

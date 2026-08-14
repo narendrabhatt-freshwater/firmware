@@ -212,6 +212,8 @@ bool LoadSampleBodies(SampleUacOut& uac,
                                wave.body.size(), err)) {
         return false;
       }
+      uac.Mixer().SetAttackLen(static_cast<uint16_t>(i),
+                               static_cast<unsigned>(wave.attack.size()));
       continue;
     }
     if (body_path.empty()) {
@@ -227,6 +229,12 @@ bool LoadSampleBodies(SampleUacOut& uac,
       if (!uac.Mixer().SetBody(static_cast<uint16_t>(i), body.data(),
                                body.size(), err)) {
         return false;
+      }
+      std::error_code ec;
+      const auto bytes = fs::file_size(head_path, ec);
+      if (!ec && bytes >= 4u && (bytes % 4u) == 0u) {
+        uac.Mixer().SetAttackLen(static_cast<uint16_t>(i),
+                                 static_cast<unsigned>(bytes / 4u));
       }
     } else if (!uac.Mixer().LoadBodyFile(static_cast<uint16_t>(i), body_path,
                                          err)) {
