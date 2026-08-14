@@ -11,6 +11,7 @@
 
 #include "cardproto/types.hpp"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -37,6 +38,9 @@ public:
   using EffectOp = std::function<cardproto::Result(cardproto::EffectClient &)>;
   /** Called when vq reports a voice idle after note activity (stop UAC dry). */
   using IdleHandler = std::function<void(uint8_t slot)>;
+  /** Occupancy correction for the UAC mux (mask, best, free slots 0..8). */
+  using VqHandler = std::function<void(uint8_t, uint8_t,
+                                       const std::array<uint8_t, 8> &)>;
 
   BusController();
   ~BusController();
@@ -74,6 +78,7 @@ public:
    * Thread-safe; may be invoked from the bus worker.
    */
   void SetIdleHandler(IdleHandler handler);
+  void SetVqHandler(VqHandler handler);
 
   /** Soft recover + clear halt latch if possible. */
   void RequestRecover(LogBuffer &log);

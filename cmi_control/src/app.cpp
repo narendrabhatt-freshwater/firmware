@@ -349,6 +349,7 @@ bool App::EnsureAttackCdc(std::string &err)
     MarkSettingsDirty();
     log.Push(std::string("ok: attack CDC → ") + pick);
   }
+  samples.SetCdcPath(wave_cdc_path);
   return true;
 }
 
@@ -362,6 +363,7 @@ bool App::EnsureSampleUac()
   {
     sample_uac = std::make_unique<SampleUacOut>();
   }
+  sample_uac->BindMixer(samples.Mixer());
   std::string err;
   if (!sample_uac->Start("Channel Card", err))
   {
@@ -497,23 +499,17 @@ void App::ApplyBankEvents(const std::vector<midi_host::BankEvent> &events)
     {
       audio->ApplyBankEvent(ev);
     }
-    if (sample_uac && sample_uac->Running() &&
-        ev.slot < cardlink::audio::kSampleVoices)
+    if (want_card && ev.slot < cardlink::audio::kSampleVoices)
     {
       if (ev.kind == midi_host::BankEventKind::Off)
       {
-        sample_uac->Mixer().NoteOff(ev.slot);
+        samples.NoteOff(ev.slot);
       }
       else
       {
-        sample_uac->Mixer().NoteOn(ev.slot, ev.slot, ev.freq_hz);
+        samples.NoteOn(ev.slot, ev.freq_hz);
       }
     }
-  }
-
-  if (want_card && bus.IsOpen())
-  {
-    bus.PublishBank(bank);
   }
 }
 
@@ -539,10 +535,7 @@ void App::AllNotesOff()
 {
   const auto evs = bank.AllOff();
   ApplyBankEvents(evs);
-  if (sample_uac && sample_uac->Running())
-  {
-    sample_uac->Mixer().AllNotesOff();
-  }
+  samples.AllNotesOff();
   if (bus.IsOpen())
   {
     bus.RequestSilence();
@@ -862,20 +855,12 @@ void App::Tick()
       else if (sample_file_pick == SampleFilePick::Head &&
                sample_file_voice >= 0 && sample_file_voice < 8)
       {
-        auto &slot = sample_slots[static_cast<std::size_t>(sample_file_voice)];
-        std::snprintf(slot.head_path, sizeof(slot.head_path), "%s",
-                      path.c_str());
-        slot.head_on_card = false;
         pending_sample_folder = std::string("head:") +
                                 std::to_string(sample_file_voice) + ":" + path;
       }
       else if (sample_file_pick == SampleFilePick::Body &&
                sample_file_voice >= 0 && sample_file_voice < 8)
       {
-        auto &slot = sample_slots[static_cast<std::size_t>(sample_file_voice)];
-        std::snprintf(slot.body_path, sizeof(slot.body_path), "%s",
-                      path.c_str());
-        slot.body_in_mixer = false;
         pending_sample_folder = std::string("body:") +
                                 std::to_string(sample_file_voice) + ":" + path;
       }

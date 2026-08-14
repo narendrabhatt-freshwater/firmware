@@ -12,6 +12,11 @@ struct SampleUacOut::Impl {
 
 SampleUacOut::SampleUacOut() : impl_(std::make_unique<Impl>()) {}
 
+void SampleUacOut::BindMixer(cardlink::audio::SampleDryMixer &mixer)
+{
+  mixer_ = &mixer;
+}
+
 SampleUacOut::~SampleUacOut() { Stop(); }
 
 namespace {
@@ -65,7 +70,7 @@ bool SampleUacOut::Start(const std::string &name_needle, std::string &err)
   std::string seen;
   for (unsigned id : ids) {
     RtAudio::DeviceInfo info = impl_->dac.getDeviceInfo(id);
-    if (info.outputChannels < cardlink::audio::kSampleVoices) {
+    if (info.outputChannels < cardlink::audio::kUacChannels) {
       continue;
     }
     if (!seen.empty()) {
@@ -81,9 +86,9 @@ bool SampleUacOut::Start(const std::string &name_needle, std::string &err)
   if (!found) {
     err = "no UAC device matching \"" + name_needle + "\"";
     if (!seen.empty()) {
-      err += " (8ch outs: " + seen + ")";
+      err += " (10ch outs: " + seen + ")";
     } else if (!ids.empty()) {
-      err += " (no 8ch output among " + std::to_string(ids.size()) +
+      err += " (no 10ch output among " + std::to_string(ids.size()) +
              " devices)";
     }
     return false;
@@ -91,7 +96,7 @@ bool SampleUacOut::Start(const std::string &name_needle, std::string &err)
 
   RtAudio::StreamParameters params;
   params.deviceId = dev;
-  params.nChannels = cardlink::audio::kSampleVoices;
+  params.nChannels = cardlink::audio::kUacChannels;
   params.firstChannel = 0;
 
   /* One USB FS packet is 48 frames. Request 2 packets (2 ms) so prefill

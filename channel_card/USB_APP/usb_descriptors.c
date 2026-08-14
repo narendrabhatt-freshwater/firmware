@@ -1,28 +1,29 @@
 /* USB descriptors — Channel Card composite device
- *   ITF0/1: UAC2 speaker (8ch int16, 48 kHz) dry voice feeds + feedback EP
+ *   ITF0/1: UAC2 speaker (10ch int16, 48 kHz) dry voice feeds + feedback EP
  *   ITF2/3: CDC-ACM console
  */
 
 #include "tusb.h"
 
-#define TUD_AUDIO_DESC_FEATURE_UNIT_EIGHT_CHANNEL_LEN (6 + (8 + 1) * 4)
-#define TUD_AUDIO_DESC_FEATURE_UNIT_EIGHT_CHANNEL(                       \
-    _unitid, _srcid, _c0, _c1, _c2, _c3, _c4, _c5, _c6, _c7, _c8,       \
-    _stridx)                                                             \
-  TUD_AUDIO_DESC_FEATURE_UNIT_EIGHT_CHANNEL_LEN, TUSB_DESC_CS_INTERFACE, \
+#define TUD_AUDIO_DESC_FEATURE_UNIT_TEN_CHANNEL_LEN (6 + (10 + 1) * 4)
+#define TUD_AUDIO_DESC_FEATURE_UNIT_TEN_CHANNEL(                         \
+    _unitid, _srcid, _c0, _c1, _c2, _c3, _c4, _c5, _c6, _c7, _c8, _c9,  \
+    _c10, _stridx)                                                       \
+  TUD_AUDIO_DESC_FEATURE_UNIT_TEN_CHANNEL_LEN, TUSB_DESC_CS_INTERFACE,   \
       AUDIO_CS_AC_INTERFACE_FEATURE_UNIT, _unitid, _srcid,               \
       U32_TO_U8S_LE(_c0), U32_TO_U8S_LE(_c1), U32_TO_U8S_LE(_c2),        \
       U32_TO_U8S_LE(_c3), U32_TO_U8S_LE(_c4), U32_TO_U8S_LE(_c5),        \
-      U32_TO_U8S_LE(_c6), U32_TO_U8S_LE(_c7), U32_TO_U8S_LE(_c8), _stridx
+      U32_TO_U8S_LE(_c6), U32_TO_U8S_LE(_c7), U32_TO_U8S_LE(_c8),        \
+      U32_TO_U8S_LE(_c9), U32_TO_U8S_LE(_c10), _stridx
 
-#ifndef TUD_AUDIO_SPEAKER_8CH_FB_DESC_LEN
+#ifndef TUD_AUDIO_SPEAKER_10CH_FB_DESC_LEN
 /* ONE_CHANNEL_LEN is `6+(1+1)*4` without outer parens — must parenthesize
  * the subtraction or CONFIG wTotalLength overshoots and macOS leaves the
  * composite unconfigured (no CDC, no UAC interfaces). */
-#define TUD_AUDIO_SPEAKER_8CH_FB_DESC_LEN                                    \
+#define TUD_AUDIO_SPEAKER_10CH_FB_DESC_LEN                                   \
   (TUD_AUDIO_SPEAKER_MONO_FB_DESC_LEN -                                      \
    (TUD_AUDIO_DESC_FEATURE_UNIT_ONE_CHANNEL_LEN) +                           \
-   TUD_AUDIO_DESC_FEATURE_UNIT_EIGHT_CHANNEL_LEN)
+   TUD_AUDIO_DESC_FEATURE_UNIT_TEN_CHANNEL_LEN)
 #endif
 
 //--------------------------------------------------------------------+
@@ -43,8 +44,9 @@ tusb_desc_device_t const desc_device = {
                            before release */
     /* Bump PID on any descriptor change (macOS caches by VID/PID).
      * 0x4016 = 8ch SAMPLE dry; 0x4017 = FUNC_1_DESC_LEN fix (CDC enum);
-     * 0x4018 = audio interface string "Channel Card" (CoreAudio name). */
-    .idProduct = 0x4018,
+     * 0x4018 = audio interface string "Channel Card" (CoreAudio name);
+     * 0x4019 = 10ch FS ISO (~960 B/ms). */
+    .idProduct = 0x4019,
     .bcdDevice = 0x0100,
 
     .iManufacturer = 0x01,
@@ -71,7 +73,7 @@ enum {
 };
 
 #define CONFIG_TOTAL_LEN                                                       \
-  (TUD_CONFIG_DESC_LEN + TUD_AUDIO_SPEAKER_8CH_FB_DESC_LEN + TUD_CDC_DESC_LEN)
+  (TUD_CONFIG_DESC_LEN + TUD_AUDIO_SPEAKER_10CH_FB_DESC_LEN + TUD_CDC_DESC_LEN)
 
 #define EPNUM_AUDIO_OUT 0x01
 #define EPNUM_AUDIO_FB 0x81
@@ -91,24 +93,25 @@ uint8_t const desc_configuration[] = {
         0x0200, AUDIO_FUNC_DESKTOP_SPEAKER,
         TUD_AUDIO_DESC_CLK_SRC_LEN + TUD_AUDIO_DESC_INPUT_TERM_LEN +
             TUD_AUDIO_DESC_OUTPUT_TERM_LEN +
-            TUD_AUDIO_DESC_FEATURE_UNIT_EIGHT_CHANNEL_LEN,
+            TUD_AUDIO_DESC_FEATURE_UNIT_TEN_CHANNEL_LEN,
         AUDIO_CS_AS_INTERFACE_CTRL_LATENCY_POS),
     TUD_AUDIO_DESC_CLK_SRC(0x04, AUDIO_CLOCK_SOURCE_ATT_INT_FIX_CLK,
                            (AUDIO_CTRL_R << AUDIO_CLOCK_SOURCE_CTRL_CLK_FRQ_POS),
                            0x01, 0x00),
     TUD_AUDIO_DESC_INPUT_TERM(0x01, AUDIO_TERM_TYPE_USB_STREAMING, 0x00, 0x04,
-                              0x08, AUDIO_CHANNEL_CONFIG_NON_PREDEFINED, 0x00,
+                              0x0A, AUDIO_CHANNEL_CONFIG_NON_PREDEFINED, 0x00,
                               0 * (AUDIO_CTRL_R << AUDIO_IN_TERM_CTRL_CONNECTOR_POS),
                               0x00),
     TUD_AUDIO_DESC_OUTPUT_TERM(0x03, AUDIO_TERM_TYPE_OUT_DESKTOP_SPEAKER, 0x01,
                                0x02, 0x04, 0x0000, 0x00),
-    TUD_AUDIO_DESC_FEATURE_UNIT_EIGHT_CHANNEL(
+    TUD_AUDIO_DESC_FEATURE_UNIT_TEN_CHANNEL(
         0x02, 0x01, _MUTE_CTRL, _MUTE_CTRL, _MUTE_CTRL, _MUTE_CTRL, _MUTE_CTRL,
-        _MUTE_CTRL, _MUTE_CTRL, _MUTE_CTRL, _MUTE_CTRL, 0x00),
+        _MUTE_CTRL, _MUTE_CTRL, _MUTE_CTRL, _MUTE_CTRL, _MUTE_CTRL, _MUTE_CTRL,
+        0x00),
     TUD_AUDIO_DESC_STD_AS_INT((uint8_t)(_SPK_ITF + 1), 0x00, 0x00, 0x00),
     TUD_AUDIO_DESC_STD_AS_INT((uint8_t)(_SPK_ITF + 1), 0x01, 0x02, 0x00),
     TUD_AUDIO_DESC_CS_AS_INT(0x01, AUDIO_CTRL_NONE, AUDIO_FORMAT_TYPE_I,
-                             AUDIO_DATA_FORMAT_TYPE_I_PCM, 0x08,
+                             AUDIO_DATA_FORMAT_TYPE_I_PCM, 0x0A,
                              AUDIO_CHANNEL_CONFIG_NON_PREDEFINED, 0x00),
     TUD_AUDIO_DESC_TYPE_I_FORMAT(CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX,
                                  CFG_TUD_AUDIO_FUNC_1_RESOLUTION_RX),
@@ -129,9 +132,11 @@ uint8_t const desc_configuration[] = {
 
 TU_VERIFY_STATIC(sizeof(desc_configuration) == CONFIG_TOTAL_LEN,
                  "CONFIG_TOTAL_LEN mismatch");
-TU_VERIFY_STATIC(TUD_AUDIO_SPEAKER_8CH_FB_DESC_LEN ==
+TU_VERIFY_STATIC(TUD_AUDIO_SPEAKER_10CH_FB_DESC_LEN ==
                      CFG_TUD_AUDIO_FUNC_1_DESC_LEN,
                  "CFG_TUD_AUDIO_FUNC_1_DESC_LEN mismatch");
+TU_VERIFY_STATIC(CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX <= 1023,
+                 "FS ISO packet must be <= 1023");
 
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
   (void)index;

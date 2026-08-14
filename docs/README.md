@@ -10,7 +10,7 @@ than duplicating command tables. Everything else is grouped below.
 | `reference/` | Engineering references: [`rs485_console_architecture.md`](reference/rs485_console_architecture.md) (bus turnaround, half-duplex discipline, host-tool layout), [`note_filter_butterworth.md`](reference/note_filter_butterworth.md) (Channel per-voice DF4 LPF), [`svn_publishing.md`](reference/svn_publishing.md) (release export flow), plus the Firmware Engineering Reference (.docx) and Synth Firmware Architecture (.pdf). |
 | `manuals/` | Channel / Effect card user manuals (.docx). |
 | `datasheets/` | Channel / Effect card datasheets (.docx). |
-| `diagrams/` | Block diagrams (.drawio), Channel audio-flow diagram, SCF/HP clock-steering SVGs. |
+| `diagrams/` | [`card_data_flow.md`](diagrams/card_data_flow.md) (Channel + Effect mermaid: USB, DMA, playhead, analog), Channel wet/dry photo, SCF/HP clock-steering SVGs, .drawio sources. |
 | `img/` | Local board photos — gitignored, not part of the product tree. |
 
 ## Binary deliverables (not maintained with the code)

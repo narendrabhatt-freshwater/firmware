@@ -53,7 +53,7 @@ extern "C"
   void Audio_Bridge_StreamStop(void);
 
   /**
-   * @brief Feed one USB isochronous OUT packet (8ch int16 interleaved) into
+   * @brief Feed one USB isochronous OUT packet (10ch int16 interleaved) into
    *        per-voice dry stream rings for SAMPLE sustain.
    * @param pbuf Packet bytes (may be NULL only when size is 0).
    * @param size Length in bytes.

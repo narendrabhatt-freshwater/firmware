@@ -1,9 +1,9 @@
 /**
  ******************************************************************************
  * @file    attack_bank.h
- * @brief   Per-slot int32 attack heads in AXI (ATTACK_BANK_LEN × 4 bytes).
+ * @brief   Per-voice int32 attack heads in AXI (8 × ATTACK_BANK_LEN).
  *
- * Played on note-on before UAC stream_ring sustain. Q31 for the voice path.
+ * Voice N owns table N. Played on note-on before UAC stream_ring sustain.
  ******************************************************************************
  */
 
@@ -21,7 +21,8 @@ extern "C"
 #define SAMPLE_VOICES 8u
 
 #define ATTACK_BANK_COUNT SAMPLE_VOICES
-#define ATTACK_BANK_LEN 256u
+/** ~85 ms @ 48 kHz. Uses AXI freed by removing the on-card body loop. */
+#define ATTACK_BANK_LEN 4096u
 #define ATTACK_BANK_BYTES (ATTACK_BANK_LEN * 4u)
 /** Source-index overlap of attack tail with body head. */
 #define SAMPLE_CROSSFADE_LEN 32u
@@ -67,6 +68,9 @@ extern "C"
 
   /** Table sample as Q31; 0 if id/index invalid or unloaded. */
   int32_t AttackBank_SampleAt(uint16_t wave_id, uint32_t index);
+
+  /** Contiguous Q31 head (ATTACK_BANK_LEN). NULL if id invalid. */
+  const int32_t *AttackBank_Table(uint16_t wave_id);
 
 #ifdef __cplusplus
 }

@@ -68,6 +68,15 @@ int32_t *AttackBank_WritePtr(uint16_t wave_id)
   return s_data[wave_id];
 }
 
+const int32_t *AttackBank_Table(uint16_t wave_id)
+{
+  if (wave_id >= ATTACK_BANK_COUNT)
+  {
+    return NULL;
+  }
+  return s_data[wave_id];
+}
+
 int AttackBank_Commit(uint16_t wave_id)
 {
   if (wave_id >= ATTACK_BANK_COUNT)

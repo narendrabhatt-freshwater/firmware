@@ -109,9 +109,11 @@ case "$PRODUCT" in
     copy_doc docs/diagrams/channel_card_audio_flow.jpg diagrams/channel_card_audio_flow.jpg
     copy_doc docs/diagrams/scf_hp_clock_steering.svg diagrams/scf_hp_clock_steering.svg
     copy_doc docs/diagrams/scf_hp_clock_steering_v2.svg diagrams/scf_hp_clock_steering_v2.svg
+    copy_doc docs/diagrams/card_data_flow.md diagrams/card_data_flow.md
     ;;
   effect_card)
     copy_doc README.md firmware_handbook.md
+    copy_doc docs/diagrams/card_data_flow.md diagrams/card_data_flow.md
     ;;
   protocol|cmi_control)
     copy_doc docs/reference/rs485_console_architecture.md reference/rs485_console_architecture.md

@@ -21,8 +21,6 @@
 #include "usb_app.h"
 #include "attack_bank.h"
 #include "attack_upload.h"
-#include "body_bank.h"
-#include "body_upload.h"
 #include "stream_ring.h"
 
 #include <stdio.h>
@@ -232,9 +230,9 @@ static const SwitchDef_t switches[] = {
  *   n0..n7 <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 0.125)
  *   n <Hz> [sc]       — all 8 voices (n 0 = silence)
  *   s / p <d> / t <a> — global note-bank shape (sine / pulse duty / tri asym)
- *   al/bl <id> <len>  — CDC attack-head / body-loop sample upload
- *   ar <id> <Hz>      — sample root pitch;  aw <voice> <id> — assign wave
- *   a / vq            — voice→wave map / hungriest voice + free slots
+ *   al <id> <len>     — CDC attack-head upload (16384 bytes)
+ *   ar <id> <Hz>      — sample root pitch (id = voice); a — loaded heads
+ *   a / vq            — loaded heads per voice / hungriest + free slots
  *   en0..enf / en     — envelope: end slope[±k] … release_slope[±k]
  *                       (en0 0 / en 0 = clear → unprogrammed bypass)
  *   ek0..ekf / ek     — env pitch-track k (−10..10, rate ∝ (f/C4)^k)
@@ -409,7 +407,7 @@ static void Console_Help(void)
 {
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   RS485_Reply("ok: SAMPLE n0..n7 Hz [sc] | s|p d|t a | aw v id | "
-              "al id 1024 | bl id bytes | ar id Hz | a | vq | "
+              "al v 16384 | ar v Hz | a | vq | "
               "en0..en7 end slope[±k] ... rel[±k]|0 | ek0..ek7 k | "
               "f0..f7 Hz [q] | fk0..fk7 k | g ch dB | "
               "cpu [0|N|q N]\r\n");
@@ -1403,7 +1401,7 @@ static void Console_CmdNoteSlot(char *line)
   Console_SetNoteFreq(note, hz, scale);
 }
 
-/** aw <voice> <wave_id> — assign attack table to voice. */
+/** aw <voice> <id> — identity only (slot is the voice). */
 static void Console_CmdAssignWave(char *line)
 {
   unsigned int voice;
@@ -1426,7 +1424,7 @@ static void Console_CmdAssignWave(char *line)
   }
 }
 
-/** a — list loaded attack ids for voices' assignments. */
+/** a — loaded attack head per voice (slot = voice). */
 static void Console_CmdAttackQuery(void)
 {
   char b[200];
@@ -1436,9 +1434,8 @@ static void Console_CmdAttackQuery(void)
   n = snprintf(b, sizeof b, "ok: a");
   for (i = 0u; i < NOTE_BANK_VOICES && n > 0 && (size_t)n < sizeof b; i++)
   {
-    uint16_t wid = NoteBank_GetWaveId(i);
-    n += snprintf(b + n, sizeof b - (size_t)n, " %u:%u%s", (unsigned)i,
-                  (unsigned)wid, AttackBank_IsLoaded(wid) != 0u ? "*" : "");
+    n += snprintf(b + n, sizeof b - (size_t)n, " %u%s", (unsigned)i,
+                  AttackBank_IsLoaded(i) != 0u ? "*" : "");
   }
   if (n > 0 && (size_t)n < sizeof b)
   {
@@ -1447,7 +1444,7 @@ static void Console_CmdAttackQuery(void)
   RS485_Reply(b);
 }
 
-/** al <wave_id> <nbytes> — CDC binary load (1024 int32 bytes). */
+/** al <wave_id> <nbytes> — CDC binary load (ATTACK_BANK_BYTES). */
 static void Console_CmdAttackLoad(char *line)
 {
   unsigned int wid;
@@ -1471,28 +1468,11 @@ static void Console_CmdAttackLoad(char *line)
   RS485_Reply("ok:ready\r\n");
 }
 
-/** bl <wave_id> <nbytes> — CDC binary body loop (even int16 bytes). */
+/** bl is retired — body is the UAC FIFO, not on-card RAM. */
 static void Console_CmdBodyLoad(char *line)
 {
-  unsigned int wid;
-  unsigned long nbytes;
-
-  if (!console_via_usb)
-  {
-    RS485_Reply("err:usb\r\n");
-    return;
-  }
-  if (sscanf(line, "bl %u %lu", &wid, &nbytes) != 2)
-  {
-    RS485_Reply("err:syntax\r\n");
-    return;
-  }
-  if (BodyUpload_Begin((uint16_t)wid, (uint32_t)nbytes) != 0)
-  {
-    RS485_Reply("err:range\r\n");
-    return;
-  }
-  RS485_Reply("ok:ready\r\n");
+  (void)line;
+  RS485_Reply("err:unsupported\r\n");
 }
 
 /** ar <wave_id> <root_hz> — attack-head native pitch for on-card rate-scale. */
@@ -1512,8 +1492,6 @@ static void Console_CmdRoot(char *line)
     return;
   }
   AttackBank_SetRootHz((uint16_t)wid, hz);
-  /* body_bank root kept in sync until that module is removed. */
-  BodyBank_SetRootHz((uint16_t)wid, hz);
   {
     char b[48];
     snprintf(b, sizeof b, "ok: ar %u %.6g\r\n", wid, (double)hz);
@@ -1539,14 +1517,14 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- al <id> 1024: CDC attack head upload ---- */
+  /* ---- al <id> 16384: CDC attack head upload ---- */
   if (strncmp(line, "al ", 3) == 0)
   {
     Console_CmdAttackLoad(line);
     return;
   }
 
-  /* ---- bl <id> <nbytes>: CDC body loop upload ---- */
+  /* ---- bl: retired (body is UAC-streamed) ---- */
   if (strncmp(line, "bl ", 3) == 0)
   {
     Console_CmdBodyLoad(line);
@@ -1567,7 +1545,7 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- a: voice→wave_id map ---- */
+  /* ---- a: loaded heads (slot = voice) ---- */
   if (strcmp(line, "a") == 0)
   {
     Console_CmdAttackQuery();
@@ -1831,7 +1809,6 @@ void ChannelConsole_Init(void)
   NoteFilter_InitAll();
   NoteEnv_Init();
   AttackBank_Init();
-  BodyBank_Init();
   StreamRing_Init();
   NoteBank_Init();
 

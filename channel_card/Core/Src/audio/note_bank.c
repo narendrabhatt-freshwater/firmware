@@ -3,14 +3,15 @@
  * @file    note_bank.c
  * @brief   SAMPLE voices: attack RAM + body slots → sample → LPF → env.
  *
- * One Q16.16 source-index playhead per voice. Live nX slews phase_inc.
- * Join is a SAMPLE_CROSSFADE_LEN overlap mix. Body is unpitched UAC.
+ * Attack is a long AXI head (8-tap sinc). Body is the UAC FIFO
+ * (8-tap when the ring has the neighbourhood). Live nX slews phase_inc.
  ******************************************************************************
  */
 
 #include "note_bank.h"
 
 #include "attack_bank.h"
+#include "interp8.h"
 #include "note_envelope.h"
 #include "note_filter.h"
 #include "stream_ring.h"
@@ -34,8 +35,11 @@ static double note_freq_hz[NOTE_BANK_VOICES];
 static double note_scale[NOTE_BANK_VOICES];
 static int32_t note_amp_q15[NOTE_BANK_VOICES];
 static uint8_t note_active[NOTE_BANK_VOICES];
-static uint16_t note_wave_id[NOTE_BANK_VOICES];
-static uint32_t note_phase[NOTE_BANK_VOICES];
+/* Q16.16 attack index. Body consume is note_body_frac from ring rd.
+ * Attack slot is the voice index — nX always plays AXI head X. */
+static uint64_t note_phase[NOTE_BANK_VOICES];
+static uint32_t note_body_frac[NOTE_BANK_VOICES];
+static int32_t note_hold[NOTE_BANK_VOICES];
 static uint32_t note_inc[NOTE_BANK_VOICES];
 static uint32_t note_inc_tgt[NOTE_BANK_VOICES];
 static NoteBank_Shape_t note_shape = NOTE_SHAPE_SINE;
@@ -91,10 +95,10 @@ static int32_t NoteBank_AttackAt(uint16_t wid, uint32_t idx)
   return AttackBank_SampleAt(wid, idx);
 }
 
-static int NoteBank_BodyAt(uint8_t note, uint32_t body_idx, int32_t *out)
+static int NoteBank_BodyAtRel(uint8_t note, uint32_t offset, int32_t *out)
 {
   int16_t s16;
-  if (StreamRing_Get(note, body_idx, &s16) != 0)
+  if (StreamRing_GetRel(note, offset, &s16) != 0)
   {
     return -1;
   }
@@ -104,34 +108,66 @@ static int NoteBank_BodyAt(uint8_t note, uint32_t body_idx, int32_t *out)
 
 static int32_t NoteBank_InterpAttack(uint16_t wid, uint32_t phase)
 {
-  uint32_t i0 = phase >> 16;
-  uint32_t frac = phase & 0xFFFFu;
-  int32_t a = NoteBank_AttackAt(wid, i0);
-  int32_t b = NoteBank_AttackAt(wid, i0 + 1u);
-  return NoteBank_LerpQ31(a, b, frac);
+  const int32_t *tab = AttackBank_Table(wid);
+  if (tab == NULL)
+  {
+    return NoteBank_LerpQ31(NoteBank_AttackAt(wid, phase >> 16),
+                            NoteBank_AttackAt(wid, (phase >> 16) + 1u),
+                            phase & 0xFFFFu);
+  }
+  return Interp8_Q31(tab, ATTACK_BANK_LEN, phase, 0u);
 }
 
-static int NoteBank_InterpBody(uint8_t note, uint32_t body_phase, int32_t *out)
+static int NoteBank_InterpBody(uint8_t note, int32_t *out)
 {
-  uint32_t i0 = body_phase >> 16;
-  uint32_t frac = body_phase & 0xFFFFu;
+  uint32_t i0 = note_body_frac[note] >> 16;
+  uint32_t frac = note_body_frac[note] & 0xFFFFu;
+  int16_t tap[8];
+  uint32_t t;
   int32_t a;
   int32_t b;
-  if (NoteBank_BodyAt(note, i0, &a) != 0)
+
+  for (t = 0u; t < 8u; t++)
+  {
+    int32_t off = (int32_t)i0 + (int32_t)t - 3;
+    int16_t s16;
+    if (off < 0)
+    {
+      off = 0;
+    }
+    if (StreamRing_GetRel(note, (uint32_t)off, &s16) != 0)
+    {
+      break;
+    }
+    tap[t] = s16;
+  }
+  if (t == 8u)
+  {
+    *out = Interp8_S16(tap, 8u, (3u << 16) | (frac & 0xFFFFu), 0u);
+    return 0;
+  }
+
+  if (NoteBank_BodyAtRel(note, i0, &a) != 0)
   {
     return -1;
   }
-  if (frac == 0u)
+  if (frac == 0u || NoteBank_BodyAtRel(note, i0 + 1u, &b) != 0)
   {
     *out = a;
     return 0;
   }
-  if (NoteBank_BodyAt(note, i0 + 1u, &b) != 0)
-  {
-    return -1;
-  }
   *out = NoteBank_LerpQ31(a, b, frac);
   return 0;
+}
+
+static void NoteBank_AdvanceBody(uint8_t note)
+{
+  note_body_frac[note] += note_inc[note];
+  while (note_body_frac[note] >= PHASE_ONE)
+  {
+    StreamRing_Advance(note, 1u);
+    note_body_frac[note] -= PHASE_ONE;
+  }
 }
 
 static void NoteBank_SlewInc(uint8_t note)
@@ -151,64 +187,56 @@ static void NoteBank_SlewInc(uint8_t note)
 }
 
 /**
- * Dry sample at source-index phase. 0 and no phase advance on body underrun.
+ * Dry sample. Head always runs to the end. Body is the UAC FIFO.
  */
 static int32_t NoteBank_Sample(uint8_t note)
 {
-  uint16_t wid = note_wave_id[note];
-  uint32_t phase = note_phase[note];
-  uint32_t i0 = phase >> 16;
+  uint16_t wid = (uint16_t)note;
+  uint64_t phase = note_phase[note];
   int32_t y;
-  const uint32_t fade0 = SAMPLE_BODY_ORIGIN << 16;
-  const uint32_t fade1 = ATTACK_BANK_LEN << 16;
+  const uint64_t fade0 = (uint64_t)SAMPLE_BODY_ORIGIN << 16;
+  const uint64_t fade1 = (uint64_t)ATTACK_BANK_LEN << 16;
 
   if (AttackBank_IsLoaded(wid) == 0u)
   {
-    /* No head: body from index 0 (host still starts at BODY_ORIGIN). */
-    if (NoteBank_InterpBody(note, phase, &y) != 0)
+    if (NoteBank_InterpBody(note, &y) != 0)
     {
-      return 0;
+      return note_hold[note];
     }
-    StreamRing_DropBefore(note, i0);
-    note_phase[note] = phase + note_inc[note];
-    return y;
-  }
-
-  if (phase < fade0)
-  {
-    y = NoteBank_InterpAttack(wid, phase);
-    note_phase[note] = phase + note_inc[note];
+    NoteBank_AdvanceBody(note);
+    note_phase[note] = phase + (uint64_t)note_inc[note];
+    note_hold[note] = y;
     return y;
   }
 
   if (phase < fade1)
   {
-    int32_t atk = NoteBank_InterpAttack(wid, phase);
-    uint32_t body_phase = phase - fade0;
-    int32_t body;
-    uint32_t t;
-    uint32_t span = fade1 - fade0;
-    if (NoteBank_InterpBody(note, body_phase, &body) != 0)
+    int32_t atk = NoteBank_InterpAttack(wid, (uint32_t)phase);
+    y = atk;
+    if (phase >= fade0)
     {
-      return 0;
+      int32_t body;
+      if (NoteBank_InterpBody(note, &body) == 0)
+      {
+        uint64_t span = fade1 - fade0;
+        uint32_t t = (uint32_t)(((phase - fade0) << 16) / span);
+        y = NoteBank_LerpQ31(atk, body, t);
+        NoteBank_AdvanceBody(note);
+      }
     }
-    t = (uint32_t)(((uint64_t)(phase - fade0) << 16) / span);
-    y = NoteBank_LerpQ31(atk, body, t);
-    StreamRing_DropBefore(note, body_phase >> 16);
-    note_phase[note] = phase + note_inc[note];
+    note_phase[note] = phase + (uint64_t)note_inc[note];
+    note_hold[note] = y;
     return y;
   }
 
+  if (NoteBank_InterpBody(note, &y) != 0)
   {
-    uint32_t body_phase = phase - fade0;
-    if (NoteBank_InterpBody(note, body_phase, &y) != 0)
-    {
-      return 0;
-    }
-    StreamRing_DropBefore(note, body_phase >> 16);
-    note_phase[note] = phase + note_inc[note];
-    return y;
+    return note_hold[note];
   }
+  NoteBank_AdvanceBody(note);
+  note_phase[note] = phase + (uint64_t)note_inc[note];
+  note_hold[note] = y;
+  return y;
 }
 
 static inline int32_t NoteBank_VoiceSample(uint8_t note)
@@ -272,6 +300,7 @@ void NoteBank_Init(void)
 {
   uint8_t i;
 
+  Interp8_Init();
   note_shape = NOTE_SHAPE_SINE;
   note_shape_param = 0.5;
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
@@ -280,8 +309,9 @@ void NoteBank_Init(void)
     note_scale[i] = 0.0;
     note_amp_q15[i] = 0;
     note_active[i] = 0u;
-    note_wave_id[i] = i;
     note_phase[i] = 0u;
+    note_body_frac[i] = 0u;
+    note_hold[i] = 0;
     note_inc[i] = PHASE_ONE;
     note_inc_tgt[i] = PHASE_ONE;
   }
@@ -300,6 +330,8 @@ void NoteBank_PanicAll(void)
     note_amp_q15[i] = 0;
     note_active[i] = 0u;
     note_phase[i] = 0u;
+    note_body_frac[i] = 0u;
+    note_hold[i] = 0;
     note_inc[i] = PHASE_ONE;
     note_inc_tgt[i] = PHASE_ONE;
     NoteFilter_Reset(i);
@@ -313,7 +345,6 @@ void NoteBank_PanicAll(void)
 void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
 {
   uint32_t inc;
-  uint16_t wid;
 
   if (note >= NOTE_BANK_VOICES)
   {
@@ -345,8 +376,7 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
     scale = 1.0;
   }
 
-  wid = note_wave_id[note];
-  inc = NoteBank_HzToInc(wid, freq_hz);
+  inc = NoteBank_HzToInc((uint16_t)note, freq_hz);
   if (inc < PHASE_INC_MIN)
   {
     inc = PHASE_INC_MIN;
@@ -364,21 +394,12 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
 
   if (note_active[note] != 0u)
   {
-    /* Live pitch: slew inc, keep source phase. Empty ring + playhead
-     * already in body means underrun — treat nX as retrigger. */
-    if (StreamRing_FillLevel(note) == 0u &&
-        (note_phase[note] >> 16) >= SAMPLE_BODY_ORIGIN)
-    {
-      note_phase[note] = 0u;
-      note_inc[note] = inc;
-      StreamRing_Prime(note);
-      NoteEnv_NoteOn(note, (float)freq_hz);
-    }
     return;
   }
 
   StreamRing_Prime(note);
   note_phase[note] = 0u;
+  note_body_frac[note] = 0u;
   note_inc[note] = inc;
   NoteEnv_NoteOn(note, (float)freq_hz);
   note_active[note] = 1u;
@@ -404,11 +425,11 @@ double NoteBank_GetScale(uint8_t note)
 
 int NoteBank_SetWaveId(uint8_t note, uint16_t wave_id)
 {
-  if (note >= NOTE_BANK_VOICES || wave_id >= ATTACK_BANK_COUNT)
+  /* Slot is the voice. Sharing one head across voices is not allowed. */
+  if (note >= NOTE_BANK_VOICES || wave_id != (uint16_t)note)
   {
     return -1;
   }
-  note_wave_id[note] = wave_id;
   return 0;
 }
 
@@ -418,7 +439,7 @@ uint16_t NoteBank_GetWaveId(uint8_t note)
   {
     return 0u;
   }
-  return note_wave_id[note];
+  return (uint16_t)note;
 }
 
 int NoteBank_SetShape(NoteBank_Shape_t shape, double param)
@@ -538,8 +559,8 @@ void NoteBank_OnBodySof(uint8_t voice)
   {
     return;
   }
-  note_phase[voice] = 0u;
-  note_inc[voice] = note_inc_tgt[voice];
+  /* New body session. Attack phase is independent of the FIFO. */
+  note_body_frac[voice] = 0u;
 }
 
 int32_t NoteBank_NextSample(void)

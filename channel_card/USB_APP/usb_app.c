@@ -1,12 +1,11 @@
 /* USB application layer — Channel Card
  *
- * UAC2 8ch int16 @ 48 kHz dry → stream rings + CDC console / attack load.
+ * UAC2 10ch int16 @ 48 kHz dry → stream rings + CDC console / attack load.
  */
 
 #include "usb_app.h"
 #include "audio_bridge.h"
 #include "attack_upload.h"
-#include "body_upload.h"
 #include "channel_console.h"
 #include "main.h"
 #include "tusb.h"
@@ -106,7 +105,7 @@ static void CDC_Console_Poll(void)
 
   while (tud_cdc_available())
   {
-    /* Binary attack/body upload: consume raw bytes, no echo / line edit. */
+    /* Binary attack upload: consume raw bytes, no echo / line edit. */
     if (AttackUpload_IsActive() != 0u)
     {
       uint8_t tmp[256];
@@ -116,17 +115,6 @@ static void CDC_Console_Poll(void)
         break;
       }
       (void)AttackUpload_Feed(tmp, n);
-      continue;
-    }
-    if (BodyUpload_IsActive() != 0u)
-    {
-      uint8_t tmp[256];
-      uint32_t n = tud_cdc_read(tmp, sizeof tmp);
-      if (n == 0u)
-      {
-        break;
-      }
-      (void)BodyUpload_Feed(tmp, n);
       continue;
     }
 

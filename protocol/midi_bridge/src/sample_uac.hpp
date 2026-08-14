@@ -5,7 +5,7 @@
 #include <memory>
 #include <string>
 
-/** RtAudio output to Channel Card UAC (8ch int16 @ 48 kHz). */
+/** RtAudio output to Channel Card UAC (10ch int16 @ 48 kHz). */
 class SampleUacOut {
 public:
   SampleUacOut();
@@ -19,10 +19,13 @@ public:
   void Stop();
   bool Running() const;
 
-  cardlink::audio::SampleDryMixer &Mixer() { return mixer_; }
+  /** Render this mixer (default: owned). Bind before Start. */
+  void BindMixer(cardlink::audio::SampleDryMixer &mixer);
+  cardlink::audio::SampleDryMixer &Mixer() { return *mixer_; }
 
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
-  cardlink::audio::SampleDryMixer mixer_;
+  cardlink::audio::SampleDryMixer owned_;
+  cardlink::audio::SampleDryMixer *mixer_ = &owned_;
 };

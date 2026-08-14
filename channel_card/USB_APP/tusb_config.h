@@ -1,7 +1,7 @@
 /* TinyUSB configuration — Channel Card
  *
  * Composite device on USB1_OTG_HS (full-speed, embedded PHY):
- *   - UAC2 speaker, 8ch int16 / 48 kHz tagged body → per-voice slot rings
+ *   - UAC2 speaker, 10ch int16 / 48 kHz tagged body → per-voice slot rings
  *   - CDC-ACM console + attack-head binary load
  */
 
@@ -54,20 +54,20 @@ extern "C" {
 #define CFG_TUD_CDC_TX_BUFSIZE      512
 
 //--------------------------------------------------------------------
-// AUDIO: 8ch int16 @ 48 kHz dry voice feeds (~768 B/ms on FS)
+// AUDIO: 10ch int16 @ 48 kHz (~960 B/ms; FS ISO max 1023)
 //--------------------------------------------------------------------
 
-/* Must match TUD_AUDIO_SPEAKER_8CH_FB_DESC_LEN in usb_descriptors.c.
+/* Must match TUD_AUDIO_SPEAKER_10CH_FB_DESC_LEN in usb_descriptors.c.
  * audiod_open() returns this to usbd set_config; wrong length breaks CDC.
  * Parenthesize ONE_CHANNEL_LEN — it is `6+(1+1)*4` without its own parens. */
 #define CFG_TUD_AUDIO_FUNC_1_DESC_LEN                                        \
   (TUD_AUDIO_SPEAKER_MONO_FB_DESC_LEN -                                      \
-   (TUD_AUDIO_DESC_FEATURE_UNIT_ONE_CHANNEL_LEN) + (6 + (8 + 1) * 4))
+   (TUD_AUDIO_DESC_FEATURE_UNIT_ONE_CHANNEL_LEN) + (6 + (10 + 1) * 4))
 #define CFG_TUD_AUDIO_FUNC_1_N_AS_INT         1
 #define CFG_TUD_AUDIO_FUNC_1_CTRL_BUF_SZ      64
 
 #define CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE          48000
-#define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX            8
+#define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX            10
 #define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX    2
 #define CFG_TUD_AUDIO_FUNC_1_RESOLUTION_RX            16
 

@@ -1,17 +1,28 @@
 #include "cardlink/audio/sample_dry.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <sstream>
+#include <thread>
 
 namespace cardlink {
 namespace audio {
 
 SampleDryMixer::SampleDryMixer()
 {
-  root_hz_.fill(kDefaultBodyRootHz);
-  oneshot_.fill(false);
+  for (auto &h : root_hz_) {
+    h.store(kDefaultBodyRootHz, std::memory_order_relaxed);
+  }
+  for (auto &o : oneshot_) {
+    o.store(false, std::memory_order_relaxed);
+  }
+  for (uint8_t i = 0; i < kSampleVoices; ++i) {
+    sent_[i].store(0, std::memory_order_relaxed);
+    live_[i].store(false, std::memory_order_relaxed);
+    live_wave_[i].store(0xFFFFu, std::memory_order_relaxed);
+  }
 }
 
 bool SampleDryMixer::LoadBodyFile(uint16_t wave_id,
@@ -41,6 +52,17 @@ bool SampleDryMixer::LoadBodyFile(uint16_t wave_id,
   return SetBody(wave_id, tmp.data(), tmp.size(), err);
 }
 
+bool SampleDryMixer::WaveInUse(uint16_t wave_id) const
+{
+  for (uint8_t i = 0; i < kSampleVoices; ++i) {
+    if (live_[i].load(std::memory_order_acquire) &&
+        live_wave_[i].load(std::memory_order_acquire) == wave_id) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool SampleDryMixer::SetBody(uint16_t wave_id, const int16_t *data, size_t nsamp,
                              std::string &err)
 {
@@ -52,7 +74,10 @@ bool SampleDryMixer::SetBody(uint16_t wave_id, const int16_t *data, size_t nsamp
     err = "empty body";
     return false;
   }
-  std::lock_guard<std::mutex> lock(mu_);
+  if (WaveInUse(wave_id)) {
+    err = "body in use";
+    return false;
+  }
   bodies_[wave_id].assign(data, data + nsamp);
   return true;
 }
@@ -62,8 +87,7 @@ void SampleDryMixer::SetBodyRootHz(uint16_t wave_id, double root_hz)
   if (wave_id >= root_hz_.size() || !(root_hz > 0.0) || !std::isfinite(root_hz)) {
     return;
   }
-  std::lock_guard<std::mutex> lock(mu_);
-  root_hz_[wave_id] = root_hz;
+  root_hz_[wave_id].store(root_hz, std::memory_order_release);
 }
 
 double SampleDryMixer::BodyRootHz(uint16_t wave_id) const
@@ -71,8 +95,7 @@ double SampleDryMixer::BodyRootHz(uint16_t wave_id) const
   if (wave_id >= root_hz_.size()) {
     return kDefaultBodyRootHz;
   }
-  std::lock_guard<std::mutex> lock(mu_);
-  return root_hz_[wave_id];
+  return root_hz_[wave_id].load(std::memory_order_acquire);
 }
 
 void SampleDryMixer::SetBodyOneshot(uint16_t wave_id, bool oneshot)
@@ -80,8 +103,7 @@ void SampleDryMixer::SetBodyOneshot(uint16_t wave_id, bool oneshot)
   if (wave_id >= oneshot_.size()) {
     return;
   }
-  std::lock_guard<std::mutex> lock(mu_);
-  oneshot_[wave_id] = oneshot;
+  oneshot_[wave_id].store(oneshot, std::memory_order_release);
 }
 
 bool SampleDryMixer::BodyOneshot(uint16_t wave_id) const
@@ -89,8 +111,7 @@ bool SampleDryMixer::BodyOneshot(uint16_t wave_id) const
   if (wave_id >= oneshot_.size()) {
     return false;
   }
-  std::lock_guard<std::mutex> lock(mu_);
-  return oneshot_[wave_id];
+  return oneshot_[wave_id].load(std::memory_order_acquire);
 }
 
 bool SampleDryMixer::LoadRootsFile(const std::string &path, std::string &err)
@@ -125,9 +146,9 @@ bool SampleDryMixer::LoadRootsFile(const std::string &path, std::string &err)
   return true;
 }
 
-double SampleDryMixer::IncLocked(const Voice &v) const
+double SampleDryMixer::IncOf(const Voice &v) const
 {
-  const double root = root_hz_[v.wave_id];
+  const double root = root_hz_[v.wave_id].load(std::memory_order_relaxed);
   double inc = 1.0;
   if (root > 0.0 && v.freq_hz > 0.0) {
     inc = v.freq_hz / root;
@@ -141,23 +162,102 @@ double SampleDryMixer::IncLocked(const Voice &v) const
   return inc;
 }
 
+int16_t SampleDryMixer::EncodeTag(uint8_t session, uint8_t route_low)
+{
+  const uint8_t low = static_cast<uint8_t>((session << kUacSessionShift) | route_low);
+  return static_cast<int16_t>(kUacTagBase | low);
+}
+
+void SampleDryMixer::Post(const Cmd &c)
+{
+  for (;;) {
+    const uint32_t w = cmd_wr_.load(std::memory_order_relaxed);
+    const uint32_t r = cmd_rd_.load(std::memory_order_acquire);
+    if ((w - r) < kCmdCap) {
+      cmds_[w % kCmdCap] = c;
+      cmd_wr_.store(w + 1u, std::memory_order_release);
+      return;
+    }
+    std::this_thread::yield();
+  }
+}
+
+void SampleDryMixer::ApplyCmd(const Cmd &c)
+{
+  if (c.kind == CmdKind::AllOff) {
+    for (uint8_t i = 0; i < kSampleVoices; ++i) {
+      const uint8_t session = voices_[i].session;
+      voices_[i] = Voice{};
+      voices_[i].session = session;
+      sent_[i].store(0, std::memory_order_release);
+      live_[i].store(false, std::memory_order_release);
+      live_wave_[i].store(0xFFFFu, std::memory_order_release);
+    }
+    return;
+  }
+  if (c.voice >= kSampleVoices) {
+    return;
+  }
+  auto &v = voices_[c.voice];
+  if (c.kind == CmdKind::Pitch) {
+    if (v.active) {
+      v.freq_hz = c.freq_hz;
+    }
+    return;
+  }
+  if (c.kind == CmdKind::Silence) {
+    const uint8_t session = v.session;
+    v = Voice{};
+    v.session = session;
+    sent_[c.voice].store(0, std::memory_order_release);
+    live_[c.voice].store(false, std::memory_order_release);
+    live_wave_[c.voice].store(0xFFFFu, std::memory_order_release);
+    return;
+  }
+  if (c.wave_id >= bodies_.size() || bodies_[c.wave_id].empty()) {
+    live_[c.voice].store(false, std::memory_order_release);
+    live_wave_[c.voice].store(0xFFFFu, std::memory_order_release);
+    return;
+  }
+  const uint8_t session = static_cast<uint8_t>((v.session + 1u) % kUacSessionMod);
+  v = Voice{};
+  v.active = true;
+  v.sof_pending = true;
+  v.session = session;
+  v.wave_id = c.wave_id;
+  v.freq_hz = c.freq_hz;
+  v.credit = static_cast<double>(kPrefillSamples);
+  sent_[c.voice].store(0, std::memory_order_release);
+  live_wave_[c.voice].store(c.wave_id, std::memory_order_release);
+  live_[c.voice].store(true, std::memory_order_release);
+}
+
+void SampleDryMixer::DrainCmds()
+{
+  uint32_t r = cmd_rd_.load(std::memory_order_relaxed);
+  const uint32_t w = cmd_wr_.load(std::memory_order_acquire);
+  while (r != w) {
+    ApplyCmd(cmds_[r % kCmdCap]);
+    ++r;
+  }
+  cmd_rd_.store(r, std::memory_order_release);
+}
+
 void SampleDryMixer::NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz)
 {
   if (voice >= kSampleVoices || wave_id >= bodies_.size()) {
     return;
   }
-  std::lock_guard<std::mutex> lock(mu_);
-  if (bodies_[wave_id].empty()) {
-    return;
-  }
-  auto &v = voices_[voice];
-  v.active = true;
-  v.sof_pending = true;
-  v.wave_id = wave_id;
-  v.freq_hz = freq_hz;
-  v.cursor = 0.0;
-  v.queued = 0.0;
-  v.consumed = 0.0;
+  /* Mark in-use before the callback drains the command so SetBody
+   * cannot reallocate a table Render is about to read. */
+  live_wave_[voice].store(wave_id, std::memory_order_release);
+  live_[voice].store(true, std::memory_order_release);
+  Cmd c;
+  c.kind = CmdKind::On;
+  c.voice = voice;
+  c.wave_id = wave_id;
+  c.freq_hz = freq_hz;
+  Post(c);
 }
 
 void SampleDryMixer::SetPitchHz(uint8_t voice, double freq_hz)
@@ -165,9 +265,65 @@ void SampleDryMixer::SetPitchHz(uint8_t voice, double freq_hz)
   if (voice >= kSampleVoices) {
     return;
   }
-  std::lock_guard<std::mutex> lock(mu_);
-  if (voices_[voice].active) {
-    voices_[voice].freq_hz = freq_hz;
+  Cmd c;
+  c.kind = CmdKind::Pitch;
+  c.voice = voice;
+  c.freq_hz = freq_hz;
+  Post(c);
+}
+
+unsigned SampleDryMixer::QueuedSamples(uint8_t voice) const
+{
+  if (voice >= kSampleVoices) {
+    return 0;
+  }
+  if (!live_[voice].load(std::memory_order_acquire)) {
+    return 0;
+  }
+  return sent_[voice].load(std::memory_order_acquire);
+}
+
+bool SampleDryMixer::WaitPrefill(uint8_t voice, unsigned timeout_ms)
+{
+  const auto t0 = std::chrono::steady_clock::now();
+  while (true) {
+    if (voice < kSampleVoices && live_[voice].load(std::memory_order_acquire) &&
+        sent_[voice].load(std::memory_order_acquire) >= kPrefillSamples) {
+      return true;
+    }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0);
+    if (elapsed.count() >= static_cast<long>(timeout_ms)) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
+
+bool SampleDryMixer::WaitPrefillActive(unsigned timeout_ms)
+{
+  const auto t0 = std::chrono::steady_clock::now();
+  while (true) {
+    bool any = false;
+    bool ready = true;
+    for (uint8_t i = 0; i < kSampleVoices; ++i) {
+      if (!live_[i].load(std::memory_order_acquire)) {
+        continue;
+      }
+      any = true;
+      if (sent_[i].load(std::memory_order_acquire) < kPrefillSamples) {
+        ready = false;
+      }
+    }
+    if (!any || ready) {
+      return true;
+    }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0);
+    if (elapsed.count() >= static_cast<long>(timeout_ms)) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 }
 
@@ -181,30 +337,30 @@ void SampleDryMixer::Silence(uint8_t voice)
   if (voice >= kSampleVoices) {
     return;
   }
-  std::lock_guard<std::mutex> lock(mu_);
-  voices_[voice] = Voice{};
+  Cmd c;
+  c.kind = CmdKind::Silence;
+  c.voice = voice;
+  Post(c);
 }
 
 void SampleDryMixer::AllNotesOff()
 {
-  std::lock_guard<std::mutex> lock(mu_);
-  for (auto &v : voices_) {
-    v = Voice{};
-  }
+  Cmd c;
+  c.kind = CmdKind::AllOff;
+  Post(c);
 }
 
 bool SampleDryMixer::AnyActive() const
 {
-  std::lock_guard<std::mutex> lock(mu_);
-  for (const auto &v : voices_) {
-    if (v.active) {
+  for (uint8_t i = 0; i < kSampleVoices; ++i) {
+    if (live_[i].load(std::memory_order_acquire)) {
       return true;
     }
   }
   return false;
 }
 
-int16_t SampleDryMixer::NextBodyLocked(Voice &v)
+int16_t SampleDryMixer::NextBody(Voice &v)
 {
   auto &body = bodies_[v.wave_id];
   const size_t n = body.size();
@@ -212,7 +368,7 @@ int16_t SampleDryMixer::NextBodyLocked(Voice &v)
     v.active = false;
     return 0;
   }
-  const bool oneshot = oneshot_[v.wave_id];
+  const bool oneshot = oneshot_[v.wave_id].load(std::memory_order_relaxed);
   double ph = v.cursor;
   const double n_d = static_cast<double>(n);
   if (oneshot && ph >= n_d) {
@@ -243,41 +399,26 @@ int16_t SampleDryMixer::NextBodyLocked(Voice &v)
   return s;
 }
 
-uint8_t SampleDryMixer::PickVoiceLocked()
+uint8_t SampleDryMixer::PickVoice() const
 {
   uint8_t best = 0xFF;
-  double best_rem = 1e300;
-  uint8_t npre = 0;
-  uint8_t pre[kSampleVoices];
+  double best_credit = 0.0;
 
   for (uint8_t i = 0; i < kSampleVoices; ++i) {
-    auto &v = voices_[i];
+    const auto &v = voices_[i];
     if (!v.active) {
       continue;
     }
-    const double fill = v.queued - v.consumed;
-    const double room = static_cast<double>(kRingSamples) - fill;
-    if (room < 8.0) {
-      continue;
+    double c = v.credit;
+    if (sent_[i].load(std::memory_order_relaxed) < kPrefillSamples) {
+      c += static_cast<double>(kPrefillSamples);
     }
-    if (v.queued < static_cast<double>(kPrefillSamples)) {
-      pre[npre++] = i;
-    }
-    const double rem = v.queued - v.consumed;
-    if (rem < best_rem) {
-      best_rem = rem;
+    if (c > best_credit) {
+      best_credit = c;
       best = i;
     }
   }
-  if (npre != 0) {
-    /* Prefill contract: new notes before hunger mux. */
-    rr_ = static_cast<uint8_t>((rr_ + 1u) % npre);
-    return pre[rr_ % npre];
-  }
-  if (best != 0xFF) {
-    return best;
-  }
-  return 0xFF;
+  return best;
 }
 
 void SampleDryMixer::Render(int16_t *interleaved, unsigned nframes)
@@ -285,29 +426,19 @@ void SampleDryMixer::Render(int16_t *interleaved, unsigned nframes)
   if (!interleaved || nframes == 0) {
     return;
   }
-  std::lock_guard<std::mutex> lock(mu_);
+  DrainCmds();
   for (unsigned f = 0; f < nframes; ++f) {
-    int16_t *fr = &interleaved[f * kSampleVoices];
-    /* Card consumes one body sample per output sample once in the body
-     * region. Tick every voice every frame or the mux latches "full"
-     * and never sends again after the first fill. */
+    int16_t *fr = &interleaved[f * kUacChannels];
     for (uint8_t i = 0; i < kSampleVoices; ++i) {
       auto &v = voices_[i];
-      if (!v.active) {
-        continue;
-      }
-      v.consumed += IncLocked(v);
-      double fill = v.queued - v.consumed;
-      if (fill < 0.0) {
-        v.consumed = v.queued;
-      } else if (fill > static_cast<double>(kRingSamples)) {
-        v.queued = v.consumed + static_cast<double>(kRingSamples);
+      if (v.active) {
+        v.credit += IncOf(v);
       }
     }
-    const uint8_t voice = PickVoiceLocked();
+    const uint8_t voice = PickVoice();
     if (voice == 0xFF) {
-      fr[0] = 0;
-      for (unsigned ch = 1; ch < kSampleVoices; ++ch) {
+      fr[0] = static_cast<int16_t>(kUacTagBase | kUacIdle);
+      for (unsigned ch = 1; ch < kUacChannels; ++ch) {
         fr[ch] = 0;
       }
       continue;
@@ -318,12 +449,26 @@ void SampleDryMixer::Render(int16_t *interleaved, unsigned nframes)
       route = static_cast<uint8_t>(voice | kUacSof);
       v.sof_pending = false;
     }
-    fr[0] = static_cast<int16_t>(kUacTagBase | route);
-    for (unsigned ch = 1; ch < kSampleVoices; ++ch) {
-      fr[ch] = NextBodyLocked(v);
+    fr[0] = EncodeTag(v.session, route);
+    for (unsigned ch = 1; ch < kUacChannels; ++ch) {
+      fr[ch] = NextBody(v);
     }
-    v.queued += static_cast<double>(kSampleVoices - 1u);
+    const unsigned n = sent_[voice].load(std::memory_order_relaxed) + kUacBodyPerFrame;
+    sent_[voice].store(n, std::memory_order_release);
+    v.credit -= static_cast<double>(kUacBodyPerFrame);
+    if (!v.active) {
+      live_[voice].store(false, std::memory_order_release);
+      live_wave_[voice].store(0xFFFFu, std::memory_order_release);
+    }
   }
+}
+
+void SampleDryMixer::ApplyVoiceQuery(uint8_t mask, uint8_t best,
+                                     const uint8_t *free_slots)
+{
+  (void)mask;
+  (void)best;
+  (void)free_slots;
 }
 
 } // namespace audio

@@ -1,10 +1,15 @@
 /**
  ******************************************************************************
  * @file    stream_ring.h
- * @brief   Per-voice body rings: 8 slots × 256 int16, filled from UAC.
+ * @brief   Per-voice body FIFO: 8 slots × 256 int16, filled from UAC.
  *
- * UAC frames are tagged (ch0 = route, ch1..7 = samples). Card pitches via
- * a Q16.16 source-index playhead in note_bank — this ring is storage only.
+ * SPSC: USB writes, the playhead reads. A full FIFO drops the write
+ * (never unread samples). An empty FIFO is an underrun for the reader.
+ *
+ * UAC frame is 10ch int16 (960 B/ms). ch0 tag: 0x7F00 | (session<<5) |
+ * SOF | voice. session is 0..6. A new session starts a new body. A
+ * repeated ISO frame carries the same session and does not reset the
+ * FIFO. 0x7FFF is idle. ch1..9 are body for that voice.
  ******************************************************************************
  */
 
@@ -25,39 +30,48 @@ extern "C"
 #define STREAM_RING_SAMPLES (STREAM_SLOTS * STREAM_SLOT_LEN)
 
 /**
- * ch0 is a tag, not PCM. Host sends (TAG_BASE | voice | SOF). Near-silence
- * is idle — voice 0 must not be encoded as 0 (OS zero-pad / mute).
+ * ch0 is a tag, not PCM. Near-silence must not decode as voice 0
+ * (OS zero-pad / mute).
  */
+/** UAC interleaved width. Not the voice count (still 8). */
+#define STREAM_UAC_CHANNELS 10u
+#define STREAM_UAC_BODY_CH (STREAM_UAC_CHANNELS - 1u)
+
 #define STREAM_UAC_TAG_BASE 0x7F00u
 #define STREAM_UAC_IDLE 0xFFu
 #define STREAM_UAC_SOF 0x10u
+#define STREAM_UAC_SESSION_SHIFT 5u
+#define STREAM_UAC_SESSION_MASK 0x07u
+/** Session 0..6 so (session<<5)|SOF|voice cannot equal IDLE (0xFF). */
+#define STREAM_UAC_SESSION_MOD 7u
 
   void StreamRing_Init(void);
   void StreamRing_Reset(uint8_t voice);
   void StreamRing_ResetAll(void);
 
   /**
-   * @brief Arm consume. Does not clear queued samples (prefill must survive
-   *        nX). Host sends SOF (route | 0x10) to start a new body.
+   * @brief Arm consume. Does not clear queued samples (prefill must
+   *        survive nX).
    */
   void StreamRing_Prime(uint8_t voice);
 
+  /** Stop consume and empty the FIFO (note-off). */
   void StreamRing_Release(uint8_t voice);
 
   /**
-   * @brief Push tagged UAC frames: ch0 route, ch1..7 body int16.
+   * @brief Push tagged UAC frames: ch0 route, ch1..9 body int16.
    */
   void StreamRing_WriteInterleaved(const int16_t *interleaved, uint32_t nframes);
 
   /**
-   * @brief Body sample at absolute index from last SOF (0 = first prefill).
+   * @brief Body sample at offset from rd (0 = next unread).
    * @retval 0 ok, *out set
-   * @retval -1 missing (underrun / not yet written)
+   * @retval -1 offset past wr (underrun / not yet written)
    */
-  int StreamRing_Get(uint8_t voice, uint32_t body_idx, int16_t *out);
+  int StreamRing_GetRel(uint8_t voice, uint32_t offset, int16_t *out);
 
-  /** Drop samples strictly before body_idx (playhead has moved on). */
-  void StreamRing_DropBefore(uint8_t voice, uint32_t body_idx);
+  /** Drop up to n unread samples from rd (playhead consumed them). */
+  void StreamRing_Advance(uint8_t voice, uint32_t n);
 
   uint32_t StreamRing_FillLevel(uint8_t voice);
 

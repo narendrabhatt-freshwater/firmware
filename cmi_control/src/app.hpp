@@ -8,6 +8,7 @@
 #include "toast.hpp"
 #include "wave_upload_queue.hpp"
 #include "sample_uac.hpp"
+#include "cardlink/sample/client.hpp"
 
 #include "audio_engine.hpp"
 #include "midi_input.hpp"
@@ -48,15 +49,6 @@ enum class SampleFilePick : int8_t
   Wave = 4,
 };
 
-struct SampleSlotState
-{
-  char head_path[256] = {};
-  char body_path[256] = {};
-  char label[40] = {};
-  bool head_on_card = false;
-  bool body_in_mixer = false;
-};
-
 /** Last-sent Effect toggles (GUI-side until a firmware status poll exists). */
 struct EffectUiState
 {
@@ -85,6 +77,7 @@ struct App
   PreviewScope preview;
   std::array<EnvProgram, midi_host::kVoiceCount> voice_envs;
   WaveUploadQueue waves;
+  cardlink::sample::Client samples;
   std::unique_ptr<SampleUacOut> sample_uac;
   fw::ui::ToastHost toasts;
   AsyncFileDialog file_dialog;
@@ -92,7 +85,6 @@ struct App
   int file_dialog_slot = -1; // -1 = folder / same-to-all context (Waves)
   SampleFilePick sample_file_pick = SampleFilePick::None;
   int sample_file_voice = -1;
-  std::array<SampleSlotState, 8> sample_slots{};
   std::string pending_sample_folder; /**< Folder pick result for SAMPLE page. */
 
   bool midi_open = false;

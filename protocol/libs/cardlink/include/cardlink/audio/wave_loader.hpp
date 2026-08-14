@@ -1,6 +1,6 @@
 /**
  * @file wave_loader.hpp
- * @brief Load wav/raw → 48 kHz, split attack[0,256) + body from sample 224.
+ * @brief Load wav/raw → 48 kHz, split attack[0, kAttackSamples) + body.
  */
 
 #ifndef HOST_IO_AUDIO_WAVE_LOADER_HPP
@@ -16,7 +16,7 @@ namespace cardlink {
 namespace audio {
 
 struct LoadedWave {
-  std::vector<int32_t> attack; /**< 256 Q31 @ 48 kHz */
+  std::vector<int32_t> attack; /**< kAttackSamples Q31 @ 48 kHz */
   std::vector<int16_t> body;   /**< from kBodyOrigin, 48 kHz int16 */
   uint32_t src_rate_hz = kSampleRateHz;
 };

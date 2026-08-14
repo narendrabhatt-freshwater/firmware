@@ -18,6 +18,7 @@
 #include "cardlink/audio/wave_loader.hpp"
 #include "cardlink/rs485/bus.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -98,7 +99,7 @@ void PrintUsage()
          "\n"
          "Output:\n"
          "  (default)            Play sines on the Mac default speakers\n"
-         "  --target channel     Channel Card SAMPLE: RS485 n0..n7 + dry 8ch UAC\n"
+         "  --target channel     Channel Card SAMPLE: RS485 n0..n7 + dry 10ch UAC\n"
          "  --rs485 PATH         USB↔RS485 adapter serial path (required with channel)\n"
          "  --sample-dir DIR     Load wN_*_body.i16 bodies for UAC dry (optional)\n"
          "  --baud N             RS485 baud (default 460800)\n"
@@ -151,7 +152,7 @@ void ApplyBankEvents(const std::vector<BankEvent>& events,
                      VoiceBank& bank)
 {
   for (const BankEvent& ev : events) {
-    /* RS485 / speakers / UAC first — never stall behind terminal I/O. */
+    /* Speakers / UAC first — never stall behind terminal I/O. */
     if (audio) {
       audio->ApplyBankEvent(ev);
     }
@@ -162,10 +163,11 @@ void ApplyBankEvents(const std::vector<BankEvent>& events,
         uac->Mixer().NoteOn(ev.slot, ev.slot, ev.freq_hz);
       }
     }
-    if (channel) {
-      channel->ApplyBankEvent(ev, bank);
-    }
     PrintBankEvent(ev, channel != nullptr);
+  }
+  /* Attack head covers the join — nX with UAC, no prefill sleep. */
+  if (channel && !events.empty()) {
+    channel->ApplyBankEvent(events.front(), bank);
   }
 }
 
@@ -184,6 +186,7 @@ bool LoadSampleBodies(SampleUacOut& uac,
     const std::string prefix = "w" + std::to_string(i) + "_";
     std::string body_path;
     std::string head_path;
+    std::string wav_path;
     for (const auto& ent : fs::directory_iterator(root)) {
       const auto name = ent.path().filename().string();
       if (name.rfind(prefix, 0) != 0) {
@@ -195,9 +198,24 @@ bool LoadSampleBodies(SampleUacOut& uac,
       if (name.find("_head.i32") != std::string::npos) {
         head_path = ent.path().string();
       }
+      const auto ext = ent.path().extension().string();
+      if (ext == ".wav" || ext == ".WAV" || ext == ".raw" || ext == ".RAW") {
+        wav_path = ent.path().string();
+      }
+    }
+    if (!wav_path.empty()) {
+      cardlink::audio::LoadedWave wave;
+      if (!cardlink::audio::LoadWaveFile(wav_path, 0, wave, err)) {
+        return false;
+      }
+      if (!uac.Mixer().SetBody(static_cast<uint16_t>(i), wave.body.data(),
+                               wave.body.size(), err)) {
+        return false;
+      }
+      continue;
     }
     if (body_path.empty()) {
-      err = "missing " + prefix + "*_body.i16 in " + dir;
+      err = "missing " + prefix + "*.wav/.raw or *_body.i16 in " + dir;
       return false;
     }
     if (!head_path.empty()) {
@@ -496,7 +514,7 @@ int main(int argc, char** argv)
       if (!uac->Start("Channel Card", uac_err)) {
         throw std::runtime_error("UAC dry: " + uac_err);
       }
-      std::cout << "uac:    8ch int16 dry @ 48 kHz (Channel Card)\n";
+      std::cout << "uac:    10ch int16 dry @ 48 kHz (Channel Card)\n";
       if (!sample_dir.empty()) {
         if (!LoadSampleBodies(*uac, channel.get(), sample_dir, uac_err)) {
           throw std::runtime_error(uac_err);
@@ -510,6 +528,12 @@ int main(int argc, char** argv)
       channel->SetIdleHandler([uac_ptr](uint8_t slot) {
         if (uac_ptr) {
           uac_ptr->Mixer().Silence(slot);
+        }
+      });
+      channel->SetVqHandler([uac_ptr](uint8_t mask, uint8_t best,
+                                      const std::array<uint8_t, 8> &slots) {
+        if (uac_ptr) {
+          uac_ptr->Mixer().ApplyVoiceQuery(mask, best, slots.data());
         }
       });
     }

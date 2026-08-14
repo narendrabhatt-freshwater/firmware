@@ -127,31 +127,27 @@ Success reply for sets: `ok`.
 Fractional Hz is intentional (e.g. `261.625565` for C4). Do not round
 to integers if you care about equal temperament.
 
-### Sample bank (attack heads + assignments)
+### Sample bank (per-voice attack heads)
 
-Eight wave ids (`0`…`7`). Each id holds one **attack head** of 256
-int32 samples (1024 bytes) in AXI RAM, with a root pitch used for
-on-card rate scaling. Upload is USB CDC only (§4); assignment and
-queries work on both transports. Contents survive mode-free operation
+Eight voices (`0`…`7`). Voice **N** owns AXI attack head **N**
+(4096 int32 / 16384 bytes) and its UAC body FIFO. Heads are not shared.
+Upload is USB CDC only (§4). Contents survive mode-free operation
 while powered and are lost on reset.
 
 | Command             | Meaning                                                             |
 | ------------------- | ------------------------------------------------------------------- |
-| `al <id> 1024`      | **USB CDC only.** Begin attack-head upload; exactly **1024** bytes  |
-| `bl <id> <nbytes>`  | **USB CDC only.** Begin body-loop upload; even, **[2, 19200]**      |
-| `ar <id> <Hz>`      | Set the wave's root pitch (Hz > 0)                                  |
-| `aw <voice> <id>`   | Assign wave `<id>` to voice `<voice>` (both 0..7)                   |
-| `a`                 | Voice→wave map; `*` marks ids with a loaded attack                  |
+| `al <v> 16384`      | **USB CDC only.** Load voice `<v>`'s attack head (**16384** bytes)  |
+| `ar <v> <Hz>`       | Set voice `<v>`'s root pitch (Hz > 0)                               |
+| `aw <v> <v>`        | Identity only; `<voice>` must equal `<id>` or `err:range`           |
+| `a`                 | Loaded heads; `*` marks a voice with an attack in RAM               |
 | `vq`                | Active mask + hungriest voice + free slots 0–8 per ring               |
 
-Replies: `ok: ar <id> <Hz>`, `ok: aw <voice> <id>`,
-`ok: a 0:0* 1:1 …`, `ok:vq <mask> <best> s0 … s7` (best 0–7 or 255; si = free slots).
+Replies: `ok: ar <v> <Hz>`, `ok: aw <v> <v>`,
+`ok: a 0* 1 2* …`, `ok:vq <mask> <best> s0 … s7` (best 0–7 or 255; si = free slots).
 
-Playback pitch is on-card: `phase_inc = note_Hz / root_Hz` over a single
-source-index playhead (attack RAM, then UAC body slots). Live `nX` while a
-voice is active slews `phase_inc`. A tagged UAC SOF restarts the playhead
-(new body / retrigger). Sustain does not use the on-card body loop when the
-host streams UAC (§4); `bl` remains for hosts that preload a sustain loop.
+Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 8-tap
+Hann-sinc. The 4096-sample attack always plays to the end. Body is the
+UAC FIFO. Live `nX` slews `phase_inc` only. `bl` replies `err:unsupported`.
 
 ### Oscillator shape (global)
 
@@ -354,7 +350,7 @@ Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 
 | Interface            | Role                                                                     |
 | -------------------- | ------------------------------------------------------------------------ |
-| **UAC2** (speaker)   | Isochronous 8ch int16 @ 48 kHz. ch0 = `0x7F00 | voice | 0x10(SOF)` (0 = idle); ch1–7 = unpitched body. Card pitches. `vq` reports free slots. |
+| **UAC2** (speaker)   | Isochronous 10ch int16 @ 48 kHz (~960 B/ms, FS ISO max 1023). ch0 = `0x7F00 \| (session<<5) \| SOF \| voice` (session 0–6, `0x7F00\|0xFF` = idle); ch1–9 = unpitched body. Card pitches. Host paces USB by `phase_inc`. |
 | **CDC ACM** (serial) | Same ASCII console as RS485, plus the binary sample uploads (`al` / `bl`). |
 
 Effect Card also has CDC for its console (no uploads) and a UAC2
@@ -370,13 +366,13 @@ microphone (mono, 32-bit, 96 kHz) carrying the selected ADC channel.
 | Reply tag      | `[C] ` / `[E] `                             | None — body only                                                               |
 | Echo           | Channel: off. Effect: `ec` (default off)    | Local keystroke echo on                                                        |
 | Baud           | **460800 8N1** on the UART                  | Host may open any rate (e.g. 115200); TinyUSB CDC ignores line coding for data |
-| `al` / `bl`    | Rejected (`err:usb`)                        | Allowed                                                                        |
+| `al`           | Rejected (`err:usb`)                        | Allowed                                                                        |
 
 Typical host path on macOS / Linux: Channel `cu.usbmodem*` / `ttyACM*`.
 USB–UART adapters (`cu.usbserial*`, `ttyUSB*`) are the RS485 dongle — wrong
 port for uploads.
 
-### Upload session (`al` / `bl`)
+### Upload session (`al`)
 
 Binary payload rides on the **same** CDC pipe as ASCII. After `ok:ready`,
 the console leaves line mode: CDC RX bytes go to the upload sink only
@@ -385,12 +381,11 @@ is met.
 
 Constraints:
 
-| Command            | Payload                                             |
-| ------------------ | --------------------------------------------------- |
-| `al <id> <nbytes>` | Exactly **1024** bytes = 256 × int32 LE attack head |
-| `bl <id> <nbytes>` | Even, **[2, 19200]** bytes of int16 LE body loop    |
+| Command            | Payload                                               |
+| ------------------ | ----------------------------------------------------- |
+| `al <id> <nbytes>` | Exactly **16384** bytes = 4096 × int32 LE attack head |
 
-Wave `<id>` is **0…7** for both.
+Wave `<id>` is **0…7**. `bl` is retired (`err:unsupported`).
 
 **Console reply API (what the card writes):** exactly two success lines
 for a full transfer — nothing in between, even if USB delivers the
@@ -398,9 +393,9 @@ payload in many reads.
 
 | When                                  | Card writes                                     |
 | ------------------------------------- | ----------------------------------------------- |
-| `al` / `bl` accepted                  | `ok:ready\r\n`                                  |
+| `al` accepted                         | `ok:ready\r\n`                                  |
 | During the `nbytes` of payload        | *(no console reply)*                            |
-| Last byte received and bank committed | `ok:attack <id>\r\n` / `ok:body <id> <n>\r\n`   |
+| Last byte received and bank committed | `ok:attack <id>\r\n`                            |
 
 There is no per-chunk ACK. Mid-payload console traffic would serialize
 Full-Speed CDC and is intentionally omitted.
@@ -408,17 +403,17 @@ Full-Speed CDC and is intentionally omitted.
 Sequence:
 
 ```text
-Host →  al 0 1024\r
+Host →  al 0 16384\r
 Card →  ok:ready\r\n          ← console write #1
-Host →  <1024 raw bytes>      ← opaque to the console parser
+Host →  <16384 raw bytes>     ← opaque to the console parser
 Card →  ok:attack 0\r\n       ← console write #2
 ```
 
-Errors you may see instead of `ok:ready` / `ok:attack` / `ok:body`:
+Errors you may see instead of `ok:ready` / `ok:attack`:
 
 | Body         | Meaning                                          |
 | ------------ | ------------------------------------------------ |
-| `err:usb`    | `al` / `bl` sent on RS485                        |
+| `err:usb`    | `al` sent on RS485                               |
 | `err:syntax` | Bad command line                                 |
 | `err:range`  | Id / size / concurrent upload / commit failure   |
 

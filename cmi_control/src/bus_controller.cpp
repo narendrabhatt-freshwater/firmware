@@ -15,7 +15,7 @@ namespace
 {
 
 constexpr unsigned kVqVoices = 8;
-/* 10 ms while notes are active; timeout must not halt the bus (ISO vs UART). */
+/* 10 ms while notes are active. Do not go faster — UART TX steals USB SOF. */
 constexpr auto kVqPollInterval = std::chrono::milliseconds(10);
 constexpr int kVqMissLimit = 16;
 
@@ -83,6 +83,7 @@ struct BusController::Impl
   std::array<bool, kVqVoices> underrun_logged_{};
   int vq_misses_ = 0;
   IdleHandler idle_handler_;
+  VqHandler vq_handler_;
   std::queue<Job> jobs_;
   std::vector<UiMirrorPatch> ui_mirror_;
   std::atomic<bool> run_{false};
@@ -102,8 +103,16 @@ struct BusController::Impl
 
   bool WatchPendingLocked() const
   {
+    /* UART TX of a vq reply runs in the same loop as tud_task and
+     * drops ISO OUT. Never poll while any note is live — a stale
+     * watch on another slot must not starve the sounding voice. */
+    for (uint8_t i = 0; i < midi_host::kVoiceCount; ++i) {
+      if (desired_hz_[i] > 0.0 || sent_hz_[i] > 0.0) {
+        return false;
+      }
+    }
     for (uint8_t i = 0; i < kVqVoices; ++i) {
-      if (watch_idle_[i] || sent_hz_[i] > 0.0) {
+      if (watch_idle_[i]) {
         return true;
       }
     }
@@ -114,7 +123,7 @@ struct BusController::Impl
   {
     sent_hz_[slot] = hz;
     if (slot < kVqVoices) {
-      /* Poll while sounding and after note-off until release idle. */
+      /* After note-off, poll until the card finishes release. */
       watch_idle_[slot] = (hz <= 0.0);
       underrun_logged_[slot] = false;
     }
@@ -216,6 +225,15 @@ void BusController::SetIdleHandler(IdleHandler handler)
   }
   std::lock_guard<std::mutex> lock(impl_->mu_);
   impl_->idle_handler_ = std::move(handler);
+}
+
+void BusController::SetVqHandler(VqHandler handler)
+{
+  if (!impl_) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(impl_->mu_);
+  impl_->vq_handler_ = std::move(handler);
 }
 
 void BusController::SetPollLog(LogBuffer *poll_log)
@@ -465,13 +483,13 @@ void BusController::WorkerMain(LogBuffer *log)
                 (r.raw[0] ? r.raw : "(empty)"));
       return;
     }
-    (void)best;
-
     IdleHandler handler;
+    VqHandler vq_handler;
     std::array<bool, kVqVoices> become_idle{};
     {
       std::lock_guard<std::mutex> lock(impl_->mu_);
       handler = impl_->idle_handler_;
+      vq_handler = impl_->vq_handler_;
       for (uint8_t i = 0; i < kVqVoices; ++i) {
         const bool active = (mask & static_cast<uint8_t>(1u << i)) != 0;
         /* Free slots 8 = empty ring. */
@@ -490,6 +508,9 @@ void BusController::WorkerMain(LogBuffer *log)
       }
     }
 
+    if (vq_handler) {
+      vq_handler(mask, best, slots);
+    }
     if (!handler) {
       return;
     }

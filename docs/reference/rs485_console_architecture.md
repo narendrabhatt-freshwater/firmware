@@ -116,7 +116,7 @@ Same command set over USB CDC (no `[C]` tag on CDC).
 `ParseReplyBody`, `ChannelClient` / `EffectClient` over `IConsoleTransport`.
 
 [`protocol/libs/cardlink`](../../protocol/libs/cardlink): shared `SerialPort`, `cardlink::rs485`
-(tagged `Link` / `Bus`), `cardlink::usb` (CDC + `AttackUploader` / `BodyUploader`). Used by
+(tagged `Link` / `Bus`), `cardlink::usb` (CDC + `AttackUploader`). Used by
 `protocol/console`, `protocol/midi_bridge`, and `cmi_control`.
 
 ## Command reference

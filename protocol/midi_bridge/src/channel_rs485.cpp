@@ -19,8 +19,7 @@ namespace
 {
 
 constexpr unsigned kVqVoices = 8;
-/* Release envelopes are tens of ms to seconds. 10 ms hammered the half-duplex
- * bus during USB ISO; a late poll was treated as a fatal fault. */
+/* 10 ms while notes are active. Do not go faster — UART TX steals USB SOF. */
 constexpr auto kVqPollInterval = std::chrono::milliseconds(10);
 constexpr int kVqMissLimit = 16;
 
@@ -76,6 +75,7 @@ struct ChannelRs485Out::Impl
   std::array<bool, kVqVoices> root_dirty_{};
   std::array<double, kVqVoices> pending_root_hz_{};
   IdleHandler idle_handler_;
+  VqHandler vq_handler_;
   std::atomic<bool> run_{false};
   std::atomic<bool> halted_{false};
   std::thread worker_;
@@ -139,8 +139,15 @@ struct ChannelRs485Out::Impl
 
   bool WatchPending() const
   {
+    /* UART TX of a vq reply steals TinyUSB SOF time; ISO OUT drops.
+     * A stale watch on another slot must not poll while a note is live. */
+    for (uint8_t i = 0; i < kVoiceCount; ++i) {
+      if (desired_hz_[i] > 0.0 || sent_hz_[i] > 0.0) {
+        return false;
+      }
+    }
     for (uint8_t i = 0; i < kVqVoices; ++i) {
-      if (watch_idle_[i] || sent_hz_[i] > 0.0) {
+      if (watch_idle_[i]) {
         return true;
       }
     }
@@ -210,13 +217,13 @@ struct ChannelRs485Out::Impl
                    r.raw[0] != '\0' ? r.raw : "(empty)");
       return;
     }
-    (void)best;
-
     IdleHandler handler;
+    VqHandler vq_handler;
     std::array<bool, kVqVoices> become_idle{};
     {
       std::lock_guard<std::mutex> lock(mu_);
       handler = idle_handler_;
+      vq_handler = vq_handler_;
       for (uint8_t i = 0; i < kVqVoices; ++i) {
         const bool active = (mask & static_cast<uint8_t>(1u << i)) != 0;
         if (active && slots[i] >= 8u) {
@@ -230,6 +237,9 @@ struct ChannelRs485Out::Impl
       }
     }
 
+    if (vq_handler) {
+      vq_handler(mask, best, slots);
+    }
     if (!handler) {
       return;
     }
@@ -495,6 +505,15 @@ void ChannelRs485Out::SetIdleHandler(IdleHandler handler)
   }
   std::lock_guard<std::mutex> lock(impl_->mu_);
   impl_->idle_handler_ = std::move(handler);
+}
+
+void ChannelRs485Out::SetVqHandler(VqHandler handler)
+{
+  if (!impl_) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(impl_->mu_);
+  impl_->vq_handler_ = std::move(handler);
 }
 
 void ChannelRs485Out::SetRootHz(uint8_t wave_id, double hz)

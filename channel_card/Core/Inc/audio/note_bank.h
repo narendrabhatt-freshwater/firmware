@@ -33,14 +33,14 @@ extern "C"
 
   /**
    * @brief Note on/off. freq_hz <= 0 releases/stops; >0 starts attack+stream.
-   * Uses wave_id assigned via NoteBank_SetWaveId (default = voice index).
+   * Voice N always uses attack slot N.
    */
   void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale);
 
   double NoteBank_GetFreq(uint8_t note);
   double NoteBank_GetScale(uint8_t note);
 
-  /** Assign library attack id (0..255) to voice. */
+  /** Identity only: wave_id must equal note. */
   int NoteBank_SetWaveId(uint8_t note, uint16_t wave_id);
   uint16_t NoteBank_GetWaveId(uint8_t note);
 
@@ -60,7 +60,7 @@ extern "C"
   void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out,
                            uint8_t *free_slots);
 
-  /** UAC SOF for this voice: restart source-index (new body / retrigger). */
+  /** New UAC body session: reset body interpolation. Attack is unchanged. */
   void NoteBank_OnBodySof(uint8_t voice);
 
 #ifdef __cplusplus

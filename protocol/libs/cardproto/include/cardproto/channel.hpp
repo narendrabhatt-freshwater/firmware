@@ -454,7 +454,7 @@ struct VoiceQuery {
   std::array<uint8_t, 8> free_slots{};
 };
 
-/** Parse `ok:vq <mask_hex> <best> s0..s7` from a reply body. */
+/** Parse `ok:vq <mask_hex> <best> s0..s7`. Accepts an optional `[C]`/`[E]` tag. */
 bool ParseVoiceQuery(const char *raw, VoiceQuery &out);
 
 } // namespace cardproto

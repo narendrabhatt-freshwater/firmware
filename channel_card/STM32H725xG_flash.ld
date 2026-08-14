@@ -239,8 +239,7 @@ SECTIONS
     . = ALIGN(4);
   } >RAM_D1
 
-  /* Attack bank (256 x 1 KiB int32) + stream rings; AXI for
-     attack heads + dry rings — not DTCM. */
+  /* Attack heads (8 × 4096 int32) in AXI — not DTCM. */
   .attack_bank (NOLOAD) : ALIGN(4)
   {
     *(.attack_bank)

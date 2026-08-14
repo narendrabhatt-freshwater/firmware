@@ -208,6 +208,12 @@ void Split48k(const std::vector<double> &x, LoadedWave &out)
   for (size_t i = 0; i < alen; ++i) {
     out.attack[i] = FToQ31(x[i]);
   }
+  if (alen > 0 && alen < kAttackSamples) {
+    const int32_t hold = out.attack[alen - 1];
+    for (size_t i = alen; i < kAttackSamples; ++i) {
+      out.attack[i] = hold;
+    }
+  }
   const size_t b0 = std::min(n, static_cast<size_t>(kBodyOrigin));
   out.body.resize(n > b0 ? (n - b0) : 0);
   for (size_t i = b0; i < n; ++i) {
@@ -238,8 +244,8 @@ bool LoadWaveFile(const std::string &path, uint32_t raw_rate_hz,
   }
   std::vector<double> x48;
   ResampleTo48k(mono, rate, x48);
-  if (x48.size() < kAttackSamples) {
-    err = "wave shorter than attack head";
+  if (x48.empty()) {
+    err = "empty wave";
     return false;
   }
   out.src_rate_hz = rate;
@@ -257,7 +263,7 @@ bool BodyWithHeadOverlap(const std::string &head_i32_path,
     return false;
   }
   if (head.size() != kAttackSamples * 4u) {
-    err = "head must be 1024 bytes";
+    err = "head size must match kAttackSamples";
     return false;
   }
   if (body.size() < 2 || (body.size() & 1u) != 0u) {

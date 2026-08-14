@@ -76,7 +76,7 @@ ExchangeResult ParseTaggedReply(const std::string &line_in, Target expected) {
                            line.back() == ' ')) {
     line.pop_back();
   }
-  CopyTrunc(r.raw, sizeof(r.raw), line_in);
+  CopyTrunc(r.raw, sizeof(r.raw), line);
 
   if (line.size() < 4 || line[0] != '[' || line[2] != ']') {
     r.status = Status::BadReply;
@@ -98,12 +98,14 @@ ExchangeResult ParseTaggedReply(const std::string &line_in, Target expected) {
     return r;
   }
 
-  /* Skip "[X]" and optional space. */
+  /* Skip "[X]" and optional space. raw is the body — same contract as
+   * cardproto::ParseReplyBody / Result::raw. */
   size_t i = 3;
   while (i < line.size() && line[i] == ' ') {
     ++i;
   }
   const std::string body = line.substr(i);
+  CopyTrunc(r.raw, sizeof(r.raw), body);
   const std::string body_l = ToLower(body);
 
   if (body_l == "ok" || body_l.rfind("ok:", 0) == 0 ||

@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    attack_upload.c
- * @brief   CDC session: al → 1024 raw int32 LE → AttackBank_Commit.
+ * @brief   CDC session: al → ATTACK_BANK_BYTES raw int32 LE → Commit.
  ******************************************************************************
  */
 

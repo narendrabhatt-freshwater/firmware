@@ -13,7 +13,7 @@
 | CubeMX project | `channel_MCU.ioc`                                 |
 | Linker script  | `STM32H725xG_flash.ld`                            |
 | USB stack      | TinyUSB 0.17 (`ThirdParty/tinyusb`)               |
-| USB device     | UAC2 speaker (mono, 32-bit, 48 kHz) + CDC console |
+| USB device     | UAC2 speaker (10ch int16 @ 48 kHz) + CDC console  |
 | RS485 address  | `c:`                                              |
 
 ## What this card does
@@ -27,6 +27,11 @@ DAC** over I2S, alongside an 8-voice sample/note bank summed onto CH1.
 - Console over RS485 (`c:` prefix) and USB CDC
 
 ## Audio signal path
+
+Firmware / USB / playhead / I2S (including ISR vs main loop):
+[`docs/diagrams/card_data_flow.md`](docs/diagrams/card_data_flow.md).
+
+Analog wet/dry and GPIO switches:
 
 ![Channel Card audio flow](../docs/diagrams/channel_card_audio_flow.jpg)
 
@@ -230,9 +235,8 @@ Type `h` / `help` / `?` on the card for the live list.
 | `fk0`…`fk7` `[k]` / `fk` `[k]`            | Filter pitch-track **k** (0..10, default **0**): `fc = fbase × (note/C4)^k`. Same C4 as envelope `slope±k` / `ek`.                                                                                                                 |
 | `en0`…`en7` `<end slope[±k] …>` / `en`    | Multi-segment amplitude envelope per voice (bare = query; `en0 0` / `en 0` = clear)                                                                                                                                                |
 | `ek0`…`ek7` `<k>` / `ek <k>`              | Envelope pitch-track **k** (−10..10, rate ∝ (f/C4)^k)                                                                                                                                                                              |
-| `al <id> 1024` / `bl <id> <bytes>`        | CDC upload: attack head / body loop for wave `<id>`                                                                                                                                                                                |
-| `ar <id> <Hz>`                            | Root pitch of wave `<id>`                                                                                                                                                                                                          |
-| `aw <voice> <id>` / `a`                   | Assign wave to voice / query voice→wave map                                                                                                                                                                                        |
+| `al <v> 16384`                            | CDC upload: 4096-sample Q31 attack head for voice `<v>`                                                                                                                                                                            |
+| `ar <v> <Hz>` / `a`                       | Root pitch of voice `<v>` / query loaded heads (`*` = in RAM)                                                                                                                                                                      |
 | `vq`                                      | Active mask + hungriest voice + free slots 0–8                                                                                                                                                                                     |
 | `g <ch> <dB>`                             | DAC atten 0..127 dB on ch 1..4                                                                                                                                                                                                     |
 | `cpu` / `cpu N`                           | N voices + LED_Y main-loop fill load probe (default 8)                                                                                                                                                                             |
