@@ -501,13 +501,19 @@ void App::ApplyBankEvents(const std::vector<midi_host::BankEvent> &events)
     }
     if (want_card && ev.slot < cardlink::audio::kSampleVoices)
     {
-      if (ev.kind == midi_host::BankEventKind::Off)
+      switch (ev.kind)
       {
+      case midi_host::BankEventKind::Off:
         samples.NoteOff(ev.slot);
-      }
-      else
-      {
+        break;
+      case midi_host::BankEventKind::On:
+      case midi_host::BankEventKind::Retrig:
         samples.NoteOn(ev.slot, ev.freq_hz);
+        break;
+      case midi_host::BankEventKind::Steal:
+        /* The following On reuses this slot. Starting a session for the
+         * dropped key races its late SOF against the replacement note. */
+        break;
       }
     }
   }

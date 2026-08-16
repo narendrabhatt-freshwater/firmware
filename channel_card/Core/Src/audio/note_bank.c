@@ -58,6 +58,8 @@ static double note_shape_param = 0.5;
 static volatile uint8_t note_cmd[NOTE_BANK_VOICES];
 static volatile uint32_t note_cmd_inc[NOTE_BANK_VOICES];
 static volatile float note_cmd_hz[NOTE_BANK_VOICES];
+/* An explicit nX 0 must win over a late UAC session-start packet. */
+static volatile uint8_t note_gate_requested[NOTE_BANK_VOICES];
 
 static int32_t NoteBank_ScaleToQ15(double scale)
 {
@@ -431,6 +433,7 @@ void NoteBank_Init(void)
     note_cmd[i] = NOTE_CMD_NONE;
     note_cmd_inc[i] = PHASE_ONE;
     note_cmd_hz[i] = 0.0f;
+    note_gate_requested[i] = 0u;
   }
 }
 
@@ -456,6 +459,7 @@ void NoteBank_PanicAll(void)
     note_cmd[i] = NOTE_CMD_NONE;
     note_cmd_inc[i] = PHASE_ONE;
     note_cmd_hz[i] = 0.0f;
+    note_gate_requested[i] = 0u;
     NoteFilter_Reset(i);
     if (NoteEnv_IsProgrammed(i) != 0u)
     {
@@ -475,6 +479,7 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
 
   if (freq_hz <= 0.0)
   {
+    note_gate_requested[note] = 0u;
     note_freq_hz[note] = 0.0;
     note_cmd[note] = (NoteEnv_IsProgrammed(note) != 0u) ? NOTE_CMD_REL
                                                        : NOTE_CMD_OFF;
@@ -505,6 +510,7 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
   note_amp_q15[note] = NoteBank_ScaleToQ15(scale);
   note_inc_tgt[note] = inc;
   NoteFilter_OnNoteFreq(note, freq_hz);
+  note_gate_requested[note] = 1u;
   /* Every nX > 0 is a gate-on. Pitch slew is not this command. */
   NoteBank_PostOn(note, inc, (float)freq_hz);
 }
@@ -665,9 +671,12 @@ void NoteBank_OnBodySof(uint8_t voice)
   {
     return;
   }
-  /* New UAC session already wiped the FIFO. Restart the head even if
-   * nX 0 has already cleared freq — a late off must not leave the
-   * playhead in an empty body (hold). nX supplies pitch if hz is 0. */
+  /* New UAC session already wiped the FIFO. Do not let a delayed SOF
+   * reopen a voice after its explicit note-off. */
+  if (note_gate_requested[voice] == 0u)
+  {
+    return;
+  }
   inc = note_inc_tgt[voice];
   if (inc < PHASE_INC_MIN)
   {

@@ -157,10 +157,18 @@ void ApplyBankEvents(const std::vector<BankEvent>& events,
       audio->ApplyBankEvent(ev);
     }
     if (uac && ev.slot < cardlink::audio::kSampleVoices) {
-      if (ev.kind == BankEventKind::Off) {
+      switch (ev.kind) {
+      case BankEventKind::Off:
         uac->Mixer().NoteOff(ev.slot);
-      } else {
+        break;
+      case BankEventKind::On:
+      case BankEventKind::Retrig:
         uac->Mixer().NoteOn(ev.slot, ev.slot, ev.freq_hz);
+        break;
+      case BankEventKind::Steal:
+        /* The following On reuses this slot. Starting a session for the
+         * dropped key races its late SOF against the replacement note. */
+        break;
       }
     }
     PrintBankEvent(ev, channel != nullptr);
