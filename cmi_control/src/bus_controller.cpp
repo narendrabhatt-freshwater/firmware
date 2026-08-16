@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -15,10 +16,8 @@ namespace
 {
 
 constexpr unsigned kVqVoices = 8;
-/* Release envelopes are tens of ms to seconds. 10 ms hammered the half-duplex
- * bus during USB ISO (blocking [C]ok:vq TX) and a single late poll was treated
- * as a fatal fault + Soft Recover. */
-constexpr auto kVqPollInterval = std::chrono::milliseconds(50);
+/* 10 ms while notes are active. Do not go faster — UART TX steals USB SOF. */
+constexpr auto kVqPollInterval = std::chrono::milliseconds(10);
 constexpr int kVqMissLimit = 16;
 
 double ClampNoteHz(double hz)
@@ -57,36 +56,17 @@ void LogResult(const std::function<void(const std::string &)> &push,
   }
 }
 
-/** Parse `ok:vq <mask_hex> q0..q7` from Result::raw. */
-bool ParseVq(const char *raw, uint8_t &mask_out, std::array<uint8_t, kVqVoices> &q_out)
+/** Parse `ok:vq <mask> <best> s0..s7`. */
+bool ParseVq(const char *raw, uint8_t &mask_out, uint8_t &best_out,
+             std::array<uint8_t, kVqVoices> &slots_out)
 {
-  if (raw == nullptr) {
+  cardproto::VoiceQuery q;
+  if (!cardproto::ParseVoiceQuery(raw, q)) {
     return false;
   }
-  const char *p = raw;
-  if (std::strncmp(p, "ok:", 3) == 0) {
-    p += 3;
-  }
-  while (*p == ' ') {
-    ++p;
-  }
-  if (std::strncmp(p, "vq", 2) == 0) {
-    p += 2;
-  }
-  unsigned mask = 0;
-  unsigned q[kVqVoices] = {};
-  const int n = std::sscanf(p, " %x %u %u %u %u %u %u %u %u", &mask, &q[0],
-                            &q[1], &q[2], &q[3], &q[4], &q[5], &q[6], &q[7]);
-  if (n != 1 + static_cast<int>(kVqVoices) || mask > 0xffu) {
-    return false;
-  }
-  for (unsigned i = 0; i < kVqVoices; ++i) {
-    if (q[i] > 4u) {
-      return false;
-    }
-    q_out[i] = static_cast<uint8_t>(q[i]);
-  }
-  mask_out = static_cast<uint8_t>(mask);
+  mask_out = q.mask;
+  best_out = q.best;
+  slots_out = q.free_slots;
   return true;
 }
 
@@ -104,6 +84,7 @@ struct BusController::Impl
   std::array<bool, kVqVoices> underrun_logged_{};
   int vq_misses_ = 0;
   IdleHandler idle_handler_;
+  VqHandler vq_handler_;
   std::queue<Job> jobs_;
   std::vector<UiMirrorPatch> ui_mirror_;
   std::atomic<bool> run_{false};
@@ -123,6 +104,14 @@ struct BusController::Impl
 
   bool WatchPendingLocked() const
   {
+    /* UART TX of a vq reply runs in the same loop as tud_task and
+     * drops ISO OUT. Never poll while any note is live — a stale
+     * watch on another slot must not starve the sounding voice. */
+    for (uint8_t i = 0; i < midi_host::kVoiceCount; ++i) {
+      if (desired_hz_[i] > 0.0 || sent_hz_[i] > 0.0) {
+        return false;
+      }
+    }
     for (uint8_t i = 0; i < kVqVoices; ++i) {
       if (watch_idle_[i]) {
         return true;
@@ -135,7 +124,7 @@ struct BusController::Impl
   {
     sent_hz_[slot] = hz;
     if (slot < kVqVoices) {
-      /* Poll only after note-off, until the card finishes release. */
+      /* After note-off, poll until the card finishes release. */
       watch_idle_[slot] = (hz <= 0.0);
       underrun_logged_[slot] = false;
     }
@@ -237,6 +226,15 @@ void BusController::SetIdleHandler(IdleHandler handler)
   }
   std::lock_guard<std::mutex> lock(impl_->mu_);
   impl_->idle_handler_ = std::move(handler);
+}
+
+void BusController::SetVqHandler(VqHandler handler)
+{
+  if (!impl_) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(impl_->mu_);
+  impl_->vq_handler_ = std::move(handler);
 }
 
 void BusController::SetPollLog(LogBuffer *poll_log)
@@ -407,6 +405,41 @@ void BusController::RequestRecover(LogBuffer &log)
 BusQueueResult BusController::QueueExec(cardproto::Target target,
                                         std::string command)
 {
+  /* nX must last-win. Queueing every tap/release on RS485 delivers a
+   * stale nX 0 after the hold's UAC session has already started. */
+  if (target == cardproto::Target::Channel && impl_) {
+    const char *s = command.c_str();
+    if (s[0] == 'c' && s[1] == ':') {
+      s += 2;
+    }
+    unsigned slot = 0;
+    double hz = 0.0;
+    if (s[0] == 'n' && std::isdigit(static_cast<unsigned char>(s[1])) &&
+        std::sscanf(s, "n%u %lf", &slot, &hz) == 2 &&
+        slot < midi_host::kVoiceCount) {
+      if (connecting_.load()) {
+        return BusQueueResult::Connecting;
+      }
+      if (!open_.load()) {
+        return BusQueueResult::Closed;
+      }
+      if (halted_.load()) {
+        return BusQueueResult::Halted;
+      }
+      const double v = ClampNoteHz(hz);
+      {
+        std::lock_guard<std::mutex> lock(impl_->mu_);
+        impl_->desired_hz_[slot] = v;
+        if (slot < kVqVoices) {
+          impl_->watch_idle_[slot] = (v <= 0.0);
+          impl_->underrun_logged_[slot] = false;
+        }
+      }
+      impl_->cv_.notify_one();
+      return BusQueueResult::Ok;
+    }
+  }
+
   Job j;
   j.kind = JobKind::Exec;
   j.target = target;
@@ -479,26 +512,29 @@ void BusController::WorkerMain(LogBuffer *log)
 
   auto handle_vq = [&](const cardproto::Result &r) {
     uint8_t mask = 0;
-    std::array<uint8_t, kVqVoices> quarters{};
-    if (!ParseVq(r.raw, mask, quarters)) {
+    uint8_t best = 0xFF;
+    std::array<uint8_t, kVqVoices> slots{};
+    if (!ParseVq(r.raw, mask, best, slots)) {
       push_poll(std::string("warn: bad vq reply: ") +
                 (r.raw[0] ? r.raw : "(empty)"));
       return;
     }
-
     IdleHandler handler;
+    VqHandler vq_handler;
     std::array<bool, kVqVoices> become_idle{};
     {
       std::lock_guard<std::mutex> lock(impl_->mu_);
       handler = impl_->idle_handler_;
+      vq_handler = impl_->vq_handler_;
       for (uint8_t i = 0; i < kVqVoices; ++i) {
         const bool active = (mask & static_cast<uint8_t>(1u << i)) != 0;
-        if (impl_->watch_idle_[i] && active && quarters[i] == 0u) {
+        /* Free slots 8 = empty ring. */
+        if (active && slots[i] >= 8u) {
           if (!impl_->underrun_logged_[i]) {
             push_poll("warn: ring underrun voice " + std::to_string(i));
             impl_->underrun_logged_[i] = true;
           }
-        } else if (quarters[i] > 0u) {
+        } else if (slots[i] < 8u) {
           impl_->underrun_logged_[i] = false;
         }
         if (impl_->watch_idle_[i] && !active) {
@@ -508,6 +544,9 @@ void BusController::WorkerMain(LogBuffer *log)
       }
     }
 
+    if (vq_handler) {
+      vq_handler(mask, best, slots);
+    }
     if (!handler) {
       return;
     }

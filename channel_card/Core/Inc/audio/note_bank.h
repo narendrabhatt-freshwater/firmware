@@ -1,11 +1,7 @@
 /**
  ******************************************************************************
  * @file    note_bank.h
- * @brief   SAMPLE voice bank: attack head → dry UAC ring → env → filter → mix.
- *
- * Voices n0..n7 (SAMPLE_VOICES). Each note-on plays the assigned attack
- * table then continues from the per-voice dry stream ring. Envelope and
- * LPF run for the full voice lifetime on the card.
+ * @brief   SAMPLE voice bank: one playhead over attack RAM + body slots.
  ******************************************************************************
  */
 
@@ -36,15 +32,16 @@ extern "C"
   void NoteBank_PanicAll(void);
 
   /**
-   * @brief Note on/off. freq_hz <= 0 releases/stops; >0 starts attack+stream.
-   * Uses wave_id assigned via NoteBank_SetWaveId (default = voice index).
+   * @brief Note on/off. freq_hz <= 0 releases/stops.
+   * freq_hz > 0 is always a note-on (restarts attack + body). Applied on
+   * the next I2S sample. Voice N always uses attack slot N.
    */
   void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale);
 
   double NoteBank_GetFreq(uint8_t note);
   double NoteBank_GetScale(uint8_t note);
 
-  /** Assign library attack id (0..255) to voice. */
+  /** Identity only: wave_id must equal note. */
   int NoteBank_SetWaveId(uint8_t note, uint16_t wave_id);
   uint16_t NoteBank_GetWaveId(uint8_t note);
 
@@ -56,6 +53,15 @@ extern "C"
   uint8_t NoteBank_IsActive(uint8_t note);
   uint8_t NoteBank_AnyActive(void);
   int32_t NoteBank_NextSample(void);
+
+  /**
+   * @brief vq payload: active mask, hungriest voice (0xFF if none), free slots
+   *        0..8 per voice.
+   */
+  void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out,
+                           uint8_t *free_slots);
+
+  /** New UAC body session: same as note-on (FIFO was wiped). */
 
 #ifdef __cplusplus
 }

@@ -17,6 +17,7 @@
 #include "imgui_impl_opengl3.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -106,12 +107,18 @@ int main(int argc, char **argv)
   g_app = &app;
   app.bus.SetPollLog(&app.poll_log);
   /* Stop UAC dry when card finishes release (vq reports idle). */
+  app.samples.SetConsole([&app](const std::string &cmd) {
+    (void)app.bus.QueueExec(cardproto::Target::Channel, cmd);
+  });
   app.bus.SetIdleHandler([&app](uint8_t slot) {
-    if (app.sample_uac && app.sample_uac->Running()) {
-      app.sample_uac->Mixer().Silence(slot);
-    }
+    app.samples.Silence(slot);
+  });
+  app.bus.SetVqHandler([&app](uint8_t mask, uint8_t best,
+                              const std::array<uint8_t, 8> &slots) {
+    app.samples.Mixer().ApplyVoiceQuery(mask, best, slots.data());
   });
   fw::settings::Load(app);
+  app.samples.SetCdcPath(app.wave_cdc_path);
 
   // Effective UI scale = persisted user zoom × monitor content scale
   // (content scale is a no-op on macOS — points already handle Retina).

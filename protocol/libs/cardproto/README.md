@@ -103,10 +103,10 @@ if (!r.ok()) { /* r.status, r.err_code, r.raw */ }
 Local validation failures use `Result::LocalErr("range", …)` or
 `("syntax", …)` and **do not** hit the bus.
 
-Binary sample **upload** (`al` / `bl` + payload) is not in this library — it
+Binary sample **upload** (`al` + payload) is not in this library — it
 needs a byte stream. See the console protocol specification (USB CDC section)
 and, in the product tree, `protocol/libs/cardlink`
-(`cardlink::usb::AttackUploader` / `BodyUploader`).
+(`cardlink::usb::AttackUploader`).
 
 ---
 

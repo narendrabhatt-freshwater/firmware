@@ -1,6 +1,6 @@
 /**
  * @file attack_upload.hpp
- * @brief USB CDC binary attack-head upload (`al` session, 1024 bytes int32).
+ * @brief USB CDC binary attack-head upload (`al` session, ≤ kAttackSamples int32).
  */
 
 #ifndef HOST_IO_USB_ATTACK_UPLOAD_HPP

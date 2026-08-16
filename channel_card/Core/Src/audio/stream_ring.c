@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    stream_ring.c
- * @brief   Per-voice dry int16 rings for UAC sustain (int16 → Q31 on pop).
+ * @brief   Per-voice body FIFO filled from tagged UAC frames.
  ******************************************************************************
  */
 
@@ -9,18 +9,21 @@
 
 #include <stddef.h>
 
+void NoteBank_OnBodySof(uint8_t voice);
+
 typedef struct
 {
   volatile uint32_t wr;
   volatile uint32_t rd;
   volatile uint8_t consuming;
+  uint8_t session;
   int16_t data[STREAM_RING_SAMPLES];
 } StreamRing_t;
 
+/* .bss is DTCM on this part — CPU fill from USB, mix reads in the I2S path. */
 static StreamRing_t s_rings[SAMPLE_VOICES];
 
-/* Free-running wr/rd; capacity STREAM_RING_SAMPLES. */
-static uint32_t StreamRing_Avail(const StreamRing_t *r)
+static uint32_t StreamRing_Filled(const StreamRing_t *r)
 {
   uint32_t wr = r->wr;
   uint32_t rd = r->rd;
@@ -41,6 +44,7 @@ void StreamRing_Reset(uint8_t voice)
   s_rings[voice].wr = 0u;
   s_rings[voice].rd = 0u;
   s_rings[voice].consuming = 0u;
+  s_rings[voice].session = 0xFFu;
 }
 
 void StreamRing_Prime(uint8_t voice)
@@ -49,18 +53,12 @@ void StreamRing_Prime(uint8_t voice)
   {
     return;
   }
-  s_rings[voice].wr = 0u;
-  s_rings[voice].rd = 0u;
   s_rings[voice].consuming = 1u;
 }
 
 void StreamRing_Release(uint8_t voice)
 {
-  if (voice >= SAMPLE_VOICES)
-  {
-    return;
-  }
-  s_rings[voice].consuming = 0u;
+  StreamRing_Reset(voice);
 }
 
 void StreamRing_ResetAll(void)
@@ -72,10 +70,21 @@ void StreamRing_ResetAll(void)
   }
 }
 
+static void StreamRing_Push(StreamRing_t *r, int16_t s)
+{
+  if (StreamRing_Filled(r) >= STREAM_RING_SAMPLES)
+  {
+    /* Producer never overwrites unread samples. */
+    return;
+  }
+  r->data[r->wr % STREAM_RING_SAMPLES] = s;
+  r->wr++;
+}
+
 void StreamRing_WriteInterleaved(const int16_t *interleaved, uint32_t nframes)
 {
   uint32_t f;
-  uint8_t ch;
+  uint8_t i;
 
   if (interleaved == NULL || nframes == 0u)
   {
@@ -84,44 +93,77 @@ void StreamRing_WriteInterleaved(const int16_t *interleaved, uint32_t nframes)
 
   for (f = 0u; f < nframes; f++)
   {
-    for (ch = 0u; ch < SAMPLE_VOICES; ch++)
+    const int16_t *fr = &interleaved[f * STREAM_UAC_CHANNELS];
+    uint16_t tag = (uint16_t)fr[0];
+    uint8_t route;
+    uint8_t voice;
+    uint8_t session;
+    StreamRing_t *r;
+
+    if (tag < STREAM_UAC_TAG_BASE)
     {
-      StreamRing_t *r = &s_rings[ch];
-      uint32_t avail = StreamRing_Avail(r);
-      if (avail >= STREAM_RING_SAMPLES)
-      {
-        if (r->consuming != 0u)
-        {
-          /* Playhead is live: dropping rd would skip DAC samples. */
-          continue;
-        }
-        /* Idle: drop oldest so the ring holds the most recent UAC. */
-        r->rd++;
-      }
-      r->data[r->wr % STREAM_RING_SAMPLES] = interleaved[f * SAMPLE_VOICES + ch];
-      r->wr++;
+      continue;
+    }
+    route = (uint8_t)tag;
+    if (route == STREAM_UAC_IDLE)
+    {
+      continue;
+    }
+    voice = (uint8_t)(route & 7u);
+    session = (uint8_t)((route >> STREAM_UAC_SESSION_SHIFT) &
+                        STREAM_UAC_SESSION_MASK);
+    r = &s_rings[voice];
+    if ((route & STREAM_UAC_SOF) != 0u && session != r->session)
+    {
+      r->wr = 0u;
+      r->rd = 0u;
+      r->session = session;
+      NoteBank_OnBodySof(voice);
+    }
+    for (i = 1u; i < STREAM_UAC_CHANNELS; i++)
+    {
+      StreamRing_Push(r, fr[i]);
     }
   }
 }
 
-int32_t StreamRing_NextSample(uint8_t voice)
+int StreamRing_GetRel(uint8_t voice, uint32_t offset, int16_t *out)
 {
   StreamRing_t *r;
-  int16_t s16;
+  uint32_t rd;
+  uint32_t wr;
 
-  if (voice >= SAMPLE_VOICES)
+  if (voice >= SAMPLE_VOICES || out == NULL)
   {
-    return 0;
+    return -1;
   }
   r = &s_rings[voice];
-  if (StreamRing_Avail(r) == 0u)
+  rd = r->rd;
+  wr = r->wr;
+  if (offset >= (wr - rd))
   {
-    return 0;
+    return -1;
   }
-  s16 = r->data[r->rd % STREAM_RING_SAMPLES];
-  r->rd++;
-  /* int16 → Q31: place in high half */
-  return ((int32_t)s16) << 16;
+  *out = r->data[(rd + offset) % STREAM_RING_SAMPLES];
+  return 0;
+}
+
+void StreamRing_Advance(uint8_t voice, uint32_t n)
+{
+  StreamRing_t *r;
+  uint32_t filled;
+
+  if (voice >= SAMPLE_VOICES || n == 0u)
+  {
+    return;
+  }
+  r = &s_rings[voice];
+  filled = StreamRing_Filled(r);
+  if (n > filled)
+  {
+    n = filled;
+  }
+  r->rd += n;
 }
 
 uint32_t StreamRing_FillLevel(uint8_t voice)
@@ -131,18 +173,19 @@ uint32_t StreamRing_FillLevel(uint8_t voice)
     return 0u;
   }
   {
-    uint32_t a = StreamRing_Avail(&s_rings[voice]);
+    uint32_t a = StreamRing_Filled(&s_rings[voice]);
     return (a > STREAM_RING_SAMPLES) ? STREAM_RING_SAMPLES : a;
   }
 }
 
-uint8_t StreamRing_FillQuarters(uint8_t voice)
+uint8_t StreamRing_FreeSlots(uint8_t voice)
 {
-  uint32_t fill = StreamRing_FillLevel(voice);
-  uint32_t q = (fill * 4u) / STREAM_RING_SAMPLES;
-  if (q > 4u)
+  uint32_t filled = StreamRing_FillLevel(voice);
+  uint32_t free_samp = STREAM_RING_SAMPLES - filled;
+  uint32_t slots = free_samp / STREAM_SLOT_LEN;
+  if (slots > STREAM_SLOTS)
   {
-    q = 4u;
+    slots = STREAM_SLOTS;
   }
-  return (uint8_t)q;
+  return (uint8_t)slots;
 }

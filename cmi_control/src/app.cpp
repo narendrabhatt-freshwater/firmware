@@ -349,6 +349,29 @@ bool App::EnsureAttackCdc(std::string &err)
     MarkSettingsDirty();
     log.Push(std::string("ok: attack CDC → ") + pick);
   }
+  samples.SetCdcPath(wave_cdc_path);
+  return true;
+}
+
+bool App::EnsureSampleUac()
+{
+  if (sample_uac && sample_uac->Running())
+  {
+    return true;
+  }
+  if (!sample_uac)
+  {
+    sample_uac = std::make_unique<SampleUacOut>();
+  }
+  sample_uac->BindMixer(samples.Mixer());
+  std::string err;
+  if (!sample_uac->Start("Channel Card", err))
+  {
+    log.Push("err: " + err);
+    PushToastErr(err);
+    return false;
+  }
+  log.Push("ok: UAC dry stream open");
   return true;
 }
 
@@ -465,11 +488,9 @@ void App::ApplyBankEvents(const std::vector<midi_host::BankEvent> &events)
   {
     EnsureAudio();
   }
-
-  if (want_card && bus.IsOpen())
+  if (want_card)
   {
-    /* n0 before UAC body so the card head starts before body[0] is gated. */
-    bus.PublishBank(bank);
+    (void)EnsureSampleUac();
   }
 
   for (const auto &ev : events)
@@ -478,17 +499,21 @@ void App::ApplyBankEvents(const std::vector<midi_host::BankEvent> &events)
     {
       audio->ApplyBankEvent(ev);
     }
-    /* SAMPLE body rides UAC dry (host-pitched); Silence via bus vq idle. */
-    if (sample_uac && sample_uac->Running() &&
-        ev.slot < cardlink::audio::kSampleVoices)
+    if (want_card && ev.slot < cardlink::audio::kSampleVoices)
     {
-      if (ev.kind == midi_host::BankEventKind::Off)
+      switch (ev.kind)
       {
-        sample_uac->Mixer().NoteOff(ev.slot);
-      }
-      else
-      {
-        sample_uac->Mixer().NoteOn(ev.slot, ev.slot, ev.freq_hz);
+      case midi_host::BankEventKind::Off:
+        samples.NoteOff(ev.slot);
+        break;
+      case midi_host::BankEventKind::On:
+      case midi_host::BankEventKind::Retrig:
+        samples.NoteOn(ev.slot, ev.freq_hz);
+        break;
+      case midi_host::BankEventKind::Steal:
+        /* The following On reuses this slot. Starting a session for the
+         * dropped key races its late SOF against the replacement note. */
+        break;
       }
     }
   }
@@ -516,10 +541,7 @@ void App::AllNotesOff()
 {
   const auto evs = bank.AllOff();
   ApplyBankEvents(evs);
-  if (sample_uac && sample_uac->Running())
-  {
-    sample_uac->Mixer().AllNotesOff();
-  }
+  samples.AllNotesOff();
   if (bus.IsOpen())
   {
     bus.RequestSilence();
@@ -839,21 +861,19 @@ void App::Tick()
       else if (sample_file_pick == SampleFilePick::Head &&
                sample_file_voice >= 0 && sample_file_voice < 8)
       {
-        auto &slot = sample_slots[static_cast<std::size_t>(sample_file_voice)];
-        std::snprintf(slot.head_path, sizeof(slot.head_path), "%s",
-                      path.c_str());
-        slot.head_on_card = false;
         pending_sample_folder = std::string("head:") +
                                 std::to_string(sample_file_voice) + ":" + path;
       }
       else if (sample_file_pick == SampleFilePick::Body &&
                sample_file_voice >= 0 && sample_file_voice < 8)
       {
-        auto &slot = sample_slots[static_cast<std::size_t>(sample_file_voice)];
-        std::snprintf(slot.body_path, sizeof(slot.body_path), "%s",
-                      path.c_str());
-        slot.body_in_mixer = false;
         pending_sample_folder = std::string("body:") +
+                                std::to_string(sample_file_voice) + ":" + path;
+      }
+      else if (sample_file_pick == SampleFilePick::Wave &&
+               sample_file_voice >= 0 && sample_file_voice < 8)
+      {
+        pending_sample_folder = std::string("wave:") +
                                 std::to_string(sample_file_voice) + ":" + path;
       }
       else if (file_dialog_kind == AsyncFileDialog::Kind::Folder)

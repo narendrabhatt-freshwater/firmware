@@ -1,12 +1,11 @@
 /* USB application layer — Channel Card
  *
- * UAC2 8ch int16 @ 48 kHz dry → stream rings + CDC console / attack load.
+ * UAC2 10ch int16 @ 48 kHz dry → stream rings + CDC console / attack load.
  */
 
 #include "usb_app.h"
 #include "audio_bridge.h"
 #include "attack_upload.h"
-#include "body_upload.h"
 #include "channel_console.h"
 #include "main.h"
 #include "tusb.h"
@@ -106,7 +105,7 @@ static void CDC_Console_Poll(void)
 
   while (tud_cdc_available())
   {
-    /* Binary attack/body upload: consume raw bytes, no echo / line edit. */
+    /* Binary attack upload: consume raw bytes, no echo / line edit. */
     if (AttackUpload_IsActive() != 0u)
     {
       uint8_t tmp[256];
@@ -116,17 +115,6 @@ static void CDC_Console_Poll(void)
         break;
       }
       (void)AttackUpload_Feed(tmp, n);
-      continue;
-    }
-    if (BodyUpload_IsActive() != 0u)
-    {
-      uint8_t tmp[256];
-      uint32_t n = tud_cdc_read(tmp, sizeof tmp);
-      if (n == 0u)
-      {
-        break;
-      }
-      (void)BodyUpload_Feed(tmp, n);
       continue;
     }
 
@@ -237,15 +225,8 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport,
     case AUDIO_FU_CTRL_MUTE:
       TU_VERIFY(p_request->wLength == sizeof(audio_control_cur_1_t));
       mute[channelNum] = ((audio_control_cur_1_t *)pBuff)->bCur;
-      {
-        uint8_t any = mute[0];
-        uint8_t i;
-        for (i = 1u; i <= CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX; i++)
-        {
-          any = (uint8_t)(any || mute[i]);
-        }
-        Audio_SetUSBMute(any);
-      }
+      /* UAC is a tagged body pipe, not analog PCM. macOS mutes unused
+       * channels 2–8; OR-ing those would idle the rings and kill sustain. */
       return true;
 
     default:

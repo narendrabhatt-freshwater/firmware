@@ -211,11 +211,11 @@ void Audio_Bridge_SetMute(uint8_t cmd)
 }
 
 /**
- * @brief Demux UAC 8ch int16 interleaved PCM into per-voice dry rings.
+ * @brief Demux tagged UAC frames (ch0 route, ch1..9 body) into stream rings.
  */
 void Audio_Bridge_WriteUSB(const uint8_t *pbuf, uint32_t size)
 {
-  const uint32_t frame_bytes = (uint32_t)SAMPLE_VOICES * 2u;
+  const uint32_t frame_bytes = (uint32_t)STREAM_UAC_CHANNELS * 2u;
   uint32_t nframes;
   const int16_t *samples;
 
@@ -234,9 +234,24 @@ void Audio_Bridge_WriteUSB(const uint8_t *pbuf, uint32_t size)
   samples = (const int16_t *)(const void *)pbuf;
   if (usb_muted)
   {
-    /* Soft-mute: push silence so playheads stay time-aligned. */
-    static int16_t zeros[48u * SAMPLE_VOICES];
+    /* Soft-mute: idle tagged frames (ch0=0xFF), not voice-0 zeros. */
+    static int16_t idle[48u * STREAM_UAC_CHANNELS];
+    static uint8_t idle_init = 0u;
     uint32_t left = nframes;
+    uint32_t i;
+    if (idle_init == 0u)
+    {
+      for (i = 0u; i < 48u; i++)
+      {
+        uint8_t ch;
+        idle[i * STREAM_UAC_CHANNELS] = (int16_t)STREAM_UAC_IDLE;
+        for (ch = 1u; ch < STREAM_UAC_CHANNELS; ch++)
+        {
+          idle[i * STREAM_UAC_CHANNELS + ch] = 0;
+        }
+      }
+      idle_init = 1u;
+    }
     while (left > 0u)
     {
       uint32_t chunk = left;
@@ -244,7 +259,7 @@ void Audio_Bridge_WriteUSB(const uint8_t *pbuf, uint32_t size)
       {
         chunk = 48u;
       }
-      StreamRing_WriteInterleaved(zeros, chunk);
+      StreamRing_WriteInterleaved(idle, chunk);
       left -= chunk;
     }
     return;

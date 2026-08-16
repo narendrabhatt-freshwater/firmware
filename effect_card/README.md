@@ -58,7 +58,10 @@ checkout, or [`../README.md`](../README.md) §3 in the git monorepo.
 ## Audio capture path — the fragile parts
 
 The chain is: **ADCs → TDM/SAI → circular DMA → de-interleave → TinyUSB
-FIFO → USB**. Several settings here are non-obvious and were established
+FIFO → USB**. Mermaid of that path (and the Channel card):
+[`docs/diagrams/card_data_flow.md`](docs/diagrams/card_data_flow.md).
+
+Several settings here are non-obvious and were established
 by measurement. All are commented in-place; the summary:
 
 ### `sai.c` — TDM alignment override (USER CODE section)

@@ -4,6 +4,7 @@
 
 #include "cardlink/rs485/bus.hpp"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -14,14 +15,16 @@ namespace midi_host
 
 /**
  * Channel Card notes over RS485 — one ASCII nX command per event, strict ACK.
- * After note-off, polls `vq` until the card reports idle so the host can
- * stop UAC dry streams. Sustain does not poll.
+ * After note-off, polls `vq` until the card reports idle (then Silence UAC).
+ * Does not poll while any note is live — UART TX starves ISO OUT.
  */
 class ChannelRs485Out
 {
 public:
   /** Called when vq reports a voice idle (bit clear) after note activity. */
   using IdleHandler = std::function<void(uint8_t slot)>;
+  using VqHandler = std::function<void(uint8_t, uint8_t,
+                                       const std::array<uint8_t, 8> &)>;
 
   ChannelRs485Out();
   ~ChannelRs485Out();
@@ -46,6 +49,7 @@ public:
 
   /** Optional: Silence UAC voice when card reports idle after release. */
   void SetIdleHandler(IdleHandler handler);
+  void SetVqHandler(VqHandler handler);
 
   /** Queue `ar <id> <Hz>` — attack-head root for on-card pitch. */
   void SetRootHz(uint8_t wave_id, double hz);

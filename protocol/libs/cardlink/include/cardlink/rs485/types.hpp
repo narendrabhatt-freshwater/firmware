@@ -82,7 +82,7 @@ struct LinkOptions {
   bool enforce_tag = true;
 };
 
-/** Parse a terminal tagged line into ExchangeResult (status/from/err_code/raw). */
+/** Parse a terminal tagged line. raw is the body after `[C]` / `[E]`. */
 ExchangeResult ParseTaggedReply(const std::string &line, Target expected);
 
 } // namespace rs485

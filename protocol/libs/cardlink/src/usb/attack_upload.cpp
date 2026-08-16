@@ -1,4 +1,5 @@
 #include "cardlink/usb/attack_upload.hpp"
+#include "cardlink/audio/sample_dry.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -80,7 +81,7 @@ AttackUploadResult Fail(const std::string &msg)
   return r;
 }
 
-constexpr size_t kAttackBytes = 1024;
+constexpr size_t kAttackBytes = cardlink::audio::kAttackSamples * 4u;
 
 } // namespace
 
@@ -101,8 +102,9 @@ AttackUploadResult AttackUploader::Upload(
   if (wave_id >= 8u) {
     return Fail("err: wave_id 0..7");
   }
-  if (data == nullptr || nbytes != kAttackBytes) {
-    return Fail("err: attack head must be exactly 1024 bytes (256 int32)");
+  if (data == nullptr || nbytes < 4u || nbytes > kAttackBytes ||
+      (nbytes & 3u) != 0u) {
+    return Fail("err: attack head must be 1..kAttackSamples int32 LE");
   }
 
   DrainRx(port_);
@@ -174,6 +176,12 @@ AttackUploadResult AttackUploader::UploadFile(
   }
   std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)),
                             std::istreambuf_iterator<char>());
+  if (data.empty() || (data.size() & 3u) != 0u) {
+    return Fail("err: head must be int32 LE");
+  }
+  if (data.size() > kAttackBytes) {
+    return Fail("err: head longer than kAttackSamples");
+  }
   return Upload(wave_id, data.data(), data.size(), on_progress);
 }
 

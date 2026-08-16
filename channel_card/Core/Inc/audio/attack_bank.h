@@ -1,9 +1,9 @@
 /**
  ******************************************************************************
  * @file    attack_bank.h
- * @brief   Per-slot int32 attack heads in AXI (ATTACK_BANK_LEN × 4 bytes).
+ * @brief   Per-voice int32 attack heads in AXI (8 × ATTACK_BANK_LEN).
  *
- * Played on note-on before UAC stream_ring sustain. Q31 for the voice path.
+ * Voice N owns table N. Played on note-on before UAC stream_ring sustain.
  ******************************************************************************
  */
 
@@ -21,13 +21,17 @@ extern "C"
 #define SAMPLE_VOICES 8u
 
 #define ATTACK_BANK_COUNT SAMPLE_VOICES
-#define ATTACK_BANK_LEN 256u
+/** ~171 ms @ 48 kHz. Fits 8 heads in AXI RAM_D1 with margin. */
+#define ATTACK_BANK_LEN 8192u
 #define ATTACK_BANK_BYTES (ATTACK_BANK_LEN * 4u)
+/** Source-index overlap of attack tail with body head. */
+#define SAMPLE_CROSSFADE_LEN 32u
+#define SAMPLE_BODY_ORIGIN (ATTACK_BANK_LEN - SAMPLE_CROSSFADE_LEN)
 
   void AttackBank_Init(void);
 
   /**
-   * @brief Replace one head with int32 LE bytes (exactly ATTACK_BANK_BYTES).
+   * @brief Replace one head with int32 LE bytes (4..ATTACK_BANK_BYTES).
    * @retval 0 ok
    * @retval -1 bad id / size / null
    */
@@ -36,10 +40,13 @@ extern "C"
   /** Direct write pointer for CDC upload (ATTACK_BANK_LEN int32). */
   int32_t *AttackBank_WritePtr(uint16_t wave_id);
 
-  /** Mark head present after streaming into WritePtr. */
-  int AttackBank_Commit(uint16_t wave_id);
+  /** Mark head present; nsamp is the real table length (not a hold-pad). */
+  int AttackBank_Commit(uint16_t wave_id, uint32_t nsamp);
 
   uint8_t AttackBank_IsLoaded(uint16_t wave_id);
+
+  /** Committed samples (0 if empty). Join is at this index, not ATTACK_BANK_LEN. */
+  uint32_t AttackBank_GetLen(uint16_t wave_id);
 
   void AttackBank_SetRootHz(uint16_t wave_id, float root_hz);
   float AttackBank_GetRootHz(uint16_t wave_id);
@@ -61,6 +68,12 @@ extern "C"
    *        when the head ends (not 0).
    */
   int32_t AttackBank_NextSample(uint8_t voice);
+
+  /** Table sample as Q31; 0 if id/index invalid or unloaded. */
+  int32_t AttackBank_SampleAt(uint16_t wave_id, uint32_t index);
+
+  /** Contiguous Q31 head (ATTACK_BANK_LEN). NULL if id invalid. */
+  const int32_t *AttackBank_Table(uint16_t wave_id);
 
 #ifdef __cplusplus
 }
