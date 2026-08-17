@@ -15,8 +15,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(__APPLE__)
@@ -167,18 +170,41 @@ std::string FindWavesDir()
   return found;
 }
 
-/** Load w0_*.raw … w7_*.raw from a directory (one file per voice). */
-int LoadRawBank(App &app, const std::string &folder)
+using ProgressFn = std::function<void(float, const char *)>;
+
+void SetProgress(const ProgressFn &fn, float p, const char *status)
+{
+  if (fn) {
+    fn(p, status);
+  }
+}
+
+/** Load w0_*.raw … w7_*.raw. Holds CDC open for the whole bank. */
+int LoadRawBank(App &app, const std::string &folder, std::string &result,
+                const ProgressFn &on_progress)
 {
   std::string cdc_err;
-  if (!app.EnsureAttackCdc(cdc_err)) {
+  SetProgress(on_progress, 0.02f, "CDC");
+  if (!app.samples.BeginCdc(cdc_err)) {
+    result = cdc_err;
     app.log.Push(cdc_err);
-    app.PushToastErr(cdc_err);
     return 0;
   }
+  struct EndCdc {
+    cardlink::sample::Client &c;
+    ~EndCdc() { c.EndCdc(); }
+  } end_cdc{app.samples};
+  (void)end_cdc;
+
   const fs::path root(folder);
   int loaded = 0;
   for (int v = 0; v < kVoices; ++v) {
+    char st[16];
+    std::snprintf(st, sizeof st, "w%d", v);
+    SetProgress(on_progress, (static_cast<float>(v) + 0.05f) /
+                                 static_cast<float>(kVoices),
+                st);
+
     char prefix[16];
     std::snprintf(prefix, sizeof prefix, "w%d_", v);
     std::string path;
@@ -205,18 +231,17 @@ int LoadRawBank(App &app, const std::string &folder)
     }
     std::string err;
     if (!app.samples.LoadWave(static_cast<uint8_t>(v), path, err)) {
+      result = err;
       app.log.Push(err);
-      app.PushToastErr(err);
       return loaded;
     }
     ++loaded;
   }
-  char msg[72];
-  std::snprintf(msg, sizeof msg, "ok: loaded %d/%d raw bank", loaded, kVoices);
-  app.log.Push(msg);
+
   if (loaded > 0) {
     const fs::path roots = root / "roots.txt";
     if (fs::exists(roots)) {
+      SetProgress(on_progress, 0.92f, "roots");
       std::string roots_err;
       (void)app.samples.Mixer().LoadRootsFile(roots.string(), roots_err);
       for (int v = 0; v < loaded; ++v) {
@@ -228,16 +253,89 @@ int LoadRawBank(App &app, const std::string &folder)
         }
       }
     }
+    char msg[72];
+    std::snprintf(msg, sizeof msg, "ok: loaded %d/%d raw bank", loaded,
+                  kVoices);
+    result = msg;
+    app.log.Push(msg);
+  } else {
+    result = "err: raw bank not found (w0_*.raw … w7_*.raw)";
+    app.log.Push(result);
+  }
+  SetProgress(on_progress, 1.f, "done");
+  return loaded;
+}
+
+void FinishSampleLoad(App &app)
+{
+  SampleLoadJob &job = app.sample_load;
+  std::string msg;
+  bool ok = false;
+  {
+    std::lock_guard<std::mutex> lock(job.mu);
+    if (!job.ready) {
+      return;
+    }
+    msg = std::move(job.result);
+    ok = job.ok;
+    job.ready = false;
+    job.status.clear();
+  }
+  if (job.worker.joinable()) {
+    job.worker.join();
+  }
+  if (msg.empty()) {
+    return;
+  }
+  if (ok) {
     app.PushToastOk(msg);
   } else {
-    app.PushToastErr("raw bank not found (w0_*.raw … w7_*.raw)");
+    app.PushToastErr(msg);
   }
-  return loaded;
+}
+
+void StartRawBankLoad(App &app, const std::string &folder)
+{
+  SampleLoadJob &job = app.sample_load;
+  if (job.busy.exchange(true)) {
+    return;
+  }
+  if (job.worker.joinable()) {
+    job.worker.join();
+  }
+  {
+    std::lock_guard<std::mutex> lock(job.mu);
+    job.ready = false;
+    job.ok = false;
+    job.result.clear();
+    job.status = "starting";
+  }
+  job.progress.store(0.f);
+
+  job.worker = std::thread([&app, folder] {
+    SampleLoadJob &job = app.sample_load;
+    const auto on_progress = [&job](float p, const char *st) {
+      job.progress.store(p);
+      if (st != nullptr) {
+        std::lock_guard<std::mutex> lock(job.mu);
+        job.status = st;
+      }
+    };
+    std::string result;
+    (void)LoadRawBank(app, folder, result, on_progress);
+    {
+      std::lock_guard<std::mutex> lock(job.mu);
+      job.ok = result.rfind("ok:", 0) == 0;
+      job.result = std::move(result);
+      job.ready = true;
+    }
+    job.busy.store(false);
+  });
 }
 
 void DrainPending(App &app)
 {
-  if (app.pending_sample_folder.empty()) {
+  if (app.sample_load.busy.load() || app.pending_sample_folder.empty()) {
     return;
   }
   const std::string pending = std::move(app.pending_sample_folder);
@@ -284,8 +382,10 @@ void DrawVoiceCard(App &app, int voice, float card_w, float card_h)
 {
   ImFont *fs = fw::theme::g_fonts.mono_small;
   ImFont *fm = fw::theme::g_fonts.mono;
-  const auto &slot = app.samples.GetSlot(static_cast<uint8_t>(voice));
   const bool dialog_busy = app.file_dialog.Busy();
+  const bool load_busy = app.sample_load.busy.load();
+  const cardlink::sample::Slot *slot =
+      load_busy ? nullptr : &app.samples.GetSlot(static_cast<uint8_t>(voice));
 
   ImGui::PushID(voice);
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kPalette.panel);
@@ -298,38 +398,52 @@ void DrawVoiceCard(App &app, int voice, float card_w, float card_h)
   std::snprintf(id, sizeof id, "n%x", voice);
   MonoText(id, kPalette.accent, fm);
   ImGui::SameLine(0.f, S(8.f));
-  MonoText(slot.label.empty() ? "empty" : slot.label.c_str(),
-           slot.label.empty() ? kPalette.muted : kPalette.text, fs);
-
-  {
-    char status[64];
-    std::snprintf(status, sizeof status, "atk %s  ·  body %s",
-                  slot.head_on_card ? "card" : "—",
-                  slot.body_ready ? "UAC" : "—");
-    MonoText(status,
-             (slot.head_on_card && slot.body_ready) ? kPalette.accent
-                                                    : kPalette.muted,
-             fs);
+  if (load_busy || slot == nullptr) {
+    MonoText("loading\u2026", kPalette.muted, fs);
+  } else {
+    MonoText(slot->label.empty() ? "empty" : slot->label.c_str(),
+             slot->label.empty() ? kPalette.muted : kPalette.text, fs);
   }
 
   {
-    const std::string bn = Basename(slot.head_path.empty() ? slot.body_path
-                                                          : slot.head_path);
+    char status[64];
+    if (load_busy || slot == nullptr) {
+      std::snprintf(status, sizeof status, "atk \u2014  ·  body \u2014");
+      MonoText(status, kPalette.muted, fs);
+    } else {
+      std::snprintf(status, sizeof status, "atk %s  ·  body %s",
+                    slot->head_on_card ? "card" : "\u2014",
+                    slot->body_ready ? "UAC" : "\u2014");
+      MonoText(status,
+               (slot->head_on_card && slot->body_ready) ? kPalette.accent
+                                                        : kPalette.muted,
+               fs);
+    }
+  }
+
+  {
+    std::string bn;
+    if (!load_busy && slot != nullptr) {
+      bn = Basename(slot->head_path.empty() ? slot->body_path
+                                            : slot->head_path);
+    }
     ImGui::PushFont(fs);
     ImGui::PushTextWrapPos(card_w - S(16.f));
-    ImGui::TextColored(kPalette.text_dim, "%s", bn.empty() ? "—" : bn.c_str());
+    ImGui::TextColored(kPalette.text_dim, "%s", bn.empty() ? "\u2014" : bn.c_str());
     ImGui::PopTextWrapPos();
     ImGui::PopFont();
   }
 
   ImGui::Spacing();
-  ImGui::BeginDisabled(dialog_busy);
+  ImGui::BeginDisabled(dialog_busy || load_busy);
   if (fw::ui::ChipBtn("Wave", false, BtnKind::Neutral)) {
     BeginPickWave(app, voice);
   }
   ImGui::EndDisabled();
   ImGui::SameLine(0.f, S(8.f));
-  ImGui::BeginDisabled(!slot.head_on_card && !slot.body_ready);
+  const bool can_play =
+      !load_busy && slot != nullptr && (slot->head_on_card || slot->body_ready);
+  ImGui::BeginDisabled(!can_play);
   if (fw::ui::ChipBtn("Play", false, BtnKind::Primary)) {
     NoteOn(app, voice, 440.0);
   }
@@ -348,9 +462,10 @@ void DrawVoiceCard(App &app, int voice, float card_w, float card_h)
 
 void DrawSamplePage(App &app)
 {
+  FinishSampleLoad(app);
   DrainPending(app);
   /* Keep CDC list fresh — card paths change when USB re-enumerates. */
-  if ((ImGui::GetFrameCount() % 120) == 0) {
+  if (!app.sample_load.busy.load() && (ImGui::GetFrameCount() % 120) == 0) {
     app.RefreshPortLists();
   }
 
@@ -359,6 +474,7 @@ void DrawSamplePage(App &app)
   const bool bus_ok = app.bus.IsOpen() && !app.bus.BusFault();
   const bool cdc_ok = app.attack_cdc_path[0] != '\0';
   const bool dialog_busy = app.file_dialog.Busy();
+  const bool load_busy = app.sample_load.busy.load();
 
   // ── Top bar: CDC + UAC
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kPalette.bg_alt);
@@ -385,6 +501,7 @@ void DrawSamplePage(App &app)
       std::string preview =
           cdc_ok ? app.attack_cdc_path : "\u2014 select \u2014";
       ImGui::PushFont(fs);
+      ImGui::BeginDisabled(load_busy);
       if (ImGui::BeginCombo("##sample_cdc", preview.c_str())) {
         for (int i = 0; i < static_cast<int>(app.serial_ports.size()); ++i) {
           const auto &p = app.serial_ports[static_cast<std::size_t>(i)];
@@ -398,15 +515,18 @@ void DrawSamplePage(App &app)
         }
         ImGui::EndCombo();
       }
+      ImGui::EndDisabled();
       ImGui::PopFont();
     } else {
       ImGui::PushFont(fs);
+      ImGui::BeginDisabled(load_busy);
       if (ImGui::InputTextWithHint("##sample_cdc_path", "CDC path\u2026",
                                    app.attack_cdc_path,
                                    sizeof(app.attack_cdc_path))) {
         app.samples.SetCdcPath(app.attack_cdc_path);
         app.MarkSettingsDirty();
       }
+      ImGui::EndDisabled();
       ImGui::PopFont();
     }
 
@@ -461,23 +581,46 @@ void DrawSamplePage(App &app)
              fs);
 
     ImGui::Spacing();
-    ImGui::BeginDisabled(dialog_busy || !cdc_ok);
-    if (fw::ui::Btn("Load raw bank", ImVec2(0, S(24.f)), BtnKind::Primary)) {
+    ImGui::BeginDisabled(dialog_busy || !cdc_ok || load_busy);
+    if (fw::ui::Btn(load_busy ? "Loading\u2026" : "Load raw bank",
+                    ImVec2(0, S(24.f)), BtnKind::Primary)) {
       const std::string waves = FindWavesDir();
       if (waves.empty()) {
         app.PushToastErr(
             "waves/ not found (need w0_*.raw under cmi_control/waves)");
       } else {
-        LoadRawBank(app, waves);
+        std::string cdc_err;
+        if (!app.EnsureAttackCdc(cdc_err)) {
+          app.log.Push(cdc_err);
+          app.PushToastErr(cdc_err);
+        } else {
+          StartRawBankLoad(app, waves);
+        }
       }
     }
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
       if (!cdc_ok) {
         ImGui::SetTooltip("Select Channel Card CDC port first");
+      } else if (load_busy) {
+        ImGui::SetTooltip("Uploading attack heads over CDC");
       } else {
         ImGui::SetTooltip("Load w0_*.raw \u2026 w7_*.raw from waves/");
       }
+    }
+    if (load_busy) {
+      ImGui::SameLine(0.f, S(12.f));
+      std::string st;
+      {
+        std::lock_guard<std::mutex> lock(app.sample_load.mu);
+        st = app.sample_load.status;
+      }
+      ImGui::SetCursorPosY(ImGui::GetCursorPosY() + S(10.f));
+      fw::ui::ProgressBar("raw_bank", app.sample_load.progress.load(),
+                          ImVec2(S(140.f), S(4.f)));
+      ImGui::SameLine(0.f, S(8.f));
+      ImGui::SetCursorPosY(ImGui::GetCursorPosY() - S(6.f));
+      MonoText(st.c_str(), kPalette.accent, fs);
     }
 
     ImGui::SameLine(0.f, S(12.f));

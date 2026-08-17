@@ -15,11 +15,14 @@
 #include "cardlink/midi/voice_bank.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 enum class GuiView : int
@@ -43,6 +46,29 @@ enum class SampleFilePick : int8_t
 {
   None = 0,
   Wave = 1,
+};
+
+/** Background w0..w7 raw-bank load. Declared last on App so join runs first. */
+struct SampleLoadJob
+{
+  std::atomic<bool> busy{false};
+  std::atomic<float> progress{0.f};
+  std::thread worker;
+  std::mutex mu;
+  std::string status;
+  std::string result;
+  bool ok = false;
+  bool ready = false;
+
+  SampleLoadJob() = default;
+  SampleLoadJob(const SampleLoadJob &) = delete;
+  SampleLoadJob &operator=(const SampleLoadJob &) = delete;
+  ~SampleLoadJob()
+  {
+    if (worker.joinable()) {
+      worker.join();
+    }
+  }
 };
 
 /** Last-sent Effect toggles (GUI-side until a firmware status poll exists). */
@@ -148,6 +174,8 @@ struct App
 
   std::array<float, cardlink::midi::kVoiceCount> voice_glow{};
   std::vector<std::string> pending_drops;
+  /** Last so the worker is joined while samples / log are still alive. */
+  SampleLoadJob sample_load;
 
   void RefreshPortLists();
   /**

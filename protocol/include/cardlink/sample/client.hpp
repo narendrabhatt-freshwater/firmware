@@ -11,6 +11,7 @@
 #define CARDLINK_SAMPLE_CLIENT_HPP
 
 #include "cardlink/audio/sample_dry.hpp"
+#include "cardlink/serial_port.hpp"
 
 #include <array>
 #include <cstdint>
@@ -36,6 +37,13 @@ public:
   void SetConsole(ConsoleFn fn);
   void SetCdcPath(const std::string &path);
   const std::string &CdcPath() const { return cdc_path_; }
+
+  /**
+   * Hold the Channel Card CDC port open across a burst of LoadWave / SetRootHz.
+   * Pair each successful BeginCdc with EndCdc. Nested holds are refcounted.
+   */
+  bool BeginCdc(std::string &err);
+  void EndCdc();
 
   cardlink::audio::SampleDryMixer &Mixer() { return mixer_; }
   const cardlink::audio::SampleDryMixer &Mixer() const { return mixer_; }
@@ -70,6 +78,8 @@ private:
 
   ConsoleFn console_;
   std::string cdc_path_;
+  cardlink::SerialPort cdc_port_;
+  int cdc_refs_ = 0;
   cardlink::audio::SampleDryMixer mixer_;
   std::array<Slot, cardlink::audio::kSampleVoices> slots_{};
 };

@@ -122,6 +122,21 @@ bool FindStemPairs(const fs::path &dir,
   return n > 0;
 }
 
+struct CdcHold {
+  Client &c;
+  bool ok;
+  CdcHold(Client &client, std::string &err) : c(client), ok(c.BeginCdc(err)) {}
+  ~CdcHold()
+  {
+    if (ok) {
+      c.EndCdc();
+    }
+  }
+  CdcHold(const CdcHold &) = delete;
+  CdcHold &operator=(const CdcHold &) = delete;
+  explicit operator bool() const { return ok; }
+};
+
 } // namespace
 
 void Client::SetConsole(ConsoleFn fn)
@@ -131,7 +146,42 @@ void Client::SetConsole(ConsoleFn fn)
 
 void Client::SetCdcPath(const std::string &path)
 {
+  if (path == cdc_path_) {
+    return;
+  }
+  if (cdc_port_.IsOpen()) {
+    cdc_port_.Close();
+    cdc_refs_ = 0;
+  }
   cdc_path_ = path;
+}
+
+bool Client::BeginCdc(std::string &err)
+{
+  if (cdc_path_.empty()) {
+    err = "err: CDC path not set";
+    return false;
+  }
+  if (cdc_port_.IsOpen()) {
+    ++cdc_refs_;
+    return true;
+  }
+  if (!cardlink::usb::OpenCdcPort(cdc_port_, cdc_path_, err)) {
+    return false;
+  }
+  cdc_refs_ = 1;
+  return true;
+}
+
+void Client::EndCdc()
+{
+  if (cdc_refs_ <= 0) {
+    return;
+  }
+  --cdc_refs_;
+  if (cdc_refs_ == 0 && cdc_port_.IsOpen()) {
+    cdc_port_.Close();
+  }
 }
 
 void Client::Render(int16_t *interleaved, unsigned nframes)
@@ -148,23 +198,21 @@ void Client::SendConsole(const std::string &cmd)
 
 bool Client::SendCdcLine(const std::string &line, std::string &err)
 {
-  if (cdc_path_.empty()) {
-    err = "err: CDC path not set";
+  if (!BeginCdc(err)) {
     return false;
   }
-  cardlink::SerialPort port;
-  if (!cardlink::usb::OpenCdcPort(port, cdc_path_, err)) {
-    return false;
-  }
-  if (!port.Write(reinterpret_cast<const uint8_t *>(line.data()),
-                  line.size())) {
+  const bool wrote =
+      cdc_port_.Write(reinterpret_cast<const uint8_t *>(line.data()),
+                      line.size());
+  if (wrote) {
+    cdc_port_.DrainOutput();
+    uint8_t buf[128];
+    (void)cdc_port_.ReadTimeout(buf, sizeof(buf), 200);
+  } else {
     err = "err: CDC write";
-    return false;
   }
-  port.DrainOutput();
-  uint8_t buf[128];
-  (void)port.ReadTimeout(buf, sizeof(buf), 200);
-  return true;
+  EndCdc();
+  return wrote;
 }
 
 bool Client::UploadAttack(uint8_t voice, const int32_t *q31, size_t nsamp,
@@ -175,17 +223,13 @@ bool Client::UploadAttack(uint8_t voice, const int32_t *q31, size_t nsamp,
     err = "err: attack must be 1..8192 Q31 samples";
     return false;
   }
-  if (cdc_path_.empty()) {
-    err = "err: CDC path not set";
+  if (!BeginCdc(err)) {
     return false;
   }
-  cardlink::SerialPort port;
-  if (!cardlink::usb::OpenCdcPort(port, cdc_path_, err)) {
-    return false;
-  }
-  cardlink::usb::AttackUploader up(port);
+  cardlink::usb::AttackUploader up(cdc_port_);
   auto r = up.Upload(voice, reinterpret_cast<const uint8_t *>(q31),
                      nsamp * sizeof(int32_t));
+  EndCdc();
   if (!r.ok) {
     err = r.message;
     return false;
@@ -197,16 +241,12 @@ bool Client::UploadAttack(uint8_t voice, const int32_t *q31, size_t nsamp,
 bool Client::UploadAttackFile(uint8_t voice, const std::string &path,
                               std::string &err)
 {
-  if (cdc_path_.empty()) {
-    err = "err: CDC path not set";
+  if (!BeginCdc(err)) {
     return false;
   }
-  cardlink::SerialPort port;
-  if (!cardlink::usb::OpenCdcPort(port, cdc_path_, err)) {
-    return false;
-  }
-  cardlink::usb::AttackUploader up(port);
+  cardlink::usb::AttackUploader up(cdc_port_);
   auto r = up.UploadFile(voice, path);
+  EndCdc();
   if (!r.ok) {
     err = r.message;
     return false;
@@ -360,8 +400,8 @@ bool Client::SetRootHz(uint8_t voice, double hz, std::string &err)
 
 int Client::LoadFolder(const std::string &dir, std::string &err)
 {
-  if (cdc_path_.empty()) {
-    err = "err: CDC path not set";
+  CdcHold cdc(*this, err);
+  if (!cdc) {
     return 0;
   }
   const fs::path root(dir);
