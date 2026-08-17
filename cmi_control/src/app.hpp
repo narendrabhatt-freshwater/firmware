@@ -42,10 +42,7 @@ enum class OutMode : int
 enum class SampleFilePick : int8_t
 {
   None = 0,
-  Folder = 1,
-  Head = 2,
-  Body = 3,
-  Wave = 4,
+  Wave = 1,
 };
 
 /** Last-sent Effect toggles (GUI-side until a firmware status poll exists). */
@@ -81,7 +78,7 @@ struct App
   AsyncFileDialog file_dialog;
   SampleFilePick sample_file_pick = SampleFilePick::None;
   int sample_file_voice = -1;
-  std::string pending_sample_folder; /**< Folder pick result for SAMPLE page. */
+  std::string pending_sample_folder; /**< Pending wave pick: `wave:<v>:<path>`. */
 
   bool midi_open = false;
   bool audio_open = false;

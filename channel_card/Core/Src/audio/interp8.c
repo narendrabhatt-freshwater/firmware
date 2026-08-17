@@ -175,6 +175,25 @@ int32_t Interp8_Q31(const int32_t *tab, uint32_t n, uint32_t phase_q16,
   return (int32_t)(acc >> 15);
 }
 
+int32_t Interp8_Q31Taps(const int32_t taps[INTERP8_TAPS],
+                        uint32_t phase_q16)
+{
+  uint32_t p;
+  uint32_t t;
+  int64_t acc = 0;
+
+  if (taps == NULL)
+  {
+    return 0;
+  }
+  p = (phase_q16 >> 8) & (INTERP8_PHASES - 1u);
+  for (t = 0u; t < INTERP8_TAPS; t++)
+  {
+    acc += (int64_t)taps[t] * (int64_t)s_kern[p][t];
+  }
+  return (int32_t)(acc >> 15);
+}
+
 int32_t Interp8_S16Taps(const int16_t taps[INTERP8_TAPS], uint32_t phase_q16)
 {
   uint32_t p;

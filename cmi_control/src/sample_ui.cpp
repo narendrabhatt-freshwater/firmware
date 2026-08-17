@@ -15,10 +15,15 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
+
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#elif defined(__linux__)
+#include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 using fw::theme::kPalette;
@@ -85,32 +90,85 @@ bool ApplyWaveFile(App &app, int voice, const std::string &path)
                     err, msg);
 }
 
-bool ApplyHead(App &app, int voice, const std::string &path)
+bool DirHasRawBank(const fs::path &dir)
 {
-  std::string cdc_err;
-  if (!app.EnsureAttackCdc(cdc_err)) {
-    app.log.Push(cdc_err);
-    app.PushToastErr(cdc_err);
+  std::error_code ec;
+  if (!fs::is_directory(dir, ec)) {
     return false;
   }
-  std::string err;
-  return CallSample(app, app.samples.LoadHead(static_cast<uint8_t>(voice),
-                                              path, err),
-                    err, nullptr);
+  try {
+    for (const auto &ent : fs::directory_iterator(dir)) {
+      if (!ent.is_regular_file()) {
+        continue;
+      }
+      const auto name = ent.path().filename().string();
+      if (name.rfind("w0_", 0) == 0 && name.size() >= 4 &&
+          name.compare(name.size() - 4, 4, ".raw") == 0) {
+        return true;
+      }
+    }
+  } catch (...) {
+    return false;
+  }
+  return false;
 }
 
-bool ApplyBody(App &app, int voice, const std::string &path)
+/** Walk parents of `start` for `waves/` or `cmi_control/waves/` with w0_*.raw. */
+std::string FindWavesNear(fs::path start)
 {
-  std::string err;
-  char msg[48];
-  std::snprintf(msg, sizeof msg, "ok: body w%u → UAC mixer",
-                static_cast<unsigned>(voice));
-  return CallSample(app, app.samples.LoadBody(static_cast<uint8_t>(voice),
-                                              path, err),
-                    err, msg);
+  for (int i = 0; i < 10 && !start.empty(); ++i) {
+    const fs::path candidates[] = {
+        start / "waves",
+        start / "cmi_control" / "waves",
+    };
+    for (const auto &cand : candidates) {
+      if (DirHasRawBank(cand)) {
+        return cand.string();
+      }
+    }
+    const fs::path parent = start.parent_path();
+    if (parent == start) {
+      break;
+    }
+    start = parent;
+  }
+  return {};
 }
 
-int LoadFolder(App &app, const std::string &folder)
+std::string ExecutableDir()
+{
+#if defined(__APPLE__)
+  char buf[4096];
+  uint32_t size = sizeof(buf);
+  if (_NSGetExecutablePath(buf, &size) == 0) {
+    std::error_code ec;
+    return fs::weakly_canonical(fs::path(buf), ec).parent_path().string();
+  }
+#elif defined(__linux__)
+  std::error_code ec;
+  const fs::path link = fs::read_symlink("/proc/self/exe", ec);
+  if (!ec) {
+    return link.parent_path().string();
+  }
+#endif
+  return {};
+}
+
+std::string FindWavesDir()
+{
+  std::string found = FindWavesNear(fs::current_path());
+  if (!found.empty()) {
+    return found;
+  }
+  const std::string exe = ExecutableDir();
+  if (!exe.empty()) {
+    found = FindWavesNear(exe);
+  }
+  return found;
+}
+
+/** Load w0_*.raw … w7_*.raw from a directory (one file per voice). */
+int LoadRawBank(App &app, const std::string &folder)
 {
   std::string cdc_err;
   if (!app.EnsureAttackCdc(cdc_err)) {
@@ -118,21 +176,61 @@ int LoadFolder(App &app, const std::string &folder)
     app.PushToastErr(cdc_err);
     return 0;
   }
-  std::string err;
-  const int loaded = app.samples.LoadFolder(folder, err);
-  if (loaded <= 0 && !err.empty()) {
-    app.log.Push(err);
-    app.PushToastErr(err);
-    return 0;
+  const fs::path root(folder);
+  int loaded = 0;
+  for (int v = 0; v < kVoices; ++v) {
+    char prefix[16];
+    std::snprintf(prefix, sizeof prefix, "w%d_", v);
+    std::string path;
+    try {
+      for (const auto &ent : fs::directory_iterator(root)) {
+        if (!ent.is_regular_file()) {
+          continue;
+        }
+        const auto name = ent.path().filename().string();
+        if (name.rfind(prefix, 0) != 0) {
+          continue;
+        }
+        if (name.size() >= 4 &&
+            name.compare(name.size() - 4, 4, ".raw") == 0) {
+          path = ent.path().string();
+          break;
+        }
+      }
+    } catch (...) {
+      path.clear();
+    }
+    if (path.empty()) {
+      continue;
+    }
+    std::string err;
+    if (!app.samples.LoadWave(static_cast<uint8_t>(v), path, err)) {
+      app.log.Push(err);
+      app.PushToastErr(err);
+      return loaded;
+    }
+    ++loaded;
   }
   char msg[72];
-  std::snprintf(msg, sizeof msg, "ok: loaded %d/%d from folder", loaded,
-                kVoices);
+  std::snprintf(msg, sizeof msg, "ok: loaded %d/%d raw bank", loaded, kVoices);
   app.log.Push(msg);
   if (loaded > 0) {
+    const fs::path roots = root / "roots.txt";
+    if (fs::exists(roots)) {
+      std::string roots_err;
+      (void)app.samples.Mixer().LoadRootsFile(roots.string(), roots_err);
+      for (int v = 0; v < loaded; ++v) {
+        const double hz =
+            app.samples.Mixer().BodyRootHz(static_cast<uint16_t>(v));
+        if (hz > 0.0) {
+          std::string ignore;
+          (void)app.samples.SetRootHz(static_cast<uint8_t>(v), hz, ignore);
+        }
+      }
+    }
     app.PushToastOk(msg);
   } else {
-    app.PushToastErr(msg);
+    app.PushToastErr("raw bank not found (w0_*.raw … w7_*.raw)");
   }
   return loaded;
 }
@@ -145,35 +243,15 @@ void DrainPending(App &app)
   const std::string pending = std::move(app.pending_sample_folder);
   app.pending_sample_folder.clear();
 
-  if (pending.rfind("head:", 0) == 0) {
-    // head:<voice>:<path>
-    const auto c1 = pending.find(':', 5);
-    if (c1 == std::string::npos) {
-      return;
-    }
-    const int voice = std::atoi(pending.c_str() + 5);
-    ApplyHead(app, voice, pending.substr(c1 + 1));
+  if (pending.rfind("wave:", 0) != 0) {
     return;
   }
-  if (pending.rfind("body:", 0) == 0) {
-    const auto c1 = pending.find(':', 5);
-    if (c1 == std::string::npos) {
-      return;
-    }
-    const int voice = std::atoi(pending.c_str() + 5);
-    ApplyBody(app, voice, pending.substr(c1 + 1));
+  const auto c1 = pending.find(':', 5);
+  if (c1 == std::string::npos) {
     return;
   }
-  if (pending.rfind("wave:", 0) == 0) {
-    const auto c1 = pending.find(':', 5);
-    if (c1 == std::string::npos) {
-      return;
-    }
-    const int voice = std::atoi(pending.c_str() + 5);
-    ApplyWaveFile(app, voice, pending.substr(c1 + 1));
-    return;
-  }
-  LoadFolder(app, pending);
+  const int voice = std::atoi(pending.c_str() + 5);
+  ApplyWaveFile(app, voice, pending.substr(c1 + 1));
 }
 
 void NoteOn(App &app, int voice, double hz)
@@ -187,18 +265,15 @@ void NoteOff(App &app, int voice)
   app.samples.NoteOff(static_cast<uint8_t>(voice));
 }
 
-void BeginPick(App &app, SampleFilePick kind, int voice)
+void BeginPickWave(App &app, int voice)
 {
   if (app.file_dialog.Busy()) {
     app.PushToastErr("file dialog busy");
     return;
   }
-  app.sample_file_pick = kind;
+  app.sample_file_pick = SampleFilePick::Wave;
   app.sample_file_voice = voice;
-  const bool ok = (kind == SampleFilePick::Folder)
-                      ? app.file_dialog.BeginPickFolder()
-                      : app.file_dialog.BeginPickFile();
-  if (!ok) {
+  if (!app.file_dialog.BeginPickFile()) {
     app.sample_file_pick = SampleFilePick::None;
     app.sample_file_voice = -1;
     app.PushToastErr("file dialog busy");
@@ -238,30 +313,19 @@ void DrawVoiceCard(App &app, int voice, float card_w, float card_h)
   }
 
   {
-    const std::string head_bn = Basename(slot.head_path);
-    const std::string body_bn = Basename(slot.body_path);
+    const std::string bn = Basename(slot.head_path.empty() ? slot.body_path
+                                                          : slot.head_path);
     ImGui::PushFont(fs);
     ImGui::PushTextWrapPos(card_w - S(16.f));
-    ImGui::TextColored(kPalette.text_dim, "head: %s",
-                       head_bn.empty() ? "—" : head_bn.c_str());
-    ImGui::TextColored(kPalette.text_dim, "body: %s",
-                       body_bn.empty() ? "—" : body_bn.c_str());
+    ImGui::TextColored(kPalette.text_dim, "%s", bn.empty() ? "—" : bn.c_str());
     ImGui::PopTextWrapPos();
     ImGui::PopFont();
   }
 
   ImGui::Spacing();
   ImGui::BeginDisabled(dialog_busy);
-  if (fw::ui::ChipBtn("Head", false, BtnKind::Neutral)) {
-    BeginPick(app, SampleFilePick::Head, voice);
-  }
-  ImGui::SameLine(0.f, S(4.f));
-  if (fw::ui::ChipBtn("Body", false, BtnKind::Neutral)) {
-    BeginPick(app, SampleFilePick::Body, voice);
-  }
-  ImGui::SameLine(0.f, S(4.f));
   if (fw::ui::ChipBtn("Wave", false, BtnKind::Neutral)) {
-    BeginPick(app, SampleFilePick::Wave, voice);
+    BeginPickWave(app, voice);
   }
   ImGui::EndDisabled();
   ImGui::SameLine(0.f, S(8.f));
@@ -393,47 +457,28 @@ void DrawSamplePage(App &app)
   {
     MonoText("LIBRARY", kPalette.text_dim, fs);
     ImGui::SameLine(0.f, S(12.f));
-    MonoText("folder auto-load · Head/Body split files · Wave wav/raw", kPalette.muted,
+    MonoText("one wav/raw per voice · SDK splits attack + body", kPalette.muted,
              fs);
 
     ImGui::Spacing();
     ImGui::BeginDisabled(dialog_busy || !cdc_ok);
-    if (fw::ui::Btn("Load folder\u2026", ImVec2(0, S(24.f)), BtnKind::Primary)) {
-      BeginPick(app, SampleFilePick::Folder, -1);
+    if (fw::ui::Btn("Load raw bank", ImVec2(0, S(24.f)), BtnKind::Primary)) {
+      const std::string waves = FindWavesDir();
+      if (waves.empty()) {
+        app.PushToastErr(
+            "waves/ not found (need w0_*.raw under cmi_control/waves)");
+      } else {
+        LoadRawBank(app, waves);
+      }
     }
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
       if (!cdc_ok) {
         ImGui::SetTooltip("Select Channel Card CDC port first");
       } else {
-        ImGui::SetTooltip(
-            "Pick a folder with w0_*_head.i32 + w0_*_body.i16 \u2026 w7");
+        ImGui::SetTooltip("Load w0_*.raw \u2026 w7_*.raw from waves/");
       }
     }
-
-    ImGui::SameLine(0.f, S(8.f));
-    ImGui::BeginDisabled(dialog_busy || !cdc_ok);
-    if (fw::ui::Btn("Load sample48", ImVec2(0, S(24.f)), BtnKind::Neutral)) {
-      static const char *kCandidates[] = {
-          "cmi_control/waves/sample48",
-          "waves/sample48",
-          "../waves/sample48",
-          "../../cmi_control/waves/sample48",
-      };
-      bool found = false;
-      for (const char *c : kCandidates) {
-        std::error_code ec;
-        if (fs::is_directory(c, ec)) {
-          LoadFolder(app, c);
-          found = true;
-          break;
-        }
-      }
-      if (!found) {
-        app.PushToastErr("sample48 folder not found");
-      }
-    }
-    ImGui::EndDisabled();
 
     ImGui::SameLine(0.f, S(12.f));
     ImGui::BeginDisabled(!bus_ok);
@@ -482,7 +527,7 @@ void DrawSamplePage(App &app)
   const float gap = S(12.f);
   const float avail_w = ImGui::GetContentRegionAvail().x;
   const float card_w = (avail_w - gap * 3.f) / 4.f;
-  const float card_h = S(148.f);
+  const float card_h = S(120.f);
 
   for (int row = 0; row < 2; ++row) {
     for (int col = 0; col < 4; ++col) {
@@ -505,7 +550,7 @@ void DrawSamplePage(App &app)
   MonoText("Prefill UAC then RS485 n0..n7  ·  vq after note-off  ·  env / filter on card.",
            kPalette.text_dim, fs);
   ImGui::Spacing();
-  MonoText("Wave: wav/raw SRC to 48 kHz. Folder: wN_head.i32 + wN_body.i16.",
+  MonoText("Pass one wav/raw per voice; SDK splits attack (CDC) + body (UAC).",
            kPalette.text_dim, fs);
   fw::ui::EndSection();
 

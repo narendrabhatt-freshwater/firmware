@@ -847,24 +847,8 @@ void App::Tick()
     std::string path;
     if (file_dialog.TakeResult(path) && !path.empty())
     {
-      if (sample_file_pick == SampleFilePick::Folder)
-      {
-        pending_sample_folder = path;
-      }
-      else if (sample_file_pick == SampleFilePick::Head &&
-               sample_file_voice >= 0 && sample_file_voice < 8)
-      {
-        pending_sample_folder = std::string("head:") +
-                                std::to_string(sample_file_voice) + ":" + path;
-      }
-      else if (sample_file_pick == SampleFilePick::Body &&
-               sample_file_voice >= 0 && sample_file_voice < 8)
-      {
-        pending_sample_folder = std::string("body:") +
-                                std::to_string(sample_file_voice) + ":" + path;
-      }
-      else if (sample_file_pick == SampleFilePick::Wave &&
-               sample_file_voice >= 0 && sample_file_voice < 8)
+      if (sample_file_pick == SampleFilePick::Wave && sample_file_voice >= 0 &&
+          sample_file_voice < 8)
       {
         pending_sample_folder = std::string("wave:") +
                                 std::to_string(sample_file_voice) + ":" + path;

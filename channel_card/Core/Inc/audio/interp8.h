@@ -35,6 +35,14 @@ extern "C"
                       uint8_t wrap);
 
   /**
+   * @brief 8-tap kernel over prefetched Q31 samples.
+   *        taps[t] is source at (i0 + t - 3); phase_q16 supplies the
+   *        fractional LUT index only.
+   */
+  int32_t Interp8_Q31Taps(const int32_t taps[INTERP8_TAPS],
+                          uint32_t phase_q16);
+
+  /**
    * @brief 8-tap kernel over prefetched int16 samples (ring body path).
    *        taps[t] is source at (i0 + t - 3); phase_q16 supplies the
    *        fractional LUT index only.

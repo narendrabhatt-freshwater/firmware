@@ -33,13 +33,15 @@ _Static_assert(NOTE_ENV_VOICES >= NOTE_BANK_VOICES,
 #define PHASE_INC_MAX (PHASE_ONE * 16u)
 /* ~1 octave in 20 ms @ 48 kHz. */
 #define PHASE_INC_SLEW 68u
+#define INTERP8_LEFT_TAPS 3u
+#define BODY_ADVANCE_PHASE ((INTERP8_LEFT_TAPS + 1u) * PHASE_ONE)
 
 static double note_freq_hz[NOTE_BANK_VOICES];
 static double note_scale[NOTE_BANK_VOICES];
 static int32_t note_amp_q15[NOTE_BANK_VOICES];
 static uint8_t note_active[NOTE_BANK_VOICES];
-/* Q16.16 attack index. Body consume is note_body_frac from ring rd.
- * Attack slot is the voice index — nX always plays AXI head X. */
+/* Q16.16 attack index. Body phase is relative to ring rd and retains the
+ * three preceding samples required by the interpolation kernel. */
 static uint64_t note_phase[NOTE_BANK_VOICES];
 static uint32_t note_body_frac[NOTE_BANK_VOICES];
 static int32_t note_hold[NOTE_BANK_VOICES];
@@ -113,9 +115,50 @@ static int32_t NoteBank_InterpAttack(uint16_t wid, uint64_t phase)
   return Interp8_Q31(tab, len, phase_q16, 0u);
 }
 
+static int NoteBank_InterpAttackBody(uint8_t note, uint16_t wid,
+                                    uint64_t phase, int32_t *out)
+{
+  const int32_t *attack = AttackBank_Table(wid);
+  uint32_t alen = AttackBank_GetLen(wid);
+  int32_t source_i0 = (int32_t)(phase >> 16);
+  int32_t body_i0 = (int32_t)(note_body_frac[note] >> 16);
+  int32_t taps[INTERP8_TAPS];
+  uint32_t t;
+
+  if (out == NULL || attack == NULL || alen == 0u)
+  {
+    return -1;
+  }
+  for (t = 0u; t < INTERP8_TAPS; t++)
+  {
+    int32_t source = source_i0 + (int32_t)t - (int32_t)INTERP8_LEFT_TAPS;
+    if (source < 0)
+    {
+      source = 0;
+    }
+    if ((uint32_t)source < alen)
+    {
+      taps[t] = attack[source];
+    }
+    else
+    {
+      int32_t offset = body_i0 + source - source_i0;
+      int16_t sample;
+      if (offset < 0 ||
+          StreamRing_GetRel(note, (uint32_t)offset, &sample) != 0)
+      {
+        return -1;
+      }
+      taps[t] = (int32_t)sample * 65536;
+    }
+  }
+  *out = Interp8_Q31Taps(taps, (uint32_t)phase);
+  return 0;
+}
+
 /**
- * 8-tap over the body FIFO. Edge taps clamp like Interp8 non-wrap;
- * missing center (i0 past filled) is underrun.
+ * 8-tap over the body FIFO. The read pointer remains three samples behind
+ * the interpolation center; only the beginning of a stream needs clamping.
  */
 static int NoteBank_InterpBody(uint8_t note, int32_t *out)
 {
@@ -132,7 +175,8 @@ static int NoteBank_InterpBody(uint8_t note, int32_t *out)
 
   for (t = 0u; t < INTERP8_TAPS; t++)
   {
-    int32_t idx = (int32_t)i0 + (int32_t)t - 3;
+    int32_t idx =
+        (int32_t)i0 + (int32_t)t - (int32_t)INTERP8_LEFT_TAPS;
     if (idx < 0)
     {
       idx = 0;
@@ -153,7 +197,7 @@ static int NoteBank_InterpBody(uint8_t note, int32_t *out)
 static void NoteBank_AdvanceBody(uint8_t note)
 {
   note_body_frac[note] += note_inc[note];
-  while (note_body_frac[note] >= PHASE_ONE)
+  while (note_body_frac[note] >= BODY_ADVANCE_PHASE)
   {
     StreamRing_Advance(note, 1u);
     note_body_frac[note] -= PHASE_ONE;
@@ -173,14 +217,20 @@ static void NoteBank_SyncBodyPlayhead(uint8_t note, uint64_t phase,
                                      uint64_t fade0)
 {
   uint64_t rel;
+  uint32_t source_index;
+  uint32_t history;
 
   if (note_body_locked[note] != 0u)
   {
     return;
   }
   rel = (phase >= fade0) ? (phase - fade0) : 0u;
-  note_body_skip[note] = (uint32_t)(rel >> 16);
-  note_body_frac[note] = (uint32_t)(rel & 0xFFFFu);
+  source_index = (uint32_t)(rel >> 16);
+  history = (source_index < INTERP8_LEFT_TAPS)
+                ? source_index
+                : INTERP8_LEFT_TAPS;
+  note_body_skip[note] = source_index - history;
+  note_body_frac[note] = (history << 16) | (uint32_t)(rel & 0xFFFFu);
   note_body_locked[note] = 1u;
 }
 
@@ -322,15 +372,17 @@ static int32_t NoteBank_Sample(uint8_t note)
 
   if (phase < fade1)
   {
-    /* Overlap is for FIFO alignment only. Mixing Q31 attack with
-     * int16<<16 body of the same samples drops the low bits over
-     * the window and shows up as an amplitude sag. */
     y = NoteBank_InterpAttack(wid, phase);
     if (phase >= fade0 && note_body_skip[note] == 0u)
     {
       int32_t body;
       if (NoteBank_InterpBody(note, &body) == 0)
       {
+        int32_t joined;
+        if (NoteBank_InterpAttackBody(note, wid, phase, &joined) == 0)
+        {
+          y = joined;
+        }
         NoteBank_AdvanceBody(note);
       }
     }
