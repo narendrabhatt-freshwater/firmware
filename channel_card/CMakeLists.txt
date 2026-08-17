@@ -56,6 +56,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/audio/note_envelope.c
     Core/Src/audio/attack_bank.c
     Core/Src/audio/stream_ring.c
+    Core/Src/audio/interp8.c
     Core/Src/audio/audio_cpuload.c
     Core/Src/audio/audio_tone_dc.c
     Core/Src/filters/butterworth_four_pole.c
@@ -99,8 +100,7 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
-
-    # Add user defined libraries
+    m
 )
 
 # --specs=nano.specs (cmake/gcc-arm-none-eabi.cmake) strips floating-point

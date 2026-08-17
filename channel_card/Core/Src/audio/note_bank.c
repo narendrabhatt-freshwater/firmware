@@ -4,15 +4,17 @@
  * @brief   SAMPLE voices: attack RAM + body slots → sample → LPF → env.
  *
  * Attack is an AXI head of committed length (not hold-padded). Body is
- * the UAC FIFO. At the join the body playhead is locked to the attack
- * source index so both sides read the same sample. nX > 0 is always a
- * note-on. Playhead changes apply on the I2S sample.
+ * the UAC FIFO. Pitch uses 8-tap Hann-sinc (Q16.16). At the join the
+ * body playhead is locked to the attack source index so both sides
+ * read the same sample. nX > 0 is always a note-on. Playhead changes
+ * apply on the I2S sample.
  ******************************************************************************
  */
 
 #include "note_bank.h"
 
 #include "attack_bank.h"
+#include "interp8.h"
 #include "note_envelope.h"
 #include "note_filter.h"
 #include "stream_ring.h"
@@ -96,62 +98,55 @@ static uint32_t NoteBank_HzToInc(uint16_t wave_id, double freq_hz)
   return (uint32_t)(inc * (double)PHASE_ONE + 0.5);
 }
 
-static int32_t NoteBank_LerpQ31(int32_t a, int32_t b, uint32_t frac)
-{
-  int64_t d = (int64_t)b - (int64_t)a;
-  return a + (int32_t)((d * (int64_t)frac) >> 16);
-}
-
-static int32_t NoteBank_AttackAt(uint16_t wid, uint32_t idx)
-{
-  uint32_t len = AttackBank_GetLen(wid);
-  if (len == 0u)
-  {
-    return 0;
-  }
-  if (idx >= len)
-  {
-    return AttackBank_SampleAt(wid, len - 1u);
-  }
-  return AttackBank_SampleAt(wid, idx);
-}
-
-static int NoteBank_BodyAtRel(uint8_t note, uint32_t offset, int32_t *out)
-{
-  int16_t s16;
-  if (StreamRing_GetRel(note, offset, &s16) != 0)
-  {
-    return -1;
-  }
-  *out = ((int32_t)s16) << 16;
-  return 0;
-}
-
 static int32_t NoteBank_InterpAttack(uint16_t wid, uint64_t phase)
 {
-  uint32_t idx = (uint32_t)(phase >> 16);
-  uint32_t frac = (uint32_t)(phase & 0xFFFFu);
-  return NoteBank_LerpQ31(NoteBank_AttackAt(wid, idx),
-                          NoteBank_AttackAt(wid, idx + 1u), frac);
+  const int32_t *tab = AttackBank_Table(wid);
+  uint32_t len = AttackBank_GetLen(wid);
+  uint32_t phase_q16;
+
+  if (tab == NULL || len == 0u)
+  {
+    return 0;
+  }
+  /* Attack heads are ≤ 8192; Q16.16 index fits in 32 bits. */
+  phase_q16 = (phase > 0xffffffffull) ? 0xffffffffu : (uint32_t)phase;
+  return Interp8_Q31(tab, len, phase_q16, 0u);
 }
 
+/**
+ * 8-tap over the body FIFO. Edge taps clamp like Interp8 non-wrap;
+ * missing center (i0 past filled) is underrun.
+ */
 static int NoteBank_InterpBody(uint8_t note, int32_t *out)
 {
-  uint32_t i0 = note_body_frac[note] >> 16;
-  uint32_t frac = note_body_frac[note] & 0xFFFFu;
-  int32_t a;
-  int32_t b;
+  uint32_t phase = note_body_frac[note];
+  uint32_t i0 = phase >> 16;
+  uint32_t filled = StreamRing_FillLevel(note);
+  int16_t taps[INTERP8_TAPS];
+  uint32_t t;
 
-  if (NoteBank_BodyAtRel(note, i0, &a) != 0)
+  if (out == NULL || filled == 0u || i0 >= filled)
   {
     return -1;
   }
-  if (frac == 0u || NoteBank_BodyAtRel(note, i0 + 1u, &b) != 0)
+
+  for (t = 0u; t < INTERP8_TAPS; t++)
   {
-    *out = a;
-    return 0;
+    int32_t idx = (int32_t)i0 + (int32_t)t - 3;
+    if (idx < 0)
+    {
+      idx = 0;
+    }
+    if ((uint32_t)idx >= filled)
+    {
+      idx = (int32_t)filled - 1;
+    }
+    if (StreamRing_GetRel(note, (uint32_t)idx, &taps[t]) != 0)
+    {
+      return -1;
+    }
   }
-  *out = NoteBank_LerpQ31(a, b, frac);
+  *out = Interp8_S16Taps(taps, phase);
   return 0;
 }
 
@@ -415,6 +410,7 @@ void NoteBank_Init(void)
 {
   uint8_t i;
 
+  Interp8_Init();
   note_shape = NOTE_SHAPE_SINE;
   note_shape_param = 0.5;
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
