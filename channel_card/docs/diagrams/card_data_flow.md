@@ -60,9 +60,10 @@ Attack and body are storage. The head plays to its committed length
 interpolation. `nX > 0` is always a note-on. A new UAC session
 (`SOF` + session 0–6) starts a new body FIFO; a repeated frame with
 the same session does not.
-The host paces USB frames by `phase_inc` (credit per output sample).
-Missing body holds the last sample until USB catches up. The producer
-never overwrites unread FIFO samples.
+The host muxes UAC frames from Channel `vq` (hungriest voice + free
+slots), polled every 10 ms while notes are live. Missing body holds the
+last sample until USB catches up. The producer never overwrites unread
+FIFO samples.
 
 ```mermaid
 flowchart TB
@@ -261,6 +262,7 @@ flowchart LR
 ```
 
 Channel `vq` replies are sent from the main loop (same loop as
-`USB_App_Task`). Do not poll `vq` while a note is sounding — UART TX
-starves TinyUSB SOF and ISO OUT packets drop (cracked sustain). Host
-mux uses the 1 ms UAC estimate; `vq` is for post-note-off idle only.
+`USB_App_Task`). The host polls `vq` every 10 ms while any note is live
+or releasing; the reply (mask, hungriest voice, free slots) is the UAC
+mux input. Do not poll faster: UART TX of the reply can miss a USB SOF
+and ISO OUT has no retry.

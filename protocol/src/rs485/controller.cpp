@@ -19,7 +19,8 @@ namespace
 {
 
 constexpr uint8_t kVqVoices = 8;
-/* 10 ms while notes are active. Do not go faster: UART TX steals USB SOF. */
+/* 10 ms while any note is live or releasing. Faster UART TX of vq replies
+ * steals USB SOF (ISO OUT has no retry). */
 constexpr auto kVqPollInterval = std::chrono::milliseconds(10);
 constexpr int kVqMissLimit = 16;
 
@@ -132,12 +133,11 @@ struct Controller::Impl
 
   bool WatchPendingLocked() const
   {
-    /* UART TX of a vq reply runs in the same loop as tud_task and drops ISO
-     * OUT. Never poll while any note is live: a stale watch on another slot
-     * must not starve the sounding voice. */
+    /* Card hunger (vq) drives the UAC mux. Poll at kVqPollInterval while any
+     * voice is live or finishing release — not only after note-off. */
     for (uint8_t i = 0; i < cardlink::midi::kVoiceCount; ++i) {
       if (desired_hz[i] > 0.0 || sent_hz[i] > 0.0) {
-        return false;
+        return true;
       }
     }
     for (bool watching : watch_idle) {

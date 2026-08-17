@@ -3,12 +3,13 @@
  * @brief Host body feeder: unpitched int16 → tagged UAC frames.
  *
  * Card owns pitch / env / filter. Each UAC frame: ch0 = route, ch1..9 =
- * samples for one voice. Mux is a credit scheduler: each output frame
- * adds phase_inc credits; a sent frame costs 9.
+ * samples for one voice. Mux follows Channel `vq` (hungriest voice + free
+ * slots). Between polls the host spends the last free-slot snapshot; it
+ * does not rank voices from local phase_inc.
  *
- * The card does not consume body until the attack join. The host models
- * that FIFO: fill to kRingSamples, then do not advance the cursor until
- * the playhead is past fade0. Dropped USB must not skip the file.
+ * The card does not consume body until the attack join. The host still
+ * tracks its send cursor: extra USB during that window is dropped and
+ * would skip the file. Dropped USB must not skip the file.
  *
  * Render() is the UAC callback — no mutex. UI posts to a SPSC command
  * queue; Render drains it at the start of the buffer.
@@ -32,7 +33,10 @@ constexpr unsigned kAttackSamples = 8192;
 constexpr unsigned kCrossfadeSamples = 32;
 constexpr unsigned kBodyOrigin = kAttackSamples - kCrossfadeSamples;
 constexpr unsigned kRingSamples = 4096;
-/** Mux boost until the card FIFO is full. Extra USB is dropped. */
+/** Must match STREAM_SLOT_LEN / STREAM_SLOTS on the card. */
+constexpr unsigned kVqSlotSamples = 256;
+constexpr unsigned kVqSlotMax = 8;
+/** Prefill target until the first `vq` (one ring). Extra USB is dropped. */
 constexpr unsigned kPrefillSamples = kRingSamples;
 constexpr uint16_t kUacTagBase = 0x7F00;
 constexpr uint8_t kUacIdle = 0xFF;
@@ -104,7 +108,6 @@ private:
     uint16_t wave_id = 0;
     double freq_hz = 0.0;
     double cursor = 0.0;
-    double credit = 0.0;
     double phase = 0.0;
     double queued = 0.0;
     unsigned attack_len = 0;
@@ -116,6 +119,7 @@ private:
   void DrainCmds();
   void ApplyCmd(const Cmd &c);
   uint8_t PickVoice() const;
+  bool CanSend(uint8_t voice) const;
   int16_t NextBody(Voice &v);
   double IncOf(const Voice &v) const;
   static double Fade0Of(unsigned attack_len);
@@ -123,6 +127,7 @@ private:
   static bool HasRoom(const Voice &v);
   static int16_t EncodeTag(uint8_t session, uint8_t route_low);
   bool WaveInUse(uint16_t wave_id) const;
+  void SpendVq(uint8_t voice);
 
   std::array<Cmd, kCmdCap> cmds_{};
   std::atomic<uint32_t> cmd_wr_{0};
@@ -132,6 +137,10 @@ private:
   std::array<std::atomic<unsigned>, kSampleVoices> sent_{};
   std::array<std::atomic<bool>, kSampleVoices> live_{};
   std::array<std::atomic<uint16_t>, kSampleVoices> live_wave_{};
+  std::atomic<bool> vq_live_{false};
+  std::atomic<uint8_t> vq_mask_{0};
+  std::atomic<uint8_t> vq_best_{0xFF};
+  std::array<std::atomic<uint16_t>, kSampleVoices> vq_free_samp_{};
 
   std::array<std::vector<int16_t>, 256> bodies_{};
   std::array<std::atomic<double>, 256> root_hz_{};
