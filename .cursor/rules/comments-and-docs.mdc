@@ -28,7 +28,7 @@ an AI chat transcript. Tone is neutral, precise, and durable.
 - Restating the code or padding docs with narrative that does not help a
   maintainer act.
 - In **card firmware**, coupling comments to host/tool paths or binaries
-  (`tools/gen_sample_waves.py`, `midi_bridge`, `cmi_control`) — see
+  (`tools/gen_sample_waves.py`, `cardlink`, `cmi_control`) — see
   `firmware-card-purity.mdc`. Host tools may cite card constants; the card
   does not cite the tools.
 

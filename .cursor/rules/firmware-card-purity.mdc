@@ -24,7 +24,7 @@ app or generator script happens to produce payloads.
 
 - Reference host tree paths or tools in card comments
   (`tools/gen_sample_waves.py`, `cmi_control/...`, `sample48/`).
-- Name host binaries or libs as authorities (`midi_bridge`, `cmi_control`,
+- Name host binaries or libs as authorities (`cmi_control`,
   `cardlink`) in card comments — describe the failure/protocol instead.
 - Encode “matches the GUI/script” as the reason for a `#define`; state the
   hardware/audio constraint (length, sample rate, loop period).

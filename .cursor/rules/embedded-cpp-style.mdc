@@ -5,8 +5,9 @@ alwaysApply: true
 
 # Embedded C Style (firmware)
 
-MCU firmware is **C today**. Host `protocol/console` is C++. A future C++ firmware
-migration is intentional but must be an explicit project — see
+MCU firmware is **C today**. The cardlink host SDK
+(`protocol`) is C++17. A future C++ firmware migration is
+intentional but must be an explicit project — see
 `firmware-modules-and-robustness.mdc`. Until then, write and extract in C.
 
 - Use fixed-width types (`uint32_t`, `int32_t`, `int8_t`, ...) everywhere — never
