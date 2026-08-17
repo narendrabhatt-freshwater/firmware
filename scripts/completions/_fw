@@ -13,8 +13,7 @@ _fw() {
     'console:Interactive USB CDC console'
     'log:Follow CDC output'
     'send:Send one console command'
-    'rs485:RS485 console (protocol/console — no USB CDC needed)'
-    'midi:MIDI → speakers or Channel Card (protocol/midi_bridge)'
+    'control:Build or run the cmi_control host example'
     'clean:Remove build directories'
     'status:Show toolchain and artifacts'
     'help:Show help'
@@ -42,29 +41,6 @@ _fw() {
     '--port[CDC device path]:port:_fw_serial_ports'
     '-p[CDC device path]:port:_fw_serial_ports'
     '--baud[Baud rate]:baud:(115200 9600)'
-  )
-
-  rs485_opts=(
-    '--port[RS485 adapter device path]:port:_fw_serial_ports'
-    '-p[RS485 adapter device path]:port:_fw_serial_ports'
-    '--baud[Baud rate]:baud:(460800 115200 230400 9600)'
-    '--manual-rts[Toggle RTS around TX (dongles w/o auto-direction)]'
-    '--timeout-ms[Per-attempt reply wait, ms]:ms:(300)'
-    '--retries[Extra send attempts on no reply]:n:(2)'
-    '--echo-off[Send e:echo off at session start]'
-  )
-
-  midi_opts=(
-    '--midi[MIDI input port index]:index:'
-    '--port[MIDI index or RS485 serial path]:port-or-index:'
-    '-p[MIDI index or RS485 serial path]:port-or-index:'
-    '--rs485[USB-RS485 adapter path]:path:_fw_serial_ports'
-    '--baud[RS485 baud]:baud:(460800 115200)'
-    '--gain[CH1 DAC atten dB at start]:db:(0 6 12 20 40)'
-    '--echo-off[Send e:echo off at open (default)]'
-    '--echo-on[Send e:echo on at open]'
-    '--echo-leave[Do not change Effect echo]'
-    '--auto[Looping Am demo until first Note On, then live MIDI]'
   )
 
   _arguments -C \
@@ -104,16 +80,8 @@ _fw() {
             '2:command:(help status sw led)' \
             "${serial_opts[@]}"
           ;;
-        rs485)
-          _arguments \
-            '1:target-or-sub:(console build list send channel effect all)' \
-            '2:target-or-command:(channel effect all help status sw led)' \
-            "${rs485_opts[@]}"
-          ;;
-        midi)
-          _arguments \
-            '1:sub:(build list run play channel)' \
-            "${midi_opts[@]}"
+        control|gui)
+          _arguments '1:sub:(run build)'
           ;;
         status|info)
           _arguments \

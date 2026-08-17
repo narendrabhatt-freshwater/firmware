@@ -2,8 +2,8 @@
  * @file main.cpp
  * @brief control_gui — Dear ImGui + GLFW host for MIDI + RS485 console.
  *
- * Portable windowing via GLFW (macOS / Linux / Windows). Protocol and
- * voice allocation reuse protocol/libs/cardproto and protocol/midi_bridge sources.
+ * Portable windowing via GLFW (macOS / Linux / Windows). Protocol, MIDI,
+ * audio, and voice allocation are provided by cardlink.
  */
 
 #include "app.hpp"
@@ -118,7 +118,7 @@ int main(int argc, char **argv)
     app.samples.Mixer().ApplyVoiceQuery(mask, best, slots.data());
   });
   fw::settings::Load(app);
-  app.samples.SetCdcPath(app.wave_cdc_path);
+  app.samples.SetCdcPath(app.attack_cdc_path);
 
   // Effective UI scale = persisted user zoom × monitor content scale
   // (content scale is a no-op on macOS — points already handle Retina).

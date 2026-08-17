@@ -5,17 +5,13 @@ _fw_complete() {
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-  local cmds="build flash list console log send rs485 midi clean status help"
+  local cmds="build flash list console log send control clean status help"
   local cards_all="channel effect all"
   local cards_one="channel effect"
   local kinds="usb stlink uart all"
   local tools="cube dfu auto"
   local flash_flags="--debug --release --tool --port -p --sn --select --erase --no-verify --no-start"
   local serial_flags="--port -p --baud"
-  local rs485_flags="--port -p --baud --manual-rts --timeout-ms --retries --echo-off"
-  local rs485_subs="console build list send channel effect all"
-  local midi_flags="--midi --port -p --rs485 --baud --gain --echo-off --echo-on --echo-leave --auto"
-  local midi_subs="build list run play channel"
 
   if [[ ${COMP_CWORD} -eq 1 ]]; then
     COMPREPLY=( $(compgen -W "${cmds}" -- "${cur}") )
@@ -30,8 +26,6 @@ _fw_complete() {
       if [[ "${cmd}" == flash ]]; then
         COMPREPLY=( $(compgen -W "USB1 USB2 USB3" -- "${cur}") )
         COMPREPLY+=( $(compgen -W "$(ls /dev/cu.usbmodem* /dev/ttyACM* 2>/dev/null)" -- "${cur}") )
-      elif [[ "${cmd}" == rs485 ]]; then
-        COMPREPLY=( $(compgen -W "$(ls /dev/cu.usbserial* /dev/tty.usbserial* /dev/ttyUSB* /dev/ttyACM* 2>/dev/null)" -- "${cur}") )
       else
         COMPREPLY=( $(compgen -W "$(ls /dev/cu.usbmodem* /dev/ttyACM* 2>/dev/null)" -- "${cur}") )
       fi
@@ -79,25 +73,8 @@ _fw_complete() {
         COMPREPLY=( $(compgen -W "${serial_flags}" -- "${cur}") )
       fi
       ;;
-    rs485)
-      if [[ ${COMP_CWORD} -eq 2 ]]; then
-        COMPREPLY=( $(compgen -W "${rs485_subs}" -- "${cur}") )
-      elif [[ ${COMP_CWORD} -eq 3 && "${COMP_WORDS[2]}" == send ]]; then
-        COMPREPLY=( $(compgen -W "${cards_all}" -- "${cur}") )
-      elif [[ ${COMP_CWORD} -eq 4 && "${COMP_WORDS[2]}" == send ]]; then
-        COMPREPLY=( $(compgen -W "help status sw led" -- "${cur}") )
-      elif [[ ${COMP_CWORD} -eq 3 && "${COMP_WORDS[2]}" == console ]]; then
-        COMPREPLY=( $(compgen -W "${cards_all}" -- "${cur}") )
-      else
-        COMPREPLY=( $(compgen -W "${rs485_flags}" -- "${cur}") )
-      fi
-      ;;
-    midi)
-      if [[ ${COMP_CWORD} -eq 2 ]]; then
-        COMPREPLY=( $(compgen -W "${midi_subs} ${midi_flags}" -- "${cur}") )
-      else
-        COMPREPLY=( $(compgen -W "${midi_flags}" -- "${cur}") )
-      fi
+    control|gui)
+      COMPREPLY=( $(compgen -W "run build" -- "${cur}") )
       ;;
   esac
 }

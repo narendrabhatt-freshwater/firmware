@@ -50,33 +50,8 @@ target_include_directories(imgui_lib PUBLIC
 )
 target_link_libraries(imgui_lib PUBLIC glfw)
 
-# ── RtMidi / RtAudio (same pins as midi_bridge) ──────────────────────────────
-set(RTMIDI_BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
-set(RTMIDI_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-set(RTMIDI_TARGETNAME_UNINSTALL "rtmidi_uninstall_gui" CACHE STRING "" FORCE)
-FetchContent_Declare(
-  rtmidi
-  URL https://github.com/thestk/rtmidi/archive/refs/tags/6.0.0.tar.gz
-  URL_HASH SHA256=ef7bcda27fee6936b651c29ebe9544c74959d0b1583b716ce80a1c6fea7617f0
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
-FetchContent_MakeAvailable(rtmidi)
-
-set(RTAUDIO_BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
-set(RTAUDIO_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-set(RTAUDIO_TARGETNAME_UNINSTALL "rtaudio_uninstall_gui" CACHE STRING "" FORCE)
-FetchContent_Declare(
-  rtaudio
-  URL https://github.com/thestk/rtaudio/archive/refs/tags/6.0.1.tar.gz
-  URL_HASH SHA256=7206c8b6cee43b474f43d64988fefaadfdcfc4264ed38d8de5f5d0e6ddb0a123
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
-FetchContent_MakeAvailable(rtaudio)
-
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../protocol/libs/cardlink"
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../protocol"
                  "${CMAKE_CURRENT_BINARY_DIR}/cardlink")
-
-set(MIDI_BRIDGE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../protocol/midi_bridge/src")
 
 set(CMI_CONTROL_SOURCES
   src/main.cpp
@@ -90,15 +65,7 @@ set(CMI_CONTROL_SOURCES
   src/settings.cpp
   src/toast.cpp
   src/file_dialog.cpp
-  src/wave_cdc.cpp
-  src/wave_upload_queue.cpp
-  src/wave_bank_ui.cpp
   src/sample_ui.cpp
-  ${MIDI_BRIDGE_SRC}/midi_input.cpp
-  ${MIDI_BRIDGE_SRC}/pitch.cpp
-  ${MIDI_BRIDGE_SRC}/voice_bank.cpp
-  ${MIDI_BRIDGE_SRC}/audio_engine.cpp
-  ${MIDI_BRIDGE_SRC}/sample_uac.cpp
 )
 if(APPLE)
   list(APPEND CMI_CONTROL_SOURCES src/macos_app.mm)
@@ -121,13 +88,10 @@ target_compile_definitions(cmi_control PRIVATE
 
 target_include_directories(cmi_control PRIVATE
   src
-  ${MIDI_BRIDGE_SRC}
 )
 
 target_link_libraries(cmi_control PRIVATE
   imgui_lib
-  rtmidi
-  rtaudio
   cardlink::cardlink
 )
 
@@ -136,18 +100,10 @@ find_package(OpenGL REQUIRED)
 target_link_libraries(cmi_control PRIVATE OpenGL::GL)
 
 if(APPLE)
-  find_library(COREMIDI_FRAMEWORK CoreMIDI REQUIRED)
-  find_library(COREAUDIO_FRAMEWORK CoreAudio REQUIRED)
-  find_library(COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
-  find_library(AUDIOUNIT_FRAMEWORK AudioUnit REQUIRED)
   find_library(COCOA_FRAMEWORK Cocoa REQUIRED)
   find_library(IOKIT_FRAMEWORK IOKit REQUIRED)
   find_library(COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
   target_link_libraries(cmi_control PRIVATE
-    ${COREMIDI_FRAMEWORK}
-    ${COREAUDIO_FRAMEWORK}
-    ${COREFOUNDATION_FRAMEWORK}
-    ${AUDIOUNIT_FRAMEWORK}
     ${COCOA_FRAMEWORK}
     ${IOKIT_FRAMEWORK}
     ${COREVIDEO_FRAMEWORK}

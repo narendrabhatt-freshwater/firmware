@@ -215,25 +215,6 @@ void MirrorChannel(const std::string &cmd, const cardproto::Result &result,
     return;
   }
 
-  /* w0..w7 <rate> */
-  if (cmd.size() >= 2 && cmd[0] == 'w' && cmd[1] >= '0' && cmd[1] <= '7') {
-    const int slot = cmd[1] - '0';
-    if (cmd.size() == 2) {
-      return; /* query */
-    }
-    if (cmd[2] != ' ') {
-      return;
-    }
-    double rate = 0.0;
-    if (std::sscanf(cmd.c_str() + 3, "%lf", &rate) != 1) {
-      return;
-    }
-    if (rate > 0.0 && rate <= 192000.0) {
-      p.has_wave = true;
-      p.wave_slot = slot;
-      p.wave_rate = static_cast<float>(rate);
-    }
-  }
 }
 
 void MirrorEffect(const std::string &cmd, UiMirrorPatch &p)
@@ -282,7 +263,7 @@ bool UiMirrorPatch::Any() const
 {
   return has_gain_db || has_shape || has_filter_hz ||
          has_filter_q || has_filter_k || has_filter_bypass ||
-         has_filter_voice || has_wave || has_fx_phantom || has_fx_audio_en ||
+         has_filter_voice || has_fx_phantom || has_fx_audio_en ||
          has_fx_echo || has_fx_led_flash || has_fx_led_red ||
          has_fx_led_yellow || has_fx_usb_adc_ch || has_note;
 }

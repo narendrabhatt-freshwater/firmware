@@ -7,10 +7,10 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-void PreviewScope::SetVoices(const midi_host::VoiceBank &bank)
+void PreviewScope::SetVoices(const cardlink::midi::VoiceBank &bank)
 {
   const auto &slots = bank.Slots();
-  for (uint8_t i = 0; i < midi_host::kVoiceCount; ++i) {
+  for (uint8_t i = 0; i < cardlink::midi::kVoiceCount; ++i) {
     const bool on = slots[i].active && slots[i].freq_hz > 0.0;
     if (on && !oscs_[i].active) {
       oscs_[i].phase = 0.0;

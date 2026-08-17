@@ -625,7 +625,7 @@ namespace fw::ui
       dl->AddPolyline(pts, 4, col, ImDrawFlags_Closed, 1.2f);
       break;
     }
-    case NavIcon::Waves:
+    case NavIcon::Sample:
     {
       // ⊟ boxed minus
       dl->AddRect(ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h), col,

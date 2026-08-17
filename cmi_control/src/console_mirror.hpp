@@ -34,10 +34,6 @@ struct UiMirrorPatch
   bool has_filter_voice = false;
   int filter_voice = 0;
 
-  bool has_wave = false;
-  int wave_slot = 0;
-  float wave_rate = 14000.f;
-
   bool has_fx_phantom = false;
   bool fx_phantom = false;
 

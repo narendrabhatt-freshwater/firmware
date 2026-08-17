@@ -195,10 +195,6 @@ void BeginPick(App &app, SampleFilePick kind, int voice)
   }
   app.sample_file_pick = kind;
   app.sample_file_voice = voice;
-  app.file_dialog_kind = (kind == SampleFilePick::Folder)
-                             ? AsyncFileDialog::Kind::Folder
-                             : AsyncFileDialog::Kind::File;
-  app.file_dialog_slot = -1;
   const bool ok = (kind == SampleFilePick::Folder)
                       ? app.file_dialog.BeginPickFolder()
                       : app.file_dialog.BeginPickFile();
@@ -297,7 +293,7 @@ void DrawSamplePage(App &app)
   ImFont *fs = fw::theme::g_fonts.mono_small;
   const bool uac_on = app.sample_uac && app.sample_uac->Running();
   const bool bus_ok = app.bus.IsOpen() && !app.bus.BusFault();
-  const bool cdc_ok = app.wave_cdc_path[0] != '\0';
+  const bool cdc_ok = app.attack_cdc_path[0] != '\0';
   const bool dialog_busy = app.file_dialog.Busy();
 
   // ── Top bar: CDC + UAC
@@ -323,16 +319,16 @@ void DrawSamplePage(App &app)
     ImGui::SetNextItemWidth(S(200.f));
     if (!app.serial_ports.empty()) {
       std::string preview =
-          cdc_ok ? app.wave_cdc_path : "\u2014 select \u2014";
+          cdc_ok ? app.attack_cdc_path : "\u2014 select \u2014";
       ImGui::PushFont(fs);
       if (ImGui::BeginCombo("##sample_cdc", preview.c_str())) {
         for (int i = 0; i < static_cast<int>(app.serial_ports.size()); ++i) {
           const auto &p = app.serial_ports[static_cast<std::size_t>(i)];
-          if (ImGui::Selectable(p.c_str(), p == app.wave_cdc_path)) {
-            app.wave_cdc_port_index = i;
-            std::snprintf(app.wave_cdc_path, sizeof(app.wave_cdc_path), "%s",
+          if (ImGui::Selectable(p.c_str(), p == app.attack_cdc_path)) {
+            app.attack_cdc_port_index = i;
+            std::snprintf(app.attack_cdc_path, sizeof(app.attack_cdc_path), "%s",
                           p.c_str());
-            app.samples.SetCdcPath(app.wave_cdc_path);
+            app.samples.SetCdcPath(app.attack_cdc_path);
             app.MarkSettingsDirty();
           }
         }
@@ -342,9 +338,9 @@ void DrawSamplePage(App &app)
     } else {
       ImGui::PushFont(fs);
       if (ImGui::InputTextWithHint("##sample_cdc_path", "CDC path\u2026",
-                                   app.wave_cdc_path,
-                                   sizeof(app.wave_cdc_path))) {
-        app.samples.SetCdcPath(app.wave_cdc_path);
+                                   app.attack_cdc_path,
+                                   sizeof(app.attack_cdc_path))) {
+        app.samples.SetCdcPath(app.attack_cdc_path);
         app.MarkSettingsDirty();
       }
       ImGui::PopFont();

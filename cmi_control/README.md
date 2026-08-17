@@ -1,8 +1,8 @@
 # CMI Control (Dear ImGui)
 
-Cross-platform desktop GUI for MIDI + RS485 console control of Channel and
-Effect cards. Same ASCII protocol as `protocol/console` / any serial terminal;
-voice allocation matches `protocol/midi_bridge`.
+Cross-platform desktop GUI and example application for MIDI + RS485 console
+control of Channel and Effect cards. It uses the same ASCII protocol available
+from any serial terminal.
 
 ## Framework
 
@@ -11,8 +11,7 @@ voice allocation matches `protocol/midi_bridge`.
 | UI                 | **Dear ImGui** 1.91                                                           |
 | Window / input     | **GLFW** 3.4                                                                  |
 | Graphics           | **OpenGL 3** (macOS Core Profile / Linux / Windows)                           |
-| MIDI / local audio | RtMidi + RtAudio (same as `midi_bridge`)                                      |
-| Bus                | [`protocol/libs/cardlink`](../protocol/libs/cardlink) + [`protocol/libs/cardproto`](../protocol/libs/cardproto) |
+| Host SDK           | [`protocol`](../protocol): card protocol, MIDI, audio, RS485, USB |
 
 Runs on **macOS, Linux, and Windows** with CMake + a C++17 toolchain.
 Dependencies are pulled by FetchContent on first configure (needs network once).
@@ -41,7 +40,7 @@ cmake --build cmi_control/build
 
 1. **Perform** — full-height preview scope with TIME/DIV / VOLTS/DIV controls, voice grid, two-octave on-screen + computer keyboard piano (A–K / W E T Y U, Z/X octave)
 2. **Tone** — oscillator shape with waveform preview, n0–n7 LPF + fk, multi-segment envelope editor (voice thumbnails, presets, undo, segment table)
-3. **SAMPLE** — 8-slot wave bank, CDC upload of attack heads + bodies (`al`/`bl`), drag-and-drop files, root pitch (`ar`), voice assignment (`aw`)
+3. **SAMPLE** — 8-voice sample set, CDC attack upload (`al`), UAC body streaming, drag-and-drop files, root pitch (`ar`), voice assignment (`aw`)
 4. **Effect** — phantom / AUDIO_EN / LEDs (last-sent state), USB ADC channel, ADC/I2C tools
 5. **Setup** — RS485 / MIDI / output routing, auto-reconnect, port refresh
 

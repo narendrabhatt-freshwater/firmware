@@ -13,9 +13,8 @@ Both are standalone CMake projects — build them independently. Each is
 self-contained: all dependencies (HAL, CMSIS, TinyUSB) are vendored
 in-tree, so a copy-paste of either `channel_card/` or
 `effect_card/` folder builds as-is with no package manager or
-submodule fetch. PC-side tooling (the `fw` CLI in `scripts/`, the
-standalone RS485 console in `protocol/console/`) is separate from the two
-firmware projects — see §6.
+submodule fetch. The C++17 `cardlink` host SDK and its `cmi_control` example
+application are separate from the two firmware projects — see §6.
 
 ---
 
@@ -161,9 +160,8 @@ CODE blocks, but check anyway):
 ## 5. Repository layout (same shape in both projects)
 
 The firmware projects live at the repo root (`channel_card/`,
-`effect_card/`), alongside the PC-side protocol stack (`protocol/`,
-which bundles the `cardproto`/`cardlink` libraries, the `midi_bridge`
-app and the RS485 `console/` CLI — see §6) and the `cmi_control` GUI.
+`effect_card/`), alongside the C++17 `cardlink` host SDK under
+`protocol/` and the `cmi_control` example application.
 The `fw` CLI wrapping all of this lives in `scripts/` at the repo root.
 
 ```
@@ -214,20 +212,11 @@ probe (`cpu`).
 
 Examples: `n0 440 0.5`, `n1 550` (scale 0.125), `n2 660 0.1`.
 
-Entering `fw rs485` sends bare `n0` once (bypass on + `g 1 0`). Boot does the same.
-
 Addressing on the shared RS485 bus: `c:` / `e:` / `*:`. The Effect Card
 console covers 48 V, ADC registers, USB channel select and LEDs — see
 `docs/protocol.md` §3.
 
-```bash
-fw rs485 list
-fw rs485 send channel "n0 440 0.5" --port /dev/cu.usbserial-XXXX
-fw rs485 channel --port /dev/cu.usbserial-XXXX   # REPL: 440, n1 550, …
-```
-
-See [`protocol/console/README.md`](protocol/console/README.md),
-[`docs/protocol.md`](docs/protocol.md) (host↔card protocol), and
+See [`docs/protocol.md`](docs/protocol.md) (host↔card protocol) and
 [`docs/reference/rs485_console_architecture.md`](docs/reference/rs485_console_architecture.md)
 (bus framing).
 Per-voice digital LPF: [`docs/reference/note_filter_butterworth.md`](docs/reference/note_filter_butterworth.md).
@@ -235,19 +224,8 @@ Per-voice digital LPF: [`docs/reference/note_filter_butterworth.md`](docs/refere
 **USB CDC** — same Channel Card parser on `/dev/cu.usbmodem*`.
 Effect Card CDC runs its own console (`fw console effect`).
 
-**MIDI bridge** (any MIDI keyboard → Mac speakers, or Channel Card over RS485) —
-
-```bash
-fw midi build
-fw midi list
-fw midi                                    # speakers (Launchkey auto-pick)
-fw midi --midi 0                           # speakers, any MIDI device
-fw midi channel --rs485 /dev/cu.usbserial-XXXX --midi 0
-```
-
-See [`protocol/midi_bridge/README.md`](protocol/midi_bridge/README.md).
-
-**Control GUI** (Dear ImGui + GLFW — MIDI + console + preview scope; macOS / Linux / Windows) —
+**Control GUI** (the supported cardlink example; Dear ImGui + GLFW — MIDI +
+console + preview scope; macOS / Linux / Windows) —
 
 ```bash
 fw control build
@@ -289,16 +267,10 @@ hardware:
   TDM/SAI, one selectable channel streamed to the PC (UAC2 microphone,
   mono 32-bit 96 kHz), 48 V phantom rail control, RS485 + USB CDC
   consoles.
-- **`protocol/console`** — standalone C++ RS485 console (`fw rs485 ...`, §6)
-  reaching either board over the shared bus with no USB CDC dependency.
-- **`protocol/midi_bridge`** — MIDI keyboard → 8-voice FIFO allocator →
-  Mac speakers or Channel Card notes (RtMidi + RtAudio). See
-  [`protocol/midi_bridge/README.md`](protocol/midi_bridge/README.md).
 - **`cmi_control`** — Dear ImGui + GLFW control surface (MIDI, RS485
-  console, local preview scope). See [`cmi_control/README.md`](cmi_control/README.md).
-- **`protocol/libs/cardproto`** — Wire API only (`namespace cardproto`:
-  format / parse / typed clients; no serial). See
-  [`protocol/libs/cardproto/README.md`](protocol/libs/cardproto/README.md).
-- **`protocol/libs/cardlink`** — PC host transports: shared serial,
-  RS485 tagged bus / `Bus`, USB CDC + sample upload. See
-  [`protocol/libs/cardlink/README.md`](protocol/libs/cardlink/README.md).
+  console, local preview scope) and the supported SDK example. See
+  [`cmi_control/README.md`](cmi_control/README.md).
+- **`protocol`** — Single C++17 host SDK: `cardproto` wire API,
+  shared serial, RS485 tagged bus / `Bus`, USB CDC and sample upload, MIDI
+  input/voice allocation, local speaker output, and UAC output. See
+  [`protocol/README.md`](protocol/README.md).

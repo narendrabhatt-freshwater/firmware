@@ -81,7 +81,7 @@ enum class NavIcon : int
 {
   Perform = 0, // ◈ filled diamond in outline
   Tone,        // ◇ outline diamond
-  Waves,       // ⊟ boxed minus
+  Sample,      // ⊟ boxed minus
   Effect,      // ⊞ boxed plus
   Setup,       // ◧ half-filled square
 };

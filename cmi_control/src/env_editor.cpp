@@ -680,7 +680,7 @@ void DrawEnvelopeEditor(App &app)
 {
   app.selected_voice =
       std::clamp(app.selected_voice, 0,
-                 static_cast<int>(midi_host::kVoiceCount) - 1);
+                 static_cast<int>(cardlink::midi::kVoiceCount) - 1);
   EnvProgram &prog = app.voice_envs[static_cast<std::size_t>(app.selected_voice)];
   prog.EnsureValid();
   const bool offline = !app.bus.IsOpen() || app.bus.BusFault();
@@ -703,7 +703,7 @@ void DrawEnvelopeEditor(App &app)
   {
     ImDrawList *dl = ImGui::GetWindowDrawList();
     const float gap = S(4.f);
-    const int nvoices = static_cast<int>(midi_host::kVoiceCount);
+    const int nvoices = static_cast<int>(cardlink::midi::kVoiceCount);
     const float cw =
         (ImGui::GetContentRegionAvail().x - gap * static_cast<float>(nvoices - 1)) /
         static_cast<float>(nvoices);

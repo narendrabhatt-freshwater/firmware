@@ -1,7 +1,6 @@
 #pragma once
 
 #include <atomic>
-#include <cstdint>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -10,13 +9,6 @@
 class AsyncFileDialog
 {
 public:
-  enum class Kind : uint8_t
-  {
-    Idle = 0,
-    File,
-    Folder,
-  };
-
   AsyncFileDialog() = default;
   ~AsyncFileDialog();
 

@@ -6,14 +6,13 @@
 #include "log_buffer.hpp"
 #include "preview_scope.hpp"
 #include "toast.hpp"
-#include "wave_upload_queue.hpp"
-#include "sample_uac.hpp"
+#include "cardlink/audio/sample_uac.hpp"
 #include "cardlink/sample/client.hpp"
 
-#include "audio_engine.hpp"
-#include "midi_input.hpp"
-#include "pitch.hpp"
-#include "voice_bank.hpp"
+#include "cardlink/audio/audio_engine.hpp"
+#include "cardlink/midi/midi_input.hpp"
+#include "cardlink/midi/pitch.hpp"
+#include "cardlink/midi/voice_bank.hpp"
 
 #include <array>
 #include <cstdint>
@@ -27,7 +26,7 @@ enum class GuiView : int
 {
   Perform = 0,
   Tone = 1,
-  Sample = 2, /**< was Waves — SAMPLE attack/UAC page */
+  Sample = 2,
   Effect = 3,
   Setup = 4,
 };
@@ -39,7 +38,7 @@ enum class OutMode : int
   Both = 2,
 };
 
-/** Native picker target for the SAMPLE page (orthogonal to Waves slots). */
+/** Native picker target for the SAMPLE page. */
 enum class SampleFilePick : int8_t
 {
   None = 0,
@@ -71,18 +70,15 @@ struct App
   /** vq / ring-fill chatter — separate from activity log. */
   LogBuffer poll_log;
   BusController bus;
-  midi_host::VoiceBank bank;
-  midi_host::MidiInput midi;
-  std::unique_ptr<midi_host::AudioEngine> audio;
+  cardlink::midi::VoiceBank bank;
+  cardlink::midi::MidiInput midi;
+  std::unique_ptr<cardlink::audio::AudioEngine> audio;
   PreviewScope preview;
-  std::array<EnvProgram, midi_host::kVoiceCount> voice_envs;
-  WaveUploadQueue waves;
+  std::array<EnvProgram, cardlink::midi::kVoiceCount> voice_envs;
   cardlink::sample::Client samples;
-  std::unique_ptr<SampleUacOut> sample_uac;
+  std::unique_ptr<cardlink::audio::SampleUacOut> sample_uac;
   fw::ui::ToastHost toasts;
   AsyncFileDialog file_dialog;
-  AsyncFileDialog::Kind file_dialog_kind = AsyncFileDialog::Kind::Idle;
-  int file_dialog_slot = -1; // -1 = folder / same-to-all context (Waves)
   SampleFilePick sample_file_pick = SampleFilePick::None;
   int sample_file_voice = -1;
   std::string pending_sample_folder; /**< Folder pick result for SAMPLE page. */
@@ -90,7 +86,7 @@ struct App
   bool midi_open = false;
   bool audio_open = false;
   int midi_port_index = -1;
-  std::vector<midi_host::MidiPortInfo> midi_ports;
+  std::vector<cardlink::midi::MidiPortInfo> midi_ports;
   std::vector<std::string> serial_ports;
   int serial_port_index = 0;
   char serial_path_buf[256] = {};
@@ -107,12 +103,8 @@ struct App
   bool show_shortcuts = false;
   bool show_about = false;
 
-  int wave_slot = 0;
-  float wave_rate = 14000.f;
-  std::array<float, 8> wave_slot_rate{
-      14000.f, 14000.f, 14000.f, 14000.f, 14000.f, 14000.f, 14000.f, 14000.f};
-  char wave_cdc_path[256] = {};
-  int wave_cdc_port_index = 0;
+  char attack_cdc_path[256] = {};
+  int attack_cdc_port_index = 0;
 
   bool nav_expanded = true; // legacy settings key; unused by phosphor shell
   float nav_width = 148.f;  // legacy
@@ -165,13 +157,13 @@ struct App
   int log_panel_tab = 0;
   bool log_auto_scroll = true;
 
-  std::array<float, midi_host::kVoiceCount> voice_glow{};
+  std::array<float, cardlink::midi::kVoiceCount> voice_glow{};
   std::vector<std::string> pending_drops;
 
   void RefreshPortLists();
   /**
-   * Refresh serial list and ensure wave_cdc_path is an openable Channel Card
-   * CDC (cu.usbmodem*CHCARD* preferred). Updates wave_cdc_path on success.
+   * Refresh serial list and ensure attack_cdc_path is an openable Channel Card
+   * CDC (cu.usbmodem*CHCARD* preferred). Updates attack_cdc_path on success.
    */
   bool EnsureAttackCdc(std::string &err);
   bool EnsureSampleUac();
@@ -188,10 +180,10 @@ struct App
   void DrawShortcutSheet();
   void DrawDisconnectedHint(const char *action);
   void SendConsole(const char *cmd);
-  void ApplyBankEvents(const std::vector<midi_host::BankEvent> &events);
+  void ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events);
 
   /** Local preview / VoiceBank only — card already got the console command. */
-  void ApplyLocalBankEvents(const std::vector<midi_host::BankEvent> &events);
+  void ApplyLocalBankEvents(const std::vector<cardlink::midi::BankEvent> &events);
   void AllNotesOff();
   bool EnsureAudio();
   void ShutdownAudio();

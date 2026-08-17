@@ -2,45 +2,32 @@
 
 #include "console_mirror.hpp"
 #include "log_buffer.hpp"
-#include "voice_bank.hpp"
-
-#include "cardlink/rs485/bus.hpp"
+#include "cardlink/rs485/controller.hpp"
+#include "cardlink/midi/voice_bank.hpp"
 #include "cardproto/channel.hpp"
 #include "cardproto/effect.hpp"
 #include "cardproto/result.hpp"
-
 #include "cardproto/types.hpp"
 
 #include <array>
-#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
-enum class BusQueueResult : uint8_t
-{
-  Ok = 0,
-  Closed,
-  Halted,
-  Connecting,
-};
+using BusQueueResult = cardlink::rs485::QueueResult;
 
 /**
- * Owns the RS485 bus. Single-flight worker: note slot updates and
- * typed / raw console ops share one queue so half-duplex stays sane.
+ * UI adapter for cardlink::rs485::Controller logging and console mirroring.
  */
 class BusController
 {
 public:
-  using ChannelOp = std::function<cardproto::Result(cardproto::ChannelClient &)>;
-  using EffectOp = std::function<cardproto::Result(cardproto::EffectClient &)>;
-  /** Called when vq reports a voice idle after note activity (stop UAC dry). */
-  using IdleHandler = std::function<void(uint8_t slot)>;
-  /** Occupancy correction for the UAC mux (mask, best, free slots 0..8). */
-  using VqHandler = std::function<void(uint8_t, uint8_t,
-                                       const std::array<uint8_t, 8> &)>;
+  using ChannelOp = cardlink::rs485::Controller::ChannelOp;
+  using EffectOp = cardlink::rs485::Controller::EffectOp;
+  using IdleHandler = cardlink::rs485::Controller::IdleHandler;
+  using VqHandler = cardlink::rs485::Controller::VqHandler;
 
   BusController();
   ~BusController();
@@ -62,13 +49,13 @@ public:
 
   void Close(LogBuffer &log);
 
-  bool IsOpen() const { return open_.load(); }
-  bool IsConnecting() const { return connecting_.load(); }
-  bool BusFault() const { return halted_.load(); }
+  bool IsOpen() const;
+  bool IsConnecting() const;
+  bool BusFault() const;
   std::string Path() const;
 
   /** Publish desired Hz from VoiceBank (offs before ons in worker). */
-  void PublishBank(const midi_host::VoiceBank &bank);
+  void PublishBank(const cardlink::midi::VoiceBank &bank);
 
   /** Queue Silence (n 0). */
   void RequestSilence();
@@ -96,13 +83,10 @@ public:
   BusQueueResult QueueChannel(ChannelOp op);
   BusQueueResult QueueEffect(EffectOp op);
 
-  BusQueueResult QueuePlayWave(uint8_t slot, double rate_hz);
-  BusQueueResult QueueStopWave(uint8_t slot);
-
   /** CH1 gain at next opportunity (also used from Transport slider). */
   BusQueueResult QueueGain(uint8_t atten_db);
 
-  uint32_t AttenDb() const { return atten_db_.load(); }
+  uint32_t AttenDb() const;
   uint32_t TimeoutCount() const;
   uint32_t ErrCount() const;
   std::size_t QueueDepth() const;
@@ -118,36 +102,6 @@ public:
   void AcknowledgeAllHz(double hz);
 
 private:
-  enum class JobKind : uint8_t
-  {
-    Notes = 0,
-    Exec,
-    Gain,
-    Silence,
-    Recover,
-    Channel,
-    Effect,
-  };
-
-  struct Job
-  {
-    JobKind kind = JobKind::Notes;
-    cardproto::Target target = cardproto::Target::Channel;
-    std::string command;
-    uint8_t atten_db = 0;
-    ChannelOp channel_op;
-    EffectOp effect_op;
-  };
-
   struct Impl;
   std::unique_ptr<Impl> impl_;
-
-  std::atomic<bool> open_{false};
-  std::atomic<bool> connecting_{false};
-  std::atomic<bool> halted_{false};
-  std::atomic<uint32_t> atten_db_{6};
-  LogBuffer *poll_log_ = nullptr;
-
-  void WorkerMain(LogBuffer *log);
-  BusQueueResult Enqueue(Job job);
 };

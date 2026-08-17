@@ -174,8 +174,8 @@ bool Load(App &app)
     } else if (key == "serial_path") {
       std::snprintf(app.serial_path_buf, sizeof(app.serial_path_buf), "%s",
                     val.c_str());
-    } else if (key == "wave_cdc_path") {
-      std::snprintf(app.wave_cdc_path, sizeof(app.wave_cdc_path), "%s",
+    } else if (key == "attack_cdc_path") {
+      std::snprintf(app.attack_cdc_path, sizeof(app.attack_cdc_path), "%s",
                     val.c_str());
     } else if (key == "midi_port_index") {
       app.midi_port_index = std::atoi(val.c_str());
@@ -212,7 +212,7 @@ bool Save(const App &app)
   WriteKV(out, "out_mode", static_cast<int>(app.out_mode));
   WriteKV(out, "baud", static_cast<int>(app.baud));
   WriteKV(out, "serial_path", std::string(app.serial_path_buf));
-  WriteKV(out, "wave_cdc_path", std::string(app.wave_cdc_path));
+  WriteKV(out, "attack_cdc_path", std::string(app.attack_cdc_path));
   WriteKV(out, "midi_port_index", app.midi_port_index);
   WriteKV(out, "auto_reconnect", app.auto_reconnect);
   WriteKV(out, "piano_octave", app.piano_octave);

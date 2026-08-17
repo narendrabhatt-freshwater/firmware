@@ -6,7 +6,7 @@
 # Usage:
 #   svn_publish.sh <product> <svn-working-copy> [--tag vX.Y] [--dry-run]
 #
-#   <product>            channel_card | effect_card | protocol | cmi_control
+#   <product>            channel_card | effect_card | cardlink | cmi_control
 #   <svn-working-copy>   checkout of the SVN repo ROOT (must contain trunk/;
 #                        tags/ is required only when --tag is used)
 #   --tag vX.Y           after committing trunk, svn copy trunk -> tags/vX.Y
@@ -38,14 +38,18 @@ while [ $# -gt 0 ]; do
 done
 
 case "$PRODUCT" in
-  channel_card|effect_card|protocol|cmi_control) ;;
-  *) err "unknown product '$PRODUCT' (channel_card | effect_card | protocol | cmi_control)" ;;
+  channel_card|effect_card|cardlink|cmi_control) ;;
+  *) err "unknown product '$PRODUCT' (channel_card | effect_card | cardlink | cmi_control)" ;;
 esac
 
 command -v svn   >/dev/null || err "svn not found on PATH"
 command -v rsync >/dev/null || err "rsync not found on PATH"
 
-SRC="$ROOT/$PRODUCT"
+SOURCE_REL="$PRODUCT"
+if [ "$PRODUCT" = "cardlink" ]; then
+  SOURCE_REL="protocol"
+fi
+SRC="$ROOT/$SOURCE_REL"
 [ -d "$SRC" ] || err "product directory not found: $SRC"
 TRUNK="$WC/trunk"
 [ -d "$TRUNK" ] || err "no trunk/ in working copy: $WC (check out the SVN repo root)"
@@ -53,7 +57,7 @@ svn info "$WC" >/dev/null 2>&1 || err "$WC is not an SVN working copy"
 
 # Refuse to publish a dirty product tree: the SVN revision must
 # correspond to a reproducible git state.
-if [ -n "$(git -C "$ROOT" status --porcelain -- "$PRODUCT" docs README.md)" ]; then
+if [ -n "$(git -C "$ROOT" status --porcelain -- "$SOURCE_REL" docs README.md)" ]; then
   err "uncommitted changes under $PRODUCT/, docs/ or README.md — commit first"
 fi
 
@@ -122,7 +126,7 @@ case "$PRODUCT" in
     copy_doc README.md firmware_handbook.md
     copy_doc docs/diagrams/card_data_flow.md diagrams/card_data_flow.md
     ;;
-  protocol|cmi_control)
+  cardlink|cmi_control)
     copy_doc docs/reference/rs485_console_architecture.md reference/rs485_console_architecture.md
     ;;
 esac

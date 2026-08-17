@@ -10,11 +10,8 @@ terminal can type (`screen`, `minicom`, PuTTY at **460800 8N1**).
 | --------------------------------------------------- | --------------------------------------------------------- | -------------- |
 | Channel / Effect firmware                           | Product protocol (addressing, commands, `ok`/`err`)       | Yes            |
 | USB↔RS485 adapter + any terminal                    | Maintenance / bring-up                                    | Enough for lab |
-| [`protocol/console`](../../protocol/console) (`rs485_console`) | Convenience REPL, retries, `--echo-off`                   | No             |
-| [`protocol/midi_bridge`](../../protocol/midi_bridge)               | MIDI → one-by-one notes via [`protocol/libs/cardlink`](../../protocol/libs/cardlink) | No             |
-| [`cmi_control`](../../cmi_control)           | Dear ImGui + GLFW: MIDI + full console + preview scope  | No             |
-| [`protocol/libs/cardproto`](../../protocol/libs/cardproto)                 | Wire API only (`namespace cardproto`) — format/parse/typed clients | Host apps only |
-| [`protocol/libs/cardlink`](../../protocol/libs/cardlink)                       | PC serial + `cardlink::rs485` / `cardlink::usb`            | Freshwater tools |
+| [`cmi_control`](../../cmi_control)           | Supported example: MIDI + full console + preview scope   | No             |
+| [`protocol`](../../protocol) | C++17 host SDK: wire API, serial/RS485, USB, MIDI, audio | Host apps |
 
 **Implication:** do not invent framing a terminal cannot type. Voice commands
 are ASCII (`c:n3 440` + Enter). Compact `[C]ok` replies stay human-readable.
@@ -22,18 +19,12 @@ are ASCII (`c:n3 440` + Enter). Compact `[C]ok` replies stay human-readable.
 ```mermaid
 flowchart LR
   Term[Any serial terminal]
-  Con[protocol/console]
-  Midi[protocol/midi_bridge]
   Gui[cmi_control]
-  Lib[protocol/libs/cardlink]
-  Proto[protocol/libs/cardproto]
+  Lib[protocol]
   Bus[RS485 adapter 460800 8N1]
   CC[Channel Card]
   EC[Effect Card]
-  Con --> Lib
-  Midi --> Lib
   Gui --> Lib
-  Lib --> Proto
   Lib --> Bus
   Term --> Bus
   Bus --> CC
@@ -46,8 +37,8 @@ One shared D+/D- multi-drop bus. Operators:
 
 | Operator                                 | Role                     |
 | ---------------------------------------- | ------------------------ |
-| Rockchip CPU card (future) / `midi_bridge` | Production voice/control |
-| PC + terminal or `protocol/console`          | Maintenance              |
+| Rockchip CPU card (future) / host SDK app | Production voice/control |
+| PC + terminal                            | Maintenance              |
 
 Addresses: `c:` Channel, `e:` Effect, `*:` / bare = broadcast.
 
@@ -82,11 +73,11 @@ has been removed.
 `e:ec 0` / `e:ec 1` — runtime keystroke bus echo (firmware default
 **off**). Production and burst TX require echo off. With device echo off,
 enable **local** echo in the terminal. Any client can type `e:ec 0`
-(including `rs485_console --echo-off`).
+(including `cmi_control`).
 
 ### Half-duplex
 
-- **Single-master (PC / midi_bridge):** host is the lock — one command in
+- **Single-master (PC host):** host is the lock — one command in
   flight, wait for `[C]ok` / timeout, then next. Do not Link-resend into
   a live ACK (card DE high ⇒ RX deaf ⇒ death spiral of `no cok` on Offs).
 - Cards: acquire DE, one short TX, release; never drop the ACK. (PC USB
@@ -112,12 +103,11 @@ Same command set over USB CDC (no `[C]` tag on CDC).
 
 ## Host library
 
-[`protocol/libs/cardproto`](../../protocol/libs/cardproto): wire encoding only — `Format*`,
-`ParseReplyBody`, `ChannelClient` / `EffectClient` over `IConsoleTransport`.
-
-[`protocol/libs/cardlink`](../../protocol/libs/cardlink): shared `SerialPort`, `cardlink::rs485`
-(tagged `Link` / `Bus`), `cardlink::usb` (CDC + `AttackUploader`). Used by
-`protocol/console`, `protocol/midi_bridge`, and `cmi_control`.
+[`protocol`](../../protocol) contains the
+`cardproto` wire API (`Format*`, `ParseReplyBody`, typed clients), shared
+`SerialPort`, `cardlink::rs485` tagged `Link` / `Bus`, `cardlink::usb`,
+`cardlink::midi`, and `cardlink::audio`. `cmi_control` is its supported
+example application.
 
 ## Command reference
 

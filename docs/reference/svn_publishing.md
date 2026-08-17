@@ -7,14 +7,13 @@ based**: SVN receives release states, not git history.
 
 ## Mapping
 
-Each top-level monorepo directory is exactly one SVN repository's
-trunk content:
+Each product maps to one SVN repository's trunk content:
 
 | Monorepo directory | SVN repository | Status |
 | ------------------ | -------------- | ------ |
 | `channel_card/` | `channel_card` | exists |
 | `effect_card/`  | `effect_card`  | exists |
-| `protocol/`     | `protocol`     | create when needed |
+| `protocol/` | `cardlink` | create when needed |
 | `cmi_control/`  | `cmi_control`  | create when needed |
 
 ## Release flow

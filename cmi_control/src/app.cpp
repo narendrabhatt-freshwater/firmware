@@ -2,9 +2,9 @@
 
 #include "anim.hpp"
 #include "env_editor.hpp"
-#include "note_event.hpp"
+#include "cardlink/midi/note_event.hpp"
 #include "cardlink/serial_port.hpp"
-#include "cardlink/usb/wave_upload.hpp"
+#include "cardlink/usb/cdc_port.hpp"
 #include "product.hpp"
 #include "cardproto/types.hpp"
 #include "settings.hpp"
@@ -263,7 +263,7 @@ void App::NotifyEnqueue(bool ok, const char *what)
 void App::RefreshPortLists()
 {
   serial_ports = cardlink::SerialPort::ListPorts();
-  midi_ports = midi_host::MidiInput::ListPorts();
+  midi_ports = cardlink::midi::MidiInput::ListPorts();
   if (serial_path_buf[0] == '\0' && !serial_ports.empty())
   {
     std::snprintf(serial_path_buf, sizeof(serial_path_buf), "%s",
@@ -301,7 +301,7 @@ bool App::EnsureAttackCdc(std::string &err)
 {
   RefreshPortLists();
 
-  const std::string cur = wave_cdc_path;
+  const std::string cur = attack_cdc_path;
   if (PathLooksOpenable(cur) && IsUsbModemCdc(cur) &&
       !cardlink::usb::LooksLikeRs485AdapterPath(cur))
   {
@@ -345,11 +345,11 @@ bool App::EnsureAttackCdc(std::string &err)
 
   if (cur != pick)
   {
-    std::snprintf(wave_cdc_path, sizeof(wave_cdc_path), "%s", pick.c_str());
+    std::snprintf(attack_cdc_path, sizeof(attack_cdc_path), "%s", pick.c_str());
     MarkSettingsDirty();
     log.Push(std::string("ok: attack CDC → ") + pick);
   }
-  samples.SetCdcPath(wave_cdc_path);
+  samples.SetCdcPath(attack_cdc_path);
   return true;
 }
 
@@ -361,7 +361,7 @@ bool App::EnsureSampleUac()
   }
   if (!sample_uac)
   {
-    sample_uac = std::make_unique<SampleUacOut>();
+    sample_uac = std::make_unique<cardlink::audio::SampleUacOut>();
   }
   sample_uac->BindMixer(samples.Mixer());
   std::string err;
@@ -383,7 +383,7 @@ bool App::EnsureAudio()
   }
   try
   {
-    audio = std::make_unique<midi_host::AudioEngine>();
+    audio = std::make_unique<cardlink::audio::AudioEngine>();
     audio->Start(48000);
     audio_open = true;
     log.Push(std::string("ok: speakers ") + audio->DeviceName());
@@ -477,7 +477,7 @@ void App::DisconnectBus()
   }
 }
 
-void App::ApplyBankEvents(const std::vector<midi_host::BankEvent> &events)
+void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
 {
   const bool want_speakers =
       (out_mode == OutMode::Speakers || out_mode == OutMode::Both);
@@ -503,14 +503,14 @@ void App::ApplyBankEvents(const std::vector<midi_host::BankEvent> &events)
     {
       switch (ev.kind)
       {
-      case midi_host::BankEventKind::Off:
+      case cardlink::midi::BankEventKind::Off:
         samples.NoteOff(ev.slot);
         break;
-      case midi_host::BankEventKind::On:
-      case midi_host::BankEventKind::Retrig:
+      case cardlink::midi::BankEventKind::On:
+      case cardlink::midi::BankEventKind::Retrig:
         samples.NoteOn(ev.slot, ev.freq_hz);
         break;
-      case midi_host::BankEventKind::Steal:
+      case cardlink::midi::BankEventKind::Steal:
         /* The following On reuses this slot. Starting a session for the
          * dropped key races its late SOF against the replacement note. */
         break;
@@ -520,7 +520,7 @@ void App::ApplyBankEvents(const std::vector<midi_host::BankEvent> &events)
 }
 
 void App::ApplyLocalBankEvents(
-    const std::vector<midi_host::BankEvent> &events)
+    const std::vector<cardlink::midi::BankEvent> &events)
 {
   const bool want_speakers =
       (out_mode == OutMode::Speakers || out_mode == OutMode::Both);
@@ -707,13 +707,6 @@ void App::Tick()
         filter_voice = std::clamp(p.filter_voice, 0, 7);
         dirty = true;
       }
-      if (p.has_wave)
-      {
-        wave_slot = std::clamp(p.wave_slot, 0, 7);
-        wave_rate = std::clamp(p.wave_rate, 1.f, 192000.f);
-        wave_slot_rate[static_cast<std::size_t>(wave_slot)] = wave_rate;
-        dirty = true;
-      }
       if (p.has_fx_phantom)
       {
         effect.phantom = p.fx_phantom;
@@ -751,7 +744,7 @@ void App::Tick()
       }
       if (p.has_note)
       {
-        std::vector<midi_host::BankEvent> evs;
+        std::vector<cardlink::midi::BankEvent> evs;
         if (p.note_slot < 0)
         {
           evs = bank.SetAllFreq(p.note_hz);
@@ -786,7 +779,7 @@ void App::Tick()
 
   if (midi_open)
   {
-    std::vector<midi_host::NoteEvent> notes;
+    std::vector<cardlink::midi::NoteEvent> notes;
     midi.Poll(notes);
     if (!notes.empty())
     {
@@ -795,12 +788,12 @@ void App::Tick()
     }
     for (const auto &n : notes)
     {
-      std::vector<midi_host::BankEvent> evs;
-      if (n.action == midi_host::NoteAction::On)
+      std::vector<cardlink::midi::BankEvent> evs;
+      if (n.action == cardlink::midi::NoteAction::On)
       {
         evs = bank.NoteOn(n.key);
       }
-      else if (n.action == midi_host::NoteAction::AllOff)
+      else if (n.action == cardlink::midi::NoteAction::AllOff)
       {
         AllNotesOff();
         continue;
@@ -848,7 +841,7 @@ void App::Tick()
   log.Snapshot(log_view);
   poll_log.Snapshot(poll_log_view);
 
-  // Drain async file dialogs (Waves / SAMPLE set kind+context before Begin*).
+  // Drain SAMPLE file dialogs without blocking the UI thread.
   if (!file_dialog.Busy())
   {
     std::string path;
@@ -876,27 +869,8 @@ void App::Tick()
         pending_sample_folder = std::string("wave:") +
                                 std::to_string(sample_file_voice) + ":" + path;
       }
-      else if (file_dialog_kind == AsyncFileDialog::Kind::Folder)
-      {
-        // Waves page folder auto-assign.
-        pending_drops.clear();
-        pending_drops.push_back(std::string("folder:") + path);
-      }
-      else if (file_dialog_slot >= 0 && file_dialog_slot < 8)
-      {
-        waves.SetSlotPath(file_dialog_slot, path);
-      }
-      else if (file_dialog_slot == -2)
-      {
-        for (int s = 0; s < 8; ++s)
-        {
-          waves.SetSlotPath(s, path);
-        }
-      }
       sample_file_pick = SampleFilePick::None;
       sample_file_voice = -1;
-      file_dialog_kind = AsyncFileDialog::Kind::Idle;
-      file_dialog_slot = -1;
     }
   }
 }
@@ -2058,7 +2032,7 @@ void App::DrawPerform()
     // 4×2 grid — id / note / Hz when active
     const float gap = S(4.f);
     const float pad = S(8.f);
-    const int nvoices = static_cast<int>(midi_host::kVoiceCount);
+    const int nvoices = static_cast<int>(cardlink::midi::kVoiceCount);
     const int ncols = 4;
     const int nrows = (nvoices + ncols - 1) / ncols;
     const float cell_w = (wsz.x - pad * 2.f - gap * static_cast<float>(ncols - 1)) /
@@ -2107,7 +2081,7 @@ void App::DrawPerform()
                   id);
       if (s.active)
       {
-        const std::string note = midi_host::MidiNoteName(s.midi_key);
+        const std::string note = cardlink::midi::MidiNoteName(s.midi_key);
         const ImVec2 nw =
             fs->CalcTextSizeA(fs->FontSize, FLT_MAX, 0.f, note.c_str());
         dl->AddText(fs, fs->FontSize,
@@ -2143,7 +2117,7 @@ void App::DrawPerform()
 
     // Selected voice footer
     if (selected_voice >= 0 &&
-        selected_voice < static_cast<int>(midi_host::kVoiceCount))
+        selected_voice < static_cast<int>(cardlink::midi::kVoiceCount))
     {
       const float fy =
           wp.y + S(32.f) + static_cast<float>(nrows) * (cell_h + gap) + S(2.f);
@@ -2155,7 +2129,7 @@ void App::DrawPerform()
       if (s.active)
       {
         std::snprintf(info, sizeof(info), "n%x — %s %.2f Hz", selected_voice,
-                      midi_host::MidiNoteName(s.midi_key).c_str(),
+                      cardlink::midi::MidiNoteName(s.midi_key).c_str(),
                       static_cast<double>(s.freq_hz));
       }
       else
@@ -2170,7 +2144,7 @@ void App::DrawPerform()
         MarkSettingsDirty();
       }
       ImGui::SameLine(0.f, S(6.f));
-      if (fw::ui::ChipBtn("\u2192 Waves", false, BtnKind::Neutral))
+      if (fw::ui::ChipBtn("\u2192 Sample", false, BtnKind::Neutral))
       {
         view = GuiView::Sample;
         MarkSettingsDirty();
@@ -2949,7 +2923,7 @@ void App::DrawAbout()
        kPalette.text, fw::theme::g_fonts.mono);
   ImGui::Spacing();
   ImGui::TextWrapped(
-      "RS485 console · MIDI input · USB CDC wave upload · host preview");
+      "RS485 console · MIDI input · USB CDC attack upload · UAC sample output");
   ImGui::Spacing();
   ImGui::TextDisabled("Dear ImGui · GLFW · RtMidi · RtAudio");
   ImGui::Spacing();
