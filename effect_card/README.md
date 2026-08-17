@@ -76,10 +76,11 @@ edge. Without this override the SAI samples one bit early, the sign bit
 picks up the previous slot's LSB, and audio comes out as ragged
 square-wave noise with the real signal buried underneath.
 
-`AudioFrequency` must stay at the generated **96K**. A 500/s SAI
-callback rate with 2 ms halves is correct for 96 kHz — do not "fix" it
-by doubling `AudioFrequency`; a 192 kHz bus into the 96 kHz USB stream
-overflows the FIFO (dropped chunks, audible beating).
+`AudioFrequency` must stay at the generated **96K**. Each 96-frame DMA
+half completes every 1 ms at 96 kHz, so half/full callbacks provide one
+refill opportunity per millisecond. Doubling `AudioFrequency` drives a
+192 kHz bus into the 96 kHz USB stream and overflows the FIFO (dropped
+chunks, audible beating).
 
 ### `main.c` — cadence must match USB
 
@@ -111,13 +112,10 @@ callbacks have a relaxed 1 ms deadline.
 
 ### TinyUSB 0.18
 
-This card runs 0.18 (the Channel Card is on 0.17) for its **dwc2
-isochronous-IN fixes**. On 0.17 this core missed roughly 8 IN service
-intervals per second, each one a 1 ms hole the host filled with a
-discontinuity. The 0.17 rollback copy has been removed from the tree;
-recover it from version-control history if needed. A rollback also
-requires dropping `dwc2_common.c` from `CMakeLists.txt` (0.18 split it
-out of `dcd_dwc2.c`; 0.17 does not have it).
+This card uses 0.18 for its **dwc2 isochronous-IN fixes**. Earlier dwc2
+code missed roughly 8 IN service intervals per second, each one a 1 ms
+hole that produced a host-side discontinuity. TinyUSB 0.18 splits shared
+dwc2 code into `dwc2_common.c`; keep that source in `CMakeLists.txt`.
 
 ## ADC configuration
 

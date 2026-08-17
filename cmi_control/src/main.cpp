@@ -140,13 +140,6 @@ int main(int argc, char **argv)
   fw::theme::LoadFonts(io);
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init(glsl_version);
-  // Clamp layout restored from a broken DPI-scaled save so panels fit.
-  app.nav_width = std::clamp(app.nav_width, 52.f, 180.f);
-  app.layout_log_h = std::clamp(app.layout_log_h, 56.f, 280.f);
-  app.layout_perform_voice_h =
-      std::clamp(app.layout_perform_voice_h, 56.f, 160.f);
-  app.layout_perform_piano_h =
-      std::clamp(app.layout_perform_piano_h, 72.f, 180.f);
   app.RefreshPortLists();
   {
     char ready[160];

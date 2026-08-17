@@ -84,11 +84,9 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-  /* CubeMX never emitted this: the core ran at 558 MHz fetching every
-   * instruction from flash at LATENCY_3. Before I2S1 fills moved to the
-   * main loop, NoteBank in the DMA callback overran its half-buffer above
-   * ~13 voices and starved RS485 (stuck notes). I-cache only: D-cache needs
-   * non-cacheable MPU regions for DMA buffers; this MPU_Config does not. */
+  /* I-cache keeps the NoteBank refill within the 1 ms I2S DMA callback
+   * budget. I-cache only: D-cache requires non-cacheable MPU regions for
+   * DMA buffers, which this MPU configuration does not provide. */
   SCB_EnableICache();
   /* USER CODE END 1 */
 
@@ -214,7 +212,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-    Audio_I2S1_Poll();     /* I2S1 half refill (flagged by DMA IRQ) — first */
+    Audio_I2S1_Poll();     /* Compatibility hook; I2S1 refills in DMA callbacks */
     USB_App_Task();        /* ISO OUT before RS485: missed SOF has no retry */
     ChannelConsole_Poll(); /* RS485 console + LED chaser */
     Audio_CpuLoad_Poll();  /* queue-mode NoteBank producer (no-op otherwise) */

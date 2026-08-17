@@ -3,8 +3,8 @@
  * @brief cardproto::IConsoleTransport over USB CDC (bare body replies).
  */
 
-#ifndef HOST_IO_USB_CDC_TRANSPORT_HPP
-#define HOST_IO_USB_CDC_TRANSPORT_HPP
+#ifndef CARDLINK_USB_CDC_TRANSPORT_HPP
+#define CARDLINK_USB_CDC_TRANSPORT_HPP
 
 #include "cardproto/transport.hpp"
 
@@ -38,4 +38,4 @@ private:
 } // namespace usb
 } // namespace cardlink
 
-#endif /* HOST_IO_USB_CDC_TRANSPORT_HPP */
+#endif /* CARDLINK_USB_CDC_TRANSPORT_HPP */

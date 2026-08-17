@@ -117,13 +117,13 @@ Smoke: `cpu 1`, `cpu 8`, `cpu 0`, `n0 440 0.5`, `g 1 0` — LED chaser resumes a
 
 Bare `cpu` starts all **8** voices (220, 260, … Hz). Pass **`1..8`** for count.
 
-I2S1 half-buffer sample fill runs in the **main loop** (`Audio_I2S1_Poll`);
-the DMA IRQ only sets a pending-half flag. Bare `cpu` / `cpu N` still
-measures NoteBank fill busy-time on LED_Y (now around that main-loop fill).
+I2S1 half-buffer sample fill runs in the **I2S DMA half/full callbacks**.
+`Audio_I2S1_Poll()` remains an empty compatibility hook. Bare `cpu` /
+`cpu N` measures NoteBank fill busy-time on LED_Y around the callback refill.
 
 | Command             | Action                                           |
 | ------------------- | ------------------------------------------------ |
-| `cpu` / `cpu N`     | N voices (default 8) + main-loop fill LED probe  |
+| `cpu` / `cpu N`     | N voices (default 8) + DMA-callback fill probe   |
 | `cpu q` / `cpu q N` | Soft-queue LED probe                             |
 | `cpu 0`             | Clear notes, stop probe, resume LED chaser       |
 
@@ -174,7 +174,7 @@ Hand-written modules live under `Core/Src/<domain>/` (and matching
 | `Core/Src/console/channel_console.c`       | RS485 + USB CDC console, `cpu`, LED chaser                        |
 | `Core/Src/console/uart5_rx.c`              | Interrupt-driven UART5 RX ring buffer                             |
 | `Core/Src/audio/audio_bridge.c`            | USB → per-voice stream rings; CH1 note-bank mix; I2S DMA |
-| `Core/Src/audio/note_bank.c`               | n0–n7 8-voice bank (sine / pulse / tri / sample)                  |
+| `Core/Src/audio/note_bank.c`               | n0–n7 8-voice SAMPLE bank with fallback oscillators               |
 | `Core/Src/filters/note_filter.c`           | Per-voice LPF wrapper (base/effective cutoff, pitch-k, q/Q31)     |
 | `Core/Src/filters/butterworth_four_pole.c` | Reusable 4-pole DF4 Butterworth kernel                            |
 | `Core/Src/drivers/cs4304.c`                | CS4304 DAC driver (I2C)                                           |
@@ -185,8 +185,9 @@ Hand-written modules live under `Core/Src/<domain>/` (and matching
 This file holds the playback path as measured on the board. Notable
 parts, all commented in-place:
 
-- **UAC dry** is demuxed into per-voice stream rings (8ch int16 @ 48 kHz).
-  CH1 I2S is always the note-bank mix.
+- **UAC body stream** is 10ch int16 at 48 kHz: ch0 is the route tag and
+  ch1–9 carry nine body samples for the tagged voice. CH1 I2S is always
+  the note-bank mix.
 - **I2S start order matters** — the I2S1 master must be running before
   the I2S2 slave is enabled, or the slave never shifts.
 - **I2S2 slave workarounds** — UDR wedge clearing via the TIM7 pump, and
@@ -195,11 +196,7 @@ parts, all commented in-place:
 - **DMA buffers live in AXI SRAM** (`.dma_buffer` section) — DMA1 cannot
   reach the DTCM RAM where `.bss` normally lands.
 
-It was relocated out of `USB_DEVICE/App/usbd_audio_if.c` when the card
-moved from ST's USB Device Library to TinyUSB; only the ~30 lines that
-touched ST's stack were changed.
-
-## Volume behaviour (worth knowing)
+## Volume control
 
 The device advertises a **mute-only** UAC2 feature unit, so **Windows
 applies volume in software** by scaling the PCM before sending it. The
@@ -213,10 +210,13 @@ without re-testing the full slider range on Windows.
 
 **`n0`** applies **bypass ON** and **`g 1 0`** (0 dB CH1 DAC trim) at
 boot and on bare `n0`. **`n0`…`n7`** are 8 independent phase-accumulator
-voices summed onto CH1. Optional **`[scale]`** (0.0..1.0, default **0.125**) sets
-that note’s amplitude. Global shape: **`s`** (sine, default), **`p <0.1..0.9>`**
-(pulse duty), **`t <0.1..0.9>`** (triangle asymmetry; 0.5 = symmetric).
-Frequency/scale/shape changes do not touch gain or bypass.
+voices summed onto CH1. Optional **`[scale]`** (0.0..1.0, default **0.125**)
+sets that note’s amplitude. When a voice has no loaded attack head,
+**`s`** (sine, default), **`p <0.1..0.9>`** (pulse duty), and
+**`t <0.1..0.9>`** (triangle asymmetry; 0.5 = symmetric) select its fallback
+oscillator. These shape commands do not affect SAMPLE playback from a loaded
+attack head and UAC body stream. Frequency, scale, and shape changes do not
+touch gain or bypass.
 **`g`** changes DAC atten on any channel.
 
 ## Console quick reference
@@ -230,9 +230,9 @@ Type `h` / `help` / `?` on the card for the live list.
 | `n0`…`n7` `0`                             | Turn that note off                                                                                                                                                                                                                 |
 | `n0`…`n7` `<Hz>` `[scale]`                | Note (default scale **0.125**); slots `8`..`f` reply `err:range`                                                                                                                                                                   |
 | `n <Hz>` `[scale]` / `n 0`                | All 8 voices / silence                                                                                                                                                                                                             |
-| `s`                                       | Note-bank shape: sine                                                                                                                                                                                                              |
-| `p <0.1..0.9>`                            | Note-bank shape: pulse (duty)                                                                                                                                                                                                      |
-| `t <0.1..0.9>`                            | Note-bank shape: triangle (asymmetry)                                                                                                                                                                                              |
+| `s`                                       | Fallback oscillator shape: sine (voices without a loaded attack)                                                                                                                                                                  |
+| `p <0.1..0.9>`                            | Fallback oscillator shape: pulse (duty)                                                                                                                                                                                            |
+| `t <0.1..0.9>`                            | Fallback oscillator shape: triangle (asymmetry)                                                                                                                                                                                    |
 | `f0`…`f7` `<Hz>` `[q]` / `f` `<Hz>` `[q]` | LPF **base** cutoff at C4 on voices **0..7** (20..20000; **`0` or `20000` = bypass**). Optional **`q`** = DF4 **g** **0.5..10** (default **1.0**). See [`docs/reference/note_filter_butterworth.md`](docs/reference/note_filter_butterworth.md). |
 | `fk0`…`fk7` `[k]` / `fk` `[k]`            | Filter pitch-track **k** (0..10, default **0**): `fc = fbase × (note/C4)^k`. Same C4 as envelope `slope±k` / `ek`.                                                                                                                 |
 | `en0`…`en7` `<end slope[±k] …>` / `en`    | Multi-segment amplitude envelope per voice (bare = query; `en0 0` / `en 0` = clear)                                                                                                                                                |
@@ -241,12 +241,13 @@ Type `h` / `help` / `?` on the card for the live list.
 | `ar <v> <Hz>` / `a`                       | Root pitch of voice `<v>` / query loaded heads (`*` = in RAM)                                                                                                                                                                      |
 | `vq`                                      | Active mask + hungriest voice + free slots 0–8                                                                                                                                                                                     |
 | `g <ch> <dB>`                             | DAC atten 0..127 dB on ch 1..4                                                                                                                                                                                                     |
-| `cpu` / `cpu N`                           | N voices + LED_Y main-loop fill load probe (default 8)                                                                                                                                                                             |
+| `cpu` / `cpu N`                           | N voices + LED_Y DMA-callback fill load probe (default 8)                                                                                                                                                                          |
 | `cpu q` `[N]`                             | Soft-queue load probe                                                                                                                                                                                                              |
 | `cpu 0`                                   | Clear notes; resume LED chaser                                                                                                                                                                                                     |
 
-Shape smoke (scope on CH1): `n0 440`, `s`, `p 0.5`, `t 0.5`, `p 0.1`,
-then `f0` sweep — pulse/tri should show harmonics; LPF still responds.
+Shape smoke with no attack loaded for n0 (scope on CH1): `n0 440`, `s`,
+`p 0.5`, `t 0.5`, `p 0.1`, then `f0` sweep — pulse/tri should show
+harmonics; LPF still responds.
 
 Pitch-track smoke: `f0 300`, `fk0 1`, `p 0.5`, `n0 261.63 1` then
 `n0 523.25 1` — corner should roughly double with the octave (query `f0`).

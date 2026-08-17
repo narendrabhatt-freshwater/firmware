@@ -150,20 +150,8 @@ bool Load(App &app)
     }
     if (key == "view") {
       app.view = static_cast<GuiView>(std::clamp(std::atoi(val.c_str()), 0, 4));
-    } else if (key == "nav_expanded") {
-      app.nav_expanded = (std::atoi(val.c_str()) != 0);
-    } else if (key == "nav_width") {
-      app.nav_width = std::strtof(val.c_str(), nullptr);
     } else if (key == "log_collapsed") {
       app.log_collapsed = (std::atoi(val.c_str()) != 0);
-    } else if (key == "layout_log_h") {
-      app.layout_log_h = std::strtof(val.c_str(), nullptr);
-    } else if (key == "layout_perform_voice_h") {
-      app.layout_perform_voice_h = std::strtof(val.c_str(), nullptr);
-    } else if (key == "layout_perform_piano_h") {
-      app.layout_perform_piano_h = std::strtof(val.c_str(), nullptr);
-    } else if (key == "layout_tone_left_w") {
-      app.layout_tone_left_w = std::strtof(val.c_str(), nullptr);
     } else if (key == "gain_db") {
       app.gain_db = std::clamp(std::atoi(val.c_str()), 0, 127);
     } else if (key == "out_mode") {
@@ -201,13 +189,7 @@ bool Save(const App &app)
   }
   out << "# CMI Control settings\n";
   WriteKV(out, "view", static_cast<int>(app.view));
-  WriteKV(out, "nav_expanded", app.nav_expanded);
-  WriteKV(out, "nav_width", app.nav_width);
   WriteKV(out, "log_collapsed", app.log_collapsed);
-  WriteKV(out, "layout_log_h", app.layout_log_h);
-  WriteKV(out, "layout_perform_voice_h", app.layout_perform_voice_h);
-  WriteKV(out, "layout_perform_piano_h", app.layout_perform_piano_h);
-  WriteKV(out, "layout_tone_left_w", app.layout_tone_left_w);
   WriteKV(out, "gain_db", app.gain_db);
   WriteKV(out, "out_mode", static_cast<int>(app.out_mode));
   WriteKV(out, "baud", static_cast<int>(app.baud));

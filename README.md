@@ -199,10 +199,10 @@ Both cards run the same line-based console over RS485 and USB CDC.
 [`docs/protocol.md`](docs/protocol.md) is the normative command
 reference; the summary:
 
-**Channel Card** — 8 SAMPLE voices (`n0`…`n7`, summed on CH1), global
-shape (`s`/`p`/`t`), sample upload/assignment (`al`/`bl`/`ar`/`aw`/`a`/`vq`),
-per-voice envelope (`en`/`ek`) and LPF (`f`/`fk`), DAC gain (`g`), CPU
-probe (`cpu`).
+**Channel Card** — 8 SAMPLE voices (`n0`…`n7`, summed on CH1), fallback
+oscillator shape (`s`/`p`/`t`), sample upload/assignment
+(`al`/`ar`/`aw`/`a`/`vq`), per-voice envelope (`en`/`ek`) and LPF
+(`f`/`fk`), DAC gain (`g`), CPU probe (`cpu`).
 
 | Command                        | Meaning                                                         |
 | ------------------------------ | --------------------------------------------------------------- |
@@ -259,10 +259,10 @@ Both cards currently build clean (no warnings) and are working on
 hardware:
 
 - **Channel Card** — 8 SAMPLE voices: USB audio (UAC2 speaker,
-  8-channel 16-bit 48 kHz, one channel per voice) feeds per-voice
-  sustain; rate-scaled attack heads uploaded over CDC; CS4304 DAC out;
-  DC control voltages on CH2–CH4 (0 V at boot); RS485 + USB CDC
-  consoles.
+  10-channel int16 at 48 kHz; channel 0 route tag, channels 1–9 body
+  samples) feeds per-voice sustain; rate-scaled attack heads uploaded
+  over CDC; CS4304 DAC out; DC control voltages on CH2–CH4 (0 V at
+  boot); RS485 + USB CDC consoles.
 - **Effect Card** — 8-channel capture from two TLV320ADC6140 ADCs over
   TDM/SAI, one selectable channel streamed to the PC (UAC2 microphone,
   mono 32-bit 96 kHz), 48 V phantom rail control, RS485 + USB CDC

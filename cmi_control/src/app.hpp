@@ -106,20 +106,12 @@ struct App
   char attack_cdc_path[256] = {};
   int attack_cdc_port_index = 0;
 
-  bool nav_expanded = true; // legacy settings key; unused by phosphor shell
-  float nav_width = 148.f;  // legacy
-  float ui_scale = 1.f;     // user zoom (Cmd/Ctrl +/-/0), persisted
+  float ui_scale = 1.f; // user zoom (Cmd/Ctrl +/-/0), persisted
   bool log_collapsed = false;
   float layout_log_w = 288.f; // right LOG + CONSOLE width (design 288)
   bool auto_reconnect = false;
   bool settings_dirty = false;
   float settings_save_countdown = 0.f;
-
-  /** Persisted panel sizes for drag splitters (window pixels). */
-  float layout_log_h = 100.f;             // legacy
-  float layout_perform_voice_h = 78.f;    // legacy
-  float layout_perform_piano_h = 180.f;   // bottom voice/piano strip height
-  float layout_tone_left_w = 0.f;         // legacy
 
   int shape_mode = 0;
   float shape_param = 0.5f;

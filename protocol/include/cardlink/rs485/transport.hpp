@@ -3,8 +3,8 @@
  * @brief cardproto::IConsoleTransport over cardlink::rs485::Link.
  */
 
-#ifndef HOST_IO_RS485_TRANSPORT_HPP
-#define HOST_IO_RS485_TRANSPORT_HPP
+#ifndef CARDLINK_RS485_TRANSPORT_HPP
+#define CARDLINK_RS485_TRANSPORT_HPP
 
 #include "cardproto/transport.hpp"
 
@@ -32,4 +32,4 @@ private:
 } // namespace rs485
 } // namespace cardlink
 
-#endif /* HOST_IO_RS485_TRANSPORT_HPP */
+#endif /* CARDLINK_RS485_TRANSPORT_HPP */

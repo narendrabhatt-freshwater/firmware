@@ -3,8 +3,8 @@
  * @file    channel_console.c
  * @brief   Channel Card RS485 + USB CDC console (short cmds), cpu probe, LED.
  *
- * Extracted from main.c (behavior-preserving). main.c owns bring-up and the
- * DAC handle; this file owns the interactive console surface.
+ * main.c owns bring-up and the DAC handle; this file owns the interactive
+ * console surface.
  ******************************************************************************
  */
 

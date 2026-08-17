@@ -113,12 +113,10 @@ void MX_SAI1_Init(void)
   /* USER CODE BEGIN SAI1_Init 2 */
 
   /* Rate contract: AudioFrequency stays at the generated 96K, with
-   * SAI_FRAMES_PER_HALF = 96 in main.c so the DMA half-buffer (1 ms)
-   * matches the USB frame interval one-for-one. Do not "fix" a measured
-   * 500/s callback rate by doubling AudioFrequency: 500/s is correct
-   * when halves are 2 ms (SAI_FRAMES_PER_HALF = 192), and a 192K bus
-   * into the 96 kHz USB stream overflows the FIFO (dropped chunks,
-   * audible beating). */
+   * SAI_FRAMES_PER_HALF = 96 in main.c so each DMA half (1 ms) matches
+   * one USB frame. Doubling AudioFrequency drives a 192 kHz bus into the
+   * 96 kHz USB stream and overflows the FIFO (dropped chunks and audible
+   * beating). */
 
   /* TDM alignment: the TLV320ADC6140 transmits slot 0 starting one BCLK
    * cycle AFTER the FSYNC edge (standard TDM offset).  With the default

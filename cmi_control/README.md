@@ -70,8 +70,8 @@ scanline accents).
 
 Envelope programs match firmware: odd token lists, `slope±k` glued (e.g. `10+1`, `2.0-0.5`), 2–10 segments including release.
 
-**Preview scope** is a local sine mix for “what it should look like,” not a
-bit-exact Channel DSP or DAC probe.
+**Preview scope** is an illustrative local sine mix, not a bit-exact Channel
+DSP or DAC probe.
 
 ## Output modes
 

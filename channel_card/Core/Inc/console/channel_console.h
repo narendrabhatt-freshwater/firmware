@@ -9,7 +9,7 @@
  *
  * Bring-up: call ChannelConsole_SetDacHandle() then ChannelConsole_Init()
  * after UART5 and the DAC handle are ready. Poll from the main loop after
- * Audio_I2S1_Poll().
+ * servicing the USB task.
  ******************************************************************************
  */
 

@@ -81,7 +81,7 @@ public:
   void AcknowledgeAllHz(double hz);
 
   void SetLogHandler(LogHandler handler);
-  /** Poll chatter uses this callback, or the normal log when unset. */
+  /** Status-poll messages use this callback, or the normal log when unset. */
   void SetPollLogHandler(LogHandler handler);
   /** Called after each successful raw QueueExec command. */
   void SetCommandHandler(CommandHandler handler);

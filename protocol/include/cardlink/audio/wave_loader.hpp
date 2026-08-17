@@ -3,8 +3,8 @@
  * @brief Load wav/raw → 48 kHz, split attack[0, min(n,kAttackSamples)) + body.
  */
 
-#ifndef HOST_IO_AUDIO_WAVE_LOADER_HPP
-#define HOST_IO_AUDIO_WAVE_LOADER_HPP
+#ifndef CARDLINK_AUDIO_WAVE_LOADER_HPP
+#define CARDLINK_AUDIO_WAVE_LOADER_HPP
 
 #include "cardlink/audio/sample_dry.hpp"
 
@@ -35,4 +35,4 @@ bool BodyWithHeadOverlap(const std::string &head_i32_path,
 } // namespace audio
 } // namespace cardlink
 
-#endif
+#endif /* CARDLINK_AUDIO_WAVE_LOADER_HPP */

@@ -7,8 +7,8 @@
  * or cardlink::usb transports — this type only moves bytes.
  */
 
-#ifndef HOST_IO_SERIAL_PORT_HPP
-#define HOST_IO_SERIAL_PORT_HPP
+#ifndef CARDLINK_SERIAL_PORT_HPP
+#define CARDLINK_SERIAL_PORT_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -87,4 +87,4 @@ private:
 
 } // namespace cardlink
 
-#endif // HOST_IO_SERIAL_PORT_HPP
+#endif // CARDLINK_SERIAL_PORT_HPP

@@ -3,8 +3,8 @@
  * @brief USB CDC binary attack-head upload (`al` session, ≤ kAttackSamples int32).
  */
 
-#ifndef HOST_IO_USB_ATTACK_UPLOAD_HPP
-#define HOST_IO_USB_ATTACK_UPLOAD_HPP
+#ifndef CARDLINK_USB_ATTACK_UPLOAD_HPP
+#define CARDLINK_USB_ATTACK_UPLOAD_HPP
 
 #include "cardlink/serial_port.hpp"
 
@@ -42,4 +42,4 @@ private:
 } // namespace usb
 } // namespace cardlink
 
-#endif /* HOST_IO_USB_ATTACK_UPLOAD_HPP */
+#endif /* CARDLINK_USB_ATTACK_UPLOAD_HPP */

@@ -3,7 +3,7 @@
 Host ↔ Channel Card and Effect Card over RS485 (and the same command
 set over USB CDC). One ASCII line in, one reply line out. That is the
 protocol — there is no separate binary control frame; the only binary
-payloads are the CDC sample uploads (`al` / `bl`, §4).
+payloads are the CDC attack-head uploads (`al`, §4).
 
 Baud on the RS485 UARTs is **460800 8N1**.
 
@@ -75,7 +75,7 @@ return `ok: …` with the value.
 | `err:syntax`                            | Could not parse the line                      |
 | `err:range`                             | Number or slot out of allowed range (Channel) |
 | `err:unknown`                           | No such command                               |
-| `err:usb`                               | CDC-only command (`al` / `bl`) sent on RS485  |
+| `err:usb`                               | CDC-only command (`al`) sent on RS485         |
 | `err:rxdrop`                            | Channel UART RX overrun between lines         |
 | `err: ar …` / `err: aw …` / `err: adc…` | Effect I2C / ADC failure                      |
 
@@ -141,8 +141,7 @@ Replies: `ok: ar <v> <Hz>`, `ok: aw <v> <v>`,
 Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 2-tap
 linear. The attack plays to its committed length (not a hold-pad to
 8192). Body starts at `len − 32` with the same source index and
-fraction as the attack. `nX > 0` is always a note-on. `bl` replies
-`err:unsupported`.
+fraction as the attack. `nX > 0` is always a note-on.
 
 ### Oscillator shape (global)
 
@@ -271,7 +270,8 @@ audio. Not a normal musical control.
 
 `m` / `mode`, `w0`…`w7`, `wl`, `sw`, `tone1`, `dc`, `scf`, `duty` and
 `gain` no longer exist; they reply `err:unknown` (or parse as another
-command). Sample upload replaced `wl` with `al` / `bl`.
+command). Attack upload uses `al`; the former `bl` body upload is retired
+and replies `err:unsupported`.
 
 ### Channel quick examples
 
@@ -346,7 +346,7 @@ Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 | Interface            | Role                                                                     |
 | -------------------- | ------------------------------------------------------------------------ |
 | **UAC2** (speaker)   | Isochronous 10ch int16 @ 48 kHz (~960 B/ms, FS ISO max 1023). ch0 = `0x7F00 \| (session<<5) \| SOF \| voice` (session 0–6, `0x7F00\|0xFF` = idle); ch1–9 = unpitched body. Card pitches. Host paces USB by `phase_inc`. |
-| **CDC ACM** (serial) | Same ASCII console as RS485, plus the binary sample uploads (`al` / `bl`). |
+| **CDC ACM** (serial) | Same ASCII console as RS485, plus binary attack-head upload (`al`). |
 
 Effect Card also has CDC for its console (no uploads) and a UAC2
 microphone (mono, 32-bit, 96 kHz) carrying the selected ADC channel.
@@ -380,7 +380,7 @@ Constraints:
 | ------------------ | ----------------------------------------------------- |
 | `al <id> <nbytes>` | 4…32768 bytes = 1…8192 × int32 LE (real length, no hold-pad) |
 
-Wave `<id>` is **0…7**. `bl` is retired (`err:unsupported`).
+Wave `<id>` is **0…7**.
 
 **Console reply API (what the card writes):** exactly two success lines
 for a full transfer — nothing in between, even if USB delivers the
@@ -419,8 +419,8 @@ Notes:
 2. While waiting for the completion line, keep reading the CDC RX path —
    do not discard pending replies.
 3. Upload only loads AXI RAM (lost on reset). To hear it: `ar <id> <rootHz>`,
-   `aw <voice> <id>`, then `nX <Hz>` — and stream sustain audio on the
-   voice's UAC channel.
+   `aw <voice> <id>`, then `nX <Hz>` — and stream sustain audio in tagged
+   UAC body frames.
 
 ---
 

@@ -38,8 +38,6 @@ void Audio_Bridge_SetDacHandle(CS4304_HandleTypeDef *h)
  *
  * Full-speed UAC OUT is one packet per 1 ms SOF. Size the DMA half to
  * AUDIO_SAMPLE_RATE_HZ/1000 frames so I2S consume and USB fill lockstep.
- * (Was hardcoded 192/96 from the 96 kHz bring-up; at 48 kHz that half
- * was 2 ms and the stream ring underran.)
  */
 #define AUDIO_I2S_HALF_FRAMES (AUDIO_SAMPLE_RATE_HZ / 1000u)
 #define AUDIO_I2S_BUF_FRAMES (AUDIO_I2S_HALF_FRAMES * 2u)
@@ -83,10 +81,10 @@ void Audio_SetUSBMute(uint8_t mute) { usb_muted = mute ? 1u : 0u; }
 
 static volatile uint8_t dma_active_half = 0; /* 0 = playing first half (write to second), 1 = playing second half (write to first) */
 
-/* I2S1 sample fill runs in the DMA half/full ISR. Main-loop fill missed
- * the 1 ms half whenever USB or RS485 ran first — DMA then replayed the
- * previous half (a short jump on the DAC). 8 voices @ 48 kHz fits the
- * ISR budget; the old overrun was >13 voices @ 96 kHz. */
+/* I2S1 sample fill runs in the DMA half/full ISR. Deferring refill to the
+ * main loop can miss the 1 ms deadline when USB or RS485 work runs first,
+ * causing DMA to replay the previous half. Eight voices at 48 kHz fit the
+ * callback budget. */
 static volatile uint8_t i2s1_fill_busy = 0;
 volatile uint32_t g_i2s1_fill_late = 0;
 
@@ -275,9 +273,6 @@ void Audio_Bridge_WriteUSB(const uint8_t *pbuf, uint32_t size)
 void TransferComplete_CallBack_HS(void)
 {
   dma_active_half = 0; /* DMA is now playing the first half, so second half is free to write */
-  /* (ST's USBD_AUDIO_Sync() bookkeeping is gone: TinyUSB's audio class
-   * tracks its own FIFO, and the USB write pointer is positioned from the
-   * DMA's NDTR directly in Audio_Bridge_WriteUSB().) */
 }
 
 /**
@@ -321,8 +316,7 @@ static void Audio_FillToneSlot(int32_t *buf, uint32_t num_frames,
 
 /**
  * @brief  Fill ONE slot with the mixed N0–NF note bank. Only called while
- *         NoteBank_AnyActive() (see Audio_I2S1_Poll) — otherwise CH1's
- *         slot is left for Audio_Bridge_WriteUSB() to fill from USB.
+ *         NoteBank_AnyActive() during the I2S DMA refill.
  *
  *         In AUDIO_CPULOAD_DMA mode, LED_Y is driven low for the duration of
  *         the fill (busy) and high afterward (idle) for scope duty-cycle.
@@ -537,8 +531,7 @@ static void Audio_I2S1_FillHalf(uint8_t half)
 }
 
 /**
- * @brief  I2S1 fill is in the DMA ISR. Kept so the main loop still has a
- *         documented audio slot; no work here.
+ * @brief  Compatibility hook. I2S1 refill runs in the DMA callbacks.
  */
 void Audio_I2S1_Poll(void)
 {

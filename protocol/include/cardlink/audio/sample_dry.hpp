@@ -14,8 +14,8 @@
  * queue; Render drains it at the start of the buffer.
  */
 
-#ifndef HOST_IO_AUDIO_SAMPLE_DRY_HPP
-#define HOST_IO_AUDIO_SAMPLE_DRY_HPP
+#ifndef CARDLINK_AUDIO_SAMPLE_DRY_HPP
+#define CARDLINK_AUDIO_SAMPLE_DRY_HPP
 
 #include <array>
 #include <atomic>
@@ -142,4 +142,4 @@ private:
 } // namespace audio
 } // namespace cardlink
 
-#endif /* HOST_IO_AUDIO_SAMPLE_DRY_HPP */
+#endif /* CARDLINK_AUDIO_SAMPLE_DRY_HPP */

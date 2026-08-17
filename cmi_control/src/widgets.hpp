@@ -26,7 +26,7 @@ bool Btn(const char *label, const ImVec2 &size = ImVec2(0, 0),
 bool ChipBtn(const char *label, bool selected = false,
              BtnKind kind = BtnKind::Neutral);
 
-/** Legacy wrapper kept for call sites: danger → Danger else Primary. */
+/** Compatibility wrapper: danger → Danger, otherwise Primary. */
 bool GlowButton(const char *label, const ImVec2 &size = ImVec2(0, 0),
                 bool danger = false);
 

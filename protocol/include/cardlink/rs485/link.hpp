@@ -3,8 +3,8 @@
  * @brief One request/response exchange over a shared RS485 bus.
  */
 
-#ifndef HOST_IO_RS485_LINK_HPP
-#define HOST_IO_RS485_LINK_HPP
+#ifndef CARDLINK_RS485_LINK_HPP
+#define CARDLINK_RS485_LINK_HPP
 
 #include "cardlink/serial_port.hpp"
 #include "cardlink/rs485/types.hpp"
@@ -55,4 +55,4 @@ private:
 } // namespace rs485
 } // namespace cardlink
 
-#endif // HOST_IO_RS485_LINK_HPP
+#endif // CARDLINK_RS485_LINK_HPP

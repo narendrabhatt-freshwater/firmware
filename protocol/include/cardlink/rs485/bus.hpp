@@ -3,8 +3,8 @@
  * @brief Owns RS485 port + link; bootstrap; protocol Channel/Effect clients.
  */
 
-#ifndef HOST_IO_RS485_BUS_HPP
-#define HOST_IO_RS485_BUS_HPP
+#ifndef CARDLINK_RS485_BUS_HPP
+#define CARDLINK_RS485_BUS_HPP
 
 #include "cardproto/channel.hpp"
 #include "cardproto/effect.hpp"
@@ -97,4 +97,4 @@ private:
 } // namespace rs485
 } // namespace cardlink
 
-#endif /* HOST_IO_RS485_BUS_HPP */
+#endif /* CARDLINK_RS485_BUS_HPP */

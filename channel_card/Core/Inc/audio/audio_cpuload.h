@@ -3,8 +3,8 @@
  * @file    audio_cpuload.h
  * @brief   CPU-load probe on LED_Y (PB9) for Channel Card NoteBank fill.
  *
- * Modes: OFF (LED free for chaser), DMA (busy around half fill in main),
- * QUEUE (soft ring produced in main, drained by I2S1 half refill).
+ * Modes: OFF (LED free for chaser), DMA (busy around the I2S DMA callback
+ * refill), QUEUE (soft ring produced in main, drained by the callback refill).
  ******************************************************************************
  */
 
@@ -21,8 +21,8 @@ extern "C"
   typedef enum
   {
     AUDIO_CPULOAD_OFF = 0,   /**< Normal path; LED_Y free for chaser */
-    AUDIO_CPULOAD_DMA = 1,   /**< Busy=low around NoteBank half fill in main */
-    AUDIO_CPULOAD_QUEUE = 2, /**< Soft queue (256) filled in main, drained by DMA */
+    AUDIO_CPULOAD_DMA = 1,   /**< Busy=low around NoteBank DMA callback refill */
+    AUDIO_CPULOAD_QUEUE = 2, /**< Soft queue (256) filled in main, drained by callback */
   } Audio_CpuLoadMode_t;
 
   /**

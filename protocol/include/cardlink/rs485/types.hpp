@@ -6,8 +6,8 @@
  * tagged terminal line ending in CRLF (`[C]ok\r\n` / `[E]err:range\r\n`).
  */
 
-#ifndef HOST_IO_RS485_TYPES_HPP
-#define HOST_IO_RS485_TYPES_HPP
+#ifndef CARDLINK_RS485_TYPES_HPP
+#define CARDLINK_RS485_TYPES_HPP
 
 #include <cstdint>
 #include <cstddef>
@@ -88,4 +88,4 @@ ExchangeResult ParseTaggedReply(const std::string &line, Target expected);
 } // namespace rs485
 } // namespace cardlink
 
-#endif // HOST_IO_RS485_TYPES_HPP
+#endif // CARDLINK_RS485_TYPES_HPP
