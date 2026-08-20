@@ -13,6 +13,9 @@ include(FetchContent)
 
 set(RTMIDI_BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
 set(RTMIDI_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+# find_library(jack) succeeds on MacPorts libjack without putting
+# /opt/local/include on the compile line; CoreMIDI is the macOS backend.
+set(RTMIDI_API_JACK OFF CACHE BOOL "" FORCE)
 set(RTMIDI_TARGETNAME_UNINSTALL "rtmidi_uninstall" CACHE STRING "" FORCE)
 FetchContent_Declare(
   rtmidi
@@ -24,6 +27,7 @@ FetchContent_MakeAvailable(rtmidi)
 
 set(RTAUDIO_BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
 set(RTAUDIO_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(RTAUDIO_API_JACK OFF CACHE BOOL "" FORCE)
 set(RTAUDIO_TARGETNAME_UNINSTALL "rtaudio_uninstall" CACHE STRING "" FORCE)
 FetchContent_Declare(
   rtaudio
