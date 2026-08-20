@@ -235,7 +235,11 @@ struct Controller::Impl
         } else {
           underrun_logged[i] = false;
         }
-        if (watch_idle[i] && !active) {
+        /* UAC NoteOn is posted before nX is on the wire. An in-flight
+         * vq then has no mask bit for the new slot; treating that as
+         * idle Silence()s the body stream and only the AXI attack
+         * plays. Stay armed while the host still wants a pitch. */
+        if (watch_idle[i] && !active && desired_hz[i] <= 0.0) {
           watch_idle[i] = false;
           become_idle[i] = true;
         }
@@ -685,7 +689,8 @@ QueueResult Controller::QueueExec(cardproto::Target target, std::string command)
       {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         impl_->desired_hz[slot] = value;
-        impl_->watch_idle[slot] = true;
+        /* Arm the idle watch after the card ACKs nX (MarkNoteSentLocked).
+         * Arming here races an in-flight vq and drops the UAC body. */
         impl_->underrun_logged[slot] = false;
       }
       impl_->cv.notify_one();
