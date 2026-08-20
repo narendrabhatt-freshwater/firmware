@@ -6,6 +6,7 @@
 #include "cardlink/usb/cdc_port.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -51,13 +52,32 @@ std::string Basename(const std::string &path)
   return pos == std::string::npos ? path : path.substr(pos + 1);
 }
 
+bool ParseWId(const std::string &name, int &id)
+{
+  if (name.size() < 3 || name[0] != 'w') {
+    return false;
+  }
+  if (name[1] < '0' || name[1] > '9') {
+    return false;
+  }
+  int n = 0;
+  size_t i = 1;
+  while (i < name.size() && name[i] >= '0' && name[i] <= '9') {
+    n = n * 10 + (name[i] - '0');
+    ++i;
+  }
+  if (i >= name.size() || name[i] != '_') {
+    return false;
+  }
+  id = n;
+  return true;
+}
+
 bool FindNamedPair(const fs::path &dir, int id, std::string &head,
                    std::string &body)
 {
   head.clear();
   body.clear();
-  char prefix[16];
-  std::snprintf(prefix, sizeof prefix, "w%d_", id);
   try {
     if (!fs::exists(dir)) {
       return false;
@@ -67,10 +87,12 @@ bool FindNamedPair(const fs::path &dir, int id, std::string &head,
         continue;
       }
       const auto name = ent.path().filename().string();
-      if (name.rfind(prefix, 0) != 0) {
+      int wid = -1;
+      if (!ParseWId(name, wid) || wid != id) {
         continue;
       }
-      if (name.find("_head.i32") != std::string::npos) {
+      if (name.find("_head.i32") != std::string::npos ||
+          name.find("_head.i16") != std::string::npos) {
         head = ent.path().string();
       } else if (name.find("_body.i16") != std::string::npos) {
         body = ent.path().string();
@@ -83,8 +105,8 @@ bool FindNamedPair(const fs::path &dir, int id, std::string &head,
 }
 
 bool FindStemPairs(const fs::path &dir,
-                   std::array<std::string, cardlink::audio::kSampleVoices> &heads,
-                   std::array<std::string, cardlink::audio::kSampleVoices> &bodies)
+                   std::array<std::string, cardlink::audio::kAttackWaves> &heads,
+                   std::array<std::string, cardlink::audio::kAttackWaves> &bodies)
 {
   heads.fill({});
   bodies.fill({});
@@ -96,7 +118,8 @@ bool FindStemPairs(const fs::path &dir,
       }
       const auto name = ent.path().filename().string();
       if (name.size() > 9 &&
-          name.compare(name.size() - 9, 9, "_head.i32") == 0) {
+          (name.compare(name.size() - 9, 9, "_head.i32") == 0 ||
+           name.compare(name.size() - 9, 9, "_head.i16") == 0)) {
         head_files.push_back(ent.path());
       }
     }
@@ -106,7 +129,7 @@ bool FindStemPairs(const fs::path &dir,
   std::sort(head_files.begin(), head_files.end());
   int n = 0;
   for (const auto &hp : head_files) {
-    if (n >= static_cast<int>(cardlink::audio::kSampleVoices)) {
+    if (n >= static_cast<int>(cardlink::audio::kAttackWaves)) {
       break;
     }
     const std::string name = hp.filename().string();
@@ -215,37 +238,37 @@ bool Client::SendCdcLine(const std::string &line, std::string &err)
   return wrote;
 }
 
-bool Client::UploadAttack(uint8_t voice, const int32_t *q31, size_t nsamp,
+bool Client::UploadAttack(uint16_t wave_id, const int16_t *q15, size_t nsamp,
                           std::string &err)
 {
-  if (voice >= cardlink::audio::kSampleVoices || q31 == nullptr ||
+  if (wave_id >= cardlink::audio::kAttackWaves || q15 == nullptr ||
       nsamp == 0 || nsamp > cardlink::audio::kAttackSamples) {
-    err = "err: attack must be 1..4096 Q31 samples";
+    err = "err: attack must be 1..512 int16 samples";
     return false;
   }
   if (!BeginCdc(err)) {
     return false;
   }
   cardlink::usb::AttackUploader up(cdc_port_);
-  auto r = up.Upload(voice, reinterpret_cast<const uint8_t *>(q31),
-                     nsamp * sizeof(int32_t));
+  auto r = up.Upload(wave_id, reinterpret_cast<const uint8_t *>(q15),
+                     nsamp * sizeof(int16_t));
   EndCdc();
   if (!r.ok) {
     err = r.message;
     return false;
   }
-  mixer_.SetAttackLen(voice, static_cast<unsigned>(nsamp));
+  mixer_.SetAttackLen(wave_id, static_cast<unsigned>(nsamp));
   return true;
 }
 
-bool Client::UploadAttackFile(uint8_t voice, const std::string &path,
+bool Client::UploadAttackFile(uint16_t wave_id, const std::string &path,
                               std::string &err)
 {
   if (!BeginCdc(err)) {
     return false;
   }
   cardlink::usb::AttackUploader up(cdc_port_);
-  auto r = up.UploadFile(voice, path);
+  auto r = up.UploadFile(wave_id, path);
   EndCdc();
   if (!r.ok) {
     err = r.message;
@@ -253,25 +276,37 @@ bool Client::UploadAttackFile(uint8_t voice, const std::string &path,
   }
   std::error_code ec;
   const auto bytes = fs::file_size(path, ec);
-  if (!ec && bytes >= 4u && (bytes % 4u) == 0u) {
-    mixer_.SetAttackLen(voice, static_cast<unsigned>(bytes / 4u));
+  if (!ec) {
+    const bool i32 = (bytes % 4u) == 0u &&
+                     (bytes > cardlink::audio::kAttackSamples * 2u ||
+                      path.find(".i32") != std::string::npos);
+    const unsigned nsamp = i32 ? static_cast<unsigned>(bytes / 4u)
+                               : static_cast<unsigned>(bytes / 2u);
+    mixer_.SetAttackLen(
+        wave_id, std::min(nsamp, cardlink::audio::kAttackSamples));
   }
   return true;
 }
 
-void Client::SetLabel(uint8_t voice)
+void Client::SetLabel(uint16_t wave_id)
 {
-  auto &slot = slots_[voice];
+  if (wave_id >= cardlink::audio::kSampleVoices) {
+    return;
+  }
+  auto &slot = slots_[static_cast<size_t>(wave_id)];
   std::string base = Basename(slot.head_path);
   if (base.empty()) {
     base = Basename(slot.body_path);
   }
-  if (base.size() > 3 && base[0] == 'w' && base[1] >= '0' && base[1] <= '7' &&
-      base[2] == '_') {
-    base = base.substr(3);
+  int wid = -1;
+  if (ParseWId(base, wid) && base.size() > 2) {
+    const auto us = base.find('_');
+    if (us != std::string::npos) {
+      base = base.substr(us + 1);
+    }
   }
   for (const char *suf :
-       {"_head.i32", "_body.i16", ".i32", ".i16", ".wav", ".raw"}) {
+       {"_head.i32", "_head.i16", "_body.i16", ".i32", ".i16", ".wav", ".raw"}) {
     const size_t n = std::strlen(suf);
     if (base.size() > n && base.compare(base.size() - n, n, suf) == 0) {
       base.resize(base.size() - n);
@@ -290,111 +325,146 @@ const Slot &Client::GetSlot(uint8_t voice) const
   return slots_[voice];
 }
 
-bool Client::LoadWave(uint8_t voice, const std::string &path, std::string &err)
+bool Client::LoadWave(uint16_t wave_id, const std::string &path, std::string &err)
 {
-  if (voice >= cardlink::audio::kSampleVoices || path.empty()) {
-    err = "err: voice 0..7";
+  if (wave_id >= cardlink::audio::kAttackWaves || path.empty()) {
+    err = "err: wave_id 0..255";
     return false;
   }
   cardlink::audio::LoadedWave wave;
   if (!cardlink::audio::LoadWaveFile(path, 0, wave, err)) {
     return false;
   }
-  auto &slot = slots_[voice];
-  slot.head_path = path;
-  slot.body_path = path;
-  SetLabel(voice);
-  if (!UploadAttack(voice, wave.attack.data(), wave.attack.size(), err)) {
-    slot.head_on_card = false;
-    slot.body_ready = false;
+  if (wave_id < cardlink::audio::kSampleVoices) {
+    auto &slot = slots_[static_cast<size_t>(wave_id)];
+    slot.head_path = path;
+    slot.body_path = path;
+    SetLabel(wave_id);
+  }
+  if (!UploadAttack(wave_id, wave.attack.data(), wave.attack.size(), err)) {
+    if (wave_id < cardlink::audio::kSampleVoices) {
+      slots_[static_cast<size_t>(wave_id)].head_on_card = false;
+      slots_[static_cast<size_t>(wave_id)].body_ready = false;
+    }
     return false;
   }
-  slot.head_on_card = true;
-  if (!mixer_.SetBody(voice, wave.body.data(), wave.body.size(), err)) {
-    slot.body_ready = false;
+  if (wave_id < cardlink::audio::kSampleVoices) {
+    slots_[static_cast<size_t>(wave_id)].head_on_card = true;
+  }
+  if (!mixer_.SetBody(wave_id, wave.body.data(), wave.body.size(), err)) {
+    if (wave_id < cardlink::audio::kSampleVoices) {
+      slots_[static_cast<size_t>(wave_id)].body_ready = false;
+    }
     return false;
   }
-  slot.body_ready = true;
-  char aw[32];
-  std::snprintf(aw, sizeof aw, "aw %u %u", static_cast<unsigned>(voice),
-                static_cast<unsigned>(voice));
-  SendConsole(aw);
+  if (wave_id < cardlink::audio::kSampleVoices) {
+    slots_[static_cast<size_t>(wave_id)].body_ready = true;
+  }
+  if (wave_id < cardlink::audio::kSampleVoices) {
+    char aw[32];
+    std::snprintf(aw, sizeof aw, "aw %u %u", static_cast<unsigned>(wave_id),
+                  static_cast<unsigned>(wave_id));
+    SendConsole(aw);
+  }
   return true;
 }
 
-bool Client::LoadHead(uint8_t voice, const std::string &path, std::string &err)
+bool Client::LoadHead(uint16_t wave_id, const std::string &path, std::string &err)
 {
-  if (voice >= cardlink::audio::kSampleVoices || path.empty()) {
-    err = "err: voice 0..7";
+  if (wave_id >= cardlink::audio::kAttackWaves || path.empty()) {
+    err = "err: wave_id 0..255";
     return false;
   }
   if (IsWaveFile(path)) {
-    return LoadWave(voice, path, err);
+    return LoadWave(wave_id, path, err);
   }
-  auto &slot = slots_[voice];
-  slot.head_path = path;
-  SetLabel(voice);
-  if (!UploadAttackFile(voice, path, err)) {
-    slot.head_on_card = false;
+  if (wave_id < cardlink::audio::kSampleVoices) {
+    slots_[static_cast<size_t>(wave_id)].head_path = path;
+    SetLabel(wave_id);
+  }
+  if (!UploadAttackFile(wave_id, path, err)) {
+    if (wave_id < cardlink::audio::kSampleVoices) {
+      slots_[static_cast<size_t>(wave_id)].head_on_card = false;
+    }
     return false;
   }
-  slot.head_on_card = true;
-  char aw[32];
-  std::snprintf(aw, sizeof aw, "aw %u %u", static_cast<unsigned>(voice),
-                static_cast<unsigned>(voice));
-  SendConsole(aw);
+  if (wave_id < cardlink::audio::kSampleVoices) {
+    slots_[static_cast<size_t>(wave_id)].head_on_card = true;
+    char aw[32];
+    std::snprintf(aw, sizeof aw, "aw %u %u", static_cast<unsigned>(wave_id),
+                  static_cast<unsigned>(wave_id));
+    SendConsole(aw);
+  }
   return true;
 }
 
-bool Client::LoadBody(uint8_t voice, const std::string &path, std::string &err)
+bool Client::LoadBody(uint16_t wave_id, const std::string &path, std::string &err)
 {
-  if (voice >= cardlink::audio::kSampleVoices || path.empty()) {
-    err = "err: voice 0..7";
+  if (wave_id >= cardlink::audio::kAttackWaves || path.empty()) {
+    err = "err: wave_id 0..255";
     return false;
   }
   if (IsWaveFile(path)) {
-    return LoadWave(voice, path, err);
+    return LoadWave(wave_id, path, err);
   }
-  auto &slot = slots_[voice];
-  slot.body_path = path;
-  if (slot.label.empty()) {
-    SetLabel(voice);
+  std::string head_path;
+  if (wave_id < cardlink::audio::kSampleVoices) {
+    auto &slot = slots_[static_cast<size_t>(wave_id)];
+    slot.body_path = path;
+    if (slot.label.empty()) {
+      SetLabel(wave_id);
+    }
+    head_path = slot.head_path;
   }
   std::vector<int16_t> body;
-  if (!slot.head_path.empty() &&
-      cardlink::audio::BodyWithHeadOverlap(slot.head_path, path, body, err)) {
-    if (!mixer_.SetBody(voice, body.data(), body.size(), err)) {
-      slot.body_ready = false;
+  if (!head_path.empty() &&
+      cardlink::audio::BodyWithHeadOverlap(head_path, path, body, err)) {
+    if (!mixer_.SetBody(wave_id, body.data(), body.size(), err)) {
+      if (wave_id < cardlink::audio::kSampleVoices) {
+        slots_[static_cast<size_t>(wave_id)].body_ready = false;
+      }
       return false;
     }
     {
       std::error_code ec;
-      const auto bytes = fs::file_size(slot.head_path, ec);
-      if (!ec && bytes >= 4u && (bytes % 4u) == 0u) {
-        mixer_.SetAttackLen(voice, static_cast<unsigned>(bytes / 4u));
+      const auto bytes = fs::file_size(head_path, ec);
+      if (!ec && bytes >= 2u) {
+        const bool i32 = (bytes % 4u) == 0u &&
+                         (bytes > cardlink::audio::kAttackSamples * 2u ||
+                          head_path.find(".i32") != std::string::npos);
+        const unsigned nsamp = i32 ? static_cast<unsigned>(bytes / 4u)
+                                   : static_cast<unsigned>(bytes / 2u);
+        mixer_.SetAttackLen(
+            wave_id, std::min(nsamp, cardlink::audio::kAttackSamples));
       }
     }
-    slot.body_ready = true;
+    if (wave_id < cardlink::audio::kSampleVoices) {
+      slots_[static_cast<size_t>(wave_id)].body_ready = true;
+    }
     return true;
   }
-  if (!mixer_.LoadBodyFile(voice, path, err)) {
-    slot.body_ready = false;
+  if (!mixer_.LoadBodyFile(wave_id, path, err)) {
+    if (wave_id < cardlink::audio::kSampleVoices) {
+      slots_[static_cast<size_t>(wave_id)].body_ready = false;
+    }
     return false;
   }
-  slot.body_ready = true;
+  if (wave_id < cardlink::audio::kSampleVoices) {
+    slots_[static_cast<size_t>(wave_id)].body_ready = true;
+  }
   return true;
 }
 
-bool Client::SetRootHz(uint8_t voice, double hz, std::string &err)
+bool Client::SetRootHz(uint16_t wave_id, double hz, std::string &err)
 {
-  if (voice >= cardlink::audio::kSampleVoices || !(hz > 0.0)) {
+  if (wave_id >= cardlink::audio::kAttackWaves || !(hz > 0.0)) {
     err = "err: range";
     return false;
   }
-  mixer_.SetBodyRootHz(voice, hz);
+  mixer_.SetBodyRootHz(wave_id, hz);
   char cmd[64];
   std::snprintf(cmd, sizeof cmd, "c:ar %u %.6g\r",
-                static_cast<unsigned>(voice), hz);
+                static_cast<unsigned>(wave_id), hz);
   return SendCdcLine(cmd, err);
 }
 
@@ -407,32 +477,32 @@ int Client::LoadFolder(const std::string &dir, std::string &err)
   const fs::path root(dir);
   int loaded = 0;
   bool any_named = false;
-  for (unsigned i = 0; i < cardlink::audio::kSampleVoices; ++i) {
+  for (unsigned i = 0; i < cardlink::audio::kAttackWaves; ++i) {
     std::string head;
     std::string body;
     if (!FindNamedPair(root, static_cast<int>(i), head, body)) {
       continue;
     }
     any_named = true;
-    if (!LoadHead(static_cast<uint8_t>(i), head, err) ||
-        !LoadBody(static_cast<uint8_t>(i), body, err)) {
+    if (!LoadHead(static_cast<uint16_t>(i), head, err) ||
+        !LoadBody(static_cast<uint16_t>(i), body, err)) {
       return loaded;
     }
     ++loaded;
   }
   if (!any_named) {
-    std::array<std::string, cardlink::audio::kSampleVoices> heads{};
-    std::array<std::string, cardlink::audio::kSampleVoices> bodies{};
+    std::array<std::string, cardlink::audio::kAttackWaves> heads{};
+    std::array<std::string, cardlink::audio::kAttackWaves> bodies{};
     if (!FindStemPairs(root, heads, bodies)) {
-      err = "err: folder has no wN_*_head.i32 / *_body.i16 pairs";
+      err = "err: folder has no wN_*_head.i32/.i16 / *_body.i16 pairs";
       return 0;
     }
-    for (unsigned i = 0; i < cardlink::audio::kSampleVoices; ++i) {
+    for (unsigned i = 0; i < cardlink::audio::kAttackWaves; ++i) {
       if (heads[i].empty()) {
         continue;
       }
-      if (!LoadHead(static_cast<uint8_t>(i), heads[i], err) ||
-          !LoadBody(static_cast<uint8_t>(i), bodies[i], err)) {
+      if (!LoadHead(static_cast<uint16_t>(i), heads[i], err) ||
+          !LoadBody(static_cast<uint16_t>(i), bodies[i], err)) {
         return loaded;
       }
       ++loaded;
@@ -451,32 +521,44 @@ int Client::LoadFolder(const std::string &dir, std::string &err)
       unsigned id = 0;
       double hz = 0.0;
       if (std::sscanf(line.c_str(), "%u %lf", &id, &hz) == 2 &&
-          id < cardlink::audio::kSampleVoices && hz > 0.0) {
+          id < cardlink::audio::kAttackWaves && hz > 0.0) {
         std::string ignore;
-        (void)SetRootHz(static_cast<uint8_t>(id), hz, ignore);
+        (void)SetRootHz(static_cast<uint16_t>(id), hz, ignore);
       }
     }
   }
   return loaded;
 }
 
-void Client::NoteOn(uint8_t voice, double hz)
+void Client::NoteOn(uint8_t voice, double hz, uint16_t wave_id)
 {
   if (voice >= cardlink::audio::kSampleVoices) {
     return;
   }
-  /* Slot is the UAC/nX voice. Body may come from another loaded wave so
-   * MIDI polyphony works when only n0 has a sample. */
-  uint16_t wave = voice;
-  if (!slots_[voice].body_ready) {
-    for (uint8_t i = 0; i < cardlink::audio::kSampleVoices; ++i) {
-      if (slots_[i].body_ready) {
+  uint16_t wave = wave_id;
+  if (wave >= cardlink::audio::kAttackWaves) {
+    wave = voice;
+    if (!slots_[voice].body_ready) {
+      for (uint8_t i = 0; i < cardlink::audio::kSampleVoices; ++i) {
+        if (slots_[i].body_ready) {
+          wave = i;
+          break;
+        }
+      }
+    }
+  } else if (!mixer_.HasBody(wave)) {
+    for (uint16_t i = 0; i < cardlink::audio::kAttackWaves; ++i) {
+      if (mixer_.HasBody(i)) {
         wave = i;
         break;
       }
     }
   }
   mixer_.NoteOn(voice, wave, hz);
+  char aw[32];
+  std::snprintf(aw, sizeof aw, "aw %u %u", static_cast<unsigned>(voice),
+                static_cast<unsigned>(wave));
+  SendConsole(aw);
   char cmd[48];
   std::snprintf(cmd, sizeof cmd, "n%u %.6g", static_cast<unsigned>(voice), hz);
   SendConsole(cmd);

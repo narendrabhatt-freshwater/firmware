@@ -50,6 +50,8 @@ static uint32_t note_inc_tgt[NOTE_BANK_VOICES];
 /* Body consume starts at fade0. skip = source samples already past. */
 static uint8_t note_body_locked[NOTE_BANK_VOICES];
 static uint32_t note_body_skip[NOTE_BANK_VOICES];
+static uint16_t note_wave_id[NOTE_BANK_VOICES];
+static uint16_t note_play_wid[NOTE_BANK_VOICES];
 static NoteBank_Shape_t note_shape = NOTE_SHAPE_SINE;
 static double note_shape_param = 0.5;
 
@@ -102,7 +104,7 @@ static uint32_t NoteBank_HzToInc(uint16_t wave_id, double freq_hz)
 
 static int32_t NoteBank_InterpAttack(uint16_t wid, uint64_t phase)
 {
-  const int32_t *tab = AttackBank_Table(wid);
+  const int16_t *tab = AttackBank_Table(wid);
   uint32_t len = AttackBank_GetLen(wid);
   uint32_t phase_q16;
 
@@ -112,13 +114,13 @@ static int32_t NoteBank_InterpAttack(uint16_t wid, uint64_t phase)
   }
   /* Attack heads are ≤ ATTACK_BANK_LEN; Q16.16 index fits in 32 bits. */
   phase_q16 = (phase > 0xffffffffull) ? 0xffffffffu : (uint32_t)phase;
-  return Interp8_Q31(tab, len, phase_q16, 0u);
+  return Interp8_S16(tab, len, phase_q16, 0u);
 }
 
 static int NoteBank_InterpAttackBody(uint8_t note, uint16_t wid,
                                     uint64_t phase, int32_t *out)
 {
-  const int32_t *attack = AttackBank_Table(wid);
+  const int16_t *attack = AttackBank_Table(wid);
   uint32_t alen = AttackBank_GetLen(wid);
   int32_t source_i0 = (int32_t)(phase >> 16);
   int32_t body_i0 = (int32_t)(note_body_frac[note] >> 16);
@@ -138,7 +140,7 @@ static int NoteBank_InterpAttackBody(uint8_t note, uint16_t wid,
     }
     if ((uint32_t)source < alen)
     {
-      taps[t] = attack[source];
+      taps[t] = ((int32_t)attack[source]) << 16;
     }
     else
     {
@@ -264,6 +266,7 @@ static void NoteBank_StartVoice(uint8_t note, uint32_t inc)
   NoteBank_ClearPlayhead(note);
   note_inc[note] = inc;
   note_inc_tgt[note] = inc;
+  note_play_wid[note] = note_wave_id[note];
   NoteFilter_Reset(note);
   NoteEnv_NoteOn(note, (float)note_freq_hz[note]);
   note_active[note] = 1u;
@@ -340,7 +343,7 @@ static void NoteBank_SlewInc(uint8_t note)
  */
 static int32_t NoteBank_Sample(uint8_t note)
 {
-  uint16_t wid = (uint16_t)note;
+  uint16_t wid = note_play_wid[note];
   uint64_t phase = note_phase[note];
   int32_t y;
   uint32_t alen = AttackBank_GetLen(wid);
@@ -478,6 +481,8 @@ void NoteBank_Init(void)
     note_inc_tgt[i] = PHASE_ONE;
     note_body_locked[i] = 0u;
     note_body_skip[i] = 0u;
+    note_wave_id[i] = (uint16_t)i;
+    note_play_wid[i] = (uint16_t)i;
     note_cmd[i] = NOTE_CMD_NONE;
     note_cmd_inc[i] = PHASE_ONE;
     note_cmd_hz[i] = 0.0f;
@@ -543,7 +548,7 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
     scale = 1.0;
   }
 
-  inc = NoteBank_HzToInc((uint16_t)note, freq_hz);
+  inc = NoteBank_HzToInc(note_wave_id[note], freq_hz);
   if (inc < PHASE_INC_MIN)
   {
     inc = PHASE_INC_MIN;
@@ -583,11 +588,11 @@ double NoteBank_GetScale(uint8_t note)
 
 int NoteBank_SetWaveId(uint8_t note, uint16_t wave_id)
 {
-  /* Slot is the voice. Sharing one head across voices is not allowed. */
-  if (note >= NOTE_BANK_VOICES || wave_id != (uint16_t)note)
+  if (note >= NOTE_BANK_VOICES || wave_id >= ATTACK_BANK_COUNT)
   {
     return -1;
   }
+  note_wave_id[note] = wave_id;
   return 0;
 }
 
@@ -597,7 +602,7 @@ uint16_t NoteBank_GetWaveId(uint8_t note)
   {
     return 0u;
   }
-  return (uint16_t)note;
+  return note_wave_id[note];
 }
 
 int NoteBank_SetShape(NoteBank_Shape_t shape, double param)

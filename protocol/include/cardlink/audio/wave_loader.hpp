@@ -16,7 +16,7 @@ namespace cardlink {
 namespace audio {
 
 struct LoadedWave {
-  std::vector<int32_t> attack; /**< Q31 @ 48 kHz, length ≤ kAttackSamples */
+  std::vector<int16_t> attack; /**< Q15 @ 48 kHz, length ≤ kAttackSamples */
   std::vector<int16_t> body;   /**< from (len-overlap), 48 kHz int16 */
   uint32_t src_rate_hz = kSampleRateHz;
 };

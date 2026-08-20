@@ -211,7 +211,7 @@ without re-testing the full slider range on Windows.
 **`n0`** applies **bypass ON** and **`g 1 0`** (0 dB CH1 DAC trim) at
 boot and on bare `n0`. **`n0`…`n7`** are 8 independent phase-accumulator
 voices summed onto CH1. Optional **`[scale]`** (0.0..1.0, default **0.125**)
-sets that note’s amplitude. When a voice has no loaded attack head,
+sets that note’s amplitude. When the assigned wave has no loaded attack head,
 **`s`** (sine, default), **`p <0.1..0.9>`** (pulse duty), and
 **`t <0.1..0.9>`** (triangle asymmetry; 0.5 = symmetric) select its fallback
 oscillator. These shape commands do not affect SAMPLE playback from a loaded
@@ -237,8 +237,8 @@ Type `h` / `help` / `?` on the card for the live list.
 | `fk0`…`fk7` `[k]` / `fk` `[k]`            | Filter pitch-track **k** (0..10, default **0**): `fc = fbase × (note/C4)^k`. Same C4 as envelope `slope±k` / `ek`.                                                                                                                 |
 | `en0`…`en7` `<end slope[±k] …>` / `en`    | Multi-segment amplitude envelope per voice (bare = query; `en0 0` / `en 0` = clear)                                                                                                                                                |
 | `ek0`…`ek7` `<k>` / `ek <k>`              | Envelope pitch-track **k** (−10..10, rate ∝ (f/C4)^k)                                                                                                                                                                              |
-| `al <v> <nbytes>`                         | CDC upload: Q31 attack head for voice `<v>` (4…16384 bytes; join at committed length)                                                                                                                                              |
-| `ar <v> <Hz>` / `a`                       | Root pitch of voice `<v>` / query loaded heads (`*` = in RAM)                                                                                                                                                                      |
+| `al <id> <nbytes>`                        | CDC upload: int16 attack head for wave `<id>` 0…255 (2…1024 bytes; join at committed length)                                                                                                                                        |
+| `ar <id> <Hz>` / `aw <v> <id>` / `a`      | Root pitch of head `<id>` / assign head to voice 0…7 / loaded count + hex mask                                                                                                                                                      |
 | `vq`                                      | Active mask + hungriest voice + free-slot codes 0–14; 15 means empty                                                                                                                                                               |
 | `g <ch> <dB>`                             | DAC atten 0..127 dB on ch 1..4                                                                                                                                                                                                     |
 | `cpu` / `cpu N`                           | N voices + LED_Y DMA-callback fill load probe (default 8)                                                                                                                                                                          |

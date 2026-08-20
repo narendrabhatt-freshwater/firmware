@@ -34,14 +34,14 @@ extern "C"
   /**
    * @brief Note on/off. freq_hz <= 0 releases/stops.
    * freq_hz > 0 is always a note-on (restarts attack + body). Applied on
-   * the next I2S sample. Voice N always uses attack slot N.
+   * the next I2S sample. Voice uses the assigned wave_id (`aw`).
    */
   void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale);
 
   double NoteBank_GetFreq(uint8_t note);
   double NoteBank_GetScale(uint8_t note);
 
-  /** Identity only: wave_id must equal note. */
+  /** Assign AXI head 0..255 to voice 0..7. Applied on the next note-on. */
   int NoteBank_SetWaveId(uint8_t note, uint16_t wave_id);
   uint16_t NoteBank_GetWaveId(uint8_t note);
 

@@ -508,7 +508,7 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
         break;
       case cardlink::midi::BankEventKind::On:
       case cardlink::midi::BankEventKind::Retrig:
-        samples.NoteOn(ev.slot, ev.freq_hz);
+        samples.NoteOn(ev.slot, ev.freq_hz, ev.midi_key);
         break;
       case cardlink::midi::BankEventKind::Steal:
         /* The following On reuses this slot. Starting a session for the

@@ -41,7 +41,7 @@ flowchart TB
 
   RS485 -->|"c: nX en f vq"| ChCon
   RS485 -->|"e: u echo"| FxCon
-  CDC -->|"al nbytes Q31"| ChAtk
+  CDC -->|"al nbytes int16"| ChAtk
   CDC --> ChCon
   CDC --> FxCon
   UacOut -->|"ch0 tag ch1..9 body"| ChRing
@@ -56,7 +56,7 @@ flowchart TB
 ## 2. Channel — SAMPLE voice (one of n0..n7)
 
 Attack and body are storage. The head plays to its committed length
-(≤ 4096). Body is a FIFO from the UAC ring, consumed with Q16.16
+(≤ 512). Body is a FIFO from the UAC ring, consumed with Q16.16
 interpolation. `nX > 0` is always a note-on. A new UAC session
 (`SOF` + session 0–6) starts a new body FIFO; a repeated frame with
 the same session does not.
@@ -69,7 +69,7 @@ FIFO samples.
 flowchart TB
   subgraph store [Storage]
     File["48 kHz stream"]
-    Atk["Attack AXI: file 0..len-1 Q31"]
+    Atk["Attack AXI: 256 heads x 512 int16"]
     Body["Host body: file (len-32)..end int16"]
     File --> Atk
     File --> Body

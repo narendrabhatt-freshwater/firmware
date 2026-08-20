@@ -4,8 +4,8 @@
  *
  * Owns wave split, CDC attack upload, UAC body mixer, and note commands.
  * The UI supplies a console sink (RS485 or CDC ASCII) and calls Render()
- * from the UAC callback. Attack heads stay per slot. MIDI NoteOn may
- * stream another slot's body so one loaded sample is 8-voice polyphonic.
+ * from the UAC callback. Attack heads are wave_id 0..255; eight voices
+ * assign any loaded head (`aw`). MIDI NoteOn maps key → wave_id.
  */
 
 #ifndef CARDLINK_SAMPLE_CLIENT_HPP
@@ -52,16 +52,17 @@ public:
   /** UAC callback — 10ch int16 interleaved. No mutex. */
   void Render(int16_t *interleaved, unsigned nframes);
 
-  bool LoadWave(uint8_t voice, const std::string &path, std::string &err);
-  bool LoadHead(uint8_t voice, const std::string &path, std::string &err);
-  bool LoadBody(uint8_t voice, const std::string &path, std::string &err);
-  /** wN_*_head.i32 + wN_*_body.i16, or matching stems. Optional roots.txt. */
+  bool LoadWave(uint16_t wave_id, const std::string &path, std::string &err);
+  bool LoadHead(uint16_t wave_id, const std::string &path, std::string &err);
+  bool LoadBody(uint16_t wave_id, const std::string &path, std::string &err);
+  /** wN_*_head.i32/.i16 + wN_*_body.i16, or matching stems. Optional roots.txt. */
   int LoadFolder(const std::string &dir, std::string &err);
 
-  bool SetRootHz(uint8_t voice, double hz, std::string &err);
+  bool SetRootHz(uint16_t wave_id, double hz, std::string &err);
 
-  /** Mixer + console `nX`. Does not wait for USB prefill. */
-  void NoteOn(uint8_t voice, double hz);
+  /** Mixer + `aw` + console `nX`. Does not wait for USB prefill.
+   *  wave_id 0xFFFF: use voice, or the first loaded body if that slot is empty. */
+  void NoteOn(uint8_t voice, double hz, uint16_t wave_id = 0xFFFFu);
   void NoteOff(uint8_t voice);
   void AllNotesOff();
   void Silence(uint8_t voice);
@@ -69,13 +70,13 @@ public:
   const Slot &GetSlot(uint8_t voice) const;
 
 private:
-  bool UploadAttack(uint8_t voice, const int32_t *q31, size_t nsamp,
+  bool UploadAttack(uint16_t wave_id, const int16_t *q15, size_t nsamp,
                     std::string &err);
-  bool UploadAttackFile(uint8_t voice, const std::string &path,
+  bool UploadAttackFile(uint16_t wave_id, const std::string &path,
                         std::string &err);
   bool SendCdcLine(const std::string &line, std::string &err);
   void SendConsole(const std::string &cmd);
-  void SetLabel(uint8_t voice);
+  void SetLabel(uint16_t wave_id);
 
   ConsoleFn console_;
   std::string cdc_path_;

@@ -27,8 +27,9 @@ namespace cardlink {
 namespace audio {
 
 constexpr unsigned kSampleVoices = 8;
+constexpr unsigned kAttackWaves = 256;
 constexpr unsigned kSampleRateHz = 48000;
-constexpr unsigned kAttackSamples = 4096;
+constexpr unsigned kAttackSamples = 512;
 constexpr unsigned kCrossfadeSamples = 32;
 constexpr unsigned kBodyOrigin = kAttackSamples - kCrossfadeSamples;
 constexpr unsigned kRingSamples = 4096;
@@ -56,6 +57,8 @@ public:
    *  Rejected while a voice is playing this id (callback reads the table). */
   bool SetBody(uint16_t wave_id, const int16_t *data, size_t nsamp,
                std::string &err);
+
+  bool HasBody(uint16_t wave_id) const;
 
   /** Committed AXI head length. 0 = consume body from note-on. */
   void SetAttackLen(uint16_t wave_id, unsigned nsamp);

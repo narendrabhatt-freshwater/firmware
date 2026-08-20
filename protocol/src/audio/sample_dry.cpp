@@ -86,6 +86,11 @@ bool SampleDryMixer::SetBody(uint16_t wave_id, const int16_t *data, size_t nsamp
   return true;
 }
 
+bool SampleDryMixer::HasBody(uint16_t wave_id) const
+{
+  return wave_id < bodies_.size() && !bodies_[wave_id].empty();
+}
+
 void SampleDryMixer::SetAttackLen(uint16_t wave_id, unsigned nsamp)
 {
   if (wave_id >= attack_len_.size()) {

@@ -81,7 +81,7 @@ AttackUploadResult Fail(const std::string &msg)
   return r;
 }
 
-constexpr size_t kAttackBytes = cardlink::audio::kAttackSamples * 4u;
+constexpr size_t kAttackBytes = cardlink::audio::kAttackSamples * 2u;
 
 } // namespace
 
@@ -99,12 +99,12 @@ AttackUploadResult AttackUploader::Upload(
   if (!port_.IsOpen()) {
     return Fail("err: CDC session not open");
   }
-  if (wave_id >= 8u) {
-    return Fail("err: wave_id 0..7");
+  if (wave_id >= cardlink::audio::kAttackWaves) {
+    return Fail("err: wave_id 0..255");
   }
-  if (data == nullptr || nbytes < 4u || nbytes > kAttackBytes ||
-      (nbytes & 3u) != 0u) {
-    return Fail("err: attack head must be 1..kAttackSamples int32 LE");
+  if (data == nullptr || nbytes < 2u || nbytes > kAttackBytes ||
+      (nbytes & 1u) != 0u) {
+    return Fail("err: attack head must be 1..kAttackSamples int16 LE");
   }
 
   DrainRx(port_);
@@ -176,8 +176,24 @@ AttackUploadResult AttackUploader::UploadFile(
   }
   std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)),
                             std::istreambuf_iterator<char>());
-  if (data.empty() || (data.size() & 3u) != 0u) {
-    return Fail("err: head must be int32 LE");
+  if (data.empty() || (data.size() & 1u) != 0u) {
+    return Fail("err: head must be even int16 or int32 LE");
+  }
+  const bool i32 = (data.size() & 3u) == 0u &&
+                   (data.size() > kAttackBytes ||
+                    file_path.find(".i32") != std::string::npos);
+  if (i32) {
+    const size_t nsamp = std::min(data.size() / 4u,
+                                  static_cast<size_t>(kAttackBytes / 2u));
+    std::vector<uint8_t> i16(nsamp * 2u);
+    for (size_t i = 0; i < nsamp; ++i) {
+      int32_t q = 0;
+      std::memcpy(&q, data.data() + i * 4u, 4);
+      const int16_t s = static_cast<int16_t>(q >> 16);
+      i16[i * 2u] = static_cast<uint8_t>(s & 0xff);
+      i16[i * 2u + 1u] = static_cast<uint8_t>((s >> 8) & 0xff);
+    }
+    return Upload(wave_id, i16.data(), i16.size(), on_progress);
   }
   if (data.size() > kAttackBytes) {
     return Fail("err: head longer than kAttackSamples");

@@ -5,6 +5,7 @@
 #include "widgets.hpp"
 
 #include "cardlink/sample/client.hpp"
+#include "cardlink/audio/sample_dry.hpp"
 
 #include "imgui.h"
 
@@ -105,7 +106,7 @@ bool DirHasRawBank(const fs::path &dir)
         continue;
       }
       const auto name = ent.path().filename().string();
-      if (name.rfind("w0_", 0) == 0 && name.size() >= 4 &&
+      if (name.size() >= 6 && name[0] == 'w' &&
           name.compare(name.size() - 4, 4, ".raw") == 0) {
         return true;
       }
@@ -179,7 +180,7 @@ void SetProgress(const ProgressFn &fn, float p, const char *status)
   }
 }
 
-/** Load w0_*.raw … w7_*.raw. Holds CDC open for the whole bank. */
+/** Load w0_*.raw … w255_*.raw. Holds CDC open for the whole bank. */
 int LoadRawBank(App &app, const std::string &folder, std::string &result,
                 const ProgressFn &on_progress)
 {
@@ -197,16 +198,15 @@ int LoadRawBank(App &app, const std::string &folder, std::string &result,
   (void)end_cdc;
 
   const fs::path root(folder);
+  constexpr int kWaves = static_cast<int>(cardlink::audio::kAttackWaves);
   int loaded = 0;
-  for (int v = 0; v < kVoices; ++v) {
+  for (int v = 0; v < kWaves; ++v) {
     char st[16];
     std::snprintf(st, sizeof st, "w%d", v);
     SetProgress(on_progress, (static_cast<float>(v) + 0.05f) /
-                                 static_cast<float>(kVoices),
+                                 static_cast<float>(kWaves),
                 st);
 
-    char prefix[16];
-    std::snprintf(prefix, sizeof prefix, "w%d_", v);
     std::string path;
     try {
       for (const auto &ent : fs::directory_iterator(root)) {
@@ -214,14 +214,25 @@ int LoadRawBank(App &app, const std::string &folder, std::string &result,
           continue;
         }
         const auto name = ent.path().filename().string();
-        if (name.rfind(prefix, 0) != 0) {
+        int wid = -1;
+        if (name.size() < 6 || name[0] != 'w' ||
+            name.compare(name.size() - 4, 4, ".raw") != 0) {
           continue;
         }
-        if (name.size() >= 4 &&
-            name.compare(name.size() - 4, 4, ".raw") == 0) {
-          path = ent.path().string();
-          break;
+        size_t i = 1;
+        if (i >= name.size() || name[i] < '0' || name[i] > '9') {
+          continue;
         }
+        wid = 0;
+        while (i < name.size() && name[i] >= '0' && name[i] <= '9') {
+          wid = wid * 10 + (name[i] - '0');
+          ++i;
+        }
+        if (i >= name.size() || name[i] != '_' || wid != v) {
+          continue;
+        }
+        path = ent.path().string();
+        break;
       }
     } catch (...) {
       path.clear();
@@ -230,7 +241,7 @@ int LoadRawBank(App &app, const std::string &folder, std::string &result,
       continue;
     }
     std::string err;
-    if (!app.samples.LoadWave(static_cast<uint8_t>(v), path, err)) {
+    if (!app.samples.LoadWave(static_cast<uint16_t>(v), path, err)) {
       result = err;
       app.log.Push(err);
       return loaded;
@@ -244,22 +255,22 @@ int LoadRawBank(App &app, const std::string &folder, std::string &result,
       SetProgress(on_progress, 0.92f, "roots");
       std::string roots_err;
       (void)app.samples.Mixer().LoadRootsFile(roots.string(), roots_err);
-      for (int v = 0; v < loaded; ++v) {
+      for (int v = 0; v < kWaves; ++v) {
         const double hz =
             app.samples.Mixer().BodyRootHz(static_cast<uint16_t>(v));
         if (hz > 0.0) {
           std::string ignore;
-          (void)app.samples.SetRootHz(static_cast<uint8_t>(v), hz, ignore);
+          (void)app.samples.SetRootHz(static_cast<uint16_t>(v), hz, ignore);
         }
       }
     }
     char msg[72];
     std::snprintf(msg, sizeof msg, "ok: loaded %d/%d raw bank", loaded,
-                  kVoices);
+                  kWaves);
     result = msg;
     app.log.Push(msg);
   } else {
-    result = "err: raw bank not found (w0_*.raw … w7_*.raw)";
+    result = "err: raw bank not found (w0_*.raw … w255_*.raw)";
     app.log.Push(result);
   }
   SetProgress(on_progress, 1.f, "done");
@@ -577,7 +588,7 @@ void DrawSamplePage(App &app)
   {
     MonoText("LIBRARY", kPalette.text_dim, fs);
     ImGui::SameLine(0.f, S(12.f));
-    MonoText("one wav/raw per voice · SDK splits attack + body", kPalette.muted,
+    MonoText("wav/raw per wave_id 0..255 · SDK splits attack + body", kPalette.muted,
              fs);
 
     ImGui::Spacing();
@@ -605,7 +616,7 @@ void DrawSamplePage(App &app)
       } else if (load_busy) {
         ImGui::SetTooltip("Uploading attack heads over CDC");
       } else {
-        ImGui::SetTooltip("Load w0_*.raw \u2026 w7_*.raw from waves/");
+        ImGui::SetTooltip("Load w0_*.raw \u2026 w255_*.raw from waves/");
       }
     }
     if (load_busy) {
@@ -693,7 +704,7 @@ void DrawSamplePage(App &app)
   MonoText("Prefill UAC then RS485 n0..n7  ·  vq at adapter RTT until idle  ·  env / filter on card.",
            kPalette.text_dim, fs);
   ImGui::Spacing();
-  MonoText("Pass one wav/raw per voice; SDK splits attack (CDC) + body (UAC).",
+  MonoText("Pass wav/raw per wave_id 0..255; SDK splits attack (CDC) + body (UAC).",
            kPalette.text_dim, fs);
   fw::ui::EndSection();
 

@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    attack_bank.c
- * @brief   AXI int32 attack heads; rate-scaled playheads (n0 pitch).
+ * @brief   AXI int16 attack heads; rate-scaled playheads (n0 pitch).
  ******************************************************************************
  */
 
@@ -22,13 +22,18 @@ typedef struct
   uint8_t playing;
 } AttackVoice_t;
 
-static int32_t s_data[ATTACK_BANK_COUNT][ATTACK_BANK_LEN]
+static int16_t s_data[ATTACK_BANK_COUNT][ATTACK_BANK_LEN]
     __attribute__((section(".attack_bank"), aligned(4)));
 
 static uint8_t s_loaded[ATTACK_BANK_COUNT];
 static uint32_t s_len[ATTACK_BANK_COUNT];
 static float s_root_hz[ATTACK_BANK_COUNT];
 static AttackVoice_t s_voices[SAMPLE_VOICES];
+
+static int32_t AttackBank_S16ToQ31(int16_t s)
+{
+  return ((int32_t)s) << 16;
+}
 
 void AttackBank_Init(void)
 {
@@ -52,7 +57,7 @@ void AttackBank_Init(void)
 int AttackBank_Load(uint16_t wave_id, const uint8_t *data, uint32_t nbytes)
 {
   if (wave_id >= ATTACK_BANK_COUNT || data == NULL ||
-      nbytes < 4u || nbytes > ATTACK_BANK_BYTES || (nbytes & 3u) != 0u)
+      nbytes < 2u || nbytes > ATTACK_BANK_BYTES || (nbytes & 1u) != 0u)
   {
     return -1;
   }
@@ -62,12 +67,12 @@ int AttackBank_Load(uint16_t wave_id, const uint8_t *data, uint32_t nbytes)
     memset((uint8_t *)s_data[wave_id] + nbytes, 0,
            ATTACK_BANK_BYTES - nbytes);
   }
-  s_len[wave_id] = nbytes / 4u;
+  s_len[wave_id] = nbytes / 2u;
   s_loaded[wave_id] = 1u;
   return 0;
 }
 
-int32_t *AttackBank_WritePtr(uint16_t wave_id)
+int16_t *AttackBank_WritePtr(uint16_t wave_id)
 {
   if (wave_id >= ATTACK_BANK_COUNT)
   {
@@ -76,7 +81,7 @@ int32_t *AttackBank_WritePtr(uint16_t wave_id)
   return s_data[wave_id];
 }
 
-const int32_t *AttackBank_Table(uint16_t wave_id)
+const int16_t *AttackBank_Table(uint16_t wave_id)
 {
   if (wave_id >= ATTACK_BANK_COUNT)
   {
@@ -113,6 +118,37 @@ uint8_t AttackBank_IsLoaded(uint16_t wave_id)
     return 0u;
   }
   return s_loaded[wave_id];
+}
+
+uint16_t AttackBank_LoadedCount(void)
+{
+  uint16_t i;
+  uint16_t n = 0u;
+  for (i = 0u; i < ATTACK_BANK_COUNT; i++)
+  {
+    if (s_loaded[i] != 0u)
+    {
+      n++;
+    }
+  }
+  return n;
+}
+
+void AttackBank_LoadedMask(uint8_t *out)
+{
+  uint16_t i;
+  if (out == NULL)
+  {
+    return;
+  }
+  memset(out, 0, 32);
+  for (i = 0u; i < ATTACK_BANK_COUNT; i++)
+  {
+    if (s_loaded[i] != 0u)
+    {
+      out[i >> 3] = (uint8_t)(out[i >> 3] | (uint8_t)(1u << (i & 7u)));
+    }
+  }
 }
 
 void AttackBank_SetRootHz(uint16_t wave_id, float root_hz)
@@ -193,6 +229,7 @@ int32_t AttackBank_NextSample(uint8_t voice)
   float ph;
   uint32_t i0;
   uint32_t i1;
+  uint32_t n;
   float frac;
   double a;
   double b;
@@ -209,26 +246,31 @@ int32_t AttackBank_NextSample(uint8_t voice)
   }
 
   wid = v->wave_id;
+  n = s_len[wid];
+  if (n == 0u)
+  {
+    n = ATTACK_BANK_LEN;
+  }
   ph = v->phase;
-  if (ph >= (float)ATTACK_BANK_LEN)
+  if (ph >= (float)n)
   {
     v->playing = 0u;
     v->phase = 0.0f;
-    return s_data[wid][ATTACK_BANK_LEN - 1u];
+    return AttackBank_S16ToQ31(s_data[wid][n - 1u]);
   }
 
   i0 = (uint32_t)ph;
-  if (i0 >= ATTACK_BANK_LEN)
+  if (i0 >= n)
   {
     v->playing = 0u;
-    return s_data[wid][ATTACK_BANK_LEN - 1u];
+    return AttackBank_S16ToQ31(s_data[wid][n - 1u]);
   }
   i1 = i0 + 1u;
   frac = ph - (float)i0;
-  a = (double)s_data[wid][i0];
-  if (i1 < ATTACK_BANK_LEN)
+  a = (double)AttackBank_S16ToQ31(s_data[wid][i0]);
+  if (i1 < n)
   {
-    b = (double)s_data[wid][i1];
+    b = (double)AttackBank_S16ToQ31(s_data[wid][i1]);
     y = a + (b - a) * (double)frac;
   }
   else
@@ -238,7 +280,7 @@ int32_t AttackBank_NextSample(uint8_t voice)
 
   ph += v->phase_inc;
   v->phase = ph;
-  if (ph >= (float)ATTACK_BANK_LEN)
+  if (ph >= (float)n)
   {
     v->playing = 0u;
   }
@@ -253,5 +295,5 @@ int32_t AttackBank_SampleAt(uint16_t wave_id, uint32_t index)
   {
     return 0;
   }
-  return s_data[wave_id][index];
+  return AttackBank_S16ToQ31(s_data[wave_id][index]);
 }

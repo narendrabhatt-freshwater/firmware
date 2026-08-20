@@ -1,6 +1,6 @@
 /**
  * @file attack_upload.hpp
- * @brief USB CDC binary attack-head upload (`al` session, ≤ kAttackSamples int32).
+ * @brief USB CDC binary attack-head upload (`al` session, ≤ kAttackSamples int16).
  */
 
 #ifndef CARDLINK_USB_ATTACK_UPLOAD_HPP

@@ -120,31 +120,31 @@ Success reply for sets: `ok`.
 Fractional Hz is intentional (e.g. `261.625565` for C4). Do not round
 to integers if you care about equal temperament.
 
-### Sample bank (per-voice attack heads)
+### Sample bank (256 AXI attack heads)
 
-Eight voices (`0`…`7`). Voice **N** owns AXI attack head **N**
-(up to 4096 int32 / 16384 bytes) and its UAC body FIFO. Heads are not
-shared. Upload is USB CDC only (§4). Contents survive mode-free
-operation while powered and are lost on reset.
+Eight voices (`n0`…`n7`) assign any stored head (`aw <voice> <id>`).
+The bank holds **256** int16 heads of up to **512** samples (~10.7 ms @
+48 kHz). Upload is USB CDC only (§4). Contents survive while powered
+and are lost on reset.
 
 | Command             | Meaning                                                             |
 | ------------------- | ------------------------------------------------------------------- |
-| `al <v> <nbytes>`   | **USB CDC only.** Load voice `<v>`'s attack head (4…16384 bytes)    |
-| `ar <v> <Hz>`       | Set voice `<v>`'s root pitch (Hz > 0)                               |
-| `aw <v> <v>`        | Identity only; `<voice>` must equal `<id>` or `err:range`           |
-| `a`                 | Loaded heads; `*` marks a voice with an attack in RAM               |
+| `al <id> <nbytes>`  | **USB CDC only.** Load head `<id>` 0…255 (2…1024 bytes int16 LE)    |
+| `ar <id> <Hz>`      | Set head `<id>`'s root pitch (Hz > 0)                               |
+| `aw <v> <id>`       | Assign head `<id>` to voice `<v>` 0…7                               |
+| `a`                 | Loaded count + 256-bit hex mask (bit 0 = wave 0)                    |
 | `vq`                | Active mask + hungriest voice + free-slot code per ring               |
 
-Replies: `ok: ar <v> <Hz>`, `ok: aw <v> <v>`, `ok: a 0* 1 2* …`.
+Replies: `ok: ar <id> <Hz>`, `ok: aw <v> <id>`, `ok: a <n> <64 hex>`.
 USB CDC returns `vq` as `ok:vq <mask> <best> s0 … s7`. RS485 returns
 the same fields in a 12-byte binary frame: `a5 5a 43 01`, mask, best,
 four packed slot bytes (two 4-bit counts each), CRC-8/0x07, then `0a`.
 Best is 0–7 or 255. Slot codes 0–14 count complete 256-sample slots;
 15 means the ring is empty.
 
-Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 2-tap
-linear. The attack plays to its committed length (not a hold-pad to
-4096). Body starts at `len − 32` with the same source index and
+Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 8-tap
+sinc. The attack plays to its committed length (not a hold-pad to
+512). Body starts at `len − 32` with the same source index and
 fraction as the attack. `nX > 0` is always a note-on.
 
 ### Oscillator shape (global)
@@ -382,9 +382,9 @@ Constraints:
 
 | Command            | Payload                                               |
 | ------------------ | ----------------------------------------------------- |
-| `al <id> <nbytes>` | 4…16384 bytes = 1…4096 × int32 LE (real length, no hold-pad) |
+| `al <id> <nbytes>` | 2…1024 bytes = 1…512 × int16 LE (real length, no hold-pad) |
 
-Wave `<id>` is **0…7**.
+Wave `<id>` is **0…255**. Voice assign is `aw <voice> <id>`.
 
 **Console reply API (what the card writes):** exactly two success lines
 for a full transfer — nothing in between, even if USB delivers the
@@ -402,9 +402,9 @@ Full-Speed CDC and is intentionally omitted.
 Sequence:
 
 ```text
-Host →  al 0 16384\r
+Host →  al 0 1024\r
 Card →  ok:ready\r\n          ← console write #1
-Host →  <16384 raw bytes>     ← opaque to the console parser
+Host →  <1024 raw bytes>      ← opaque to the console parser
 Card →  ok:attack 0\r\n       ← console write #2
 ```
 

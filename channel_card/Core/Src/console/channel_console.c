@@ -290,8 +290,8 @@ static const SwitchDef_t switches[] = {
  *   n0..n7 <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 0.125)
  *   n <Hz> [sc]       — all 8 voices (n 0 = silence)
  *   s / p <d> / t <a> — global note-bank shape (sine / pulse duty / tri asym)
- *   al <id> <len>     — CDC attack-head upload (4..ATTACK_BANK_BYTES)
- *   ar <id> <Hz>      — sample root pitch (id = voice); a — loaded heads
+ *   al <id> <len>     — CDC attack-head upload (2..ATTACK_BANK_BYTES)
+ *   ar <id> <Hz>      — sample root pitch (id = wave 0..255); a — loaded mask
  *   a / vq            — loaded heads per voice / hungriest + free slots
  *   en0..enf / en     — envelope: end slope[±k] … release_slope[±k]
  *                       (en0 0 / en 0 = clear → unprogrammed bypass)
@@ -469,7 +469,7 @@ static void Console_Help(void)
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   snprintf(b, sizeof b,
            "ok: SAMPLE n0..n7 Hz [sc] | s|p d|t a | aw v id | "
-           "al v n | ar v Hz | a | vq | "
+           "al id n | ar id Hz | a | vq | "
            "en0..en7 end slope[±k] ... rel[±k]|0 | ek0..ek7 k | "
            "f0..f7 Hz [q] | fk0..fk7 k | g ch dB | "
            "cpu [0|N|q N]\r\n");
@@ -1472,7 +1472,7 @@ static void Console_CmdNoteSlot(char *line)
   Console_SetNoteFreq(note, hz, scale);
 }
 
-/** aw <voice> <id> — identity only (slot is the voice). */
+/** aw <voice> <id> — assign AXI head 0..255 to voice 0..7. */
 static void Console_CmdAssignWave(char *line)
 {
   unsigned int voice;
@@ -1495,18 +1495,20 @@ static void Console_CmdAssignWave(char *line)
   }
 }
 
-/** a — loaded attack head per voice (slot = voice). */
+/** a — loaded count + 256-bit hex mask (bit 0 = wave 0). */
 static void Console_CmdAttackQuery(void)
 {
-  char b[200];
+  char b[96];
+  uint8_t mask[32];
   int n;
   uint8_t i;
 
-  n = snprintf(b, sizeof b, "ok: a");
-  for (i = 0u; i < NOTE_BANK_VOICES && n > 0 && (size_t)n < sizeof b; i++)
+  AttackBank_LoadedMask(mask);
+  n = snprintf(b, sizeof b, "ok: a %u ",
+               (unsigned)AttackBank_LoadedCount());
+  for (i = 0u; i < 32u && n > 0 && (size_t)n < sizeof b; i++)
   {
-    n += snprintf(b + n, sizeof b - (size_t)n, " %u%s", (unsigned)i,
-                  AttackBank_IsLoaded(i) != 0u ? "*" : "");
+    n += snprintf(b + n, sizeof b - (size_t)n, "%02x", (unsigned)mask[i]);
   }
   if (n > 0 && (size_t)n < sizeof b)
   {
@@ -1515,7 +1517,7 @@ static void Console_CmdAttackQuery(void)
   RS485_Reply(b);
 }
 
-/** al <wave_id> <nbytes> — CDC binary load (4..ATTACK_BANK_BYTES). */
+/** al <wave_id> <nbytes> — CDC binary load (2..ATTACK_BANK_BYTES). */
 static void Console_CmdAttackLoad(char *line)
 {
   unsigned int wid;
@@ -1557,7 +1559,7 @@ static void Console_CmdRoot(char *line)
     RS485_Reply("err:syntax\r\n");
     return;
   }
-  if (wid >= SAMPLE_VOICES || !(hz > 0.0f))
+  if (wid >= ATTACK_BANK_COUNT || !(hz > 0.0f))
   {
     RS485_Reply("err:range\r\n");
     return;

@@ -30,17 +30,17 @@ double Lanczos(double x)
   return Sinc(x) * Sinc(x / static_cast<double>(kLanczosA));
 }
 
-int32_t FToQ31(double y)
+int16_t FToI16(double y)
 {
   y = std::clamp(y, -1.0, 1.0);
-  const double s = y * 2147483647.0;
-  if (s >= 2147483647.0) {
-    return 0x7FFFFFFF;
+  const double s = y * 32767.0;
+  if (s >= 32767.0) {
+    return 32767;
   }
-  if (s < -2147483648.0) {
-    return static_cast<int32_t>(0x80000000);
+  if (s <= -32768.0) {
+    return static_cast<int16_t>(-32768);
   }
-  return static_cast<int32_t>(std::lround(s));
+  return static_cast<int16_t>(std::lround(s));
 }
 
 void ResampleTo48k(const std::vector<double> &in, uint32_t in_rate,
@@ -200,16 +200,16 @@ void Split48k(const std::vector<double> &x, LoadedWave &out)
   const size_t alen = std::min(n, static_cast<size_t>(kAttackSamples));
   out.attack.resize(alen);
   for (size_t i = 0; i < alen; ++i) {
-    out.attack[i] = FToQ31(x[i]);
+    out.attack[i] = FToI16(x[i]);
   }
   const size_t fade = std::min(static_cast<size_t>(kCrossfadeSamples), alen);
   const size_t b0 = alen - fade;
   out.body.resize(n > b0 ? (n - b0) : 0);
   for (size_t i = 0; i < out.body.size(); ++i) {
     if (i < fade) {
-      out.body[i] = static_cast<int16_t>(out.attack[b0 + i] >> 16);
+      out.body[i] = out.attack[b0 + i];
     } else {
-      out.body[i] = static_cast<int16_t>(FToQ31(x[b0 + i]) >> 16);
+      out.body[i] = FToI16(x[b0 + i]);
     }
   }
 }
@@ -255,27 +255,41 @@ bool BodyWithHeadOverlap(const std::string &head_i32_path,
   if (!ReadAll(head_i32_path, head, err) || !ReadAll(body_i16_path, body, err)) {
     return false;
   }
-  if (head.empty() || (head.size() & 3u) != 0u) {
-    err = "head must be int32 LE";
+  if (head.empty() || (head.size() & 1u) != 0u) {
+    err = "head must be even int16 or int32 LE";
     return false;
   }
-  if (head.size() > kAttackSamples * 4u) {
-    err = "head longer than kAttackSamples";
+  const bool i32 = (head.size() & 3u) == 0u &&
+                   (head.size() > kAttackSamples * 2u ||
+                    head_i32_path.find(".i32") != std::string::npos);
+  const size_t head_n = i32
+      ? std::min(head.size() / 4u, static_cast<size_t>(kAttackSamples))
+      : std::min(head.size() / 2u, static_cast<size_t>(kAttackSamples));
+  if (head_n == 0u) {
+    err = "empty head";
     return false;
   }
   if (body.size() < 2 || (body.size() & 1u) != 0u) {
     err = "body must be even int16 LE";
     return false;
   }
-  const size_t head_n = head.size() / 4u;
   const size_t fade = std::min(static_cast<size_t>(kCrossfadeSamples), head_n);
   body_out.clear();
   body_out.reserve(fade + body.size() / 2);
-  const size_t start = (head_n - fade) * 4u;
-  for (size_t i = 0; i < fade; ++i) {
-    int32_t q = 0;
-    std::memcpy(&q, head.data() + start + i * 4u, 4);
-    body_out.push_back(static_cast<int16_t>(q >> 16));
+  if (i32) {
+    const size_t start = (head_n - fade) * 4u;
+    for (size_t i = 0; i < fade; ++i) {
+      int32_t q = 0;
+      std::memcpy(&q, head.data() + start + i * 4u, 4);
+      body_out.push_back(static_cast<int16_t>(q >> 16));
+    }
+  } else {
+    const size_t start = (head_n - fade) * 2u;
+    for (size_t i = 0; i < fade; ++i) {
+      body_out.push_back(static_cast<int16_t>(
+          head[start + i * 2u] |
+          (static_cast<uint16_t>(head[start + i * 2u + 1u]) << 8)));
+    }
   }
   for (size_t i = 0; i < body.size() / 2; ++i) {
     body_out.push_back(static_cast<int16_t>(
