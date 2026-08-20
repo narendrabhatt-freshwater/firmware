@@ -69,11 +69,10 @@ void Uart5Rx_Init(void)
   }
   UART5->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF;
 
-  /* Preempt 0 — must be ≥ audio DMA (also 0). Was 1: under a held 16-voice
-   * chord NoteBank DMA (prio 0) nested over UART and dropped host nX bytes
-   * → no exec → no [C]ok → upstream MIDI session fail-stop on a late slot (e.g. nE).
-   * Handler only drains RDR into the ring; keep it short. */
-  HAL_NVIC_SetPriority(UART5_IRQn, 0, 0);
+  /* USB ISO (0) nests over UART; UART nests over I2S DMA (2). Same
+   * preempt as OTG_HS delayed EP re-arm (INCOMPISOOUT). Handler only
+   * copies RDR; the UART RX FIFO covers a USB ISR. */
+  HAL_NVIC_SetPriority(UART5_IRQn, 1, 0);
   HAL_NVIC_EnableIRQ(UART5_IRQn);
 
   UART5->CR1 |= USART_CR1_RXNEIE_RXFNEIE;

@@ -3,12 +3,23 @@
  * @brief Host body feeder: unpitched int16 → tagged UAC frames.
  *
  * Card owns pitch / env / filter. Each UAC frame: ch0 = route, ch1..9 =
- * samples for one voice. Each frame goes to the voice with the least
- * remaining fill / phase_inc. During the AXI head, prefill is rate-limited
- * to ~phase_inc (same as later consume) so a new key does not starve a
- * held note; dump-fast only if there is no head or the join is behind.
- * `vq` still reports card occupancy. After a 0-slot (full) snapshot the
- * feeder waits, then trickles at phase_inc once a hole appears.
+ * samples for one voice. The frame goes to the voice with the least
+ * remaining fill / phase_inc.
+ *
+ * Send rate is phase_inc samples per output sample (credit), which is
+ * what the interpolator consumes. Each UAC frame carries 9 body samples;
+ * if sum(inc) exceeds 9, credit is scaled to that budget. Bandwidth
+ * left after sustain is shared among voices still below cruise so a new
+ * key fills without taking every frame from held notes.
+ *
+ * `queued` is body samples pushed minus body-FIFO consume. The card
+ * plays the AXI attack without draining the ring; consume starts at
+ * the join (`attack_len − overlap`). Decrementing `queued` during the
+ * attack reopens HasRoom and overflows the ring (`usb drop`).
+ * `vq` is a delayed reading of the card FIFO: use it as a lower bound
+ * (raise `queued` if the card is fuller) and as a hard stop when it
+ * reports fewer than 9 samples free. Do not assign `queued` from `vq`
+ * when the card looks emptier; USB has not landed yet.
  *
  * Render() is the UAC callback — no mutex. UI posts to a SPSC command
  * queue; Render drains it at the start of the buffer.
@@ -33,11 +44,15 @@ constexpr unsigned kAttackSamples = 512;
 constexpr unsigned kCrossfadeSamples = 32;
 constexpr unsigned kBodyOrigin = kAttackSamples - kCrossfadeSamples;
 constexpr unsigned kRingSamples = 4096;
+/** Leave room for one UAC body packet plus interpolator taps. */
+constexpr unsigned kRingHeadroom = 32;
 /** Must match the card's 256-sample slots and 4-bit vq encoding. */
 constexpr unsigned kVqSlotSamples = 256;
 constexpr unsigned kVqSlotMax = 15;
-/** Prefill target (one ring). Extra USB is dropped on the card. */
-constexpr unsigned kPrefillSamples = kRingSamples;
+/** Cruise fill. Dumping to 4064 sat on the hardware ceiling (drops / dips). */
+constexpr unsigned kCruiseSamples = kRingSamples / 2u;
+/** Prefill / HasRoom cap — half the ring, not 4096−32. */
+constexpr unsigned kPrefillSamples = kCruiseSamples;
 constexpr uint16_t kUacTagBase = 0x7F00;
 constexpr uint8_t kUacIdle = 0xFF;
 constexpr uint8_t kUacSof = 0x10;
@@ -122,21 +137,21 @@ private:
   void ApplyCmd(const Cmd &c);
   uint8_t PickVoice() const;
   bool CanSend(uint8_t voice) const;
-  /** No AXI head, already at join, or more than one UAC packet behind. */
+  /** True while queued is below cruise (gets leftover USB after sustain). */
   bool PrefillCatchUp(uint8_t voice) const;
-  /** Samples still in the card FIFO (vq) or already pushed (prefill). */
   double FilledEstimate(uint8_t voice) const;
   int16_t NextBody(Voice &v);
   double IncOf(const Voice &v) const;
   static double Fade0Of(unsigned attack_len);
+  /** True once the card interpolator has reached the attack join. */
+  static bool BodyDraining(const Voice &v);
   void AdvancePlayheads();
-  static bool HasRoom(const Voice &v);
+  void RaiseQueuedFromVq();
+  bool HasRoom(uint8_t voice) const;
   static int16_t EncodeTag(uint8_t session, uint8_t route_low);
   bool WaveInUse(uint16_t wave_id) const;
   void SpendVq(uint8_t voice);
   void ReclaimVq();
-
-  enum class VqFeed : uint8_t { Prefill = 0, Full = 1, Drain = 2 };
 
   std::array<Cmd, kCmdCap> cmds_{};
   std::atomic<uint32_t> cmd_wr_{0};
@@ -151,7 +166,7 @@ private:
   std::atomic<uint8_t> vq_best_{0xFF};
   std::array<std::atomic<uint16_t>, kSampleVoices> vq_free_samp_{};
   std::array<double, kSampleVoices> vq_reclaim_{};
-  std::array<std::atomic<uint8_t>, kSampleVoices> vq_feed_{};
+  std::array<std::atomic<uint16_t>, kSampleVoices> vq_occ_{};
 
   std::array<std::vector<int16_t>, 256> bodies_{};
   std::array<std::atomic<double>, 256> root_hz_{};

@@ -22,6 +22,12 @@ typedef struct
 
 /* .bss is DTCM on this part — CPU fill from USB, mix reads in the I2S path. */
 static StreamRing_t s_rings[SAMPLE_VOICES];
+static volatile uint32_t s_drop_pkts;
+static volatile uint32_t s_rx_pkts;
+static volatile uint32_t s_sof_pkts;
+static volatile uint32_t s_zero_pkts;
+/* 0xFFFFFFFF = no consume sample since last clear. */
+static volatile uint32_t s_min_fill = 0xFFFFFFFFu;
 
 static uint32_t StreamRing_Filled(const StreamRing_t *r)
 {
@@ -118,11 +124,32 @@ void StreamRing_WriteInterleaved(const int16_t *interleaved, uint32_t nframes)
       r->wr = 0u;
       r->rd = 0u;
       r->session = session;
+      s_sof_pkts++;
       NoteBank_OnBodySof(voice);
     }
-    for (i = 1u; i < STREAM_UAC_CHANNELS; i++)
+    /* Whole packet or none. A partial push with the host cursor already
+     * advanced is a hole in the wav — that is the scope amp-dip. */
+    if (StreamRing_Filled(r) + (STREAM_UAC_CHANNELS - 1u) >
+        STREAM_RING_SAMPLES)
     {
-      StreamRing_Push(r, fr[i]);
+      s_drop_pkts++;
+      continue;
+    }
+    {
+      uint8_t all_zero = 1u;
+      for (i = 1u; i < STREAM_UAC_CHANNELS; i++)
+      {
+        if (fr[i] != 0)
+        {
+          all_zero = 0u;
+        }
+        StreamRing_Push(r, fr[i]);
+      }
+      s_rx_pkts++;
+      if (all_zero != 0u)
+      {
+        s_zero_pkts++;
+      }
     }
   }
 }
@@ -164,6 +191,7 @@ void StreamRing_Advance(uint8_t voice, uint32_t n)
     n = filled;
   }
   r->rd += n;
+  StreamRing_ObserveFill(voice);
 }
 
 uint32_t StreamRing_FillLevel(uint8_t voice)
@@ -192,4 +220,77 @@ uint8_t StreamRing_FreeSlots(uint8_t voice)
     slots = STREAM_SLOT_MAX;
   }
   return (uint8_t)slots;
+}
+
+uint32_t StreamRing_MaxFill(void)
+{
+  uint32_t max_fill = 0u;
+  uint8_t i;
+  for (i = 0u; i < SAMPLE_VOICES; i++)
+  {
+    uint32_t f = StreamRing_FillLevel(i);
+    if (f > max_fill)
+    {
+      max_fill = f;
+    }
+  }
+  return max_fill;
+}
+
+void StreamRing_ObserveFill(uint8_t voice)
+{
+  uint32_t f;
+
+  if (voice >= SAMPLE_VOICES)
+  {
+    return;
+  }
+  if (s_rings[voice].consuming == 0u)
+  {
+    return;
+  }
+  f = StreamRing_Filled(&s_rings[voice]);
+  if (f < s_min_fill)
+  {
+    s_min_fill = f;
+  }
+}
+
+uint32_t StreamRing_MinFill(void)
+{
+  return s_min_fill;
+}
+
+uint32_t StreamRing_DropCount(void)
+{
+  return s_drop_pkts;
+}
+
+uint32_t StreamRing_RxCount(void)
+{
+  return s_rx_pkts;
+}
+
+uint32_t StreamRing_SofCount(void)
+{
+  return s_sof_pkts;
+}
+
+uint32_t StreamRing_ZeroCount(void)
+{
+  return s_zero_pkts;
+}
+
+void StreamRing_StatsClear(void)
+{
+  s_drop_pkts = 0u;
+  s_rx_pkts = 0u;
+  s_sof_pkts = 0u;
+  s_zero_pkts = 0u;
+  s_min_fill = 0xFFFFFFFFu;
+}
+
+void StreamRing_DropCountClear(void)
+{
+  StreamRing_StatsClear();
 }

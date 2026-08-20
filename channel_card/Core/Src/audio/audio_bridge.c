@@ -537,6 +537,97 @@ void Audio_I2S1_Poll(void)
 {
 }
 
+#define AUDIO_FB_NOMINAL (((uint32_t)AUDIO_SAMPLE_RATE_HZ / 1000u) << 16)
+#define AUDIO_FB_TARGET_FILL (STREAM_RING_SAMPLES / 2u)
+/* Stay at 48.00 while fill is near cruise so the host does not chatter
+ * 47/49-frame SOFs. Larger error still trims Mac vs I2S walk. */
+#define AUDIO_FB_DEADBAND 256u
+
+/* 0 = lock 48.00 (packet-size A/B); 1 = fill-tracking (default). */
+static uint8_t s_fb_lock = 1u;
+
+/**
+ * Ask the host to send slightly fewer or more 10ch frames per SOF so the
+ * body FIFOs stay near half-full. A fixed 48.000 lets Mac vs I2S walk
+ * until a packet is dropped (amp dip, then the sine continues).
+ */
+uint32_t Audio_Bridge_FeedbackU16(void)
+{
+  uint32_t fill;
+  int32_t err;
+  int32_t adj;
+  uint32_t fb;
+
+  if (s_fb_lock == 0u || NoteBank_AnyActive() == 0u)
+  {
+    return AUDIO_FB_NOMINAL;
+  }
+  fill = StreamRing_MaxFill();
+  if (fill + AUDIO_FB_DEADBAND >= AUDIO_FB_TARGET_FILL &&
+      fill <= AUDIO_FB_TARGET_FILL + AUDIO_FB_DEADBAND)
+  {
+    return AUDIO_FB_NOMINAL;
+  }
+  err = (int32_t)AUDIO_FB_TARGET_FILL - (int32_t)fill;
+  /* ±2048 samples of error → ±1 sample per SOF. */
+  adj = (err * (int32_t)65536) / (int32_t)AUDIO_FB_TARGET_FILL;
+  if (adj > 65536)
+  {
+    adj = 65536;
+  }
+  if (adj < -65536)
+  {
+    adj = -65536;
+  }
+  fb = (uint32_t)((int32_t)AUDIO_FB_NOMINAL + adj);
+  /* Never request 49 frames/SOF. 10ch int16 is 980 B; this FS ISO pipe
+   * already sits on 960 B at 48. Extra-byte SOFs showed up as
+   * INCOMPISOOUT and a draining ring (n49 with iso in the hundreds).
+   * Slow-down (47 frames) is still allowed when the FIFO is high. */
+  if (fb > AUDIO_FB_NOMINAL)
+  {
+    fb = AUDIO_FB_NOMINAL;
+  }
+  return fb;
+}
+
+int Audio_Bridge_SetFbLock(uint8_t enable)
+{
+  if (enable > 1u)
+  {
+    return -1;
+  }
+  s_fb_lock = enable;
+  return 0;
+}
+
+uint8_t Audio_Bridge_GetFbLock(void)
+{
+  return s_fb_lock;
+}
+
+uint32_t Audio_Bridge_UsbDropCount(void)
+{
+  return StreamRing_DropCount();
+}
+
+void Audio_Bridge_UsbDropCountClear(void)
+{
+  StreamRing_StatsClear();
+  NoteBank_HoldCountClear();
+  g_i2s1_fill_late = 0u;
+}
+
+uint32_t Audio_Bridge_MaxFill(void)
+{
+  return StreamRing_MaxFill();
+}
+
+uint32_t Audio_Bridge_FillLate(void)
+{
+  return g_i2s1_fill_late;
+}
+
 /**
  * @brief  I2S1 DMA half transfer complete callback.
  *         DMA now plays the second half → refill the first.

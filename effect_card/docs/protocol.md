@@ -134,18 +134,27 @@ and are lost on reset.
 | `aw <v> <id>`       | Assign head `<id>` to voice `<v>` 0…7                               |
 | `a`                 | Loaded count + 256-bit hex mask (bit 0 = wave 0)                    |
 | `vq`                | Active mask + hungriest voice + free-slot code per ring               |
+| `interp`            | Query: 8-tap sinc (1, default) or nearest sample (0)                  |
+| `interp 0` / `1`    | Diagnostic playhead. `0` needs one FIFO sample; `1` needs 4 ahead     |
+| `usb`               | Splice counters: FIFO drop, ISO miss, hold, min/max fill, packet size |
+| `usb 0`             | Clear those counters, then same reply                                 |
+| `fb`                | Query async feedback: 1 = fill-tracking (default), 0 = lock 48.00     |
+| `fb 0` / `1`        | Diagnostic. `0` stops 47/49-frame chatter; `1` tracks ring fill       |
 
 Replies: `ok: ar <id> <Hz>`, `ok: aw <v> <id>`, `ok: a <n> <64 hex>`.
 USB CDC returns `vq` as `ok:vq <mask> <best> s0 … s7`. RS485 returns
 the same fields in a 12-byte binary frame: `a5 5a 43 01`, mask, best,
 four packed slot bytes (two 4-bit counts each), CRC-8/0x07, then `0a`.
 Best is 0–7 or 255. Slot codes 0–14 count complete 256-sample slots;
-15 means the ring is empty.
+15 means the ring is empty. At 921600 8N1 the 12-byte frame is ~150 µs
+on the wire. That is not TinyUSB's 32-packet ISO OUT software FIFO
+(~32 ms of UAC body).
 
 Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 8-tap
 sinc. The attack plays to its committed length (not a hold-pad to
 512). Body starts at `len − 32` with the same source index and
-fraction as the attack. `nX > 0` is always a note-on.
+fraction as the attack. The host does not count body-FIFO consume
+until that join. `nX > 0` is always a note-on.
 
 ### Oscillator shape (global)
 

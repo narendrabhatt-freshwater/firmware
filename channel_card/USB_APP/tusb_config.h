@@ -76,9 +76,9 @@ extern "C" {
   TUD_AUDIO_EP_SIZE(CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE,              \
                     CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX,        \
                     CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX)
-/* ISO has no retry. 4 packets (~4 ms) was smaller than a CoreAudio 1024-frame
- * period (~21 ms) and smaller than an RS485 vq reply stall. 32 ms of FIFO
- * holds a full host callback until tud_task drains it into stream_ring. */
+/* ISO has no retry. TinyUSB UAC OUT software FIFO (32 × ~960 B ≈ 32 ms
+ * of body), not the 12-byte RS485 vq reply. Main must drain it dry;
+ * a full FIFO skips the next EP OUT xfer. The USB ISR only re-arms. */
 #define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ                          \
   (32 * CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX)
 

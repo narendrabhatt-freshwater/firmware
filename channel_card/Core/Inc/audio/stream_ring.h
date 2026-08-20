@@ -83,6 +83,31 @@ extern "C"
   /** Free-slot code: 0..14 complete slots; 15 means empty. */
   uint8_t StreamRing_FreeSlots(uint8_t voice);
 
+  /** Highest fill among all voices (feedback / console). */
+  uint32_t StreamRing_MaxFill(void);
+
+  /** Lowest fill seen on a consuming voice since the last stats clear. */
+  uint32_t StreamRing_MinFill(void);
+
+  /** Record fill for min-fill (I2S consume / interpolator miss). */
+  void StreamRing_ObserveFill(uint8_t voice);
+
+  /** Whole 9-sample UAC packets dropped because the FIFO was full. */
+  uint32_t StreamRing_DropCount(void);
+
+  /** Tagged packets accepted into a ring. */
+  uint32_t StreamRing_RxCount(void);
+
+  /** Session-start (SOF + new session) resets. */
+  uint32_t StreamRing_SofCount(void);
+
+  /** Tagged packets whose 9 body samples were all zero. */
+  uint32_t StreamRing_ZeroCount(void);
+
+  void StreamRing_StatsClear(void);
+
+  void StreamRing_DropCountClear(void);
+
 #ifdef __cplusplus
 }
 #endif

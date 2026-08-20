@@ -23,6 +23,8 @@ static uint32_t sampFreq = CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE;
 static uint8_t clkValid = 1;
 static audio_control_range_4_n_t(1) sampleFreqRng;
 
+static void USB_App_DrainUac(void);
+
 //--------------------------------------------------------------------+
 // Init / task
 //--------------------------------------------------------------------+
@@ -89,11 +91,9 @@ void USB_CDC_WriteStr(const char *s)
     tud_cdc_write_flush();
     if (n == 0)
     {
-      /* host not draining — service the stack once, then give up rather
-       * than blocking the main loop (and the audio path) forever */
-      tud_task();
-      if (!tud_cdc_connected())
-        return;
+      /* TX buffer full. Do not spin in tud_task: that races the USB ISR
+       * and skips ISO OUT re-arm (INCOMPISOOUT). */
+      return;
     }
   }
 }
@@ -152,32 +152,167 @@ static void CDC_Console_Poll(void)
   }
 }
 
-/* ISO OUT is armed from tud_task, not the DCD ISR. If that waits for the
- * main loop, a 1 ms DMA fill can miss the next SOF (no retry). Run tud_task
- * from the USB ISR after the DCD handler; skip if the main loop is already
- * inside it (OS_NONE queue is not re-entrant). */
-static volatile uint8_t s_tud_task_busy;
+/* ISO OUT is armed from tud_task, not the DCD ISR. Run tud_task only in
+ * the USB ISR. Main must not call it: OS_NONE is not re-entrant, and a
+ * skip here misses the next SOF (INCOMPISOOUT, then a draining ring). */
+static volatile uint8_t s_tud_from_isr;
+static volatile uint32_t s_iso_drop;
+static volatile uint32_t s_iso_incomp;
+static volatile uint32_t s_n47;
+static volatile uint32_t s_n48;
+static volatile uint32_t s_n49;
+static volatile uint32_t s_nxx;
 
-static void USB_App_RunTudTask(void)
+/* TinyUSB never unmasks ISOODRP / incomplete ISO OUT, so a dropped
+ * packet never reaches the body FIFO and never increments `usb drop`. */
+static void USB_App_PollIsoHw(void)
 {
-  if (s_tud_task_busy != 0u)
+  uint32_t sts = USB_OTG_HS->GINTSTS;
+
+  if ((sts & USB_OTG_GINTSTS_ISOODRP) != 0u)
   {
-    return;
+    s_iso_drop++;
+    USB_OTG_HS->GINTSTS = USB_OTG_GINTSTS_ISOODRP;
   }
-  s_tud_task_busy = 1u;
-  tud_task();
-  s_tud_task_busy = 0u;
+  if ((sts & USB_OTG_GINTSTS_PXFR_INCOMPISOOUT) != 0u)
+  {
+    s_iso_incomp++;
+    USB_OTG_HS->GINTSTS = USB_OTG_GINTSTS_PXFR_INCOMPISOOUT;
+  }
 }
 
 void USB_App_TaskFromIsr(void)
 {
-  USB_App_RunTudTask();
+  /* Re-arm ISO OUT. Never skip: a busy-lock with main's tud_task missed
+   * SOFs. Do not WriteUSB here — demux in this IRQ ran past the next SOF. */
+  if (s_tud_from_isr != 0u)
+  {
+    return;
+  }
+  s_tud_from_isr = 1u;
+  tud_task();
+  s_tud_from_isr = 0u;
+}
+
+static uint8_t s_uac_pkt[CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX];
+
+static void USB_App_CountPktSize(uint16_t n_bytes)
+{
+  uint32_t frame_bytes = (uint32_t)CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX *
+                         (uint32_t)CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX;
+  uint32_t frames;
+
+  if (frame_bytes == 0u || (n_bytes % frame_bytes) != 0u)
+  {
+    s_nxx++;
+    return;
+  }
+  frames = (uint32_t)n_bytes / frame_bytes;
+  if (frames == 47u)
+  {
+    s_n47++;
+  }
+  else if (frames == 48u)
+  {
+    s_n48++;
+  }
+  else if (frames == 49u)
+  {
+    s_n49++;
+  }
+  else
+  {
+    s_nxx++;
+  }
+}
+
+/* Copy TinyUSB's SW FIFO into the body rings. Drain it dry: a full
+ * software FIFO skips the next EP OUT xfer (INCOMPISOOUT). */
+static void USB_App_DrainUac(void)
+{
+  uint32_t frame_bytes = (uint32_t)CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX *
+                         (uint32_t)CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX;
+
+  if (!tud_audio_mounted())
+  {
+    return;
+  }
+  for (;;)
+  {
+    uint16_t n;
+
+    if ((uint32_t)tud_audio_available() < frame_bytes)
+    {
+      break;
+    }
+    n = tud_audio_read(s_uac_pkt, (uint16_t)sizeof s_uac_pkt);
+    if (n == 0u)
+    {
+      break;
+    }
+    Audio_Bridge_WriteUSB(s_uac_pkt, n);
+  }
 }
 
 void USB_App_Task(void)
 {
-  USB_App_RunTudTask();
+  static uint32_t fb_tick;
+
+  USB_App_PollIsoHw();
+  USB_App_DrainUac();
   CDC_Console_Poll();
+  {
+    uint32_t now = HAL_GetTick();
+    if ((now - fb_tick) >= 8u)
+    {
+      fb_tick = now;
+      if (tud_audio_mounted())
+      {
+        (void)tud_audio_fb_set(Audio_Bridge_FeedbackU16());
+      }
+    }
+  }
+}
+
+uint32_t USB_App_IsoDropCount(void)
+{
+  return s_iso_drop;
+}
+
+uint32_t USB_App_IsoIncompCount(void)
+{
+  return s_iso_incomp;
+}
+
+void USB_App_PktSizeCounts(uint32_t *n47, uint32_t *n48, uint32_t *n49,
+                           uint32_t *nxx)
+{
+  if (n47 != NULL)
+  {
+    *n47 = s_n47;
+  }
+  if (n48 != NULL)
+  {
+    *n48 = s_n48;
+  }
+  if (n49 != NULL)
+  {
+    *n49 = s_n49;
+  }
+  if (nxx != NULL)
+  {
+    *nxx = s_nxx;
+  }
+}
+
+void USB_App_StatsClear(void)
+{
+  s_iso_drop = 0u;
+  s_iso_incomp = 0u;
+  s_n47 = 0u;
+  s_n48 = 0u;
+  s_n49 = 0u;
+  s_nxx = 0u;
 }
 
 //--------------------------------------------------------------------+
@@ -336,11 +471,9 @@ bool tud_audio_set_itf_close_EP_cb(uint8_t rhport,
   return true;
 }
 
-/** Feedback strategy: manual/fixed 48.000 samples per SOF.
- *
- * FIFO_COUNT would regulate TinyUSB's ISO FIFO, which is drained every
- * packet. The elastic buffer is the stream ring. Report the nominal rate;
- * I2S and USB SOF already share ~40 ppm (same 1 ms tick). */
+/** Feedback strategy: manual 16.16 from body-FIFO fill (not TinyUSB's
+ * ISO FIFO). A fixed 48.000 lets the Mac clock walk vs I2S until the
+ * ring overflows and a packet is dropped. */
 void tud_audio_feedback_params_cb(uint8_t func_id, uint8_t alt_itf,
                                   audio_feedback_params_t *feedback_param)
 {
@@ -350,7 +483,7 @@ void tud_audio_feedback_params_cb(uint8_t func_id, uint8_t alt_itf,
   feedback_param->sample_freq = CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE;
 }
 
-/** Iso OUT packet → demux into per-voice dry rings. */
+/** Iso OUT complete: count size only. Demux runs in USB_App_DrainUac(). */
 bool tud_audio_rx_done_post_read_cb(uint8_t rhport, uint16_t n_bytes_received,
                                     uint8_t func_id, uint8_t ep_out,
                                     uint8_t cur_alt_setting)
@@ -360,14 +493,6 @@ bool tud_audio_rx_done_post_read_cb(uint8_t rhport, uint16_t n_bytes_received,
   (void)ep_out;
   (void)cur_alt_setting;
 
-  static uint8_t pkt[CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX];
-  if (n_bytes_received > sizeof(pkt))
-    n_bytes_received = (uint16_t)sizeof(pkt);
-
-  uint16_t n = tud_audio_read(pkt, n_bytes_received);
-  if (n)
-  {
-    Audio_Bridge_WriteUSB(pkt, n);
-  }
+  USB_App_CountPktSize(n_bytes_received);
   return true;
 }

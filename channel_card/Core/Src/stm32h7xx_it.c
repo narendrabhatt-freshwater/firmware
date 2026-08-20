@@ -241,7 +241,7 @@ void OTG_HS_IRQHandler(void)
    * rhport 0: this part has a single USB core, which TinyUSB's STM32
    * port maps onto controller index 0. */
   tud_int_handler(0);
-  /* Re-arm ISO OUT before the next SOF; see USB_App_TaskFromIsr(). */
+  /* Re-arm ISO OUT (tud_task only). Ring demux is USB_App_Task(). */
   USB_App_TaskFromIsr();
   return;
 

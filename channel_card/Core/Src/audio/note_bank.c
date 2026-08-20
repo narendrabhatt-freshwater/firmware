@@ -54,6 +54,9 @@ static uint16_t note_wave_id[NOTE_BANK_VOICES];
 static uint16_t note_play_wid[NOTE_BANK_VOICES];
 static NoteBank_Shape_t note_shape = NOTE_SHAPE_SINE;
 static double note_shape_param = 0.5;
+/* 1 = 8-tap Hann-sinc; 0 = nearest sample (scope A/B). */
+static uint8_t note_interp = 1u;
+static volatile uint32_t note_hold_miss;
 
 #define NOTE_CMD_NONE 0u
 #define NOTE_CMD_ON 1u
@@ -114,6 +117,15 @@ static int32_t NoteBank_InterpAttack(uint16_t wid, uint64_t phase)
   }
   /* Attack heads are ≤ ATTACK_BANK_LEN; Q16.16 index fits in 32 bits. */
   phase_q16 = (phase > 0xffffffffull) ? 0xffffffffu : (uint32_t)phase;
+  if (note_interp == 0u)
+  {
+    uint32_t i = phase_q16 >> 16;
+    if (i >= len)
+    {
+      i = len - 1u;
+    }
+    return ((int32_t)tab[i]) << 16;
+  }
   return Interp8_S16(tab, len, phase_q16, 0u);
 }
 
@@ -130,6 +142,28 @@ static int NoteBank_InterpAttackBody(uint8_t note, uint16_t wid,
   if (out == NULL || attack == NULL || alen == 0u)
   {
     return -1;
+  }
+  if (note_interp == 0u)
+  {
+    if (source_i0 < 0)
+    {
+      source_i0 = 0;
+    }
+    if ((uint32_t)source_i0 < alen)
+    {
+      *out = ((int32_t)attack[source_i0]) << 16;
+      return 0;
+    }
+    {
+      int16_t sample;
+      if (body_i0 < 0 ||
+          StreamRing_GetRel(note, (uint32_t)body_i0, &sample) != 0)
+      {
+        return -1;
+      }
+      *out = (int32_t)sample * 65536;
+      return 0;
+    }
   }
   for (t = 0u; t < INTERP8_TAPS; t++)
   {
@@ -160,7 +194,8 @@ static int NoteBank_InterpAttackBody(uint8_t note, uint16_t wid,
 
 /**
  * 8-tap over the body FIFO. The read pointer remains three samples behind
- * the interpolation center; only the beginning of a stream needs clamping.
+ * the interpolation center. Left taps clamp only at stream start. Right
+ * taps must exist — repeating the last sample every packet is a click.
  */
 static int NoteBank_InterpBody(uint8_t note, int32_t *out)
 {
@@ -169,9 +204,28 @@ static int NoteBank_InterpBody(uint8_t note, int32_t *out)
   uint32_t filled = StreamRing_FillLevel(note);
   int16_t taps[INTERP8_TAPS];
   uint32_t t;
+  uint32_t right;
 
   if (out == NULL || filled == 0u || i0 >= filled)
   {
+    StreamRing_ObserveFill(note);
+    return -1;
+  }
+  if (note_interp == 0u)
+  {
+    int16_t sample;
+    if (StreamRing_GetRel(note, i0, &sample) != 0)
+    {
+      StreamRing_ObserveFill(note);
+      return -1;
+    }
+    *out = (int32_t)sample * 65536;
+    return 0;
+  }
+  right = i0 + (INTERP8_TAPS - INTERP8_LEFT_TAPS);
+  if (right > filled)
+  {
+    StreamRing_ObserveFill(note);
     return -1;
   }
 
@@ -183,12 +237,9 @@ static int NoteBank_InterpBody(uint8_t note, int32_t *out)
     {
       idx = 0;
     }
-    if ((uint32_t)idx >= filled)
-    {
-      idx = (int32_t)filled - 1;
-    }
     if (StreamRing_GetRel(note, (uint32_t)idx, &taps[t]) != 0)
     {
+      StreamRing_ObserveFill(note);
       return -1;
     }
   }
@@ -201,6 +252,10 @@ static void NoteBank_AdvanceBody(uint8_t note)
   note_body_frac[note] += note_inc[note];
   while (note_body_frac[note] >= BODY_ADVANCE_PHASE)
   {
+    if (StreamRing_FillLevel(note) == 0u)
+    {
+      break;
+    }
     StreamRing_Advance(note, 1u);
     note_body_frac[note] -= PHASE_ONE;
   }
@@ -354,6 +409,7 @@ static int32_t NoteBank_Sample(uint8_t note)
   {
     if (NoteBank_InterpBody(note, &y) != 0)
     {
+      note_hold_miss++;
       return note_hold[note];
     }
     NoteBank_AdvanceBody(note);
@@ -394,8 +450,13 @@ static int32_t NoteBank_Sample(uint8_t note)
     return y;
   }
 
-  if (note_body_skip[note] != 0u || NoteBank_InterpBody(note, &y) != 0)
+  if (note_body_skip[note] != 0u)
   {
+    return note_hold[note];
+  }
+  if (NoteBank_InterpBody(note, &y) != 0)
+  {
+    note_hold_miss++;
     return note_hold[note];
   }
   NoteBank_AdvanceBody(note);
@@ -468,6 +529,7 @@ void NoteBank_Init(void)
   Interp8_Init();
   note_shape = NOTE_SHAPE_SINE;
   note_shape_param = 0.5;
+  note_interp = 1u;
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
     note_freq_hz[i] = 0.0;
@@ -626,6 +688,31 @@ NoteBank_Shape_t NoteBank_GetShape(void)
 double NoteBank_GetShapeParam(void)
 {
   return note_shape_param;
+}
+
+int NoteBank_SetInterp(uint8_t enable)
+{
+  if (enable > 1u)
+  {
+    return -1;
+  }
+  note_interp = enable;
+  return 0;
+}
+
+uint8_t NoteBank_GetInterp(void)
+{
+  return note_interp;
+}
+
+uint32_t NoteBank_HoldCount(void)
+{
+  return note_hold_miss;
+}
+
+void NoteBank_HoldCountClear(void)
+{
+  note_hold_miss = 0u;
 }
 
 uint8_t NoteBank_IsActive(uint8_t note)

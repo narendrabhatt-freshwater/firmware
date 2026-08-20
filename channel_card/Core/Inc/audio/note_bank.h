@@ -49,6 +49,18 @@ extern "C"
   NoteBank_Shape_t NoteBank_GetShape(void);
   double NoteBank_GetShapeParam(void);
 
+  /**
+   * @brief 8-tap sinc (1, default) or nearest-neighbour (0).
+   *        Diagnostic: NN only needs one FIFO sample, so a still-broken
+   *        E3/F3 is not the interpolator / lookahead hold.
+   */
+  int NoteBank_SetInterp(uint8_t enable);
+  uint8_t NoteBank_GetInterp(void);
+
+  /** Body playhead returned the held sample (FIFO miss in sustain). */
+  uint32_t NoteBank_HoldCount(void);
+  void NoteBank_HoldCountClear(void);
+
   /** True while attack/sustain/release still sounds (incl. env release). */
   uint8_t NoteBank_IsActive(uint8_t note);
   uint8_t NoteBank_AnyActive(void);

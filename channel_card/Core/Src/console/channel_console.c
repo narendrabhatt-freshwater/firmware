@@ -43,6 +43,19 @@ void ChannelConsole_SetDacHandle(CS4304_HandleTypeDef *h)
 #define RS485_BUS_TIMEOUT_MS 250
 #define RS485_ECHO 0
 
+/* 921600 8N1 ≈ 12 µs/byte. HAL Timeout is a deadline, not the payload
+ * size. The 12-byte vq frame is ~150 µs on the wire; 50 ms was a poll
+ * cap that could eat TinyUSB's ~32 ms ISO software FIFO if TX stalled. */
+static uint32_t RS485_TxDeadlineMs(uint32_t nbytes)
+{
+  uint32_t ms = 2u + (nbytes / 64u);
+  if (ms > 8u)
+  {
+    ms = 8u;
+  }
+  return ms;
+}
+
 /** RS485 bus-aware transmit.
  *
  * Multi-drop protocol: two MCUs share the same transceiver (SN65HVD75).
@@ -142,7 +155,11 @@ static int __attribute__((unused)) RS485_Send(const char *s)
 
   RS485_BusAcquire();
 
-  HAL_UART_Transmit(&huart5, (const uint8_t *)s, (uint16_t)strlen(s), 200);
+  {
+    uint32_t n = (uint32_t)strlen(s);
+    HAL_UART_Transmit(&huart5, (const uint8_t *)s, (uint16_t)n,
+                      RS485_TxDeadlineMs(n));
+  }
 
   RS485_BusRelease();
   return 0;
@@ -190,7 +207,9 @@ static void RS485_Reply(const char *s)
 
   RS485_BusAcquire();
   if (HAL_UART_Transmit(&huart5, (const uint8_t *)frame,
-                        (uint16_t)(tag_len + body_len), 50) != HAL_OK)
+                        (uint16_t)(tag_len + body_len),
+                        RS485_TxDeadlineMs((uint32_t)(tag_len + body_len))) !=
+      HAL_OK)
   {
     rs485_tx_fail++;
   }
@@ -250,7 +269,8 @@ static void RS485_ReplyVq(uint8_t mask, uint8_t best,
   frame[11] = '\n';
 
   RS485_BusAcquire();
-  if (HAL_UART_Transmit(&huart5, frame, VQ_FRAME_LEN, 50) != HAL_OK)
+  if (HAL_UART_Transmit(&huart5, frame, VQ_FRAME_LEN,
+                        RS485_TxDeadlineMs(VQ_FRAME_LEN)) != HAL_OK)
   {
     rs485_tx_fail++;
   }
@@ -293,6 +313,10 @@ static const SwitchDef_t switches[] = {
  *   al <id> <len>     — CDC attack-head upload (2..ATTACK_BANK_BYTES)
  *   ar <id> <Hz>      — sample root pitch (id = wave 0..255); a — loaded mask
  *   a / vq            — loaded heads per voice / hungriest + free slots
+ *   interp [0|1]      — 0 = nearest sample, 1 = 8-tap (default)
+ *   usb               — splice counters: drop/iso/hold/min/fill/z/sof/n47..49/fb/late
+ *   usb 0             — clear those counters, then same reply
+ *   fb [0|1]          — 0 = lock 48.00 samples/SOF, 1 = adaptive (default)
  *   en0..enf / en     — envelope: end slope[±k] … release_slope[±k]
  *                       (en0 0 / en 0 = clear → unprogrammed bypass)
  *   ek0..ekf / ek     — env pitch-track k (−10..10, rate ∝ (f/C4)^k)
@@ -469,7 +493,7 @@ static void Console_Help(void)
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   snprintf(b, sizeof b,
            "ok: SAMPLE n0..n7 Hz [sc] | s|p d|t a | aw v id | "
-           "al id n | ar id Hz | a | vq | "
+           "al id n | ar id Hz | a | vq | interp 0|1 | usb | fb 0|1 | "
            "en0..en7 end slope[±k] ... rel[±k]|0 | ek0..ek7 k | "
            "f0..f7 Hz [q] | fk0..fk7 k | g ch dB | "
            "cpu [0|N|q N]\r\n");
@@ -1629,6 +1653,121 @@ static void Console_Exec(char *line)
   if (strcmp(line, "vq") == 0)
   {
     Console_CmdVoiceQuery();
+    return;
+  }
+
+  /* ---- interp [0|1]: nearest-neighbour vs 8-tap (scope A/B) ---- */
+  if (strncmp(line, "interp", 6) == 0 && (line[6] == '\0' || line[6] == ' '))
+  {
+    unsigned v = 0u;
+
+    if (line[6] == '\0')
+    {
+      snprintf(b, sizeof b, "ok: interp %u\r\n",
+               (unsigned)NoteBank_GetInterp());
+      RS485_Reply(b);
+      return;
+    }
+    if (sscanf(line + 7, "%u", &v) != 1)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    if (v > 1u || NoteBank_SetInterp((uint8_t)v) != 0)
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+    snprintf(b, sizeof b, "ok: interp %u\r\n", v);
+    RS485_Reply(b);
+    return;
+  }
+
+  /* ---- usb [0]: splice counters (FIFO drop, ISO miss, hold, packet size) ---- */
+  if (strncmp(line, "usb", 3) == 0 && (line[3] == '\0' || line[3] == ' '))
+  {
+    if (line[3] == ' ')
+    {
+      unsigned z = 1u;
+      if (sscanf(line + 4, "%u", &z) != 1 || z != 0u)
+      {
+        RS485_Reply("err:syntax\r\n");
+        return;
+      }
+      Audio_Bridge_UsbDropCountClear();
+      USB_App_StatsClear();
+    }
+    {
+      char min_s[12];
+      uint32_t minf = StreamRing_MinFill();
+      uint32_t n47 = 0u;
+      uint32_t n48 = 0u;
+      uint32_t n49 = 0u;
+      uint32_t nxx = 0u;
+      uint32_t fb = Audio_Bridge_FeedbackU16();
+      unsigned fb_i = (unsigned)(fb >> 16);
+      unsigned fb_f =
+          (unsigned)((((fb & 0xFFFFu) * 100u) + 32768u) >> 16);
+      if (fb_f >= 100u)
+      {
+        fb_i++;
+        fb_f -= 100u;
+      }
+      char usb_b[192];
+
+      if (minf == 0xFFFFFFFFu)
+      {
+        min_s[0] = '-';
+        min_s[1] = '\0';
+      }
+      else
+      {
+        snprintf(min_s, sizeof min_s, "%lu", (unsigned long)minf);
+      }
+      USB_App_PktSizeCounts(&n47, &n48, &n49, &nxx);
+      snprintf(usb_b, sizeof usb_b,
+               "ok: usb drop %lu iso %lu/%lu hold %lu min %s fill %lu "
+               "z %lu sof %lu n47 %lu n48 %lu n49 %lu nxx %lu fb %u.%02u "
+               "late %lu\r\n",
+               (unsigned long)Audio_Bridge_UsbDropCount(),
+               (unsigned long)USB_App_IsoDropCount(),
+               (unsigned long)USB_App_IsoIncompCount(),
+               (unsigned long)NoteBank_HoldCount(), min_s,
+               (unsigned long)Audio_Bridge_MaxFill(),
+               (unsigned long)StreamRing_ZeroCount(),
+               (unsigned long)StreamRing_SofCount(),
+               (unsigned long)n47, (unsigned long)n48, (unsigned long)n49,
+               (unsigned long)nxx, fb_i, fb_f,
+               (unsigned long)Audio_Bridge_FillLate());
+      RS485_Reply(usb_b);
+    }
+    return;
+  }
+
+  /* ---- fb [0|1]: lock 48.00 vs fill-tracking async feedback ---- */
+  if (strncmp(line, "fb", 2) == 0 && (line[2] == '\0' || line[2] == ' '))
+  {
+    unsigned v = 0u;
+
+    if (line[2] == '\0')
+    {
+      snprintf(b, sizeof b, "ok: fb %u\r\n",
+               (unsigned)Audio_Bridge_GetFbLock());
+      RS485_Reply(b);
+      return;
+    }
+    if (sscanf(line + 3, "%u", &v) != 1)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    if (v > 1u || Audio_Bridge_SetFbLock((uint8_t)v) != 0)
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+    snprintf(b, sizeof b, "ok: fb %u\r\n", v);
+    RS485_Reply(b);
     return;
   }
 

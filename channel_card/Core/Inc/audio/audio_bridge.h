@@ -116,6 +116,25 @@ extern "C"
    */
   void Audio_I2S1_Poll(void);
 
+  /**
+   * @brief Async UAC feedback: 16.16 samples per SOF from ring fill.
+   *        Call from the USB task, not from an ISR.
+   */
+  uint32_t Audio_Bridge_FeedbackU16(void);
+
+  uint32_t Audio_Bridge_UsbDropCount(void);
+  void Audio_Bridge_UsbDropCountClear(void);
+  uint32_t Audio_Bridge_MaxFill(void);
+
+  /**
+   * @brief 0 = lock 48.00 samples/SOF (A/B for packet-size chatter).
+   *        1 = adaptive from ring fill (default).
+   */
+  int Audio_Bridge_SetFbLock(uint8_t enable);
+  uint8_t Audio_Bridge_GetFbLock(void);
+
+  uint32_t Audio_Bridge_FillLate(void);
+
 #ifdef __cplusplus
 }
 #endif

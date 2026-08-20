@@ -215,6 +215,7 @@ int main(void)
     Audio_I2S1_Poll();     /* Compatibility hook; I2S1 refills in DMA callbacks */
     USB_App_Task();        /* ISO OUT before RS485: missed SOF has no retry */
     ChannelConsole_Poll(); /* RS485 console + LED chaser */
+    USB_App_Task();        /* drain body FIFO after a console TX */
     Audio_CpuLoad_Poll();  /* queue-mode NoteBank producer (no-op otherwise) */
   }
   /* USER CODE END 3 */
