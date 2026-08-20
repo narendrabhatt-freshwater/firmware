@@ -4,11 +4,11 @@
  *
  * Card owns pitch / env / filter. Each UAC frame: ch0 = route, ch1..9 =
  * samples for one voice. Each frame goes to the voice with the least
- * remaining fill / phase_inc so a new key cannot starve a held note.
- * `vq` still reports card occupancy. Feed state is card-truth: prefill
- * until a 0-slot (full) snapshot, then wait, then trickle at phase_inc
- * once a hole appears (join has started). Host fade0 is not used — UAC
- * and nX are not the same clock.
+ * remaining fill / phase_inc. During the AXI head, prefill is rate-limited
+ * to ~phase_inc (same as later consume) so a new key does not starve a
+ * held note; dump-fast only if there is no head or the join is behind.
+ * `vq` still reports card occupancy. After a 0-slot (full) snapshot the
+ * feeder waits, then trickles at phase_inc once a hole appears.
  *
  * Render() is the UAC callback — no mutex. UI posts to a SPSC command
  * queue; Render drains it at the start of the buffer.
@@ -35,7 +35,7 @@ constexpr unsigned kRingSamples = 4096;
 /** Must match the card's 256-sample slots and 4-bit vq encoding. */
 constexpr unsigned kVqSlotSamples = 256;
 constexpr unsigned kVqSlotMax = 15;
-/** Prefill target until the first `vq` (one ring). Extra USB is dropped. */
+/** Prefill target (one ring). Extra USB is dropped on the card. */
 constexpr unsigned kPrefillSamples = kRingSamples;
 constexpr uint16_t kUacTagBase = 0x7F00;
 constexpr uint8_t kUacIdle = 0xFF;
@@ -119,6 +119,8 @@ private:
   void ApplyCmd(const Cmd &c);
   uint8_t PickVoice() const;
   bool CanSend(uint8_t voice) const;
+  /** No AXI head, already at join, or more than one UAC packet behind. */
+  bool PrefillCatchUp(uint8_t voice) const;
   /** Samples still in the card FIFO (vq) or already pushed (prefill). */
   double FilledEstimate(uint8_t voice) const;
   int16_t NextBody(Voice &v);

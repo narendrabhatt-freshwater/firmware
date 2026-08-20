@@ -508,23 +508,57 @@ double SampleDryMixer::FilledEstimate(uint8_t voice) const
 
 uint8_t SampleDryMixer::PickVoice() const
 {
-  /* One UAC frame, one voice. Do not lock onto a new prefill or vq
-   * best: a held Drain voice only has a few hundred samples, and
-   * exclusive feed of the next key empties it (frozen sample = louder
-   * first pitch, no chord). */
+  /* Drain (and catch-up prefill) first: a held note with credit must
+   * not lose the frame to a new key whose sent count is still 0.
+   * On-schedule prefill takes leftover frames. */
   uint8_t pick = 0xFF;
   double least_t = 0.0;
-  for (uint8_t i = 0; i < kSampleVoices; ++i) {
-    if (!CanSend(i)) {
-      continue;
+  for (int pass = 0; pass < 2; ++pass) {
+    pick = 0xFF;
+    least_t = 0.0;
+    for (uint8_t i = 0; i < kSampleVoices; ++i) {
+      if (!CanSend(i)) {
+        continue;
+      }
+      const auto feed = static_cast<VqFeed>(
+          vq_feed_[i].load(std::memory_order_relaxed));
+      const bool urgent = (feed != VqFeed::Prefill) || PrefillCatchUp(i);
+      if (pass == 0 && !urgent) {
+        continue;
+      }
+      if (pass == 1 && urgent) {
+        continue;
+      }
+      const double t = FilledEstimate(i) / IncOf(voices_[i]);
+      if (pick == 0xFF || t < least_t) {
+        least_t = t;
+        pick = i;
+      }
     }
-    const double t = FilledEstimate(i) / IncOf(voices_[i]);
-    if (pick == 0xFF || t < least_t) {
-      least_t = t;
-      pick = i;
+    if (pick != 0xFF) {
+      return pick;
     }
   }
-  return pick;
+  return 0xFF;
+}
+
+bool SampleDryMixer::PrefillCatchUp(uint8_t voice) const
+{
+  if (voice >= kSampleVoices) {
+    return false;
+  }
+  const auto &v = voices_[voice];
+  if (v.attack_len == 0u) {
+    return true;
+  }
+  const double fade0 = Fade0Of(v.attack_len);
+  if (v.phase >= fade0) {
+    return true;
+  }
+  const unsigned n = sent_[voice].load(std::memory_order_relaxed);
+  /* phase tracks source samples of the head (+= inc per UAC frame).
+   * On schedule, sent ≈ phase. More than one packet late → dump. */
+  return static_cast<double>(n + kUacBodyPerFrame) < v.phase;
 }
 
 bool SampleDryMixer::CanSend(uint8_t voice) const
@@ -544,11 +578,19 @@ bool SampleDryMixer::CanSend(uint8_t voice) const
     }
     const unsigned burst =
         vq_free_samp_[voice].load(std::memory_order_relaxed);
+    const unsigned trickle = static_cast<unsigned>(vq_reclaim_[voice]);
     if (feed == VqFeed::Prefill) {
       const unsigned n = sent_[voice].load(std::memory_order_relaxed);
-      return burst >= kUacBodyPerFrame || n < kPrefillSamples;
+      if (n >= kPrefillSamples && burst < kUacBodyPerFrame) {
+        return false;
+      }
+      if (PrefillCatchUp(voice)) {
+        return burst >= kUacBodyPerFrame || n < kPrefillSamples;
+      }
+      /* Same cadence as Drain: ~inc body samples per output sample so
+       * the ring fills over the attack instead of hogging the pipe. */
+      return (burst + trickle) >= kUacBodyPerFrame;
     }
-    const unsigned trickle = static_cast<unsigned>(vq_reclaim_[voice]);
     return (burst + trickle) >= kUacBodyPerFrame;
   }
   return HasRoom(v);
@@ -586,8 +628,9 @@ void SampleDryMixer::ReclaimVq()
       vq_reclaim_[i] = 0.0;
       continue;
     }
-    if (vq_feed_[i].load(std::memory_order_relaxed) !=
-        static_cast<uint8_t>(VqFeed::Drain)) {
+    const auto feed = static_cast<VqFeed>(
+        vq_feed_[i].load(std::memory_order_relaxed));
+    if (feed == VqFeed::Full) {
       continue;
     }
     vq_reclaim_[i] += IncOf(v);
