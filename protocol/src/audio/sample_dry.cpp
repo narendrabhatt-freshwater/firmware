@@ -228,6 +228,21 @@ void SampleDryMixer::ConsumeOutputSamples(double nframes)
   }
 }
 
+bool SampleDryMixer::VqArmed(uint8_t voice) const
+{
+  if (voice >= kSampleVoices) {
+    return false;
+  }
+  if (!vq_live_.load(std::memory_order_relaxed)) {
+    return false;
+  }
+  if (sent_[voice].load(std::memory_order_relaxed) == 0u) {
+    return false;
+  }
+  const uint8_t mask = vq_mask_.load(std::memory_order_relaxed);
+  return (mask & static_cast<uint8_t>(1u << voice)) != 0u;
+}
+
 bool SampleDryMixer::HasRoom(uint8_t voice, unsigned nsamp) const
 {
   if (voice >= kSampleVoices || nsamp == 0) {
@@ -237,9 +252,7 @@ bool SampleDryMixer::HasRoom(uint8_t voice, unsigned nsamp) const
       static_cast<double>(kPrefillSamples)) {
     return false;
   }
-  const uint8_t mask = vq_mask_.load(std::memory_order_relaxed);
-  if (vq_live_.load(std::memory_order_relaxed) &&
-      (mask & static_cast<uint8_t>(1u << voice)) != 0u &&
+  if (VqArmed(voice) &&
       vq_free_samp_[voice].load(std::memory_order_relaxed) < nsamp) {
     return false;
   }
@@ -259,9 +272,7 @@ unsigned SampleDryMixer::WantBurst(uint8_t voice) const
   if (n > kBodyBurstMax) {
     n = kBodyBurstMax;
   }
-  const uint8_t mask = vq_mask_.load(std::memory_order_relaxed);
-  if (vq_live_.load(std::memory_order_relaxed) &&
-      (mask & static_cast<uint8_t>(1u << voice)) != 0u) {
+  if (VqArmed(voice)) {
     const unsigned free_s =
         vq_free_samp_[voice].load(std::memory_order_relaxed);
     if (free_s < n) {
@@ -313,6 +324,38 @@ unsigned SampleDryMixer::FillBurst(uint8_t voice, int16_t *dst, unsigned max_n,
   return n;
 }
 
+void SampleDryMixer::AbortBurst(uint8_t voice, unsigned nsamp, bool sof)
+{
+  if (voice >= kSampleVoices || nsamp == 0) {
+    return;
+  }
+  auto &v = voices_[voice];
+  if (sof) {
+    v.sof_pending = true;
+  }
+  if (v.queued > static_cast<double>(nsamp)) {
+    v.queued -= static_cast<double>(nsamp);
+  } else {
+    v.queued = 0.0;
+  }
+  v.cursor -= static_cast<double>(nsamp);
+  const size_t nbody = (v.wave_id < bodies_.size()) ? bodies_[v.wave_id].size() : 0;
+  if (nbody > 0 && v.cursor < 0.0) {
+    const bool oneshot = oneshot_[v.wave_id].load(std::memory_order_relaxed);
+    if (oneshot) {
+      v.cursor = 0.0;
+    } else {
+      const double n_d = static_cast<double>(nbody);
+      v.cursor = std::fmod(v.cursor, n_d);
+      if (v.cursor < 0.0) {
+        v.cursor += n_d;
+      }
+    }
+  }
+  const unsigned sent = sent_[voice].load(std::memory_order_relaxed);
+  sent_[voice].store(sent > nsamp ? sent - nsamp : 0u, std::memory_order_release);
+}
+
 void SampleDryMixer::RaiseQueuedFromVq()
 {
   if (!vq_live_.load(std::memory_order_relaxed)) {
@@ -326,9 +369,17 @@ void SampleDryMixer::RaiseQueuedFromVq()
     if ((mask & static_cast<uint8_t>(1u << i)) == 0u) {
       continue;
     }
+    /* SOF empties the card ring; an in-flight vq still reports the old
+     * occupancy. Raising queued here blocks WantBurst for the new session. */
+    if (sent_[i].load(std::memory_order_relaxed) == 0u) {
+      continue;
+    }
     const double occ =
         static_cast<double>(vq_occ_[i].load(std::memory_order_relaxed));
-    if (occ > voices_[i].queued) {
+    /* Occupancy overestimates fill by 0..255. Snap down so a phantom
+     * cruise (USB FIFO / dropped burst) cannot block WantBurst. Do not
+     * snap up: a stale pre-SOF vq would freeze prefill. */
+    if (occ < voices_[i].queued) {
       voices_[i].queued = occ;
     }
   }

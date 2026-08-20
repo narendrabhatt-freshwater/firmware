@@ -14,6 +14,9 @@ namespace cardlink::audio {
 namespace {
 
 constexpr unsigned kPumpHz = 1000;
+constexpr unsigned kWriteTimeoutMs = 100;
+/* Prefill is 4 bursts × 8 voices. Stop spinning if USB is wedged. */
+constexpr unsigned kMaxSendsPerTick = 64;
 
 } // namespace
 
@@ -57,6 +60,7 @@ bool SampleBulkOut::Start(std::string &err)
   impl_->th = std::thread([this]() {
     using clock = std::chrono::steady_clock;
     auto last = clock::now();
+    auto next = last;
     std::vector<uint8_t> pkt(cardlink::usb::kStreamHdrSize +
                              cardlink::usb::kStreamBodyMetaSize +
                              cardlink::usb::kStreamNsampMax * 2u);
@@ -71,40 +75,61 @@ bool SampleBulkOut::Start(std::string &err)
         nframes = static_cast<double>(kSampleRateHz);
       }
       mixer_->ConsumeOutputSamples(nframes);
-      for (uint8_t v = 0; v < kSampleVoices; ++v) {
-        const unsigned n = mixer_->WantBurst(v);
-        if (n == 0) {
-          continue;
+
+      unsigned sends = 0;
+      bool usb_ok = true;
+      while (usb_ok && sends < kMaxSendsPerTick) {
+        bool any = false;
+        for (uint8_t v = 0; usb_ok && v < kSampleVoices; ++v) {
+          const unsigned n = mixer_->WantBurst(v);
+          if (n == 0) {
+            continue;
+          }
+          bool sof = false;
+          uint8_t session = 0;
+          const unsigned got =
+              mixer_->FillBurst(v, body.data(), n, sof, session);
+          if (got == 0) {
+            continue;
+          }
+          cardlink::usb::StreamHdr hdr{};
+          hdr.magic0 = cardlink::usb::kStreamMagic0;
+          hdr.magic1 = cardlink::usb::kStreamMagic1;
+          hdr.type = cardlink::usb::kStreamTypeBody;
+          hdr.nbytes = static_cast<uint16_t>(
+              cardlink::usb::kStreamBodyMetaSize + got * 2u);
+          cardlink::usb::StreamBodyMeta meta{};
+          meta.voice = v;
+          meta.session = session;
+          meta.sof = sof ? 1u : 0u;
+          meta.nsamp = static_cast<uint16_t>(got);
+          std::memcpy(pkt.data(), &hdr, sizeof hdr);
+          std::memcpy(pkt.data() + sizeof hdr, &meta, sizeof meta);
+          std::memcpy(pkt.data() + sizeof hdr + sizeof meta, body.data(),
+                      got * sizeof(int16_t));
+          const int nbytes = static_cast<int>(sizeof hdr + sizeof meta +
+                                              got * sizeof(int16_t));
+          std::string werr;
+          if (!impl_->link.Write(pkt.data(), nbytes, kWriteTimeoutMs, werr)) {
+            mixer_->AbortBurst(v, got, sof);
+            usb_ok = false;
+            break;
+          }
+          any = true;
+          ++sends;
         }
-        bool sof = false;
-        uint8_t session = 0;
-        const unsigned got =
-            mixer_->FillBurst(v, body.data(), n, sof, session);
-        if (got == 0) {
-          continue;
+        if (!any) {
+          break;
         }
-        cardlink::usb::StreamHdr hdr{};
-        hdr.magic0 = cardlink::usb::kStreamMagic0;
-        hdr.magic1 = cardlink::usb::kStreamMagic1;
-        hdr.type = cardlink::usb::kStreamTypeBody;
-        hdr.nbytes = static_cast<uint16_t>(
-            cardlink::usb::kStreamBodyMetaSize + got * 2u);
-        cardlink::usb::StreamBodyMeta meta{};
-        meta.voice = v;
-        meta.session = session;
-        meta.sof = sof ? 1u : 0u;
-        meta.nsamp = static_cast<uint16_t>(got);
-        std::memcpy(pkt.data(), &hdr, sizeof hdr);
-        std::memcpy(pkt.data() + sizeof hdr, &meta, sizeof meta);
-        std::memcpy(pkt.data() + sizeof hdr + sizeof meta, body.data(),
-                    got * sizeof(int16_t));
-        std::string werr;
-        (void)impl_->link.Write(pkt.data(),
-                                static_cast<int>(sizeof hdr + sizeof meta +
-                                                 got * sizeof(int16_t)),
-                                20, werr);
       }
-      std::this_thread::sleep_for(std::chrono::microseconds(1000000 / kPumpHz));
+
+      next += std::chrono::microseconds(1000000 / kPumpHz);
+      const auto wake = clock::now();
+      if (wake < next) {
+        std::this_thread::sleep_until(next);
+      } else {
+        next = wake;
+      }
     }
   });
   return true;

@@ -550,6 +550,8 @@ void Client::NoteOn(uint8_t voice, double hz, uint16_t wave_id)
     }
   }
   mixer_.NoteOn(voice, wave, hz);
+  /* BODY into the ring before nX so the join is not an empty interpolator. */
+  (void)mixer_.WaitPrefill(voice, 40);
   char aw[32];
   std::snprintf(aw, sizeof aw, "aw %u %u", static_cast<unsigned>(voice),
                 static_cast<unsigned>(wave));

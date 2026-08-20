@@ -145,7 +145,7 @@ the same fields in a 12-byte binary frame: `a5 5a 43 01`, mask, best,
 four packed slot bytes (two 4-bit counts each), CRC-8/0x07, then `0a`.
 Best is 0–7 or 255. Slot codes 0–14 count complete 256-sample slots;
 15 means the ring is empty. At 921600 8N1 the 12-byte frame is ~150 µs
-on the wire. That is not the vendor RX FIFO (~32 KB; a full FIFO NAKs).
+on the wire. That is not the vendor RX FIFO (~4 KB; a full FIFO NAKs).
 
 Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 8-tap
 sinc. The attack plays to its committed length (not a hold-pad to

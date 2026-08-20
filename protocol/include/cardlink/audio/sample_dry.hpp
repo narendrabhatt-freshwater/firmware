@@ -9,9 +9,10 @@
  * plays the AXI attack without draining the ring; consume starts at
  * the join (`attack_len − overlap`). Decrementing `queued` during the
  * attack reopens HasRoom and overflows the ring (`usb drop`).
- * `vq` is a delayed reading of the card FIFO: use it as a lower bound
- * (raise `queued` if the card is fuller) and as a hard stop when it
- * reports no free samples.
+ * `vq` is a delayed reading of the card FIFO. Occupancy is quantized to
+ * 256-sample slots and never underestimates fill, so it is safe to snap
+ * `queued` down to that occupancy (open-loop over-count is what starves
+ * the playhead). It is also a hard stop when it reports no free samples.
  *
  * The bulk thread posts no mutex: UI posts to a SPSC command queue.
  */
@@ -93,6 +94,9 @@ public:
   unsigned FillBurst(uint8_t voice, int16_t *dst, unsigned max_n, bool &sof,
                      uint8_t &session);
 
+  /** Undo FillBurst when the bulk OUT did not accept the packet. */
+  void AbortBurst(uint8_t voice, unsigned nsamp, bool sof);
+
   void ApplyVoiceQuery(uint8_t mask, uint8_t best, const uint8_t *free_slots);
 
   void SetPitchHz(uint8_t voice, double freq_hz);
@@ -135,6 +139,7 @@ private:
   /** True once the card interpolator has reached the attack join. */
   static bool BodyDraining(const Voice &v);
   void RaiseQueuedFromVq();
+  bool VqArmed(uint8_t voice) const;
   bool HasRoom(uint8_t voice, unsigned nsamp) const;
   bool WaveInUse(uint16_t wave_id) const;
 
