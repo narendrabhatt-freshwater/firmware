@@ -220,7 +220,7 @@ bool Client::UploadAttack(uint8_t voice, const int32_t *q31, size_t nsamp,
 {
   if (voice >= cardlink::audio::kSampleVoices || q31 == nullptr ||
       nsamp == 0 || nsamp > cardlink::audio::kAttackSamples) {
-    err = "err: attack must be 1..8192 Q31 samples";
+    err = "err: attack must be 1..4096 Q31 samples";
     return false;
   }
   if (!BeginCdc(err)) {
@@ -465,7 +465,18 @@ void Client::NoteOn(uint8_t voice, double hz)
   if (voice >= cardlink::audio::kSampleVoices) {
     return;
   }
-  mixer_.NoteOn(voice, voice, hz);
+  /* Slot is the UAC/nX voice. Body may come from another loaded wave so
+   * MIDI polyphony works when only n0 has a sample. */
+  uint16_t wave = voice;
+  if (!slots_[voice].body_ready) {
+    for (uint8_t i = 0; i < cardlink::audio::kSampleVoices; ++i) {
+      if (slots_[i].body_ready) {
+        wave = i;
+        break;
+      }
+    }
+  }
+  mixer_.NoteOn(voice, wave, hz);
   char cmd[48];
   std::snprintf(cmd, sizeof cmd, "n%u %.6g", static_cast<unsigned>(voice), hz);
   SendConsole(cmd);

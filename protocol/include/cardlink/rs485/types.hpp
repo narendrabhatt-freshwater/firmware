@@ -2,8 +2,9 @@
  * @file types.hpp
  * @brief RS485 tagged-link types — targets, status, link options.
  *
- * Wire contract: host TX is CR-terminated ASCII; card replies are one
- * tagged terminal line ending in CRLF (`[C]ok\r\n` / `[E]err:range\r\n`).
+ * Wire contract: host TX is CR-terminated ASCII. General card replies are
+ * tagged terminal lines; Channel `vq` uses a fixed 12-byte binary status
+ * frame so its blocking UART response does not delay USB service.
  */
 
 #ifndef CARDLINK_RS485_TYPES_HPP
@@ -84,6 +85,11 @@ struct LinkOptions {
 
 /** Parse a terminal tagged line. raw is the body after `[C]` / `[E]`. */
 ExchangeResult ParseTaggedReply(const std::string &line, Target expected);
+
+constexpr std::size_t kVqBinaryFrameLen = 12;
+
+/** Validate and translate a Channel binary vq frame to the normal raw body. */
+ExchangeResult ParseVqBinaryReply(const uint8_t *frame, std::size_t len);
 
 } // namespace rs485
 } // namespace cardlink

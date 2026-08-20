@@ -148,7 +148,7 @@ namespace cardproto
       return false;
     }
     for (unsigned i = 0; i < 8; ++i) {
-      if (s[i] > 8u) {
+      if (s[i] > 15u) {
         return false;
       }
       out.free_slots[i] = static_cast<uint8_t>(s[i]);

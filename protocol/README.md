@@ -69,7 +69,7 @@ cardlink::rs485::Controller bus;
 cardlink::midi::VoiceBank voices;
 bus.SetLogHandler([](const std::string &line) { /* display or persist */ });
 bus.SetIdleHandler([](uint8_t slot) { /* stop this slot's UAC dry stream */ });
-bus.RequestOpen("/dev/cu.usbserial-0001", 460800, 6);
+bus.RequestOpen("/dev/cu.usbserial-0001", 921600, 6);
 bus.PublishBank(voices);
 bus.QueueChannel([](cardproto::ChannelClient &ch) {
   return ch.SetGain(1, 12);

@@ -46,8 +46,8 @@ private:
   uint32_t err_count_ = 0;
 
   bool WriteWire(const uint8_t *bytes, size_t len);
-  ExchangeResult ReadTerminalReply(Target expected);
-  std::string ReadRawWindow();
+  ExchangeResult ReadTerminalReply(Target expected, bool accept_vq_binary);
+  std::string ReadRawWindow(bool accept_vq_binary);
   /** Drain RX until idle_ms of silence or max_ms elapsed. */
   void WaitRxIdle();
 };

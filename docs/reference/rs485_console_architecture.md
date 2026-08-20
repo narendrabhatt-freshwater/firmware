@@ -2,7 +2,7 @@
 
 Half-duplex, multi-drop RS485 console on Channel and Effect Card firmware,
 plus optional PC tools that speak the **same ASCII protocol** any serial
-terminal can type (`screen`, `minicom`, PuTTY at **460800 8N1**).
+terminal can type (`screen`, `minicom`, PuTTY at **921600 8N1**).
 
 ## Shipping model
 
@@ -21,7 +21,7 @@ flowchart LR
   Term[Any serial terminal]
   Gui[cmi_control]
   Lib[protocol]
-  Bus[RS485 adapter 460800 8N1]
+  Bus[RS485 adapter 921600 8N1]
   CC[Channel Card]
   EC[Effect Card]
   Gui --> Lib

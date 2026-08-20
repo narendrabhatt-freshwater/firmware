@@ -5,7 +5,7 @@ set over USB CDC). One ASCII line in, one reply line out. That is the
 protocol — there is no separate binary control frame; the only binary
 payloads are the CDC attack-head uploads (`al`, §4).
 
-Baud on the RS485 UARTs is **460800 8N1**.
+Baud on the RS485 UARTs is **921600 8N1**.
 
 Type `h` (or `help` or `?`) on either card for the live one-line menu.
 If this document and the firmware disagree, trust the firmware.
@@ -123,24 +123,28 @@ to integers if you care about equal temperament.
 ### Sample bank (per-voice attack heads)
 
 Eight voices (`0`…`7`). Voice **N** owns AXI attack head **N**
-(up to 8192 int32 / 32768 bytes) and its UAC body FIFO. Heads are not
+(up to 4096 int32 / 16384 bytes) and its UAC body FIFO. Heads are not
 shared. Upload is USB CDC only (§4). Contents survive mode-free
 operation while powered and are lost on reset.
 
 | Command             | Meaning                                                             |
 | ------------------- | ------------------------------------------------------------------- |
-| `al <v> <nbytes>`   | **USB CDC only.** Load voice `<v>`'s attack head (4…32768 bytes)    |
+| `al <v> <nbytes>`   | **USB CDC only.** Load voice `<v>`'s attack head (4…16384 bytes)    |
 | `ar <v> <Hz>`       | Set voice `<v>`'s root pitch (Hz > 0)                               |
 | `aw <v> <v>`        | Identity only; `<voice>` must equal `<id>` or `err:range`           |
 | `a`                 | Loaded heads; `*` marks a voice with an attack in RAM               |
-| `vq`                | Active mask + hungriest voice + free slots 0–8 per ring               |
+| `vq`                | Active mask + hungriest voice + free-slot code per ring               |
 
-Replies: `ok: ar <v> <Hz>`, `ok: aw <v> <v>`,
-`ok: a 0* 1 2* …`, `ok:vq <mask> <best> s0 … s7` (best 0–7 or 255; si = free slots).
+Replies: `ok: ar <v> <Hz>`, `ok: aw <v> <v>`, `ok: a 0* 1 2* …`.
+USB CDC returns `vq` as `ok:vq <mask> <best> s0 … s7`. RS485 returns
+the same fields in a 12-byte binary frame: `a5 5a 43 01`, mask, best,
+four packed slot bytes (two 4-bit counts each), CRC-8/0x07, then `0a`.
+Best is 0–7 or 255. Slot codes 0–14 count complete 256-sample slots;
+15 means the ring is empty.
 
 Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 2-tap
 linear. The attack plays to its committed length (not a hold-pad to
-8192). Body starts at `len − 32` with the same source index and
+4096). Body starts at `len − 32` with the same source index and
 fraction as the attack. `nX > 0` is always a note-on.
 
 ### Oscillator shape (global)
@@ -360,7 +364,7 @@ microphone (mono, 32-bit, 96 kHz) carrying the selected ADC channel.
 | Address prefix | Useful on a shared bus (`c:` / `e:` / `*:`) | Optional; still accepted                                                       |
 | Reply tag      | `[C] ` / `[E] `                             | None — body only                                                               |
 | Echo           | Channel: off. Effect: `ec` (default off)    | Local keystroke echo on                                                        |
-| Baud           | **460800 8N1** on the UART                  | Host may open any rate (e.g. 115200); TinyUSB CDC ignores line coding for data |
+| Baud           | **921600 8N1** on the UART                  | Host may open any rate (e.g. 115200); TinyUSB CDC ignores line coding for data |
 | `al`           | Rejected (`err:usb`)                        | Allowed                                                                        |
 
 Typical host path on macOS / Linux: Channel `cu.usbmodem*` / `ttyACM*`.
@@ -378,7 +382,7 @@ Constraints:
 
 | Command            | Payload                                               |
 | ------------------ | ----------------------------------------------------- |
-| `al <id> <nbytes>` | 4…32768 bytes = 1…8192 × int32 LE (real length, no hold-pad) |
+| `al <id> <nbytes>` | 4…16384 bytes = 1…4096 × int32 LE (real length, no hold-pad) |
 
 Wave `<id>` is **0…7**.
 
@@ -398,9 +402,9 @@ Full-Speed CDC and is intentionally omitted.
 Sequence:
 
 ```text
-Host →  al 0 32768\r
+Host →  al 0 16384\r
 Card →  ok:ready\r\n          ← console write #1
-Host →  <32768 raw bytes>     ← opaque to the console parser
+Host →  <16384 raw bytes>     ← opaque to the console parser
 Card →  ok:attack 0\r\n       ← console write #2
 ```
 

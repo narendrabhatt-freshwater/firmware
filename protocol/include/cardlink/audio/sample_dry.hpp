@@ -3,13 +3,12 @@
  * @brief Host body feeder: unpitched int16 → tagged UAC frames.
  *
  * Card owns pitch / env / filter. Each UAC frame: ch0 = route, ch1..9 =
- * samples for one voice. Mux follows Channel `vq` (hungriest voice + free
- * slots). Between polls the host spends the last free-slot snapshot; it
- * does not rank voices from local phase_inc.
- *
- * The card does not consume body until the attack join. The host still
- * tracks its send cursor: extra USB during that window is dropped and
- * would skip the file. Dropped USB must not skip the file.
+ * samples for one voice. Each frame goes to the voice with the least
+ * remaining fill / phase_inc so a new key cannot starve a held note.
+ * `vq` still reports card occupancy. Feed state is card-truth: prefill
+ * until a 0-slot (full) snapshot, then wait, then trickle at phase_inc
+ * once a hole appears (join has started). Host fade0 is not used — UAC
+ * and nX are not the same clock.
  *
  * Render() is the UAC callback — no mutex. UI posts to a SPSC command
  * queue; Render drains it at the start of the buffer.
@@ -29,13 +28,13 @@ namespace audio {
 
 constexpr unsigned kSampleVoices = 8;
 constexpr unsigned kSampleRateHz = 48000;
-constexpr unsigned kAttackSamples = 8192;
+constexpr unsigned kAttackSamples = 4096;
 constexpr unsigned kCrossfadeSamples = 32;
 constexpr unsigned kBodyOrigin = kAttackSamples - kCrossfadeSamples;
 constexpr unsigned kRingSamples = 4096;
-/** Must match STREAM_SLOT_LEN / STREAM_SLOTS on the card. */
+/** Must match the card's 256-sample slots and 4-bit vq encoding. */
 constexpr unsigned kVqSlotSamples = 256;
-constexpr unsigned kVqSlotMax = 8;
+constexpr unsigned kVqSlotMax = 15;
 /** Prefill target until the first `vq` (one ring). Extra USB is dropped. */
 constexpr unsigned kPrefillSamples = kRingSamples;
 constexpr uint16_t kUacTagBase = 0x7F00;
@@ -120,6 +119,8 @@ private:
   void ApplyCmd(const Cmd &c);
   uint8_t PickVoice() const;
   bool CanSend(uint8_t voice) const;
+  /** Samples still in the card FIFO (vq) or already pushed (prefill). */
+  double FilledEstimate(uint8_t voice) const;
   int16_t NextBody(Voice &v);
   double IncOf(const Voice &v) const;
   static double Fade0Of(unsigned attack_len);
@@ -128,6 +129,9 @@ private:
   static int16_t EncodeTag(uint8_t session, uint8_t route_low);
   bool WaveInUse(uint16_t wave_id) const;
   void SpendVq(uint8_t voice);
+  void ReclaimVq();
+
+  enum class VqFeed : uint8_t { Prefill = 0, Full = 1, Drain = 2 };
 
   std::array<Cmd, kCmdCap> cmds_{};
   std::atomic<uint32_t> cmd_wr_{0};
@@ -141,6 +145,8 @@ private:
   std::atomic<uint8_t> vq_mask_{0};
   std::atomic<uint8_t> vq_best_{0xFF};
   std::array<std::atomic<uint16_t>, kSampleVoices> vq_free_samp_{};
+  std::array<double, kSampleVoices> vq_reclaim_{};
+  std::array<std::atomic<uint8_t>, kSampleVoices> vq_feed_{};
 
   std::array<std::vector<int16_t>, 256> bodies_{};
   std::array<std::atomic<double>, 256> root_hz_{};

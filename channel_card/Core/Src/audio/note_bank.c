@@ -110,7 +110,7 @@ static int32_t NoteBank_InterpAttack(uint16_t wid, uint64_t phase)
   {
     return 0;
   }
-  /* Attack heads are ≤ 8192; Q16.16 index fits in 32 bits. */
+  /* Attack heads are ≤ ATTACK_BANK_LEN; Q16.16 index fits in 32 bits. */
   phase_q16 = (phase > 0xffffffffull) ? 0xffffffffu : (uint32_t)phase;
   return Interp8_Q31(tab, len, phase_q16, 0u);
 }

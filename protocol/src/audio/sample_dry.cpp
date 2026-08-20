@@ -259,6 +259,9 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
     vq_best_.store(0xFF, std::memory_order_relaxed);
     for (uint8_t i = 0; i < kSampleVoices; ++i) {
       vq_free_samp_[i].store(0, std::memory_order_relaxed);
+      vq_reclaim_[i] = 0.0;
+      vq_feed_[i].store(static_cast<uint8_t>(VqFeed::Prefill),
+                        std::memory_order_relaxed);
     }
     return;
   }
@@ -279,6 +282,10 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
     sent_[c.voice].store(0, std::memory_order_release);
     live_[c.voice].store(false, std::memory_order_release);
     live_wave_[c.voice].store(0xFFFFu, std::memory_order_release);
+    vq_free_samp_[c.voice].store(0, std::memory_order_relaxed);
+    vq_reclaim_[c.voice] = 0.0;
+    vq_feed_[c.voice].store(static_cast<uint8_t>(VqFeed::Prefill),
+                            std::memory_order_relaxed);
     return;
   }
   if (c.wave_id >= bodies_.size() || bodies_[c.wave_id].empty()) {
@@ -295,10 +302,16 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
   v.freq_hz = c.freq_hz;
   v.phase = 0.0;
   v.queued = 0.0;
-  v.attack_len = attack_len_[c.wave_id].load(std::memory_order_acquire);
+  /* Head length is per card slot (AXI id = voice), not the body table.
+   * MIDI may stream another slot's body onto an empty head. */
+  v.attack_len = attack_len_[c.voice].load(std::memory_order_acquire);
   sent_[c.voice].store(0, std::memory_order_release);
   live_wave_[c.voice].store(c.wave_id, std::memory_order_release);
   live_[c.voice].store(true, std::memory_order_release);
+  vq_free_samp_[c.voice].store(0, std::memory_order_relaxed);
+  vq_reclaim_[c.voice] = 0.0;
+  vq_feed_[c.voice].store(static_cast<uint8_t>(VqFeed::Prefill),
+                          std::memory_order_relaxed);
 }
 
 void SampleDryMixer::DrainCmds()
@@ -468,58 +481,46 @@ int16_t SampleDryMixer::NextBody(Voice &v)
   return s;
 }
 
-uint8_t SampleDryMixer::PickVoice() const
+double SampleDryMixer::FilledEstimate(uint8_t voice) const
 {
+  if (voice >= kSampleVoices) {
+    return 0.0;
+  }
+  const auto feed = static_cast<VqFeed>(
+      vq_feed_[voice].load(std::memory_order_relaxed));
   const bool have_vq = vq_live_.load(std::memory_order_relaxed);
   const uint8_t mask = vq_mask_.load(std::memory_order_relaxed);
-  const uint8_t best = vq_best_.load(std::memory_order_relaxed);
-
-  if (!have_vq) {
-    uint8_t pick = 0xFF;
-    double least_queued = 0.0;
-    for (uint8_t i = 0; i < kSampleVoices; ++i) {
-      if (!CanSend(i)) {
-        continue;
-      }
-      if (pick == 0xFF || voices_[i].queued < least_queued) {
-        least_queued = voices_[i].queued;
-        pick = i;
-      }
-    }
-    return pick;
+  /* Prefill / not-yet-on-card: vq_free_samp_ is 0, which would look
+   * like a full ring and starve the new voice — or, if we exclusive-
+   * feed it, starve the note already in Drain. Use bytes actually
+   * pushed until the card has listed this slot. */
+  if (!have_vq || feed == VqFeed::Prefill ||
+      (mask & static_cast<uint8_t>(1u << voice)) == 0) {
+    return static_cast<double>(
+        sent_[voice].load(std::memory_order_relaxed));
   }
-
-  /* Card has not listed this voice yet — fill the FIFO until the next vq. */
-  uint8_t prefill = 0xFF;
-  unsigned least_sent = ~0u;
-  for (uint8_t i = 0; i < kSampleVoices; ++i) {
-    if (!CanSend(i) || (mask & static_cast<uint8_t>(1u << i)) != 0) {
-      continue;
-    }
-    const unsigned n = sent_[i].load(std::memory_order_relaxed);
-    if (n < kPrefillSamples && n < least_sent) {
-      least_sent = n;
-      prefill = i;
-    }
+  const uint16_t free = vq_free_samp_[voice].load(std::memory_order_relaxed);
+  if (free >= kRingSamples) {
+    return 0.0;
   }
-  if (prefill != 0xFF) {
-    return prefill;
-  }
+  return static_cast<double>(kRingSamples - free);
+}
 
-  if (best < kSampleVoices &&
-      (mask & static_cast<uint8_t>(1u << best)) != 0 && CanSend(best)) {
-    return best;
-  }
-
+uint8_t SampleDryMixer::PickVoice() const
+{
+  /* One UAC frame, one voice. Do not lock onto a new prefill or vq
+   * best: a held Drain voice only has a few hundred samples, and
+   * exclusive feed of the next key empties it (frozen sample = louder
+   * first pitch, no chord). */
   uint8_t pick = 0xFF;
-  uint16_t least_free = 0xFFFF;
+  double least_t = 0.0;
   for (uint8_t i = 0; i < kSampleVoices; ++i) {
     if (!CanSend(i)) {
       continue;
     }
-    const uint16_t free = vq_free_samp_[i].load(std::memory_order_relaxed);
-    if (free < least_free) {
-      least_free = free;
+    const double t = FilledEstimate(i) / IncOf(voices_[i]);
+    if (pick == 0xFF || t < least_t) {
+      least_t = t;
       pick = i;
     }
   }
@@ -536,17 +537,19 @@ bool SampleDryMixer::CanSend(uint8_t voice) const
     return false;
   }
   if (vq_live_.load(std::memory_order_relaxed)) {
-    if (vq_free_samp_[voice].load(std::memory_order_relaxed) <
-        kUacBodyPerFrame) {
+    const auto feed = static_cast<VqFeed>(
+        vq_feed_[voice].load(std::memory_order_relaxed));
+    if (feed == VqFeed::Full) {
       return false;
     }
-    /* Card is not consuming yet: more USB is dropped and the cursor skips. */
-    if (v.attack_len > 0u &&
-        v.cursor >= static_cast<double>(kRingSamples) &&
-        v.phase < Fade0Of(v.attack_len) + static_cast<double>(kRingSamples)) {
-      return false;
+    const unsigned burst =
+        vq_free_samp_[voice].load(std::memory_order_relaxed);
+    if (feed == VqFeed::Prefill) {
+      const unsigned n = sent_[voice].load(std::memory_order_relaxed);
+      return burst >= kUacBodyPerFrame || n < kPrefillSamples;
     }
-    return true;
+    const unsigned trickle = static_cast<unsigned>(vq_reclaim_[voice]);
+    return (burst + trickle) >= kUacBodyPerFrame;
   }
   return HasRoom(v);
 }
@@ -556,11 +559,42 @@ void SampleDryMixer::SpendVq(uint8_t voice)
   if (!vq_live_.load(std::memory_order_relaxed) || voice >= kSampleVoices) {
     return;
   }
-  const uint16_t free = vq_free_samp_[voice].load(std::memory_order_relaxed);
-  const uint16_t next = (free > kUacBodyPerFrame)
-                            ? static_cast<uint16_t>(free - kUacBodyPerFrame)
-                            : 0;
-  vq_free_samp_[voice].store(next, std::memory_order_relaxed);
+  const uint16_t burst = vq_free_samp_[voice].load(std::memory_order_relaxed);
+  if (burst >= kUacBodyPerFrame) {
+    vq_free_samp_[voice].store(
+        static_cast<uint16_t>(burst - kUacBodyPerFrame),
+        std::memory_order_relaxed);
+    return;
+  }
+  vq_free_samp_[voice].store(0, std::memory_order_relaxed);
+  const double need = static_cast<double>(kUacBodyPerFrame - burst);
+  if (vq_reclaim_[voice] > need) {
+    vq_reclaim_[voice] -= need;
+  } else {
+    vq_reclaim_[voice] = 0.0;
+  }
+}
+
+void SampleDryMixer::ReclaimVq()
+{
+  if (!vq_live_.load(std::memory_order_relaxed)) {
+    return;
+  }
+  for (uint8_t i = 0; i < kSampleVoices; ++i) {
+    const auto &v = voices_[i];
+    if (!v.active) {
+      vq_reclaim_[i] = 0.0;
+      continue;
+    }
+    if (vq_feed_[i].load(std::memory_order_relaxed) !=
+        static_cast<uint8_t>(VqFeed::Drain)) {
+      continue;
+    }
+    vq_reclaim_[i] += IncOf(v);
+    if (vq_reclaim_[i] > static_cast<double>(kRingSamples)) {
+      vq_reclaim_[i] = static_cast<double>(kRingSamples);
+    }
+  }
 }
 
 void SampleDryMixer::Render(int16_t *interleaved, unsigned nframes)
@@ -572,6 +606,7 @@ void SampleDryMixer::Render(int16_t *interleaved, unsigned nframes)
   for (unsigned f = 0; f < nframes; ++f) {
     int16_t *fr = &interleaved[f * kUacChannels];
     AdvancePlayheads();
+    ReclaimVq();
     const uint8_t voice = PickVoice();
     if (voice == 0xFF) {
       fr[0] = static_cast<int16_t>(kUacTagBase | kUacIdle);
@@ -614,9 +649,21 @@ void SampleDryMixer::ApplyVoiceQuery(uint8_t mask, uint8_t best,
     if (slots > kVqSlotMax) {
       slots = kVqSlotMax;
     }
-    vq_free_samp_[i].store(
-        static_cast<uint16_t>(slots * kVqSlotSamples),
-        std::memory_order_relaxed);
+    const uint16_t samples = (slots == kVqSlotMax)
+                                 ? static_cast<uint16_t>(kRingSamples)
+                                 : static_cast<uint16_t>(slots * kVqSlotSamples);
+    vq_free_samp_[i].store(samples, std::memory_order_relaxed);
+    const uint8_t st = vq_feed_[i].load(std::memory_order_relaxed);
+    if (slots == 0u) {
+      if (st == static_cast<uint8_t>(VqFeed::Prefill)) {
+        vq_feed_[i].store(static_cast<uint8_t>(VqFeed::Full),
+                          std::memory_order_relaxed);
+      }
+    } else if (st == static_cast<uint8_t>(VqFeed::Full)) {
+      /* Hole after a full ring: card is consuming body. */
+      vq_feed_[i].store(static_cast<uint8_t>(VqFeed::Drain),
+                        std::memory_order_relaxed);
+    }
   }
   vq_live_.store(true, std::memory_order_release);
 }

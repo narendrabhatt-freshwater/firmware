@@ -21,8 +21,8 @@ extern "C"
 #define SAMPLE_VOICES 8u
 
 #define ATTACK_BANK_COUNT SAMPLE_VOICES
-/** ~171 ms @ 48 kHz. Fits 8 heads in AXI RAM_D1 with margin. */
-#define ATTACK_BANK_LEN 8192u
+/** ~85 ms @ 48 kHz. Fits 8 heads in AXI RAM_D1 with margin. */
+#define ATTACK_BANK_LEN 4096u
 #define ATTACK_BANK_BYTES (ATTACK_BANK_LEN * 4u)
 /** Source-index overlap of attack tail with body head. */
 #define SAMPLE_CROSSFADE_LEN 32u

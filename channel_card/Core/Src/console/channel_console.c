@@ -197,6 +197,66 @@ static void RS485_Reply(const char *s)
   RS485_BusRelease();
 }
 
+/*
+ * Fixed vq frame: sync[2], card, type, active mask, best voice,
+ * four packed free-slot bytes, CRC-8, terminator. Keeping the status
+ * exchange below one USB frame reduces the time this blocking UART write
+ * can delay TinyUSB service.
+ */
+#define VQ_FRAME_LEN 12u
+#define VQ_SYNC_0 0xA5u
+#define VQ_SYNC_1 0x5Au
+#define VQ_CARD_CHANNEL 0x43u
+#define VQ_TYPE_STATUS 0x01u
+_Static_assert(NOTE_BANK_VOICES == 8u,
+               "vq binary frame packs exactly eight voices");
+
+static uint8_t RS485_Crc8(const uint8_t *data, uint32_t len)
+{
+  uint8_t crc = 0u;
+  uint32_t i;
+  uint8_t bit;
+
+  for (i = 0u; i < len; i++)
+  {
+    crc ^= data[i];
+    for (bit = 0u; bit < 8u; bit++)
+    {
+      crc = (crc & 0x80u) != 0u ? (uint8_t)((crc << 1u) ^ 0x07u)
+                                : (uint8_t)(crc << 1u);
+    }
+  }
+  return crc;
+}
+
+static void RS485_ReplyVq(uint8_t mask, uint8_t best,
+                          const uint8_t *slots)
+{
+  uint8_t frame[VQ_FRAME_LEN];
+  uint8_t i;
+
+  frame[0] = VQ_SYNC_0;
+  frame[1] = VQ_SYNC_1;
+  frame[2] = VQ_CARD_CHANNEL;
+  frame[3] = VQ_TYPE_STATUS;
+  frame[4] = mask;
+  frame[5] = best;
+  for (i = 0u; i < NOTE_BANK_VOICES; i += 2u)
+  {
+    frame[6u + (i / 2u)] =
+        (uint8_t)((slots[i] & 0x0Fu) | ((slots[i + 1u] & 0x0Fu) << 4u));
+  }
+  frame[10] = RS485_Crc8(frame, 10u);
+  frame[11] = '\n';
+
+  RS485_BusAcquire();
+  if (HAL_UART_Transmit(&huart5, frame, VQ_FRAME_LEN, 50) != HAL_OK)
+  {
+    rs485_tx_fail++;
+  }
+  RS485_BusRelease();
+}
+
 /* ---------------- Channel Card control console (RS485) ---------------- */
 
 static uint8_t led_show_on = 1;
@@ -1268,7 +1328,8 @@ static void Console_CmdCpu(char *line, char *b, size_t bsz)
 /**
  * vq — hungriest voice + free slot counts for host UAC mux.
  * Reply: ok:vq <mask_hex> <best> <s0>..<s7>
- *   mask bit i = NoteBank_IsActive; best = 0..7 or 255; si = free slots 0..8.
+ *   mask bit i = NoteBank_IsActive; best = 0..7 or 255.
+ *   si = 0..14 free 256-sample slots; 15 means the ring is empty.
  */
 static void Console_CmdVoiceQuery(void)
 {
@@ -1299,7 +1360,14 @@ static void Console_CmdVoiceQuery(void)
   b[n++] = '\r';
   b[n++] = '\n';
   b[n] = '\0';
-  RS485_Reply(b);
+  if (console_via_usb)
+  {
+    RS485_Reply(b);
+  }
+  else
+  {
+    RS485_ReplyVq(mask, best, slots);
+  }
 }
 
 /** n <Hz> [scale]: all voices (n 0 = silence). */

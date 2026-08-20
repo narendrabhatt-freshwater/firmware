@@ -158,7 +158,8 @@ bool Load(App &app)
       app.out_mode =
           static_cast<OutMode>(std::clamp(std::atoi(val.c_str()), 0, 2));
     } else if (key == "baud") {
-      app.baud = static_cast<uint32_t>(std::atoi(val.c_str()));
+      const uint32_t saved = static_cast<uint32_t>(std::atoi(val.c_str()));
+      app.baud = (saved == 460800u || saved == 960000u) ? 921600u : saved;
     } else if (key == "serial_path") {
       std::snprintf(app.serial_path_buf, sizeof(app.serial_path_buf), "%s",
                     val.c_str());

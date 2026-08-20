@@ -134,6 +134,17 @@ bool SerialPort::Open(const std::string &path, uint32_t baud) {
 #endif
   }
 
+#if defined(__APPLE__)
+  /*
+   * AppleUSBFTDI defaults to a 16 ms receive flush timer, which dominates
+   * short request/reply exchanges. The driver accepts this value in
+   * milliseconds despite the IOSSDATALAT header describing microseconds.
+   * Keep this best-effort so non-FTDI serial devices remain usable.
+   */
+  unsigned long latency_ms = 1;
+  (void)ioctl(fd, IOSSDATALAT, &latency_ms);
+#endif
+
   tcflush(fd, TCIOFLUSH);
 
   impl_->fd = fd;

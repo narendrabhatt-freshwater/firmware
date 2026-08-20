@@ -140,6 +140,9 @@ install(FILES
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/cardlink
 )
 
+add_executable(cardlink_rs485_rtt tools/rs485_rtt.cpp)
+target_link_libraries(cardlink_rs485_rtt PRIVATE cardlink::cardlink)
+
 include(CTest)
 if(BUILD_TESTING)
   add_executable(cardlink_voice_bank_tests tests/voice_bank_test.cpp)

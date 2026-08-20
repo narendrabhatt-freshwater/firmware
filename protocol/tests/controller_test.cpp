@@ -1,6 +1,8 @@
 #include "cardlink/rs485/controller.hpp"
+#include "cardlink/rs485/types.hpp"
 
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 
 namespace
@@ -46,6 +48,19 @@ int main()
         "gain commands must reject while closed");
   Check(controller.AttenDb() == 6 && controller.QueueDepth() == 0,
         "rejected commands must not mutate controller state");
+
+  uint8_t vq_frame[cardlink::rs485::kVqBinaryFrameLen] = {
+      0xA5, 0x5A, 0x43, 0x01, 0xFF, 0x00,
+      0xFF, 0xFF, 0xFF, 0xFF, 0x8B, 0x0A};
+  const auto vq = cardlink::rs485::ParseVqBinaryReply(
+      vq_frame, sizeof(vq_frame));
+  Check(vq.ok() &&
+            std::strcmp(vq.raw, "ok:vq ff 0 15 15 15 15 15 15 15 15") == 0,
+        "binary vq reply parsing changed");
+  vq_frame[10] ^= 0x01;
+  Check(cardlink::rs485::ParseVqBinaryReply(vq_frame, sizeof(vq_frame)).status ==
+            cardlink::rs485::Status::BadReply,
+        "binary vq CRC corruption must be rejected");
 
   controller.SetLogHandler([](const std::string &) {});
   controller.SetPollLogHandler([](const std::string &) {});

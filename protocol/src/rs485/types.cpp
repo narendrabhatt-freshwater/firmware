@@ -1,7 +1,9 @@
 #include "cardlink/rs485/types.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 
 namespace cardlink {
@@ -24,6 +26,19 @@ void CopyTrunc(char *dst, size_t dst_sz, const std::string &src) {
     std::memcpy(dst, src.data(), n);
   }
   dst[n] = '\0';
+}
+
+uint8_t Crc8(const uint8_t *data, size_t len) {
+  uint8_t crc = 0;
+  for (size_t i = 0; i < len; ++i) {
+    crc ^= data[i];
+    for (uint8_t bit = 0; bit < 8; ++bit) {
+      crc = (crc & 0x80u) != 0u
+                ? static_cast<uint8_t>((crc << 1u) ^ 0x07u)
+                : static_cast<uint8_t>(crc << 1u);
+    }
+  }
+  return crc;
 }
 
 } // namespace
@@ -129,6 +144,51 @@ ExchangeResult ParseTaggedReply(const std::string &line_in, Target expected) {
   /* Maintenance multi-line / status: treat as Ok if we got a tagged line. */
   r.status = Status::Ok;
   return r;
+}
+
+ExchangeResult ParseVqBinaryReply(const uint8_t *frame, size_t len) {
+  constexpr uint8_t kSync0 = 0xA5;
+  constexpr uint8_t kSync1 = 0x5A;
+  constexpr uint8_t kCardChannel = 0x43;
+  constexpr uint8_t kTypeStatus = 0x01;
+
+  ExchangeResult out;
+  out.from = Target::Channel;
+  if (frame == nullptr || len != kVqBinaryFrameLen ||
+      frame[0] != kSync0 || frame[1] != kSync1 ||
+      frame[2] != kCardChannel || frame[3] != kTypeStatus ||
+      frame[11] != '\n' || frame[10] != Crc8(frame, 10)) {
+    out.status = Status::BadReply;
+    std::snprintf(out.raw, sizeof(out.raw), "bad binary vq frame");
+    return out;
+  }
+
+  std::array<uint8_t, 8> slots{};
+  for (size_t i = 0; i < slots.size(); i += 2) {
+    const uint8_t packed = frame[6 + i / 2];
+    slots[i] = static_cast<uint8_t>(packed & 0x0Fu);
+    slots[i + 1] = static_cast<uint8_t>((packed >> 4u) & 0x0Fu);
+    if (slots[i] > 15u || slots[i + 1] > 15u) {
+      out.status = Status::BadReply;
+      std::snprintf(out.raw, sizeof(out.raw), "bad binary vq slots");
+      return out;
+    }
+  }
+
+  out.status = Status::Ok;
+  std::snprintf(out.raw, sizeof(out.raw),
+                "ok:vq %02x %u %u %u %u %u %u %u %u %u",
+                static_cast<unsigned>(frame[4]),
+                static_cast<unsigned>(frame[5]),
+                static_cast<unsigned>(slots[0]),
+                static_cast<unsigned>(slots[1]),
+                static_cast<unsigned>(slots[2]),
+                static_cast<unsigned>(slots[3]),
+                static_cast<unsigned>(slots[4]),
+                static_cast<unsigned>(slots[5]),
+                static_cast<unsigned>(slots[6]),
+                static_cast<unsigned>(slots[7]));
+  return out;
 }
 
 } // namespace rs485

@@ -690,7 +690,7 @@ void DrawSamplePage(App &app)
   MonoText("Attack on card (CDC)  ·  Body via UAC (card pitches, hungry mux)",
            kPalette.text, fw::theme::g_fonts.mono);
   ImGui::Spacing();
-  MonoText("Prefill UAC then RS485 n0..n7  ·  vq after note-off  ·  env / filter on card.",
+  MonoText("Prefill UAC then RS485 n0..n7  ·  vq at adapter RTT until idle  ·  env / filter on card.",
            kPalette.text_dim, fs);
   ImGui::Spacing();
   MonoText("Pass one wav/raw per voice; SDK splits attack (CDC) + body (UAC).",

@@ -19,9 +19,10 @@ namespace
 {
 
 constexpr uint8_t kVqVoices = 8;
-/* 10 ms while any note is live or releasing. Faster UART TX of vq replies
- * steals USB SOF (ISO OUT has no retry). */
-constexpr auto kVqPollInterval = std::chrono::milliseconds(10);
+/* Sequential vq ping-pong is already spaced by the adapter RTT (~1.2 ms).
+ * Do not wait extra while a watch is live. A non-zero idle wait is only
+ * so the worker does not spin when no notes or jobs are pending. */
+constexpr auto kWorkerIdleWait = std::chrono::milliseconds(10);
 constexpr int kVqMissLimit = 16;
 
 double ClampNoteHz(double hz)
@@ -133,13 +134,6 @@ struct Controller::Impl
 
   bool WatchPendingLocked() const
   {
-    /* Card hunger (vq) drives the UAC mux. Poll at kVqPollInterval while any
-     * voice is live or finishing release — not only after note-off. */
-    for (uint8_t i = 0; i < cardlink::midi::kVoiceCount; ++i) {
-      if (desired_hz[i] > 0.0 || sent_hz[i] > 0.0) {
-        return true;
-      }
-    }
     for (bool watching : watch_idle) {
       if (watching) {
         return true;
@@ -152,8 +146,8 @@ struct Controller::Impl
   {
     sent_hz[slot] = hz;
     if (slot < kVqVoices) {
-      /* After note-off, poll until the card finishes release. */
-      watch_idle[slot] = (hz <= 0.0);
+      /* Note-on and note-off both watch until vq reports card-side idle. */
+      watch_idle[slot] = true;
       underrun_logged[slot] = false;
     }
   }
@@ -228,8 +222,8 @@ struct Controller::Impl
       vq = vq_handler;
       for (uint8_t i = 0; i < kVqVoices; ++i) {
         const bool active = (mask & static_cast<uint8_t>(1u << i)) != 0;
-        /* Free slots 8 means the UAC ring is empty. */
-        if (active && slots[i] >= 8u) {
+        /* Slot code 15 is reserved for a genuinely empty UAC ring. */
+        if (active && slots[i] == 15u) {
           if (!underrun_logged[i]) {
             LogHandler handler =
                 poll_log_handler ? poll_log_handler : log_handler;
@@ -238,7 +232,7 @@ struct Controller::Impl
             }
             underrun_logged[i] = true;
           }
-        } else if (slots[i] < 8u) {
+        } else {
           underrun_logged[i] = false;
         }
         if (watch_idle[i] && !active) {
@@ -416,7 +410,11 @@ struct Controller::Impl
 
       {
         std::unique_lock<std::mutex> lock(mutex);
-        cv.wait_for(lock, kVqPollInterval, [&] {
+        const auto wait =
+            (!halted.load() && WatchPendingLocked())
+                ? std::chrono::milliseconds(0)
+                : kWorkerIdleWait;
+        cv.wait_for(lock, wait, [&] {
           return !run.load() || !jobs.empty() ||
                  (!halted.load() && WorkPendingLocked());
         });
@@ -687,7 +685,7 @@ QueueResult Controller::QueueExec(cardproto::Target target, std::string command)
       {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         impl_->desired_hz[slot] = value;
-        impl_->watch_idle[slot] = (value <= 0.0);
+        impl_->watch_idle[slot] = true;
         impl_->underrun_logged[slot] = false;
       }
       impl_->cv.notify_one();
@@ -745,7 +743,7 @@ void Controller::AcknowledgeSlotHz(uint8_t slot, double hz)
   std::lock_guard<std::mutex> lock(impl_->mutex);
   impl_->desired_hz[slot] = value;
   impl_->sent_hz[slot] = value;
-  impl_->watch_idle[slot] = (value <= 0.0);
+  impl_->watch_idle[slot] = true;
   impl_->underrun_logged[slot] = false;
 }
 
@@ -755,9 +753,9 @@ void Controller::AcknowledgeAllHz(double hz)
   std::lock_guard<std::mutex> lock(impl_->mutex);
   impl_->desired_hz.fill(value);
   impl_->sent_hz.fill(value);
-  /* Silence watches until the card is idle so UAC dry can stop. */
+  /* Every acknowledged voice watches until the card reports it idle. */
   for (uint8_t i = 0; i < kVqVoices; ++i) {
-    impl_->watch_idle[i] = (value <= 0.0);
+    impl_->watch_idle[i] = true;
     impl_->underrun_logged[i] = false;
   }
 }

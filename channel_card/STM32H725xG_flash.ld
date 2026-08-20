@@ -239,7 +239,7 @@ SECTIONS
     . = ALIGN(4);
   } >RAM_D1
 
-  /* Attack heads (8 × 8192 int32) in AXI — not DTCM. */
+  /* Attack heads (8 × 4096 int32) in AXI — not DTCM. */
   .attack_bank (NOLOAD) : ALIGN(4)
   {
     *(.attack_bank)

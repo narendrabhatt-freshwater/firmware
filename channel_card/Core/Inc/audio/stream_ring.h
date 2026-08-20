@@ -29,9 +29,10 @@ extern "C"
 #define STREAM_BANK_LEN 2048u
 #define STREAM_BANKS 2u
 #define STREAM_RING_SAMPLES (STREAM_BANKS * STREAM_BANK_LEN)
-/** vq reports free space in 256-sample units, capped at 8. */
+/** vq reports 0..14 free 256-sample slots; 15 means the ring is empty. */
 #define STREAM_SLOT_LEN 256u
-#define STREAM_SLOTS 8u
+#define STREAM_SLOT_MAX 14u
+#define STREAM_SLOT_EMPTY 15u
 
 /**
  * ch0 is a tag, not PCM. Near-silence must not decode as voice 0
@@ -79,7 +80,7 @@ extern "C"
 
   uint32_t StreamRing_FillLevel(uint8_t voice);
 
-  /** Complete free slots 0..8 (partial write slot does not count as free). */
+  /** Free-slot code: 0..14 complete slots; 15 means empty. */
   uint8_t StreamRing_FreeSlots(uint8_t voice);
 
 #ifdef __cplusplus

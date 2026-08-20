@@ -17,7 +17,7 @@ is a Full-Speed **UAC2 microphone** (mono int32 @ 96 kHz) plus CDC.
 ```mermaid
 flowchart TB
   subgraph host [Host]
-    RS485[RS485 460800 8N1]
+    RS485[RS485 921600 8N1]
     CDC[USB CDC ACM]
     UacOut[UAC2 OUT 10ch int16 48 kHz]
     UacIn[UAC2 IN mono int32 96 kHz]
@@ -56,12 +56,12 @@ flowchart TB
 ## 2. Channel — SAMPLE voice (one of n0..n7)
 
 Attack and body are storage. The head plays to its committed length
-(≤ 8192). Body is a FIFO from the UAC ring, consumed with Q16.16
+(≤ 4096). Body is a FIFO from the UAC ring, consumed with Q16.16
 interpolation. `nX > 0` is always a note-on. A new UAC session
 (`SOF` + session 0–6) starts a new body FIFO; a repeated frame with
 the same session does not.
 The host muxes UAC frames from Channel `vq` (hungriest voice + free
-slots), polled every 10 ms while notes are live. Missing body holds the
+slots), polled at adapter RTT while notes are live. Missing body holds the
 last sample until USB catches up. The producer never overwrites unread
 FIFO samples.
 
@@ -111,9 +111,12 @@ flowchart TB
   end
 ```
 
-`vq` reports `ok:vq <mask_hex> <best> s0..s7` (`si` = free slots 0..8).
-Need-score is `filled / max(phase_inc, target_inc)`. The host mux does
-not use `vq` while a note is sounding — it paces from `phase_inc`.
+RS485 `vq` returns a 12-byte binary frame containing active mask,
+hungriest voice, and eight packed free-slot codes (0..14; 15 = empty). Need-score is
+`filled / max(phase_inc, target_inc)`; the host uses each reply to mux
+body frames until the next 10 ms poll. The mixer also tops up free-slot
+credit by phase_inc each UAC frame so 256-sample slot rounding does not
+starve a 4× note between polls.
 UAC and `nX` start together. The attack plays to its committed length;
 body consume starts at `len − 32` with the same source fraction. The
 host does not wait for FIFO prefill. `StreamRing_Prime` arms consume
@@ -262,7 +265,7 @@ flowchart LR
 ```
 
 Channel `vq` replies are sent from the main loop (same loop as
-`USB_App_Task`). The host polls `vq` every 10 ms while any note is live
+`USB_App_Task`). The host polls `vq` at adapter RTT while any note is live
 or releasing; the reply (mask, hungriest voice, free slots) is the UAC
-mux input. Do not poll faster: UART TX of the reply can miss a USB SOF
-and ISO OUT has no retry.
+mux input. UART TX of the reply can miss a USB SOF and ISO OUT has no
+retry, so do not poll faster than the measured adapter RTT.

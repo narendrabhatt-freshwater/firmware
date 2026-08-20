@@ -1,6 +1,7 @@
 #include "cardlink/rs485/link.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cstring>
@@ -9,6 +10,27 @@
 namespace cardlink {
 namespace rs485 {
 namespace {
+
+constexpr uint8_t kVqSync0 = 0xA5;
+constexpr uint8_t kVqSync1 = 0x5A;
+
+bool FindVqFrame(const std::string &raw,
+                 std::array<uint8_t, kVqBinaryFrameLen> &frame) {
+  if (raw.size() < kVqBinaryFrameLen) {
+    return false;
+  }
+  for (size_t i = 0; i + kVqBinaryFrameLen <= raw.size(); ++i) {
+    if (static_cast<uint8_t>(raw[i]) != kVqSync0 ||
+        static_cast<uint8_t>(raw[i + 1]) != kVqSync1) {
+      continue;
+    }
+    for (size_t j = 0; j < kVqBinaryFrameLen; ++j) {
+      frame[j] = static_cast<uint8_t>(raw[i + j]);
+    }
+    return true;
+  }
+  return false;
+}
 
 std::string ToLower(const std::string &s) {
   std::string out = s;
@@ -123,7 +145,7 @@ void Link::WaitRxIdle() {
   }
 }
 
-std::string Link::ReadRawWindow() {
+std::string Link::ReadRawWindow(bool accept_vq_binary) {
   using clock = std::chrono::steady_clock;
   const auto deadline =
       clock::now() + std::chrono::milliseconds(opts_.reply_timeout_ms);
@@ -147,6 +169,13 @@ std::string Link::ReadRawWindow() {
     }
     raw.append(reinterpret_cast<char *>(buf), n);
 
+    if (accept_vq_binary) {
+      std::array<uint8_t, kVqBinaryFrameLen> frame{};
+      if (FindVqFrame(raw, frame)) {
+        return raw;
+      }
+    }
+
     std::string tagged = ExtractTaggedRegion(raw);
     if (tagged.empty()) {
       continue;
@@ -168,8 +197,15 @@ std::string Link::ReadRawWindow() {
   return raw;
 }
 
-ExchangeResult Link::ReadTerminalReply(Target expected) {
-  std::string window = ReadRawWindow();
+ExchangeResult Link::ReadTerminalReply(Target expected,
+                                       bool accept_vq_binary) {
+  std::string window = ReadRawWindow(accept_vq_binary);
+  if (accept_vq_binary) {
+    std::array<uint8_t, kVqBinaryFrameLen> frame{};
+    if (FindVqFrame(window, frame)) {
+      return ParseVqBinaryReply(frame.data(), frame.size());
+    }
+  }
   std::string tagged = ExtractTaggedRegion(window);
   if (tagged.empty()) {
     ExchangeResult r;
@@ -218,6 +254,7 @@ ExchangeResult Link::Send(Target target, const std::string &command_in) {
   std::string line =
       explicit_prefix ? command : (TargetPrefix(target) + command);
   std::string wire = line + "\r";
+  const std::string body = explicit_prefix ? command.substr(2) : command;
 
   Target expect = target;
   if (explicit_prefix) {
@@ -229,6 +266,7 @@ ExchangeResult Link::Send(Target target, const std::string &command_in) {
       expect = Target::All;
     }
   }
+  const bool vq_binary = expect == Target::Channel && body == "vq";
 
   ExchangeResult result;
   result.status = Status::Timeout;
@@ -245,13 +283,13 @@ ExchangeResult Link::Send(Target target, const std::string &command_in) {
 
     SleepMs(opts_.post_tx_settle_ms);
 
-    result = ReadTerminalReply(expect);
+    result = ReadTerminalReply(expect, vq_binary);
 
     if (result.status == Status::Ok || result.status == Status::Err) {
       if (result.status == Status::Err) {
         ++err_count_;
       }
-      if (opts_.rx_idle_ms > 0) {
+      if (!vq_binary && opts_.rx_idle_ms > 0) {
         WaitRxIdle();
       }
       SleepMs(opts_.post_ack_settle_ms);
@@ -267,13 +305,13 @@ ExchangeResult Link::Send(Target target, const std::string &command_in) {
     if (opts_.late_ack_grace_ms > 0) {
       const uint32_t saved_to = opts_.reply_timeout_ms;
       opts_.reply_timeout_ms = opts_.late_ack_grace_ms;
-      ExchangeResult late = ReadTerminalReply(expect);
+      ExchangeResult late = ReadTerminalReply(expect, vq_binary);
       opts_.reply_timeout_ms = saved_to;
       if (late.status == Status::Ok || late.status == Status::Err) {
         if (late.status == Status::Err) {
           ++err_count_;
         }
-        if (opts_.rx_idle_ms > 0) {
+        if (!vq_binary && opts_.rx_idle_ms > 0) {
           WaitRxIdle();
         }
         SleepMs(opts_.post_ack_settle_ms);

@@ -183,9 +183,13 @@ uint8_t StreamRing_FreeSlots(uint8_t voice)
   uint32_t filled = StreamRing_FillLevel(voice);
   uint32_t free_samp = STREAM_RING_SAMPLES - filled;
   uint32_t slots = free_samp / STREAM_SLOT_LEN;
-  if (slots > STREAM_SLOTS)
+  if (filled == 0u)
   {
-    slots = STREAM_SLOTS;
+    return STREAM_SLOT_EMPTY;
+  }
+  if (slots > STREAM_SLOT_MAX)
+  {
+    slots = STREAM_SLOT_MAX;
   }
   return (uint8_t)slots;
 }

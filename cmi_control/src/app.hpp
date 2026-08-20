@@ -113,7 +113,7 @@ struct App
   std::vector<std::string> serial_ports;
   int serial_port_index = 0;
   char serial_path_buf[256] = {};
-  uint32_t baud = 460800;
+  uint32_t baud = 921600;
   int gain_db = 6;
   OutMode out_mode = OutMode::Card;
   GuiView view = GuiView::Perform;

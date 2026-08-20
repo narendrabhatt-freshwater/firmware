@@ -41,7 +41,7 @@ public:
                          const cardproto::Result &)>;
   /** Called when vq reports a voice idle after note activity. */
   using IdleHandler = std::function<void(uint8_t slot)>;
-  /** Occupancy correction for a UAC mux (mask, best, free slots 0..8). */
+  /** Occupancy correction for a UAC mux (slots 0..14; 15 means empty). */
   using VqHandler = std::function<void(uint8_t, uint8_t,
                                        const std::array<uint8_t, 8> &)>;
 

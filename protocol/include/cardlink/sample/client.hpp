@@ -4,7 +4,8 @@
  *
  * Owns wave split, CDC attack upload, UAC body mixer, and note commands.
  * The UI supplies a console sink (RS485 or CDC ASCII) and calls Render()
- * from the UAC callback. Voice N owns attack slot N and body table N.
+ * from the UAC callback. Attack heads stay per slot. MIDI NoteOn may
+ * stream another slot's body so one loaded sample is 8-voice polyphonic.
  */
 
 #ifndef CARDLINK_SAMPLE_CLIENT_HPP
