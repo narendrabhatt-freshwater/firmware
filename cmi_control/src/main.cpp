@@ -106,7 +106,7 @@ int main(int argc, char **argv)
   App app;
   g_app = &app;
   app.bus.SetPollLog(&app.poll_log);
-  /* Stop UAC dry when card finishes release (vq reports idle). */
+  /* Stop BODY stream when card finishes release (vq reports idle). */
   app.samples.SetConsole([&app](const std::string &cmd) {
     (void)app.bus.QueueExec(cardproto::Target::Channel, cmd);
   });

@@ -61,7 +61,7 @@ public:
   void RequestSilence();
 
   /**
-   * Optional: Silence UAC dry when card finishes release (vq idle).
+   * Optional: Silence BODY stream when card finishes release (vq idle).
    * Thread-safe; may be invoked from the bus worker.
    */
   void SetIdleHandler(IdleHandler handler);

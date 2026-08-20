@@ -222,7 +222,7 @@ struct Controller::Impl
       vq = vq_handler;
       for (uint8_t i = 0; i < kVqVoices; ++i) {
         const bool active = (mask & static_cast<uint8_t>(1u << i)) != 0;
-        /* Slot code 15 is reserved for a genuinely empty UAC ring. */
+        /* Slot code 15 is reserved for a genuinely empty body ring. */
         if (active && slots[i] == 15u) {
           if (!underrun_logged[i]) {
             LogHandler handler =
@@ -235,7 +235,7 @@ struct Controller::Impl
         } else {
           underrun_logged[i] = false;
         }
-        /* UAC NoteOn is posted before nX is on the wire. An in-flight
+        /* BODY NoteOn is posted before nX is on the wire. An in-flight
          * vq then has no mask bit for the new slot; treating that as
          * idle Silence()s the body stream and only the AXI attack
          * plays. Stay armed while the host still wants a pitch. */
@@ -254,7 +254,7 @@ struct Controller::Impl
     }
     for (uint8_t i = 0; i < kVqVoices; ++i) {
       if (become_idle[i]) {
-        LogPoll("ok: voice " + std::to_string(i) + " idle → silence UAC");
+        LogPoll("ok: voice " + std::to_string(i) + " idle → silence BODY");
         idle(i);
       }
     }
@@ -269,7 +269,7 @@ struct Controller::Impl
       return;
     }
 
-    /* Status poll only: a late USB/ISO stall must not halt notes. */
+    /* Status poll only: a late USB stall must not halt notes. */
     int misses = 0;
     bool give_up = false;
     IdleHandler idle;
@@ -295,7 +295,7 @@ struct Controller::Impl
     if (!give_up) {
       return;
     }
-    LogPoll("warn: vq stalled — stopped UAC watch");
+    LogPoll("warn: vq stalled — stopped BODY watch");
     if (idle) {
       for (uint8_t i = 0; i < kVqVoices; ++i) {
         if (become_idle[i]) {
@@ -664,7 +664,7 @@ void Controller::RequestRecover()
 QueueResult Controller::QueueExec(cardproto::Target target, std::string command)
 {
   /* nX must last-win. Queueing every tap/release on RS485 delivers a stale
-   * nX 0 after the hold's UAC session has already started. */
+   * nX 0 after the hold's BODY session has already started. */
   if (target == cardproto::Target::Channel) {
     const char *text = command.c_str();
     if (command.size() >= 2 && text[0] == 'c' && text[1] == ':') {
@@ -690,7 +690,7 @@ QueueResult Controller::QueueExec(cardproto::Target target, std::string command)
         std::lock_guard<std::mutex> lock(impl_->mutex);
         impl_->desired_hz[slot] = value;
         /* Arm the idle watch after the card ACKs nX (MarkNoteSentLocked).
-         * Arming here races an in-flight vq and drops the UAC body. */
+         * Arming here races an in-flight vq and drops the BODY stream. */
         impl_->underrun_logged[slot] = false;
       }
       impl_->cv.notify_one();

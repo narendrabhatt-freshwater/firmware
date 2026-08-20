@@ -207,11 +207,6 @@ void Client::EndCdc()
   }
 }
 
-void Client::Render(int16_t *interleaved, unsigned nframes)
-{
-  mixer_.Render(interleaved, nframes);
-}
-
 void Client::SendConsole(const std::string &cmd)
 {
   if (console_) {

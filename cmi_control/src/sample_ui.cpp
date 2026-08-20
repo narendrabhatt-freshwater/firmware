@@ -87,7 +87,7 @@ bool ApplyWaveFile(App &app, int voice, const std::string &path)
   }
   std::string err;
   char msg[64];
-  std::snprintf(msg, sizeof msg, "ok: wav w%u → card + UAC",
+  std::snprintf(msg, sizeof msg, "ok: wav w%u → card + BODY",
                 static_cast<unsigned>(voice));
   return CallSample(app, app.samples.LoadWave(static_cast<uint8_t>(voice),
                                               path, err),
@@ -365,7 +365,7 @@ void DrainPending(App &app)
 
 void NoteOn(App &app, int voice, double hz)
 {
-  (void)app.EnsureSampleUac();
+  (void)app.EnsureSampleStream();
   app.samples.NoteOn(static_cast<uint8_t>(voice), hz);
 }
 
@@ -424,7 +424,7 @@ void DrawVoiceCard(App &app, int voice, float card_w, float card_h)
     } else {
       std::snprintf(status, sizeof status, "atk %s  ·  body %s",
                     slot->head_on_card ? "card" : "\u2014",
-                    slot->body_ready ? "UAC" : "\u2014");
+                    slot->body_ready ? "BODY" : "\u2014");
       MonoText(status,
                (slot->head_on_card && slot->body_ready) ? kPalette.accent
                                                         : kPalette.muted,
@@ -481,13 +481,13 @@ void DrawSamplePage(App &app)
   }
 
   ImFont *fs = fw::theme::g_fonts.mono_small;
-  const bool uac_on = app.sample_uac && app.sample_uac->Running();
+  const bool stream_on = app.sample_bulk && app.sample_bulk->Running();
   const bool bus_ok = app.bus.IsOpen() && !app.bus.BusFault();
   const bool cdc_ok = app.attack_cdc_path[0] != '\0';
   const bool dialog_busy = app.file_dialog.Busy();
   const bool load_busy = app.sample_load.busy.load();
 
-  // ── Top bar: CDC + UAC
+  // ── Top bar: CDC + BODY
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kPalette.bg_alt);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(16.f), 0.f));
   ImGui::BeginChild("sample_bar", ImVec2(0, S(44.f)), ImGuiChildFlags_None);
@@ -551,29 +551,29 @@ void DrawSamplePage(App &app)
 
     ImGui::SameLine(0.f, S(14.f));
     ImGui::SetCursorPosY(mid_y + S(4.f));
-    fw::ui::StatusDot(3.f, uac_on ? kPalette.accent : kPalette.muted, uac_on);
+    fw::ui::StatusDot(3.f, stream_on ? kPalette.accent : kPalette.muted, stream_on);
     ImGui::SameLine(0.f, S(8.f));
     ImGui::SetCursorPosY(mid_y + S(5.f));
-    MonoText(uac_on ? "UAC DRY ON" : "UAC DRY OFF",
-             uac_on ? kPalette.accent : kPalette.text_dim, fs);
+    MonoText(stream_on ? "BODY ON" : "BODY OFF",
+             stream_on ? kPalette.accent : kPalette.text_dim, fs);
 
     ImGui::SameLine(0.f, S(12.f));
     ImGui::SetCursorPosY(mid_y);
-    if (!uac_on) {
-      if (fw::ui::Btn("Start UAC", ImVec2(0, S(22.f)), BtnKind::Primary)) {
-        if (!app.EnsureSampleUac()) {
-          /* EnsureSampleUac already logs. */
+    if (!stream_on) {
+      if (fw::ui::Btn("Start BODY", ImVec2(0, S(22.f)), BtnKind::Primary)) {
+        if (!app.EnsureSampleStream()) {
+          /* EnsureSampleStream already logs. */
         } else {
-          app.PushToastOk("UAC dry open");
+          app.PushToastOk("BODY stream open");
         }
       }
-    } else if (fw::ui::Btn("Stop UAC", ImVec2(0, S(22.f)), BtnKind::Neutral)) {
-      app.sample_uac->Stop();
+    } else if (fw::ui::Btn("Stop BODY", ImVec2(0, S(22.f)), BtnKind::Neutral)) {
+      app.sample_bulk->Stop();
     }
 
     ImGui::SameLine(0.f, S(10.f));
     ImGui::SetCursorPosY(mid_y + S(5.f));
-    MonoText("48 kHz · 10ch int16", kPalette.muted, fs);
+    MonoText("48 kHz · vendor bulk", kPalette.muted, fs);
   }
   ImGui::EndChild();
   ImGui::PopStyleVar();
@@ -652,8 +652,8 @@ void DrawSamplePage(App &app)
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + S(5.f));
     if (!bus_ok) {
       MonoText("RS485 offline", kPalette.warning, fs);
-    } else if (!uac_on) {
-      MonoText("start UAC for sustain body", kPalette.muted, fs);
+    } else if (!stream_on) {
+      MonoText("start BODY for sustain", kPalette.muted, fs);
     } else {
       MonoText("card owns env · filter · mix", kPalette.muted, fs);
     }
@@ -698,13 +698,13 @@ void DrawSamplePage(App &app)
   fw::ui::BeginSection("sample_help", "SIGNAL PATH", ImVec2(0, S(100.f)));
   ImGui::NewLine();
   ImGui::Spacing();
-  MonoText("Attack on card (CDC)  ·  Body via UAC (card pitches, hungry mux)",
+  MonoText("Attack on card (CDC)  ·  Body via vendor bulk (card pitches)",
            kPalette.text, fw::theme::g_fonts.mono);
   ImGui::Spacing();
-  MonoText("Prefill UAC then RS485 n0..n7  ·  vq at adapter RTT until idle  ·  env / filter on card.",
+  MonoText("Prefill BODY then RS485 n0..n7  ·  env / filter on card.",
            kPalette.text_dim, fs);
   ImGui::Spacing();
-  MonoText("Pass wav/raw per wave_id 0..255; SDK splits attack (CDC) + body (UAC).",
+  MonoText("Pass wav/raw per wave_id 0..255; SDK splits attack (CDC) + body (USB).",
            kPalette.text_dim, fs);
   fw::ui::EndSection();
 

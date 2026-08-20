@@ -1,8 +1,12 @@
 /* TinyUSB configuration — Channel Card
  *
  * Composite device on USB1_OTG_HS (full-speed, embedded PHY):
- *   - UAC2 speaker, 10ch int16 / 48 kHz tagged body → per-voice slot rings
+ *   - Vendor bulk BODY stream (host → per-voice rings), fire-and-forget
  *   - CDC-ACM console + attack-head binary load
+ *
+ * FS bulk MPS is 64. CFG_TUD_VENDOR_EPSIZE is the DCD OUT buffer so one
+ * usbd transfer can collect a full 1 ms frame (~19 packets) before
+ * tud_task in main re-arms. The descriptor still advertises 64.
  */
 
 #ifndef _TUSB_CONFIG_H_
@@ -39,12 +43,12 @@ extern "C" {
 
 #define CFG_TUD_ENDPOINT0_SIZE      64
 
-#define CFG_TUD_AUDIO               1
+#define CFG_TUD_AUDIO               0
 #define CFG_TUD_CDC                 1
 #define CFG_TUD_MSC                 0
 #define CFG_TUD_HID                 0
 #define CFG_TUD_MIDI                0
-#define CFG_TUD_VENDOR              0
+#define CFG_TUD_VENDOR              1
 
 //--------------------------------------------------------------------
 // CDC CONFIGURATION
@@ -54,36 +58,15 @@ extern "C" {
 #define CFG_TUD_CDC_TX_BUFSIZE      512
 
 //--------------------------------------------------------------------
-// AUDIO: 10ch int16 @ 48 kHz (~960 B/ms; FS ISO max 1023)
+// VENDOR BULK: max FS frame into one OUT xfer
 //--------------------------------------------------------------------
 
-/* Must match TUD_AUDIO_SPEAKER_10CH_FB_DESC_LEN in usb_descriptors.c.
- * audiod_open() returns this to usbd set_config; wrong length breaks CDC.
- * Parenthesize ONE_CHANNEL_LEN — it is `6+(1+1)*4` without its own parens. */
-#define CFG_TUD_AUDIO_FUNC_1_DESC_LEN                                        \
-  (TUD_AUDIO_SPEAKER_MONO_FB_DESC_LEN -                                      \
-   (TUD_AUDIO_DESC_FEATURE_UNIT_ONE_CHANNEL_LEN) + (6 + (10 + 1) * 4))
-#define CFG_TUD_AUDIO_FUNC_1_N_AS_INT         1
-#define CFG_TUD_AUDIO_FUNC_1_CTRL_BUF_SZ      64
-
-#define CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE          48000
-#define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX            10
-#define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX    2
-#define CFG_TUD_AUDIO_FUNC_1_RESOLUTION_RX            16
-
-#define CFG_TUD_AUDIO_ENABLE_EP_OUT                   1
-#define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX                             \
-  TUD_AUDIO_EP_SIZE(CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE,              \
-                    CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX,        \
-                    CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX)
-/* ISO has no retry. TinyUSB UAC OUT software FIFO (32 × ~960 B ≈ 32 ms
- * of body), not the 12-byte RS485 vq reply. Main must drain it dry;
- * a full FIFO skips the next EP OUT xfer. The USB ISR only re-arms. */
-#define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ                          \
-  (32 * CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX)
-
-#define CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP                  1
-#define CFG_TUD_AUDIO_ENABLE_FEEDBACK_FORMAT_CORRECTION   1
+/* Descriptor wMaxPacketSize stays 64. This is the DCD multi-packet
+ * buffer: 19 × 64 = 1216, the FS bulk ceiling per 1 ms frame. */
+#define CFG_TUD_VENDOR_EPSIZE       1216
+/* ~32 ms at a full FS frame. Full FIFO NAKs the host; it does not drop. */
+#define CFG_TUD_VENDOR_RX_BUFSIZE   32768
+#define CFG_TUD_VENDOR_TX_BUFSIZE   64
 
 #ifdef __cplusplus
 }

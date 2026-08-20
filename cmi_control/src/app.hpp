@@ -6,7 +6,7 @@
 #include "log_buffer.hpp"
 #include "preview_scope.hpp"
 #include "toast.hpp"
-#include "cardlink/audio/sample_uac.hpp"
+#include "cardlink/audio/sample_bulk.hpp"
 #include "cardlink/sample/client.hpp"
 
 #include "cardlink/audio/audio_engine.hpp"
@@ -99,7 +99,7 @@ struct App
   PreviewScope preview;
   std::array<EnvProgram, cardlink::midi::kVoiceCount> voice_envs;
   cardlink::sample::Client samples;
-  std::unique_ptr<cardlink::audio::SampleUacOut> sample_uac;
+  std::unique_ptr<cardlink::audio::SampleBulkOut> sample_bulk;
   fw::ui::ToastHost toasts;
   AsyncFileDialog file_dialog;
   SampleFilePick sample_file_pick = SampleFilePick::None;
@@ -183,7 +183,7 @@ struct App
    * CDC (cu.usbmodem*CHCARD* preferred). Updates attack_cdc_path on success.
    */
   bool EnsureAttackCdc(std::string &err);
-  bool EnsureSampleUac();
+  bool EnsureSampleStream();
   void Tick();
   void Draw();
   void DrawSidebar();

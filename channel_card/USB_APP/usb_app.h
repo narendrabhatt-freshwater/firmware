@@ -1,10 +1,10 @@
 /**
  ******************************************************************************
  * @file    usb_app.h
- * @brief   TinyUSB application layer: UAC2 speaker + CDC console glue.
+ * @brief   TinyUSB application layer: vendor bulk BODY + CDC console.
  *
- * Owns clocks/PHY/NVIC bring-up for the HS device, UAC2 → audio_bridge
- * callbacks, and CDC line assembly that feeds Console_ExecFromUSB().
+ * USB ISR is DCD only (tud_int_handler). tud_task and BODY parse run in
+ * USB_App_Task() from the main loop. A full vendor RX FIFO NAKs the host.
  ******************************************************************************
  */
 
@@ -26,16 +26,11 @@ extern "C"
     void USB_App_Init(void);
 
     /**
-     * @brief Drain UAC into the body rings and poll the CDC line buffer.
-     * @note TinyUSB itself is serviced from the USB ISR. Call again after
-     *       ChannelConsole_Poll() so RS485 TX cannot sit on a full ISO FIFO.
+     * @brief Run TinyUSB, drain BODY into the rings, poll CDC.
+     * @note Call from main. Call again after ChannelConsole_Poll() so a
+     *       long RS485 TX cannot sit on a full vendor RX FIFO.
      */
     void USB_App_Task(void);
-
-    /**
-     * @brief Re-arm ISO OUT from the USB ISR (tud_task only; no ring demux).
-     */
-    void USB_App_TaskFromIsr(void);
 
     /**
      * @brief Write a NUL-terminated string to the CDC console.
@@ -43,10 +38,9 @@ extern "C"
      */
     void USB_CDC_WriteStr(const char *s);
 
-    uint32_t USB_App_IsoDropCount(void);
-    uint32_t USB_App_IsoIncompCount(void);
-    void USB_App_PktSizeCounts(uint32_t *n47, uint32_t *n48, uint32_t *n49,
-                               uint32_t *nxx);
+    uint32_t USB_App_RxMsgCount(void);
+    uint32_t USB_App_RxByteCount(void);
+    uint32_t USB_App_BadCount(void);
     void USB_App_StatsClear(void);
 
 #ifdef __cplusplus

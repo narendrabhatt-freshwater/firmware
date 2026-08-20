@@ -3,7 +3,7 @@
  * @file    attack_bank.h
  * @brief   AXI int16 attack heads (256 × ATTACK_BANK_LEN).
  *
- * Eight voices assign any loaded wave_id. Played on note-on before UAC
+ * Eight voices assign any loaded wave_id. Played on note-on before USB
  * stream_ring sustain.
  ******************************************************************************
  */

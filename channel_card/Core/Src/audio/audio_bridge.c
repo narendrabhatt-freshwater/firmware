@@ -36,8 +36,9 @@ void Audio_Bridge_SetDacHandle(CS4304_HandleTypeDef *h)
  * Each I2S frame = 2 × 32-bit words (L + R) = 8 bytes
  * DMA buffer is double-buffered: half/full IRQs each refill one half.
  *
- * Full-speed UAC OUT is one packet per 1 ms SOF. Size the DMA half to
- * AUDIO_SAMPLE_RATE_HZ/1000 frames so I2S consume and USB fill lockstep.
+ * Full-speed bulk OUT completes in 1 ms frames when the DCD buffer is
+ * a full frame. Size the DMA half to AUDIO_SAMPLE_RATE_HZ/1000 frames
+ * so I2S consume and USB fill share that 1 ms cadence.
  */
 #define AUDIO_I2S_HALF_FRAMES (AUDIO_SAMPLE_RATE_HZ / 1000u)
 #define AUDIO_I2S_BUF_FRAMES (AUDIO_I2S_HALF_FRAMES * 2u)
@@ -64,20 +65,15 @@ _Static_assert((AUDIO_SAMPLE_RATE_HZ % 1000u) == 0u,
  * (see STM32H725XG_FLASH.ld). Section is NOLOAD: buffers are cleared
  * explicitly in Audio_Bridge_Start() before DMA starts.
  */
-/* I2S1 DMA buffer for channels 1+2 (USB audio output) */
+/* I2S1 DMA buffer for channels 1+2 */
 static int32_t i2s1_tx_buf[AUDIO_I2S_BUF_SIZE] __attribute__((aligned(4), section(".dma_buffer")));
 
 /* I2S2 DMA buffer for channels 3+4 (test/other functions) */
 static int32_t i2s2_tx_buf[AUDIO_I2S_BUF_SIZE] __attribute__((aligned(4), section(".dma_buffer")));
 
-/* Audio playback state */
-static volatile uint8_t audio_playing = 0;
 static volatile uint8_t i2s_started = 0;
 
-/* Host mute: gate dry UAC ring writes to silence (PCM volume is host-side). */
-static volatile uint8_t usb_muted = 0;
-
-void Audio_SetUSBMute(uint8_t mute) { usb_muted = mute ? 1u : 0u; }
+void Audio_SetUSBMute(uint8_t mute) { (void)mute; }
 
 static volatile uint8_t dma_active_half = 0; /* 0 = playing first half (write to second), 1 = playing second half (write to first) */
 
@@ -124,9 +120,8 @@ void Audio_Bridge_Start(void)
      */
     HAL_I2S_Transmit_DMA(&hi2s1, (uint16_t *)i2s1_tx_buf, AUDIO_I2S_BUF_SIZE);
 #if AUDIO_USE_I2S2
-    /* Let BCLK/WS run before enabling the slave. MUST be a busy-wait:
-     * Audio_Bridge_Start runs in USB interrupt context where HAL_Delay
-     * deadlocks (SysTick cannot preempt the USB IRQ). ~2 ms at 550 MHz. */
+    /* Let BCLK/WS run before enabling the slave. Busy-wait, not HAL_Delay:
+     * this can run while I2S DMA IRQs are live. ~2 ms at 550 MHz. */
     for (volatile uint32_t d = 0; d < 300000u; d++)
     {
       __NOP();
@@ -139,10 +134,6 @@ void Audio_Bridge_Start(void)
 
   /*
    * DAC gain is left at the level set by CS4304_Init (CS4304_INIT_ATTEN).
-   * The ST UAC1 class exposes only MUTE to the host, so the OS applies
-   * volume in software by scaling the PCM samples — no hardware volume
-   * write is needed here (and overriding the bring-up attenuation with
-   * the class default would be wrong).
    */
 }
 
@@ -158,7 +149,6 @@ void Audio_Bridge_Stop(void)
   HAL_I2S_DMAStop(&hi2s2);
 #endif
   i2s_started = 0;
-  audio_playing = 0;
 }
 
 /**
@@ -169,7 +159,6 @@ void Audio_Bridge_Stop(void)
  */
 void Audio_Bridge_StreamStop(void)
 {
-  audio_playing = 0;
   /* Clear I2S1 buffer to silence */
   memset(i2s1_tx_buf, 0, sizeof(i2s1_tx_buf));
 }
@@ -181,8 +170,7 @@ void Audio_Bridge_StreamStop(void)
 void Audio_Bridge_SetVolume(uint8_t vol)
 {
 /*
- * vol = 0..100, linear in dB across the advertised range (vol_min..vol_max
- * = −50..0 dB, see USBD_AUDIO_Init), plus a fixed pad so 100% matches the
+ * vol = 0..100 mapped to CS4304 atten, plus a fixed pad so 100% matches the
  * M031N amp input (~80 mV full drive from ~1.06 Vrms full scale ≈ −22 dB).
  * Set AMP_MATCH_PAD_HALFDB to 0 for full line-level output.
  */
@@ -206,64 +194,6 @@ void Audio_Bridge_SetMute(uint8_t cmd)
   {
     CS4304_SetMute(s_dac, cmd);
   }
-}
-
-/**
- * @brief Demux tagged UAC frames (ch0 route, ch1..9 body) into stream rings.
- */
-void Audio_Bridge_WriteUSB(const uint8_t *pbuf, uint32_t size)
-{
-  const uint32_t frame_bytes = (uint32_t)STREAM_UAC_CHANNELS * 2u;
-  uint32_t nframes;
-  const int16_t *samples;
-
-  if (size == 0u || pbuf == NULL)
-  {
-    return;
-  }
-
-  audio_playing = 1;
-  nframes = size / frame_bytes;
-  if (nframes == 0u)
-  {
-    return;
-  }
-
-  samples = (const int16_t *)(const void *)pbuf;
-  if (usb_muted)
-  {
-    /* Soft-mute: idle tagged frames (ch0=0xFF), not voice-0 zeros. */
-    static int16_t idle[48u * STREAM_UAC_CHANNELS];
-    static uint8_t idle_init = 0u;
-    uint32_t left = nframes;
-    uint32_t i;
-    if (idle_init == 0u)
-    {
-      for (i = 0u; i < 48u; i++)
-      {
-        uint8_t ch;
-        idle[i * STREAM_UAC_CHANNELS] = (int16_t)STREAM_UAC_IDLE;
-        for (ch = 1u; ch < STREAM_UAC_CHANNELS; ch++)
-        {
-          idle[i * STREAM_UAC_CHANNELS + ch] = 0;
-        }
-      }
-      idle_init = 1u;
-    }
-    while (left > 0u)
-    {
-      uint32_t chunk = left;
-      if (chunk > 48u)
-      {
-        chunk = 48u;
-      }
-      StreamRing_WriteInterleaved(idle, chunk);
-      left -= chunk;
-    }
-    return;
-  }
-
-  StreamRing_WriteInterleaved(samples, nframes);
 }
 
 /**
@@ -351,7 +281,7 @@ static void Audio_FillCh1NoteBankSlot(int32_t *buf, uint32_t num_frames,
   }
 }
 
-/** CH1 left: always SAMPLE note-bank mix (dry UAC feeds rings, not I2S). */
+/** CH1 left: always SAMPLE note-bank mix (BODY fills rings, not I2S). */
 static void Audio_RefillCh1Slot(int32_t *buf, uint32_t num_frames)
 {
   (void)Audio_Ch1NoteBankActive;
@@ -535,75 +465,6 @@ static void Audio_I2S1_FillHalf(uint8_t half)
  */
 void Audio_I2S1_Poll(void)
 {
-}
-
-#define AUDIO_FB_NOMINAL (((uint32_t)AUDIO_SAMPLE_RATE_HZ / 1000u) << 16)
-#define AUDIO_FB_TARGET_FILL (STREAM_RING_SAMPLES / 2u)
-/* Stay at 48.00 while fill is near cruise so the host does not chatter
- * 47/49-frame SOFs. Larger error still trims Mac vs I2S walk. */
-#define AUDIO_FB_DEADBAND 256u
-
-/* 0 = lock 48.00 (packet-size A/B); 1 = fill-tracking (default). */
-static uint8_t s_fb_lock = 1u;
-
-/**
- * Ask the host to send slightly fewer or more 10ch frames per SOF so the
- * body FIFOs stay near half-full. A fixed 48.000 lets Mac vs I2S walk
- * until a packet is dropped (amp dip, then the sine continues).
- */
-uint32_t Audio_Bridge_FeedbackU16(void)
-{
-  uint32_t fill;
-  int32_t err;
-  int32_t adj;
-  uint32_t fb;
-
-  if (s_fb_lock == 0u || NoteBank_AnyActive() == 0u)
-  {
-    return AUDIO_FB_NOMINAL;
-  }
-  fill = StreamRing_MaxFill();
-  if (fill + AUDIO_FB_DEADBAND >= AUDIO_FB_TARGET_FILL &&
-      fill <= AUDIO_FB_TARGET_FILL + AUDIO_FB_DEADBAND)
-  {
-    return AUDIO_FB_NOMINAL;
-  }
-  err = (int32_t)AUDIO_FB_TARGET_FILL - (int32_t)fill;
-  /* ±2048 samples of error → ±1 sample per SOF. */
-  adj = (err * (int32_t)65536) / (int32_t)AUDIO_FB_TARGET_FILL;
-  if (adj > 65536)
-  {
-    adj = 65536;
-  }
-  if (adj < -65536)
-  {
-    adj = -65536;
-  }
-  fb = (uint32_t)((int32_t)AUDIO_FB_NOMINAL + adj);
-  /* Never request 49 frames/SOF. 10ch int16 is 980 B; this FS ISO pipe
-   * already sits on 960 B at 48. Extra-byte SOFs showed up as
-   * INCOMPISOOUT and a draining ring (n49 with iso in the hundreds).
-   * Slow-down (47 frames) is still allowed when the FIFO is high. */
-  if (fb > AUDIO_FB_NOMINAL)
-  {
-    fb = AUDIO_FB_NOMINAL;
-  }
-  return fb;
-}
-
-int Audio_Bridge_SetFbLock(uint8_t enable)
-{
-  if (enable > 1u)
-  {
-    return -1;
-  }
-  s_fb_lock = enable;
-  return 0;
-}
-
-uint8_t Audio_Bridge_GetFbLock(void)
-{
-  return s_fb_lock;
 }
 
 uint32_t Audio_Bridge_UsbDropCount(void)

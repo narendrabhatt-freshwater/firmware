@@ -6,10 +6,10 @@ The single C++17 host library for Freshwater card control:
 | --------- | ---- |
 | `cardlink::SerialPort` | Shared byte pipe (termios / Win32) |
 | `cardlink::rs485` | Tagged link, `Bus` bootstrap, and threaded `Controller` |
-| `cardlink::usb` | CDC console transport + `al` attack-head upload (`AttackUploader`) |
-| `cardlink::sample` | Plug-and-play SAMPLE session: attack upload, UAC body mix, notes |
+| `cardlink::usb` | CDC console + `al` attack upload + vendor bulk BODY (`VendorLink`) |
+| `cardlink::sample` | Plug-and-play SAMPLE session: attack upload, BODY mixer, notes |
 | `cardlink::midi` | MIDI input, pitch helpers, and 8-voice FIFO allocation |
-| `cardlink::audio` | Local speaker and Channel Card UAC output |
+| `cardlink::audio` | Local speaker and Channel Card BODY stream (`SampleBulkOut`) |
 | `cardproto` | Command formatting, reply parsing, and typed card clients |
 
 The archive includes the `cardproto` implementation. Existing build-tree
@@ -20,6 +20,7 @@ target. The normative wire contract is
 ## Build and consume
 
 ```bash
+# libusb-1.0 is required (brew install libusb / apt install libusb-1.0-0-dev)
 cmake -S protocol -B protocol/build -DBUILD_TESTING=ON
 cmake --build protocol/build
 ctest --test-dir protocol/build --output-on-failure
@@ -42,13 +43,16 @@ target_link_libraries(your_app PRIVATE cardlink::cardlink)
 
 ```cpp
 #include "cardlink/sample/client.hpp"
+#include "cardlink/audio/sample_bulk.hpp"
 
 cardlink::sample::Client smp;
+cardlink::audio::SampleBulkOut body;
 smp.SetCdcPath("/dev/cu.usbmodemCHCARD1");
 smp.SetConsole([](const std::string &cmd) { /* send to Channel RS485 */ });
 smp.LoadWave(0, "piano.wav", err);
+body.BindMixer(smp.Mixer());
+body.Start(err);
 smp.NoteOn(0, 261.63);
-/* UAC callback: smp.Render(buf, nframes); */
 ```
 
 ```cpp
@@ -68,7 +72,7 @@ raw command queues, recovery, and voice-status polling, use `Controller`:
 cardlink::rs485::Controller bus;
 cardlink::midi::VoiceBank voices;
 bus.SetLogHandler([](const std::string &line) { /* display or persist */ });
-bus.SetIdleHandler([](uint8_t slot) { /* stop this slot's UAC dry stream */ });
+bus.SetIdleHandler([](uint8_t slot) { /* stop this slot's BODY stream */ });
 bus.RequestOpen("/dev/cu.usbserial-0001", 921600, 6);
 bus.PublishBank(voices);
 bus.QueueChannel([](cardproto::ChannelClient &ch) {
@@ -80,5 +84,5 @@ bus.QueueChannel([](cardproto::ChannelClient &ch) {
 UI adapter that sends controller logs to `LogBuffer` and converts successful
 raw-command notifications into UI mirror patches.
 
-Public headers are installed under `cardlink/` and `cardproto/`. RtMidi and
-RtAudio are transitive dependencies of `cardlink::cardlink`.
+Public headers are installed under `cardlink/` and `cardproto/`. RtMidi,
+RtAudio, and libusb-1.0 are transitive dependencies of `cardlink::cardlink`.

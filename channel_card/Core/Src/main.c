@@ -125,7 +125,7 @@ int main(void)
   MX_USB_OTG_HS_PCD_Init();
   /* USER CODE BEGIN 2 */
 
-  /* USB is owned by TinyUSB (UAC2 speaker + CDC console) — see USB_APP/.
+  /* USB is owned by TinyUSB (vendor bulk BODY + CDC console) — see USB_APP/.
    * ST's MX_USB_DEVICE_Init() is gone with the USB_DEVICE middleware;
    * USB_App_Init() does the clocks, PHY power and NVIC itself.
    * Kept inside USER CODE so CubeMX regeneration preserves it. */
@@ -168,7 +168,7 @@ int main(void)
   hcs4304.MasterMask = 0x01;
   CS4304_SetVolume(&hcs4304, hcs4304.Volume); /* re-apply with the mask */
 
-  /* Bind DAC handle for UAC volume/mute (Audio_Bridge_SetVolume/SetMute). */
+  /* Bind DAC handle for volume/mute (Audio_Bridge_SetVolume/SetMute). */
   Audio_Bridge_SetDacHandle(&hcs4304);
   ChannelConsole_SetDacHandle(&hcs4304);
 
@@ -213,9 +213,9 @@ int main(void)
     /* USER CODE BEGIN 3 */
 
     Audio_I2S1_Poll();     /* Compatibility hook; I2S1 refills in DMA callbacks */
-    USB_App_Task();        /* ISO OUT before RS485: missed SOF has no retry */
+    USB_App_Task();        /* tud_task + BODY drain */
     ChannelConsole_Poll(); /* RS485 console + LED chaser */
-    USB_App_Task();        /* drain body FIFO after a console TX */
+    USB_App_Task();        /* drain vendor FIFO after a console TX */
     Audio_CpuLoad_Poll();  /* queue-mode NoteBank producer (no-op otherwise) */
   }
   /* USER CODE END 3 */

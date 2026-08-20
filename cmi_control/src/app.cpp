@@ -353,25 +353,25 @@ bool App::EnsureAttackCdc(std::string &err)
   return true;
 }
 
-bool App::EnsureSampleUac()
+bool App::EnsureSampleStream()
 {
-  if (sample_uac && sample_uac->Running())
+  if (sample_bulk && sample_bulk->Running())
   {
     return true;
   }
-  if (!sample_uac)
+  if (!sample_bulk)
   {
-    sample_uac = std::make_unique<cardlink::audio::SampleUacOut>();
+    sample_bulk = std::make_unique<cardlink::audio::SampleBulkOut>();
   }
-  sample_uac->BindMixer(samples.Mixer());
+  sample_bulk->BindMixer(samples.Mixer());
   std::string err;
-  if (!sample_uac->Start("Channel Card", err))
+  if (!sample_bulk->Start(err))
   {
     log.Push("err: " + err);
     PushToastErr(err);
     return false;
   }
-  log.Push("ok: UAC dry stream open");
+  log.Push("ok: BODY stream open");
   return true;
 }
 
@@ -490,7 +490,7 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
   }
   if (want_card)
   {
-    (void)EnsureSampleUac();
+    (void)EnsureSampleStream();
   }
 
   for (const auto &ev : events)
@@ -2907,7 +2907,7 @@ void App::DrawAbout()
        kPalette.text, fw::theme::g_fonts.mono);
   ImGui::Spacing();
   ImGui::TextWrapped(
-      "RS485 console · MIDI input · USB CDC attack upload · UAC sample output");
+      "RS485 console · MIDI input · USB CDC attack upload · USB BODY stream");
   ImGui::Spacing();
   ImGui::TextDisabled("Dear ImGui · GLFW · RtMidi · RtAudio");
   ImGui::Spacing();

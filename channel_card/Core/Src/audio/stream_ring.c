@@ -1,13 +1,15 @@
 /**
  ******************************************************************************
  * @file    stream_ring.c
- * @brief   Per-voice body FIFO filled from tagged UAC frames.
+ * @brief   Per-voice body FIFO filled from vendor bulk BODY bursts.
  ******************************************************************************
  */
 
 #include "stream_ring.h"
+#include "usb_stream.h"
 
 #include <stddef.h>
+#include <string.h>
 
 void NoteBank_OnBodySof(uint8_t voice);
 
@@ -76,82 +78,66 @@ void StreamRing_ResetAll(void)
   }
 }
 
-static void StreamRing_Push(StreamRing_t *r, int16_t s)
+static void StreamRing_CopyIn(StreamRing_t *r, const int16_t *s, uint32_t n)
 {
-  if (StreamRing_Filled(r) >= STREAM_RING_SAMPLES)
+  uint32_t idx = r->wr % STREAM_RING_SAMPLES;
+  uint32_t first = STREAM_RING_SAMPLES - idx;
+
+  if (first > n)
   {
-    /* Producer never overwrites unread samples. */
-    return;
+    first = n;
   }
-  r->data[r->wr % STREAM_RING_SAMPLES] = s;
-  r->wr++;
+  memcpy(&r->data[idx], s, first * sizeof(int16_t));
+  if (n > first)
+  {
+    memcpy(&r->data[0], s + first, (n - first) * sizeof(int16_t));
+  }
+  r->wr += n;
 }
 
-void StreamRing_WriteInterleaved(const int16_t *interleaved, uint32_t nframes)
+uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
+                               const int16_t *samples, uint32_t nsamp)
 {
-  uint32_t f;
-  uint8_t i;
+  StreamRing_t *r;
+  uint32_t i;
+  uint8_t all_zero = 1u;
 
-  if (interleaved == NULL || nframes == 0u)
+  if (voice >= SAMPLE_VOICES || samples == NULL || nsamp == 0u ||
+      nsamp > USB_STREAM_NSAMP_MAX)
   {
-    return;
+    return 0u;
   }
-
-  for (f = 0u; f < nframes; f++)
+  r = &s_rings[voice];
+  if (sof != 0u && session != r->session)
   {
-    const int16_t *fr = &interleaved[f * STREAM_UAC_CHANNELS];
-    uint16_t tag = (uint16_t)fr[0];
-    uint8_t route;
-    uint8_t voice;
-    uint8_t session;
-    StreamRing_t *r;
-
-    if (tag < STREAM_UAC_TAG_BASE)
+    r->wr = 0u;
+    r->rd = 0u;
+    r->session = session;
+    s_sof_pkts++;
+    NoteBank_OnBodySof(voice);
+  }
+  /* Whole burst or none. A partial push with the host cursor already
+   * advanced is a hole in the wav. */
+  if (StreamRing_Filled(r) + nsamp > STREAM_RING_SAMPLES)
+  {
+    s_drop_pkts++;
+    return 0u;
+  }
+  for (i = 0u; i < nsamp; i++)
+  {
+    if (samples[i] != 0)
     {
-      continue;
-    }
-    route = (uint8_t)tag;
-    if (route == STREAM_UAC_IDLE)
-    {
-      continue;
-    }
-    voice = (uint8_t)(route & 7u);
-    session = (uint8_t)((route >> STREAM_UAC_SESSION_SHIFT) &
-                        STREAM_UAC_SESSION_MASK);
-    r = &s_rings[voice];
-    if ((route & STREAM_UAC_SOF) != 0u && session != r->session)
-    {
-      r->wr = 0u;
-      r->rd = 0u;
-      r->session = session;
-      s_sof_pkts++;
-      NoteBank_OnBodySof(voice);
-    }
-    /* Whole packet or none. A partial push with the host cursor already
-     * advanced is a hole in the wav — that is the scope amp-dip. */
-    if (StreamRing_Filled(r) + (STREAM_UAC_CHANNELS - 1u) >
-        STREAM_RING_SAMPLES)
-    {
-      s_drop_pkts++;
-      continue;
-    }
-    {
-      uint8_t all_zero = 1u;
-      for (i = 1u; i < STREAM_UAC_CHANNELS; i++)
-      {
-        if (fr[i] != 0)
-        {
-          all_zero = 0u;
-        }
-        StreamRing_Push(r, fr[i]);
-      }
-      s_rx_pkts++;
-      if (all_zero != 0u)
-      {
-        s_zero_pkts++;
-      }
+      all_zero = 0u;
+      break;
     }
   }
+  StreamRing_CopyIn(r, samples, nsamp);
+  s_rx_pkts++;
+  if (all_zero != 0u)
+  {
+    s_zero_pkts++;
+  }
+  return nsamp;
 }
 
 int StreamRing_GetRel(uint8_t voice, uint32_t offset, int16_t *out)

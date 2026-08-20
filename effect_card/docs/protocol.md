@@ -87,7 +87,7 @@ Eight note slots: `n0` … `n7` (voices 0–7). Slot digits `8`–`f` parse
 but reply `err:range`. All voices mix onto DAC channel 1.
 
 Each voice is a **SAMPLE voice**: note-on plays the assigned attack head
-from AXI RAM, then the UAC body slots, through one on-card playhead
+from AXI RAM, then the USB BODY slots, through one on-card playhead
 (pitch, filter, envelope). Host streams unpitched body; the card rate-scales
 (`note_Hz / root_Hz`). Voices without a loaded wave synthesize the global
 DDS shape (`s` / `p` / `t`). Envelope (`en`) and per-voice LPF (`f`) apply
@@ -136,10 +136,8 @@ and are lost on reset.
 | `vq`                | Active mask + hungriest voice + free-slot code per ring               |
 | `interp`            | Query: 8-tap sinc (1, default) or nearest sample (0)                  |
 | `interp 0` / `1`    | Diagnostic playhead. `0` needs one FIFO sample; `1` needs 4 ahead     |
-| `usb`               | Splice counters: FIFO drop, ISO miss, hold, min/max fill, packet size |
+| `usb`               | BODY counters: FIFO drop, hold, min/max fill, rx/bytes/bad            |
 | `usb 0`             | Clear those counters, then same reply                                 |
-| `fb`                | Query async feedback: 1 = fill-tracking (default), 0 = lock 48.00     |
-| `fb 0` / `1`        | Diagnostic. `0` stops 47/49-frame chatter; `1` tracks ring fill       |
 
 Replies: `ok: ar <id> <Hz>`, `ok: aw <v> <id>`, `ok: a <n> <64 hex>`.
 USB CDC returns `vq` as `ok:vq <mask> <best> s0 … s7`. RS485 returns
@@ -147,8 +145,7 @@ the same fields in a 12-byte binary frame: `a5 5a 43 01`, mask, best,
 four packed slot bytes (two 4-bit counts each), CRC-8/0x07, then `0a`.
 Best is 0–7 or 255. Slot codes 0–14 count complete 256-sample slots;
 15 means the ring is empty. At 921600 8N1 the 12-byte frame is ~150 µs
-on the wire. That is not TinyUSB's 32-packet ISO OUT software FIFO
-(~32 ms of UAC body).
+on the wire. That is not the vendor RX FIFO (~32 KB; a full FIFO NAKs).
 
 Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 8-tap
 sinc. The attack plays to its committed length (not a hold-pad to
@@ -356,13 +353,43 @@ e:ar 1 0
 
 Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 
-| Interface            | Role                                                                     |
-| -------------------- | ------------------------------------------------------------------------ |
-| **UAC2** (speaker)   | Isochronous 10ch int16 @ 48 kHz (~960 B/ms, FS ISO max 1023). ch0 = `0x7F00 \| (session<<5) \| SOF \| voice` (session 0–6, `0x7F00\|0xFF` = idle); ch1–9 = unpitched body. Card pitches. Host paces USB by `phase_inc`. |
-| **CDC ACM** (serial) | Same ASCII console as RS485, plus binary attack-head upload (`al`). |
+| Interface              | Role                                                                 |
+| ---------------------- | -------------------------------------------------------------------- |
+| **Vendor bulk** (ITF0) | Fire-and-forget BODY stream: packed int16 bursts per voice. No ACK.  |
+| **CDC ACM** (serial)   | Same ASCII console as RS485, plus binary attack-head upload (`al`).  |
 
-Effect Card also has CDC for its console (no uploads) and a UAC2
-microphone (mono, 32-bit, 96 kHz) carrying the selected ADC channel.
+There is no UAC speaker. Full-Speed bulk MPS is 64 bytes; the card arms a
+multi-packet OUT (up to 1216 bytes, one 1 ms FS frame) so main-loop
+`tud_task` can take a full frame. USB IRQ is DCD only. A full RX FIFO NAKs
+the host instead of dropping a frame.
+
+Effect Card still has CDC and a UAC2 microphone (mono, 32-bit, 96 kHz).
+
+### BODY stream (vendor bulk OUT)
+
+Little-endian. One message per host bulk transfer. The card never replies.
+
+```text
+offset  size  field
+0       1     magic0 = 0x46  'F'
+1       1     magic1 = 0x57  'W'
+2       1     type   = 0x01  BODY
+3       1     flags  (0)
+4       2     nbytes payload length
+6       2     pad
+8       1     voice  0..7
+9       1     session 0..6
+10      1     sof    1 = reset that ring + note-on join
+11      1     pad
+12      2     nsamp  1..512
+14      2     pad
+16      2*nsamp  int16 LE unpitched body
+```
+
+Idle = send nothing. VID `0xCafe`, PID `0x4020` (placeholder; bump PID on
+descriptor change). Host claims interface 0; CDC stays a serial port.
+
+`type` `0x10` STATUS and `0x20` CAPTURE are reserved (not an ACK).
 
 ### CDC vs RS485 (console)
 
@@ -432,8 +459,7 @@ Notes:
 2. While waiting for the completion line, keep reading the CDC RX path —
    do not discard pending replies.
 3. Upload only loads AXI RAM (lost on reset). To hear it: `ar <id> <rootHz>`,
-   `aw <voice> <id>`, then `nX <Hz>` — and stream sustain audio in tagged
-   UAC body frames.
+   `aw <voice> <id>`, then `nX <Hz>` — and stream sustain as BODY bursts.
 
 ---
 

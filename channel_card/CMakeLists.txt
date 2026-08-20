@@ -71,10 +71,10 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ThirdParty/tinyusb/src/common/tusb_fifo.c
     ThirdParty/tinyusb/src/device/usbd.c
     ThirdParty/tinyusb/src/device/usbd_control.c
-    ThirdParty/tinyusb/src/class/audio/audio_device.c
+    ThirdParty/tinyusb/src/class/vendor/vendor_device.c
     ThirdParty/tinyusb/src/class/cdc/cdc_device.c
     ThirdParty/tinyusb/src/portable/synopsys/dwc2/dcd_dwc2.c
-    # USB application layer (descriptors + UAC2/CDC glue)
+    # USB application layer (descriptors + vendor bulk BODY + CDC)
     USB_APP/usb_descriptors.c
     USB_APP/usb_app.c
 )

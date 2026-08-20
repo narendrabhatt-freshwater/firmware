@@ -2,10 +2,10 @@
  * @file client.hpp
  * @brief Plug-and-play Channel SAMPLE session for host apps.
  *
- * Owns wave split, CDC attack upload, UAC body mixer, and note commands.
- * The UI supplies a console sink (RS485 or CDC ASCII) and calls Render()
- * from the UAC callback. Attack heads are wave_id 0..255; eight voices
- * assign any loaded head (`aw`). MIDI NoteOn maps key → wave_id.
+ * Owns wave split, CDC attack upload, BODY mixer, and note commands.
+ * The UI supplies a console sink (RS485 or CDC ASCII). Attack heads are
+ * wave_id 0..255; eight voices assign any loaded head (`aw`). MIDI NoteOn
+ * maps key → wave_id. Body streaming is SampleBulkOut, not this class.
  */
 
 #ifndef CARDLINK_SAMPLE_CLIENT_HPP
@@ -48,9 +48,6 @@ public:
 
   cardlink::audio::SampleDryMixer &Mixer() { return mixer_; }
   const cardlink::audio::SampleDryMixer &Mixer() const { return mixer_; }
-
-  /** UAC callback — 10ch int16 interleaved. No mutex. */
-  void Render(int16_t *interleaved, unsigned nframes);
 
   bool LoadWave(uint16_t wave_id, const std::string &path, std::string &err);
   bool LoadHead(uint16_t wave_id, const std::string &path, std::string &err);

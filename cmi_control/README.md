@@ -32,15 +32,15 @@ cmake --build cmi_control/build
 
 | OS      | Notes                                                                                         |
 | ------- | --------------------------------------------------------------------------------------------- |
-| macOS   | Xcode CLI tools; OpenGL via system frameworks                                                 |
-| Linux   | `build-essential cmake`, GLFW deps (`libgl1-mesa-dev` `libx11-dev` …), ALSA/Pulse for RtAudio |
+| macOS   | Xcode CLI tools; OpenGL via system frameworks; `brew install libusb`                          |
+| Linux   | `build-essential cmake libusb-1.0-0-dev`, GLFW deps (`libgl1-mesa-dev` `libx11-dev` …), ALSA/Pulse for RtAudio |
 | Windows | MSVC or MinGW; OpenGL from system                                                             |
 
 ## Views
 
 1. **Perform** — full-height preview scope with TIME/DIV / VOLTS/DIV controls, voice grid, two-octave on-screen + computer keyboard piano (A–K / W E T Y U, Z/X octave)
 2. **Tone** — oscillator shape with waveform preview, n0–n7 LPF + fk, multi-segment envelope editor (voice thumbnails, presets, undo, segment table)
-3. **SAMPLE** — 8-voice sample set, CDC attack upload (`al`), UAC body streaming, drag-and-drop files, root pitch (`ar`), voice assignment (`aw`)
+3. **SAMPLE** — 8-voice sample set, CDC attack upload (`al`), vendor bulk BODY streaming, drag-and-drop files, root pitch (`ar`), voice assignment (`aw`)
 4. **Effect** — phantom / AUDIO_EN / LEDs (last-sent state), USB ADC channel, ADC/I2C tools
 5. **Setup** — RS485 / MIDI / output routing, auto-reconnect, port refresh
 

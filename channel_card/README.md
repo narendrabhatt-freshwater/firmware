@@ -14,7 +14,7 @@ those same files live at the repository root (`README.md`,
 | CubeMX project | `channel_MCU.ioc`                                            |
 | Linker script  | `STM32H725xG_flash.ld`                                       |
 | USB stack      | TinyUSB 0.17 (`ThirdParty/tinyusb`)                          |
-| USB device     | UAC2 speaker (10 ch, 16-bit, 48 kHz) + CDC console           |
+| USB device     | Vendor bulk BODY (ITF0) + CDC console                        |
 | RS485 address  | `c:`                                                         |
 
 ## What this card does
@@ -23,7 +23,7 @@ Receives USB audio from the PC into **per-voice sustain rings**, and
 plays the 8-voice SAMPLE / note bank out of a **CS4304 4-channel DAC**
 over I2S.
 
-- **CH1** — SAMPLE note-bank mix (`n0..n7`). UAC dry audio fills the
+- **CH1** — SAMPLE note-bank mix (`n0..n7`). Vendor bulk BODY fills the
   per-voice rings used for sustain; it is not mixed onto CH1 as PCM.
 - **CH2–CH4** — firmware-generated DC control voltages, clocked purely
   by I2S with no USB involvement (0 V at boot)
@@ -178,16 +178,16 @@ Hand-written modules live under `Core/Src/<domain>/` (and matching
 | `Core/Src/filters/note_filter.c`           | Per-voice LPF wrapper (base/effective cutoff, pitch-k, q/Q31)     |
 | `Core/Src/filters/butterworth_four_pole.c` | Reusable 4-pole DF4 Butterworth kernel                            |
 | `Core/Src/drivers/cs4304.c`                | CS4304 DAC driver (I2C)                                           |
-| `USB_APP/`                                 | TinyUSB descriptors, `tusb_config.h`, UAC2 + CDC glue             |
+| `USB_APP/`                                 | TinyUSB descriptors, `tusb_config.h`, vendor bulk BODY + CDC      |
 
 ### `audio_bridge.c` — handle with care
 
 This file holds the playback path as measured on the board. Notable
 parts, all commented in-place:
 
-- **UAC body stream** is 10ch int16 at 48 kHz: ch0 is the route tag and
-  ch1–9 carry nine body samples for the tagged voice. CH1 I2S is always
-  the note-bank mix.
+- **BODY stream** is vendor bulk: packed int16 bursts per voice (session +
+  SOF). CH1 I2S is always the note-bank mix. USB IRQ is DCD only;
+  `tud_task` and BODY parse run in the main loop.
 - **I2S start order matters** — the I2S1 master must be running before
   the I2S2 slave is enabled, or the slave never shifts.
 - **I2S2 slave workarounds** — UDR wedge clearing via the TIM7 pump, and
@@ -198,15 +198,8 @@ parts, all commented in-place:
 
 ## Volume control
 
-The device advertises a **mute-only** UAC2 feature unit, so **Windows
-applies volume in software** by scaling the PCM before sending it. The
-firmware passes samples through at unity and only gates to silence on
-mute.
-
-This is deliberate: advertising a hardware volume control made Windows
-push one value at enumeration and then never update it, leaving the
-device stuck at a stale attenuation. Do not re-add a volume control
-without re-testing the full slider range on Windows.
+There is no USB speaker volume control. BODY samples pass at unity.
+Use **`g <ch> <dB>`** for CS4304 DAC trim.
 
 **`n0`** applies **bypass ON** and **`g 1 0`** (0 dB CH1 DAC trim) at
 boot and on bare `n0`. **`n0`…`n7`** are 8 independent phase-accumulator
@@ -215,7 +208,7 @@ sets that note’s amplitude. When the assigned wave has no loaded attack head,
 **`s`** (sine, default), **`p <0.1..0.9>`** (pulse duty), and
 **`t <0.1..0.9>`** (triangle asymmetry; 0.5 = symmetric) select its fallback
 oscillator. These shape commands do not affect SAMPLE playback from a loaded
-attack head and UAC body stream. Frequency, scale, and shape changes do not
+attack head and BODY stream. Frequency, scale, and shape changes do not
 touch gain or bypass.
 **`g`** changes DAC atten on any channel.
 

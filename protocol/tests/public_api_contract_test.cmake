@@ -10,6 +10,10 @@ if(NOT EXISTS "${CARDLINK_SOURCE_DIR}/include/cardlink/usb/cdc_port.hpp")
   message(FATAL_ERROR "The public USB CDC port helper is missing")
 endif()
 
+if(NOT EXISTS "${CARDLINK_SOURCE_DIR}/include/cardlink/usb/vendor_link.hpp")
+  message(FATAL_ERROR "The public USB vendor link is missing")
+endif()
+
 if(NOT EXISTS "${CARDLINK_SOURCE_DIR}/include/cardlink/rs485/controller.hpp")
   message(FATAL_ERROR "The public RS485 controller is missing")
 endif()

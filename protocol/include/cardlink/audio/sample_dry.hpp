@@ -1,16 +1,9 @@
 /**
  * @file sample_dry.hpp
- * @brief Host body feeder: unpitched int16 → tagged UAC frames.
+ * @brief Host body feeder: unpitched int16 → vendor bulk BODY bursts.
  *
- * Card owns pitch / env / filter. Each UAC frame: ch0 = route, ch1..9 =
- * samples for one voice. The frame goes to the voice with the least
- * remaining fill / phase_inc.
- *
- * Send rate is phase_inc samples per output sample (credit), which is
- * what the interpolator consumes. Each UAC frame carries 9 body samples;
- * if sum(inc) exceeds 9, credit is scaled to that budget. Bandwidth
- * left after sustain is shared among voices still below cruise so a new
- * key fills without taking every frame from held notes.
+ * Card owns pitch / env / filter. Host pushes per-voice bursts (up to
+ * 512 samples). No ACK. Send enough to hold cruise fill (~2048).
  *
  * `queued` is body samples pushed minus body-FIFO consume. The card
  * plays the AXI attack without draining the ring; consume starts at
@@ -18,11 +11,9 @@
  * attack reopens HasRoom and overflows the ring (`usb drop`).
  * `vq` is a delayed reading of the card FIFO: use it as a lower bound
  * (raise `queued` if the card is fuller) and as a hard stop when it
- * reports fewer than 9 samples free. Do not assign `queued` from `vq`
- * when the card looks emptier; USB has not landed yet.
+ * reports no free samples.
  *
- * Render() is the UAC callback — no mutex. UI posts to a SPSC command
- * queue; Render drains it at the start of the buffer.
+ * The bulk thread posts no mutex: UI posts to a SPSC command queue.
  */
 
 #ifndef CARDLINK_AUDIO_SAMPLE_DRY_HPP
@@ -44,7 +35,7 @@ constexpr unsigned kAttackSamples = 512;
 constexpr unsigned kCrossfadeSamples = 32;
 constexpr unsigned kBodyOrigin = kAttackSamples - kCrossfadeSamples;
 constexpr unsigned kRingSamples = 4096;
-/** Leave room for one UAC body packet plus interpolator taps. */
+/** Leave room for one BODY burst plus interpolator taps. */
 constexpr unsigned kRingHeadroom = 32;
 /** Must match the card's 256-sample slots and 4-bit vq encoding. */
 constexpr unsigned kVqSlotSamples = 256;
@@ -53,13 +44,8 @@ constexpr unsigned kVqSlotMax = 15;
 constexpr unsigned kCruiseSamples = kRingSamples / 2u;
 /** Prefill / HasRoom cap — half the ring, not 4096−32. */
 constexpr unsigned kPrefillSamples = kCruiseSamples;
-constexpr uint16_t kUacTagBase = 0x7F00;
-constexpr uint8_t kUacIdle = 0xFF;
-constexpr uint8_t kUacSof = 0x10;
-constexpr unsigned kUacSessionShift = 5;
-constexpr unsigned kUacSessionMod = 7;
-constexpr unsigned kUacChannels = 10;
-constexpr unsigned kUacBodyPerFrame = kUacChannels - 1u;
+constexpr unsigned kStreamSessionMod = 7;
+constexpr unsigned kBodyBurstMax = 512;
 constexpr double kDefaultBodyRootHz = 261.625565;
 
 class SampleDryMixer {
@@ -69,7 +55,7 @@ public:
   bool LoadBodyFile(uint16_t wave_id, const std::string &path, std::string &err);
 
   /** Replace body samples (48 kHz int16, from head_len − overlap).
-   *  Rejected while a voice is playing this id (callback reads the table). */
+   *  Rejected while a voice is playing this id (the bulk thread reads the table). */
   bool SetBody(uint16_t wave_id, const int16_t *data, size_t nsamp,
                std::string &err);
 
@@ -97,7 +83,15 @@ public:
 
   bool AnyActive() const;
 
-  void Render(int16_t *interleaved, unsigned nframes);
+  /** Subtract body consume for `nframes` of 48 kHz output (attack does not). */
+  void ConsumeOutputSamples(double nframes);
+
+  /** Samples this voice can take now (0 if inactive / full). */
+  unsigned WantBurst(uint8_t voice) const;
+
+  /** Copy up to max_n body samples. Sets sof/session. */
+  unsigned FillBurst(uint8_t voice, int16_t *dst, unsigned max_n, bool &sof,
+                     uint8_t &session);
 
   void ApplyVoiceQuery(uint8_t mask, uint8_t best, const uint8_t *free_slots);
 
@@ -135,23 +129,14 @@ private:
   void Post(const Cmd &c);
   void DrainCmds();
   void ApplyCmd(const Cmd &c);
-  uint8_t PickVoice() const;
-  bool CanSend(uint8_t voice) const;
-  /** True while queued is below cruise (gets leftover USB after sustain). */
-  bool PrefillCatchUp(uint8_t voice) const;
-  double FilledEstimate(uint8_t voice) const;
   int16_t NextBody(Voice &v);
   double IncOf(const Voice &v) const;
   static double Fade0Of(unsigned attack_len);
   /** True once the card interpolator has reached the attack join. */
   static bool BodyDraining(const Voice &v);
-  void AdvancePlayheads();
   void RaiseQueuedFromVq();
-  bool HasRoom(uint8_t voice) const;
-  static int16_t EncodeTag(uint8_t session, uint8_t route_low);
+  bool HasRoom(uint8_t voice, unsigned nsamp) const;
   bool WaveInUse(uint16_t wave_id) const;
-  void SpendVq(uint8_t voice);
-  void ReclaimVq();
 
   std::array<Cmd, kCmdCap> cmds_{};
   std::atomic<uint32_t> cmd_wr_{0};
@@ -165,7 +150,6 @@ private:
   std::atomic<uint8_t> vq_mask_{0};
   std::atomic<uint8_t> vq_best_{0xFF};
   std::array<std::atomic<uint16_t>, kSampleVoices> vq_free_samp_{};
-  std::array<double, kSampleVoices> vq_reclaim_{};
   std::array<std::atomic<uint16_t>, kSampleVoices> vq_occ_{};
 
   std::array<std::vector<int16_t>, 256> bodies_{};

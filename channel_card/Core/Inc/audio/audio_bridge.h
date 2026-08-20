@@ -3,12 +3,12 @@
  * @file    audio_bridge.h
  * @brief   USB audio / note-bank → I2S bridge for the CS4304 4-channel DAC.
  *
- * Owns I2S DMA ring buffers, USB packet ingest, CH1 note-bank refill,
+ * Owns I2S DMA ring buffers, USB BODY ingest, CH1 note-bank refill,
  * and the TIM7 I2S2 underrun pump. Tone/DC generators and the CPU-load
  * probe live in audio_tone_dc.h / audio_cpuload.h (re-exported here so
  * existing callers that include only audio_bridge.h keep working).
- * UAC dry multi-channel PCM feeds Audio_Bridge_WriteUSB() into stream
- * rings (not the DAC). CH1 is always the SAMPLE note-bank mix.
+ * Vendor bulk BODY feeds StreamRing_WriteVoice (not the DAC). CH1 is
+ * always the SAMPLE note-bank mix.
  ******************************************************************************
  */
 
@@ -29,7 +29,7 @@ extern "C"
   /* ---------------- DAC handle (bound from main) --------------------------- */
 
   /**
-   * @brief Bind the CS4304 handle used for UAC volume/mute.
+   * @brief Bind the CS4304 handle used for mute/volume.
    * @param h DAC handle owned by main (non-NULL before Start / SetVolume).
    */
   void Audio_Bridge_SetDacHandle(CS4304_HandleTypeDef *h);
@@ -38,7 +38,7 @@ extern "C"
 
   /**
    * @brief Clear I2S buffers and start I2S1 (+I2S2) DMA.
-   * @note Safe from USB IRQ context: busy-waits instead of HAL_Delay.
+   * @note Called from tud_mount in the main-loop TinyUSB task.
    */
   void Audio_Bridge_Start(void);
 
@@ -46,36 +46,26 @@ extern "C"
   void Audio_Bridge_Stop(void);
 
   /**
-   * @brief Host closed the streaming interface.
+   * @brief Host closed the USB device.
    * @note Silences the buffer and forces the write pointer to re-acquire
    *       its lead on the next stream.
    */
   void Audio_Bridge_StreamStop(void);
 
   /**
-   * @brief Feed one USB isochronous OUT packet (10ch int16 interleaved) into
-   *        per-voice dry stream rings for SAMPLE sustain.
-   * @param pbuf Packet bytes (may be NULL only when size is 0).
-   * @param size Length in bytes.
-   */
-  void Audio_Bridge_WriteUSB(const uint8_t *pbuf, uint32_t size);
-
-  /**
-   * @brief Apply UAC master volume to the bound DAC handle.
+   * @brief Apply master volume to the bound DAC handle.
    * @param vol Attenuation code (0.5 dB steps; see CS4304_SetVolume).
    */
   void Audio_Bridge_SetVolume(uint8_t vol);
 
   /**
-   * @brief Apply UAC mute to the bound DAC handle.
+   * @brief Apply mute to the bound DAC handle.
    * @param mute Non-zero to mute.
    */
   void Audio_Bridge_SetMute(uint8_t mute);
 
   /**
-   * @brief Soft-mute USB playback on CH1 only (host volume is software-side).
-   * @param mute Non-zero gates CH1 to silence.
-   * @note Never affects CH2..CH4 generators or the console `gain` command.
+   * @brief No-op. BODY writes are not gated (there is no speaker mute).
    */
   void Audio_SetUSBMute(uint8_t mute);
 
@@ -104,7 +94,7 @@ extern "C"
 
   typedef enum
   {
-    AUDIO_CH1_SRC_USB = 0,       /**< Unused in SAMPLE mode (dry UAC → rings) */
+    AUDIO_CH1_SRC_USB = 0,       /**< Unused in SAMPLE mode (BODY → rings) */
     AUDIO_CH1_SRC_TEST_TONE = 1, /**< CH1 carries SAMPLE note-bank mix */
   } Audio_CH1_Source_t;
 
@@ -116,23 +106,9 @@ extern "C"
    */
   void Audio_I2S1_Poll(void);
 
-  /**
-   * @brief Async UAC feedback: 16.16 samples per SOF from ring fill.
-   *        Call from the USB task, not from an ISR.
-   */
-  uint32_t Audio_Bridge_FeedbackU16(void);
-
   uint32_t Audio_Bridge_UsbDropCount(void);
   void Audio_Bridge_UsbDropCountClear(void);
   uint32_t Audio_Bridge_MaxFill(void);
-
-  /**
-   * @brief 0 = lock 48.00 samples/SOF (A/B for packet-size chatter).
-   *        1 = adaptive from ring fill (default).
-   */
-  int Audio_Bridge_SetFbLock(uint8_t enable);
-  uint8_t Audio_Bridge_GetFbLock(void);
-
   uint32_t Audio_Bridge_FillLate(void);
 
 #ifdef __cplusplus

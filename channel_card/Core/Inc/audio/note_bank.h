@@ -73,7 +73,7 @@ extern "C"
   void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out,
                            uint8_t *free_slots);
 
-  /** New UAC body session: same as note-on (FIFO was wiped). */
+  /** New BODY session: same as note-on (FIFO was wiped). */
 
 #ifdef __cplusplus
 }

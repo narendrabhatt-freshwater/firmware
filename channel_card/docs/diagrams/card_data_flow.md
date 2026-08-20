@@ -11,15 +11,15 @@ If this document and the firmware disagree, trust the firmware.
 ## 1. Host interfaces (both cards)
 
 One RS485 multi-drop bus (`c:` / `e:` / `*:`). USB is per-card: Channel
-is a Full-Speed **UAC2 speaker** (10ch int16 @ 48 kHz) plus CDC; Effect
-is a Full-Speed **UAC2 microphone** (mono int32 @ 96 kHz) plus CDC.
+is Full-Speed **vendor bulk BODY** (ITF0, packed int16 bursts) plus CDC;
+Effect is a Full-Speed **UAC2 microphone** (mono int32 @ 96 kHz) plus CDC.
 
 ```mermaid
 flowchart TB
   subgraph host [Host]
     RS485[RS485 921600 8N1]
     CDC[USB CDC ACM]
-    UacOut[UAC2 OUT 10ch int16 48 kHz]
+    BodyOut[vendor bulk BODY]
     UacIn[UAC2 IN mono int32 96 kHz]
   end
 
@@ -44,7 +44,7 @@ flowchart TB
   CDC -->|"al nbytes int16"| ChAtk
   CDC --> ChCon
   CDC --> FxCon
-  UacOut -->|"ch0 tag ch1..9 body"| ChRing
+  BodyOut -->|"voice session SOF int16"| ChRing
   ChAtk --> ChMix
   ChRing --> ChMix
   ChCon --> ChMix
@@ -56,14 +56,15 @@ flowchart TB
 ## 2. Channel — SAMPLE voice (one of n0..n7)
 
 Attack and body are storage. The head plays to its committed length
-(≤ 512). Body is a FIFO from the UAC ring, consumed with Q16.16
-interpolation. `nX > 0` is always a note-on. A new UAC session
-(`SOF` + session 0–6) starts a new body FIFO; a repeated frame with
+(≤ 512). Body is a FIFO from vendor bulk BODY bursts, consumed with
+Q16.16 interpolation. `nX > 0` is always a note-on. A new BODY session
+(`SOF` + session 0–6) starts a new body FIFO; a repeated burst with
 the same session does not.
-The host muxes UAC frames from Channel `vq` (hungriest voice + free
-slots), polled at adapter RTT while notes are live. Missing body holds the
-last sample until USB catches up. The producer never overwrites unread
-FIFO samples.
+The host sends per-voice bursts. Optional Channel `vq` (hungriest voice
++ free slots) is occupancy for pacing — a hard stop when a ring cannot
+take the next burst, not a mux. Missing body holds the last sample until
+USB catches up. A full FIFO drops the whole burst; the producer never
+overwrites unread FIFO samples.
 
 ```mermaid
 flowchart TB
@@ -76,7 +77,7 @@ flowchart TB
   end
 
   subgraph usb [USB FS]
-    Tag["UAC frame: ch0 = 0x7F00 | session | SOF | voice; 0x7FFF idle"]
+    Tag["BODY: hdr + voice/session/SOF + int16"]
     Slots["2 x 2048 int16 DTCM ping-pong"]
     Body --> Tag --> Slots
   end
@@ -113,14 +114,17 @@ flowchart TB
 
 RS485 `vq` returns a 12-byte binary frame containing active mask,
 hungriest voice, and eight packed free-slot codes (0..14; 15 = empty). Need-score is
-`filled / max(phase_inc, target_inc)`; the host uses each reply to mux
-body frames until the next 10 ms poll. The mixer also tops up free-slot
-credit by phase_inc each UAC frame so 256-sample slot rounding does not
+`filled / max(phase_inc, target_inc)`; the host uses each reply as
+occupancy (raise `queued` if the card is fuller; stop when free samples
+cannot take a burst). The mixer also tops up free-slot
+credit by phase_inc each pump tick so 256-sample slot rounding does not
 starve a 4× note between polls.
-UAC and `nX` start together. The attack plays to its committed length;
+BODY and `nX` start together. The attack plays to its committed length;
 body consume starts at `len − 32` with the same source fraction. The
 host does not wait for FIFO prefill. `StreamRing_Prime` arms consume
-and does not clear the ring.
+and does not clear the ring. The host fills the body FIFO, then holds
+the file cursor until the playhead reaches the join — dropped USB must
+not skip ahead in the wav.
 
 Voices with no loaded attack head play body from the FIFO immediately.
 `en` / `f` / `fk` still apply.
@@ -249,7 +253,7 @@ flowchart LR
     I2S1[I2S1 DMA: note mix + CH2]
     I2S2[I2S2 DMA: CH3/CH4]
     U5[UART5 RX]
-    USB1[OTG_FS]
+    USB1[OTG_HS]
   end
 
   subgraph fx_loop [Effect main loop]
@@ -266,6 +270,7 @@ flowchart LR
 
 Channel `vq` replies are sent from the main loop (same loop as
 `USB_App_Task`). The host polls `vq` at adapter RTT while any note is live
-or releasing; the reply (mask, hungriest voice, free slots) is the UAC
-mux input. UART TX of the reply can miss a USB SOF and ISO OUT has no
-retry, so do not poll faster than the measured adapter RTT.
+or releasing; the reply (mask, hungriest voice, free slots) is occupancy
+for BODY pacing. UART TX of the reply can delay main-loop `tud_task`; a
+full vendor FIFO NAKs the host instead of dropping a frame. Do not poll
+faster than the measured adapter RTT.

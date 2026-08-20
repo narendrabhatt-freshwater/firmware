@@ -8,7 +8,7 @@
 namespace cardlink::midi
 {
 
-/** SAMPLE firmware: 8 dry UAC voices (n0..n7). */
+/** SAMPLE firmware: 8 dry voices (n0..n7). */
 inline constexpr uint8_t kVoiceCount = 8;
 
 enum class BankEventKind : uint8_t

@@ -1,15 +1,14 @@
 /**
  ******************************************************************************
  * @file    stream_ring.h
- * @brief   Per-voice body FIFO: 2 × 2048 int16 (ping-pong), filled from UAC.
+ * @brief   Per-voice body FIFO: 2 × 2048 int16 (ping-pong), filled from USB.
  *
- * SPSC: USB writes, the playhead reads. A full FIFO drops the write
- * (never unread samples). An empty FIFO is an underrun for the reader.
+ * SPSC: USB writes from main, the playhead reads in I2S. A full FIFO drops
+ * the write (never unread samples). An empty FIFO is an underrun.
  *
- * UAC frame is 10ch int16 (960 B/ms). ch0 tag: 0x7F00 | (session<<5) |
- * SOF | voice. session is 0..6. A new session starts a new body. A
- * repeated ISO frame carries the same session and does not reset the
- * FIFO. 0x7FFF is idle. ch1..9 are body for that voice.
+ * BODY burst: voice + session + SOF + packed int16 samples. A new session
+ * starts a new body. Repeated bursts with the same session do not reset
+ * the FIFO.
  ******************************************************************************
  */
 
@@ -34,22 +33,6 @@ extern "C"
 #define STREAM_SLOT_MAX 14u
 #define STREAM_SLOT_EMPTY 15u
 
-/**
- * ch0 is a tag, not PCM. Near-silence must not decode as voice 0
- * (OS zero-pad / mute).
- */
-/** UAC interleaved width. Not the voice count (still 8). */
-#define STREAM_UAC_CHANNELS 10u
-#define STREAM_UAC_BODY_CH (STREAM_UAC_CHANNELS - 1u)
-
-#define STREAM_UAC_TAG_BASE 0x7F00u
-#define STREAM_UAC_IDLE 0xFFu
-#define STREAM_UAC_SOF 0x10u
-#define STREAM_UAC_SESSION_SHIFT 5u
-#define STREAM_UAC_SESSION_MASK 0x07u
-/** Session 0..6 so (session<<5)|SOF|voice cannot equal IDLE (0xFF). */
-#define STREAM_UAC_SESSION_MOD 7u
-
   void StreamRing_Init(void);
   void StreamRing_Reset(uint8_t voice);
   void StreamRing_ResetAll(void);
@@ -64,9 +47,11 @@ extern "C"
   void StreamRing_Release(uint8_t voice);
 
   /**
-   * @brief Push tagged UAC frames: ch0 route, ch1..9 body int16.
+   * @brief Push one BODY burst into a voice ring.
+   * @return nsamp accepted, or 0 if the whole burst would overflow / bad args.
    */
-  void StreamRing_WriteInterleaved(const int16_t *interleaved, uint32_t nframes);
+  uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
+                                 const int16_t *samples, uint32_t nsamp);
 
   /**
    * @brief Body sample at offset from rd (0 = next unread).
@@ -92,16 +77,16 @@ extern "C"
   /** Record fill for min-fill (I2S consume / interpolator miss). */
   void StreamRing_ObserveFill(uint8_t voice);
 
-  /** Whole 9-sample UAC packets dropped because the FIFO was full. */
+  /** Whole BODY bursts dropped because the FIFO was full. */
   uint32_t StreamRing_DropCount(void);
 
-  /** Tagged packets accepted into a ring. */
+  /** BODY bursts accepted into a ring. */
   uint32_t StreamRing_RxCount(void);
 
   /** Session-start (SOF + new session) resets. */
   uint32_t StreamRing_SofCount(void);
 
-  /** Tagged packets whose 9 body samples were all zero. */
+  /** Bursts whose samples were all zero. */
   uint32_t StreamRing_ZeroCount(void);
 
   void StreamRing_StatsClear(void);

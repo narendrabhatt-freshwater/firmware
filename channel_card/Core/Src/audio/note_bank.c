@@ -4,7 +4,7 @@
  * @brief   SAMPLE voices: attack RAM + body slots → sample → LPF → env.
  *
  * Attack is an AXI head of committed length (not hold-padded). Body is
- * the UAC FIFO. Pitch uses 8-tap Hann-sinc (Q16.16). At the join the
+ * the USB BODY FIFO. Pitch uses 8-tap Hann-sinc (Q16.16). At the join the
  * body playhead is locked to the attack source index so both sides
  * read the same sample. nX > 0 is always a note-on. Playhead changes
  * apply on the I2S sample.
@@ -67,7 +67,7 @@ static volatile uint32_t note_hold_miss;
 static volatile uint8_t note_cmd[NOTE_BANK_VOICES];
 static volatile uint32_t note_cmd_inc[NOTE_BANK_VOICES];
 static volatile float note_cmd_hz[NOTE_BANK_VOICES];
-/* An explicit nX 0 must win over a late UAC session-start packet. */
+/* An explicit nX 0 must win over a late BODY session-start. */
 static volatile uint8_t note_gate_requested[NOTE_BANK_VOICES];
 
 static int32_t NoteBank_ScaleToQ15(double scale)
@@ -811,7 +811,7 @@ void NoteBank_OnBodySof(uint8_t voice)
   {
     return;
   }
-  /* New UAC session already wiped the FIFO. Do not let a delayed SOF
+  /* New BODY session already wiped the FIFO. Do not let a delayed SOF
    * reopen a voice after its explicit note-off. */
   if (note_gate_requested[voice] == 0u)
   {
