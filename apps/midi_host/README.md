@@ -77,7 +77,7 @@ when Hz is sent without a scale argument.
 Timeouts trigger soft recovery (`n 0`); a latched
 bus fault stops further note TX until reopen.
 
-RS485 defaults to **460800** baud. Same ASCII works from `screen` /
+RS485 defaults to **921600** baud. Same ASCII works from `screen` /
 `rs485_console` — see [`docs/rs485_console_architecture.md`](../../docs/rs485_console_architecture.md).
 
 Example (speakers):

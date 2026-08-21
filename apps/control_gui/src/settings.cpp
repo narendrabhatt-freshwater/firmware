@@ -190,6 +190,10 @@ bool Load(App &app)
           std::clamp(std::strtof(val.c_str(), nullptr), 0.75f, 1.75f);
     }
   }
+  /* Shared CMI Control.ini is reused across branches. A leftover 460800
+   * from the previous playground session opens the FTDI port but the
+   * card is 921600, so handshake RX is empty. */
+  app.baud = 921600;
   return true;
 }
 

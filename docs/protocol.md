@@ -4,7 +4,7 @@ Host ↔ Channel Card and Effect Card over RS485 (and the same command
 set over USB CDC). One ASCII line in, one reply line out. That is the
 protocol — there is no separate binary control frame.
 
-Baud on the RS485 UARTs is **460800 8N1**.
+Baud on the RS485 UARTs is **921600 8N1**.
 
 Type `h` (or `help` or `?`) on either card for the live one-line menu.
 If this document and the firmware disagree, trust the firmware.
@@ -356,7 +356,7 @@ Effect Card also has CDC for its console; it has no wave bank / `wl`.
 | Address prefix | Useful on a shared bus (`c:` / `e:` / `*:`) | Optional; still accepted                                                       |
 | Reply tag      | `[C] ` / `[E] `                             | None — body only                                                               |
 | Echo           | Channel: off. Effect: `ec` (default off)    | Local keystroke echo on                                                        |
-| Baud           | **460800 8N1** on the UART                  | Host may open any rate (e.g. 115200); TinyUSB CDC ignores line coding for data |
+| Baud           | **921600 8N1** on the UART                  | Host may open any rate (e.g. 115200); TinyUSB CDC ignores line coding for data |
 | `wl` upload    | Rejected (`err:usb`)                        | Allowed                                                                        |
 
 Typical host path on macOS / Linux: Channel `cu.usbmodem*` / `ttyACM*`.

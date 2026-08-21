@@ -348,7 +348,7 @@ void App::RequestConnectBus()
     PushToastErr("bus still connecting…");
     return;
   }
-  bus.RequestOpen(path, baud, static_cast<uint32_t>(gain_db), log);
+  bus.RequestOpen(path, 921600, static_cast<uint32_t>(gain_db), log);
   MarkSettingsDirty();
 }
 
@@ -2105,7 +2105,7 @@ void App::DrawSetup()
                 ImVec2(wp.x + wsz.x - 1.f, wp.y + wsz.y),
                 fw::theme::U32(kPalette.border));
   }
-  SetupHeader("RS485 BUS (460800 BAUD)");
+  SetupHeader("RS485 BUS (921600 BAUD)");
 
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, S2(16.f, 16.f));
   ImGui::BeginChild("rs485_body", ImVec2(0, 0), kSetupBodyChild);

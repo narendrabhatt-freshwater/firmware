@@ -19,7 +19,7 @@ The operator connects once, then performs, sculpts sound, loads samples, and man
 
 | Link                                    | Purpose                                                              |
 | --------------------------------------- | -------------------------------------------------------------------- |
-| **RS485 serial** (460800 baud)          | Notes, tone, gain, envelopes, filters, effect controls, lab commands |
+| **RS485 serial** (921600 baud)          | Notes, tone, gain, envelopes, filters, effect controls, lab commands |
 | **USB CDC** (separate Channel USB port) | Sample-wave bank upload only                                         |
 | **MIDI** (optional)                     | Keyboard / controller → 16-voice allocator                           |
 | **Local speakers** (optional)           | Host-side audio preview without relying on the card                  |

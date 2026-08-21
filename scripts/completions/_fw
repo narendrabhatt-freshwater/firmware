@@ -47,7 +47,7 @@ _fw() {
   rs485_opts=(
     '--port[RS485 adapter device path]:port:_fw_serial_ports'
     '-p[RS485 adapter device path]:port:_fw_serial_ports'
-    '--baud[Baud rate]:baud:(460800 115200 230400 9600)'
+    '--baud[Baud rate]:baud:(921600 460800 115200 230400 9600)'
     '--manual-rts[Toggle RTS around TX (dongles w/o auto-direction)]'
     '--timeout-ms[Per-attempt reply wait, ms]:ms:(300)'
     '--retries[Extra send attempts on no reply]:n:(2)'
@@ -59,7 +59,7 @@ _fw() {
     '--port[MIDI index or RS485 serial path]:port-or-index:'
     '-p[MIDI index or RS485 serial path]:port-or-index:'
     '--rs485[USB-RS485 adapter path]:path:_fw_serial_ports'
-    '--baud[RS485 baud]:baud:(460800 115200)'
+    '--baud[RS485 baud]:baud:(921600 460800 115200)'
     '--gain[CH1 DAC atten dB at start]:db:(0 6 12 20 40)'
     '--echo-off[Send e:echo off at open (default)]'
     '--echo-on[Send e:echo on at open]'

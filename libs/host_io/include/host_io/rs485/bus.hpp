@@ -29,7 +29,7 @@ enum class EffectEcho : uint8_t {
 };
 
 struct BusOptions {
-  uint32_t baud = 460800;
+  uint32_t baud = 921600;
   uint32_t atten_db = 6;
   uint32_t reply_timeout_ms = 400;
   int retries = 1;
