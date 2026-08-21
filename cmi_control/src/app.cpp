@@ -194,6 +194,64 @@ namespace
     }
   }
 
+  /** One 512-sample BODY fits in a USB FS 1 ms frame (payload). Headers,
+   *  CDC, and refill jitter eat the rest — treat 400 as the working limit
+   *  (8×C4 = 384). Hungriest-voice does not raise this. */
+  constexpr double kUsbBodySampPerMsWire =
+      static_cast<double>(cardlink::audio::kBodyBurstMax);
+  constexpr double kUsbBodySampPerMs = 400.0;
+
+  double BodyIncOf(double freq_hz, double root_hz)
+  {
+    double inc = 1.0;
+    if (root_hz > 0.0 && freq_hz > 0.0)
+    {
+      inc = freq_hz / root_hz;
+    }
+    if (inc > 16.0)
+    {
+      inc = 16.0;
+    }
+    if (inc < (1.0 / 16.0))
+    {
+      inc = 1.0 / 16.0;
+    }
+    return inc;
+  }
+
+  /** Sum sounding voices: 48 × (note Hz / root Hz) samples/ms. */
+  void SumUsbBodyLoad(const cardlink::midi::VoiceBank &bank,
+                      const cardlink::audio::SampleDryMixer &mixer,
+                      double &c4_units, double &samp_ms)
+  {
+    c4_units = 0.0;
+    samp_ms = 0.0;
+    const double rate_ms =
+        static_cast<double>(cardlink::audio::kSampleRateHz) / 1000.0;
+    const auto &slots = bank.Slots();
+    for (uint8_t i = 0; i < cardlink::midi::kVoiceCount; ++i)
+    {
+      const auto &s = slots[i];
+      if (!s.active || s.freq_hz <= 0.0)
+      {
+        continue;
+      }
+      uint16_t wave = mixer.LiveWave(i);
+      if (wave >= cardlink::audio::kAttackWaves)
+      {
+        wave = s.midi_key;
+      }
+      double root = mixer.BodyRootHz(wave);
+      if (root <= 0.0)
+      {
+        root = cardlink::audio::kDefaultBodyRootHz;
+      }
+      const double inc = BodyIncOf(s.freq_hz, root);
+      c4_units += inc;
+      samp_ms += rate_ms * inc;
+    }
+  }
+
   /** Small mono text in a given palette color. */
   void Mono(const char *text, const ImVec4 &col, ImFont *font)
   {
@@ -1771,7 +1829,7 @@ void App::DrawPerform()
   ImFont *fs = fw::theme::g_fonts.mono_small;
   ImFont *fm = fw::theme::g_fonts.mono;
 
-  const float strip_h = S(248.f);
+  const float strip_h = S(272.f);
   const float ctrl_h = S(38.f);
   const float scope_h =
       ImGui::GetContentRegionAvail().y - strip_h;
@@ -2132,6 +2190,61 @@ void App::DrawPerform()
       {
         view = GuiView::Sample;
         MarkSettingsDirty();
+      }
+
+      double c4_units = 0.0;
+      double samp_ms = 0.0;
+      SumUsbBodyLoad(bank, samples.Mixer(), c4_units, samp_ms);
+      const bool over = samp_ms > kUsbBodySampPerMs;
+      const ImVec4 load_col = over ? kPalette.danger : kPalette.accent;
+      ImGui::SetCursorPosX(S(12.f));
+      ImGui::Dummy(ImVec2(1.f, S(6.f)));
+      ImGui::SetCursorPosX(S(12.f));
+      Mono("USB BODY", kPalette.text_dim, fs);
+      char load[48];
+      std::snprintf(load, sizeof(load), "%.0f/%.0f /ms", samp_ms,
+                    kUsbBodySampPerMs);
+      ImGui::SetCursorPosX(S(12.f));
+      Mono(load, load_col, fm);
+      char units[48];
+      std::snprintf(units, sizeof(units), "%.2f\u00D7C4  %s", c4_units,
+                    over ? "OVER" : "OK");
+      ImGui::SetCursorPosX(S(12.f));
+      Mono(units, over ? kPalette.danger : kPalette.text_dim, fs);
+      {
+        const float bar_w = wsz.x - S(24.f);
+        const float bar_h = S(4.f);
+        ImGui::SetCursorPosX(S(12.f));
+        ImGui::InvisibleButton("##usb_body_load", ImVec2(bar_w, bar_h + S(8.f)));
+        const ImVec2 bp0 = ImGui::GetItemRectMin();
+        const ImVec2 bp1(bp0.x + bar_w, bp0.y + bar_h);
+        const float frac = static_cast<float>(
+            std::min(1.0, samp_ms / kUsbBodySampPerMs));
+        dl->AddRectFilled(bp0, bp1, fw::theme::U32(kPalette.bg), S(1.f));
+        if (frac > 0.f)
+        {
+          dl->AddRectFilled(bp0,
+                            ImVec2(bp0.x + bar_w * frac, bp1.y),
+                            fw::theme::U32(load_col), S(1.f));
+        }
+        dl->AddRect(bp0, bp1, fw::theme::U32(kPalette.border), S(1.f));
+        if (ImGui::IsItemHovered())
+        {
+          ImGui::BeginTooltip();
+          ImGui::PushFont(fs);
+          ImGui::Text(
+              "Each voice consumes 48 \u00D7 (note Hz / root Hz) samples/ms.\n"
+              "%.0f is one full BODY burst in a USB FS 1 ms frame (payload).\n"
+              "Headers + CDC + refill jitter eat the rest; %.0f is the working\n"
+              "limit (8\u00D7C4 = 384). Hungriest-voice only picks who gets the\n"
+              "next burst \u2014 it does not add bandwidth.\n"
+              "A3 B3 C4 D4 E4 = 5.17 \u00D7 48 = 248  OK\n"
+              "5\u00D7C5 = 10 \u00D7 48 = 480  under %.0f, still OVER %.0f",
+              kUsbBodySampPerMsWire, kUsbBodySampPerMs, kUsbBodySampPerMsWire,
+              kUsbBodySampPerMs);
+          ImGui::PopFont();
+          ImGui::EndTooltip();
+        }
       }
     }
   }

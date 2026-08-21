@@ -89,6 +89,9 @@ public:
 
   bool AnyActive() const;
 
+  /** Wave id the bulk thread is streaming for this voice, or 0xFFFF if idle. */
+  uint16_t LiveWave(uint8_t voice) const;
+
   /** Subtract body consume for `nframes` of 48 kHz output (attack does not). */
   void ConsumeOutputSamples(double nframes);
 

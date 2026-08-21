@@ -645,6 +645,15 @@ bool SampleDryMixer::AnyActive() const
   return false;
 }
 
+uint16_t SampleDryMixer::LiveWave(uint8_t voice) const
+{
+  if (voice >= kSampleVoices ||
+      !live_[voice].load(std::memory_order_acquire)) {
+    return 0xFFFFu;
+  }
+  return live_wave_[voice].load(std::memory_order_acquire);
+}
+
 int16_t SampleDryMixer::NextBody(Voice &v)
 {
   auto &body = bodies_[v.wave_id];
