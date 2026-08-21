@@ -3,6 +3,8 @@
  * @brief Host copy of Channel Card vendor bulk BODY framing.
  *
  * Must match channel_card/USB_APP/usb_stream.h. Fire-and-forget: no ACK.
+ * One bulk transfer holds a PACK (type 0x03) of per-voice BODY metas.
+ * Vendor ISO is not used (macOS IOUSBHostFamily panics on that path).
  */
 
 #pragma once
@@ -13,10 +15,11 @@ namespace cardlink {
 namespace usb {
 
 constexpr uint16_t kStreamVid = 0xCafe;
-constexpr uint16_t kStreamPid = 0x4020;
+constexpr uint16_t kStreamPid = 0x4022;
 constexpr uint8_t kStreamMagic0 = 0x46;
 constexpr uint8_t kStreamMagic1 = 0x57;
 constexpr uint8_t kStreamTypeBody = 0x01;
+constexpr uint8_t kStreamTypePack = 0x03;
 constexpr unsigned kStreamHdrSize = 8;
 constexpr unsigned kStreamBodyMetaSize = 8;
 constexpr unsigned kStreamNsampMax = 512;
@@ -24,6 +27,20 @@ constexpr unsigned kStreamSessionMod = 7;
 constexpr uint8_t kStreamVendorItf = 0;
 constexpr uint8_t kStreamEpOut = 0x01;
 constexpr unsigned kStreamFsMps = 64;
+/** 19 × 64: Full-Speed bulk payload ceiling in one 1 ms frame. */
+constexpr unsigned kStreamFrameMax = 1216;
+
+inline constexpr unsigned PackMaxSamples(unsigned nvoices)
+{
+  if (nvoices == 0 || nvoices > 8) {
+    return 0;
+  }
+  const unsigned overhead = kStreamHdrSize + nvoices * kStreamBodyMetaSize;
+  if (overhead >= kStreamFrameMax) {
+    return 0;
+  }
+  return (kStreamFrameMax - overhead) / 2u;
+}
 
 #pragma pack(push, 1)
 struct StreamHdr {

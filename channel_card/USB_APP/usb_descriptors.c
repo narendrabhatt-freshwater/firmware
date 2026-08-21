@@ -4,6 +4,10 @@
  *
  * Vendor DCD buffer is CFG_TUD_VENDOR_EPSIZE (multi-packet). wMaxPacketSize
  * here must stay 64 on Full-Speed.
+ *
+ * PID bump on any descriptor change (macOS caches by VID/PID).
+ * 0x4019 = UAC2; 0x4020 = vendor bulk; 0x4021 = vendor ISO (withdrawn:
+ * macOS panics); 0x4022 = vendor bulk PACK + CDC.
  */
 
 #include "tusb.h"
@@ -15,14 +19,10 @@
 #define TUD_VENDOR_DESC_LEN (9 + 7 + 7)
 #endif
 
-//--------------------------------------------------------------------+
-// Device Descriptor
-//--------------------------------------------------------------------+
-
 tusb_desc_device_t const desc_device = {
     .bLength = sizeof(tusb_desc_device_t),
     .bDescriptorType = TUSB_DESC_DEVICE,
-    .bcdUSB = 0x0210, /* BOS + MS OS 2.0 */
+    .bcdUSB = 0x0210,
 
     .bDeviceClass = TUSB_CLASS_MISC,
     .bDeviceSubClass = MISC_SUBCLASS_COMMON,
@@ -30,8 +30,6 @@ tusb_desc_device_t const desc_device = {
     .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
 
     .idVendor = USB_STREAM_VID,
-    /* Bump PID on any descriptor change (macOS caches by VID/PID).
-     * 0x4019 = UAC2 10ch FS ISO; 0x4020 = vendor bulk BODY + CDC. */
     .idProduct = USB_STREAM_PID,
     .bcdDevice = 0x0100,
 
@@ -45,10 +43,6 @@ tusb_desc_device_t const desc_device = {
 uint8_t const *tud_descriptor_device_cb(void) {
   return (uint8_t const *)&desc_device;
 }
-
-//--------------------------------------------------------------------+
-// Configuration Descriptor
-//--------------------------------------------------------------------+
 
 enum {
   ITF_NUM_VENDOR = 0,
@@ -71,13 +65,10 @@ enum {
 uint8_t const desc_configuration[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
 
-    /* Interface */
     9, TUSB_DESC_INTERFACE, ITF_NUM_VENDOR, 0, 2, TUSB_CLASS_VENDOR_SPECIFIC,
     0x00, 0x00, 4,
-    /* Endpoint Out — MPS 64; DCD xfer size is CFG_TUD_VENDOR_EPSIZE */
     7, TUSB_DESC_ENDPOINT, EPNUM_VENDOR_OUT, TUSB_XFER_BULK,
     U16_TO_U8S_LE(USB_STREAM_FS_MPS), 0,
-    /* Endpoint In (reserved for Effect CAPTURE / optional telemetry) */
     7, TUSB_DESC_ENDPOINT, EPNUM_VENDOR_IN, TUSB_XFER_BULK,
     U16_TO_U8S_LE(USB_STREAM_FS_MPS), 0,
 
@@ -96,10 +87,6 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
   (void)index;
   return desc_configuration;
 }
-
-//--------------------------------------------------------------------+
-// BOS + Microsoft OS 2.0 (WinUSB on the vendor interface only)
-//--------------------------------------------------------------------+
 
 enum { VENDOR_REQUEST_MICROSOFT = 1 };
 
@@ -154,10 +141,6 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
   }
   return false;
 }
-
-//--------------------------------------------------------------------+
-// String Descriptors
-//--------------------------------------------------------------------+
 
 enum {
   STRID_LANGID = 0,

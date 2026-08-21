@@ -348,23 +348,52 @@ unsigned SampleDryMixer::WantBurst(uint8_t voice) const
 
 uint8_t SampleDryMixer::HungriestWant() const
 {
-  const uint8_t card_best = vq_best_.load(std::memory_order_relaxed);
-  if (card_best < kSampleVoices && WantBurst(card_best) > 0) {
-    return card_best;
+  uint8_t order[kSampleVoices];
+  const unsigned n = WantingVoices(order);
+  if (n == 0) {
+    return 0xFF;
   }
-  uint8_t best = 0xFF;
-  double best_t = 1.0e9;
+  return order[0];
+}
+
+unsigned SampleDryMixer::WantingVoices(uint8_t *dst) const
+{
+  uint8_t tmp[kSampleVoices];
+  unsigned n = 0;
   for (uint8_t i = 0; i < kSampleVoices; ++i) {
-    if (WantBurst(i) == 0) {
-      continue;
-    }
-    const double t = RemainingMs(voices_[i]);
-    if (t < best_t) {
-      best_t = t;
-      best = i;
+    if (WantBurst(i) > 0) {
+      tmp[n++] = i;
     }
   }
-  return best;
+  for (unsigned i = 1; i < n; ++i) {
+    const uint8_t v = tmp[i];
+    const double t = RemainingMs(voices_[v]);
+    unsigned j = i;
+    while (j > 0 && RemainingMs(voices_[tmp[j - 1u]]) > t) {
+      tmp[j] = tmp[j - 1u];
+      --j;
+    }
+    tmp[j] = v;
+  }
+  const uint8_t card_best = vq_best_.load(std::memory_order_relaxed);
+  if (card_best < kSampleVoices) {
+    for (unsigned i = 0; i < n; ++i) {
+      if (tmp[i] != card_best) {
+        continue;
+      }
+      for (unsigned j = i; j > 0; --j) {
+        tmp[j] = tmp[j - 1u];
+      }
+      tmp[0] = card_best;
+      break;
+    }
+  }
+  if (dst != nullptr) {
+    for (unsigned i = 0; i < n; ++i) {
+      dst[i] = tmp[i];
+    }
+  }
+  return n;
 }
 
 unsigned SampleDryMixer::FillBurst(uint8_t voice, int16_t *dst, unsigned max_n,

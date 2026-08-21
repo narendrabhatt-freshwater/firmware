@@ -185,9 +185,9 @@ Hand-written modules live under `Core/Src/<domain>/` (and matching
 This file holds the playback path as measured on the board. Notable
 parts, all commented in-place:
 
-- **BODY stream** is vendor bulk: packed int16 bursts per voice (session +
-  SOF). CH1 I2S is always the note-bank mix. USB IRQ is DCD only;
-  `tud_task` and BODY parse run in the main loop.
+- **BODY stream** is vendor bulk OUT: packed int16 per voice (session +
+  SOF), up to 1216 bytes per Full-Speed frame. CH1 I2S is always the
+  note-bank mix. USB IRQ is DCD only; `tud_task` drains the vendor FIFO.
 - **I2S start order matters** — the I2S1 master must be running before
   the I2S2 slave is enabled, or the slave never shifts.
 - **I2S2 slave workarounds** — UDR wedge clearing via the TIM7 pump, and

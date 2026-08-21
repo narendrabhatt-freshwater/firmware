@@ -145,7 +145,7 @@ the same fields in a 12-byte binary frame: `a5 5a 43 01`, mask, best,
 four packed slot bytes (two 4-bit counts each), CRC-8/0x07, then `0a`.
 Best is 0–7 or 255. Slot codes 0–14 count complete 256-sample slots;
 15 means the ring is empty. At 921600 8N1 the 12-byte frame is ~150 µs
-on the wire. That is not the vendor RX FIFO (~32 KB; a full FIFO NAKs).
+on the wire. That is not USB BODY (vendor bulk PACK).
 
 Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 8-tap
 sinc. The attack plays to its committed length (not a hold-pad to
@@ -353,41 +353,57 @@ e:ar 1 0
 
 Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 
-| Interface              | Role                                                                 |
-| ---------------------- | -------------------------------------------------------------------- |
-| **Vendor bulk** (ITF0) | Fire-and-forget BODY stream: packed int16 bursts per voice. No ACK.  |
-| **CDC ACM** (serial)   | Same ASCII console as RS485, plus binary attack-head upload (`al`).  |
+| Interface                    | Role                                                                |
+| ---------------------------- | ------------------------------------------------------------------- |
+| **Vendor bulk OUT** (ITF0)   | Fire-and-forget BODY. Host packs every sounding voice into one URB. |
+| **CDC ACM** (serial)         | Same ASCII console as RS485, plus binary attack-head upload (`al`). |
 
-There is no UAC speaker. Full-Speed bulk MPS is 64 bytes; the card arms a
-multi-packet OUT (up to 1216 bytes, one 1 ms FS frame) so main-loop
-`tud_task` can take a full frame. USB IRQ is DCD only. A full RX FIFO NAKs
-the host instead of dropping a frame.
+There is no UAC speaker. USB IRQ is DCD only; BODY parse runs in `tud_task`
+from the main loop. A full vendor FIFO NAKs the host.
+
+Vendor isochronous BODY (PID `0x4021`) was withdrawn: claiming that
+interface panics macOS IOUSBHostFamily. Bulk retries CRC and NAKs when
+full; it does not reserve a SOF slot the way UAC ISO did.
+
+CDC is a separate function. `al` still uses CDC; leave that port closed
+while notes are down if you want the remaining FS leftovers for hub traffic.
 
 Effect Card still has CDC and a UAC2 microphone (mono, 32-bit, 96 kHz).
 
 ### BODY stream (vendor bulk OUT)
 
-Little-endian. One message per host bulk transfer. The card never replies.
+Little-endian. The card never replies. `type` `0x03` PACK is the live
+format: one header plus N BODY metas so several voices share one transfer
+(up to 1216 bytes = 19 × 64-byte FS packets).
 
 ```text
+PACK (type 0x03), one bulk transfer ≤ 1216 bytes
 offset  size  field
 0       1     magic0 = 0x46  'F'
 1       1     magic1 = 0x57  'W'
-2       1     type   = 0x01  BODY
+2       1     type   = 0x03  PACK
 3       1     flags  (0)
-4       2     nbytes payload length
+4       2     nbytes rest of packet
 6       2     pad
-8       1     voice  0..7
-9       1     session 0..6
-10      1     sof    1 = reset that ring + note-on join
-11      1     pad
-12      2     nsamp  1..512
-14      2     pad
-16      2*nsamp  int16 LE unpitched body
+8       …     repeated BODY meta + int16 samples:
+
+  0     1     voice  0..7
+  1     1     session 0..6
+  2     1     sof    1 = reset that ring + note-on join
+  3     1     pad
+  4     2     nsamp
+  6     2     pad
+  8     2*nsamp  int16 LE unpitched body
 ```
 
-Idle = send nothing. VID `0xCafe`, PID `0x4020` (placeholder; bump PID on
-descriptor change). Host claims interface 0; CDC stays a serial port.
+`type` `0x01` BODY is the same meta+samples as a single-voice message
+(still accepted). VID `0xCafe`, PID `0x4022`. Host claims interface 0.
+CDC stays a serial port.
+
+Five C5 voices need 480 samples/ms (fits in one 1216-byte frame). Eight
+C4 voices need 384 samples/ms. Eight C5 (768 samples) still exceeds one
+FS bulk frame; the host sends more than one packed transfer per millisecond
+until the FIFO NAKs or the rings are full.
 
 `type` `0x10` STATUS and `0x20` CAPTURE are reserved (not an ACK).
 

@@ -16,14 +16,6 @@
 
 #include <string.h>
 
-//--------------------------------------------------------------------+
-// Init / task
-//--------------------------------------------------------------------+
-
-/** Bring up the USB peripheral clocks, PHY power and NVIC.
- * Mirrors what ST's HAL_PCD_MspInit() used to do (PLL3 -> 48 MHz USB
- * kernel clock, USB voltage detector, peripheral clock, OTG_HS IRQ);
- * TinyUSB itself only touches the core registers. */
 static void USB_LowLevel_Init(void)
 {
   RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
@@ -32,7 +24,7 @@ static void USB_LowLevel_Init(void)
   PeriphClkInitStruct.PLL3.PLL3M = 4;
   PeriphClkInitStruct.PLL3.PLL3N = 125;
   PeriphClkInitStruct.PLL3.PLL3P = 16;
-  PeriphClkInitStruct.PLL3.PLL3Q = 16; /* 768 MHz / 16 = 48 MHz exactly */
+  PeriphClkInitStruct.PLL3.PLL3Q = 16;
   PeriphClkInitStruct.PLL3.PLL3R = 8;
   PeriphClkInitStruct.PLL3.PLL3RGE = RCC_PLL3VCIRANGE_2;
   PeriphClkInitStruct.PLL3.PLL3VCOSEL = RCC_PLL3VCOWIDE;
@@ -43,14 +35,12 @@ static void USB_LowLevel_Init(void)
     Error_Handler();
   }
 
-  /* Transceiver supply — without this the D+ pull-up never appears and
-   * the host sees nothing on the bus. */
   HAL_PWREx_EnableUSBVoltageDetector();
 
   __HAL_RCC_USB_OTG_HS_CLK_ENABLE();
 
   /* DCD packet copy still has a 1 ms FS-frame deadline. BODY parse does
-   * not run here — a late main loop NAKs instead of dropping ISO. */
+   * not run here — a late main loop NAKs instead of dropping a frame. */
   HAL_NVIC_SetPriority(OTG_HS_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(OTG_HS_IRQn);
 }
@@ -71,10 +61,6 @@ void tud_umount_cb(void)
   Audio_Bridge_StreamStop();
 }
 
-//--------------------------------------------------------------------+
-// CDC console: line-buffered bridge into Console_ExecFromUSB
-//--------------------------------------------------------------------+
-
 void USB_CDC_WriteStr(const char *s)
 {
   if (s == NULL || !tud_cdc_connected())
@@ -88,7 +74,6 @@ void USB_CDC_WriteStr(const char *s)
     tud_cdc_write_flush();
     if (n == 0)
     {
-      /* TX buffer full. Do not spin in tud_task: that starves BODY drain. */
       return;
     }
   }
@@ -101,7 +86,6 @@ static void CDC_Console_Poll(void)
 
   while (tud_cdc_available())
   {
-    /* Binary attack upload: consume raw bytes, no echo / line edit. */
     if (AttackUpload_IsActive() != 0u)
     {
       uint8_t tmp[256];
@@ -129,7 +113,7 @@ static void CDC_Console_Poll(void)
       }
     }
     else if (c == 0x08 || c == 0x7F)
-    { /* backspace */
+    {
       if (len > 0)
       {
         len--;
@@ -138,19 +122,14 @@ static void CDC_Console_Poll(void)
     }
     else if (len < sizeof(line) - 1 && c >= 0x20 && c < 0x7F)
     {
-      /* lowercase to match the RS485 console behaviour */
       if (c >= 'A' && c <= 'Z')
         c = (char)(c + 32);
       line[len++] = c;
       char e[2] = {c, '\0'};
-      USB_CDC_WriteStr(e); /* echo */
+      USB_CDC_WriteStr(e);
     }
   }
 }
-
-//--------------------------------------------------------------------+
-// BODY assembler (main loop). No reply.
-//--------------------------------------------------------------------+
 
 static uint8_t s_msg[USB_STREAM_MSG_MAX];
 static uint32_t s_got;
@@ -176,7 +155,7 @@ static void USB_App_HandleBody(const uint8_t *payload, uint16_t nbytes)
     return;
   }
   meta = (const UsbStreamBodyMeta *)(const void *)payload;
-  if (meta->nsamp > USB_STREAM_NSAMP_MAX)
+  if (meta->nsamp == 0u || meta->nsamp > USB_STREAM_NSAMP_MAX)
   {
     s_bad++;
     return;
@@ -190,6 +169,28 @@ static void USB_App_HandleBody(const uint8_t *payload, uint16_t nbytes)
   samples = (const int16_t *)(const void *)(payload + USB_STREAM_BODY_META_SIZE);
   (void)StreamRing_WriteVoice(meta->voice, meta->session, meta->sof, samples,
                               meta->nsamp);
+}
+
+static void USB_App_HandlePack(const uint8_t *payload, uint16_t nbytes)
+{
+  uint32_t po = 0u;
+  while ((po + USB_STREAM_BODY_META_SIZE) <= (uint32_t)nbytes)
+  {
+    UsbStreamBodyMeta meta;
+    uint32_t chunk;
+
+    memcpy(&meta, payload + po, sizeof meta);
+    chunk = USB_STREAM_BODY_META_SIZE + ((uint32_t)meta.nsamp * 2u);
+    if (meta.nsamp == 0u || meta.nsamp > USB_STREAM_NSAMP_MAX ||
+        (po + chunk) > (uint32_t)nbytes)
+    {
+      s_bad++;
+      return;
+    }
+    USB_App_HandleBody(payload + po, (uint16_t)chunk);
+    po += chunk;
+    s_rx_msg++;
+  }
 }
 
 static void USB_App_DrainVendor(void)
@@ -230,7 +231,6 @@ static void USB_App_DrainVendor(void)
       }
       if (s_msg[0] != USB_STREAM_MAGIC0 || s_msg[1] != USB_STREAM_MAGIC1)
       {
-        /* Resync: drop the first byte, shift the rest. */
         s_bad++;
         memmove(s_msg, s_msg + 1, USB_STREAM_HDR_SIZE - 1u);
         s_got = USB_STREAM_HDR_SIZE - 1u;
@@ -276,6 +276,10 @@ static void USB_App_DrainVendor(void)
       {
         USB_App_HandleBody(s_msg + USB_STREAM_HDR_SIZE, hdr->nbytes);
         s_rx_msg++;
+      }
+      else if (hdr->type == USB_STREAM_TYPE_PACK)
+      {
+        USB_App_HandlePack(s_msg + USB_STREAM_HDR_SIZE, hdr->nbytes);
       }
       else
       {

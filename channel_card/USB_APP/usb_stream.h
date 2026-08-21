@@ -2,13 +2,13 @@
  * @file usb_stream.h
  * @brief Channel Card vendor bulk BODY framing (host must match).
  *
- * Fire-and-forget: the card never replies to BODY. USB bulk still retries
- * CRC errors and NAKs when the RX FIFO is full — that is the pipe, not an
- * application ACK.
+ * Fire-and-forget: the card never replies to BODY. USB bulk retries CRC
+ * errors and NAKs when the RX FIFO is full.
  *
  * Full-Speed bulk MPS is 64. The DCD OUT transfer is many packets
  * (CFG_TUD_VENDOR_EPSIZE) so one main-loop tud_task can take a whole
- * 1 ms frame. Do not put parse or ring writes in the USB ISR.
+ * 1 ms frame. Vendor isochronous OUT is not used: claiming a vendor ISO
+ * interface panics macOS IOUSBHostFamily.
  */
 
 #ifndef USB_STREAM_H
@@ -21,21 +21,25 @@ extern "C" {
 #endif
 
 #define USB_STREAM_VID 0xCafe
-#define USB_STREAM_PID 0x4020
+#define USB_STREAM_PID 0x4022
 
 #define USB_STREAM_MAGIC0 0x46u /* 'F' */
 #define USB_STREAM_MAGIC1 0x57u /* 'W' */
 
 #define USB_STREAM_TYPE_BODY 0x01u
-#define USB_STREAM_TYPE_STATUS 0x10u    /* reserved, not an ACK */
-#define USB_STREAM_TYPE_ATTACK 0x02u    /* reserved; attack stays on CDC */
-#define USB_STREAM_TYPE_CAPTURE 0x20u   /* reserved (Effect later) */
+#define USB_STREAM_TYPE_PACK 0x03u /* one hdr + N BODY metas */
+#define USB_STREAM_TYPE_STATUS 0x10u
+#define USB_STREAM_TYPE_ATTACK 0x02u
+#define USB_STREAM_TYPE_CAPTURE 0x20u
 
 #define USB_STREAM_HDR_SIZE 8u
 #define USB_STREAM_BODY_META_SIZE 8u
 #define USB_STREAM_NSAMP_MAX 512u
 #define USB_STREAM_SESSION_MOD 7u
 #define USB_STREAM_ITF_VENDOR 0u
+#define USB_STREAM_EP_OUT 0x01u
+/** One Full-Speed bulk frame of 64-byte packets (19 × 64). */
+#define USB_STREAM_FRAME_MAX 1216u
 
 #if defined(__GNUC__)
 #define USB_STREAM_PACKED __attribute__((packed))
@@ -61,9 +65,7 @@ typedef struct USB_STREAM_PACKED {
   uint16_t pad2;
 } UsbStreamBodyMeta;
 
-#define USB_STREAM_MSG_MAX                                                     \
-  (USB_STREAM_HDR_SIZE + USB_STREAM_BODY_META_SIZE +                           \
-   (USB_STREAM_NSAMP_MAX * 2u))
+#define USB_STREAM_MSG_MAX USB_STREAM_FRAME_MAX
 
 #ifdef __cplusplus
 }

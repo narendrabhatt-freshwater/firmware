@@ -1,18 +1,18 @@
 /**
  * @file sample_dry.hpp
- * @brief Host body feeder: unpitched int16 → vendor bulk BODY bursts.
+ * @brief Host body feeder: unpitched int16 → vendor bulk BODY packs.
  *
- * Card owns pitch / env / filter. Host sends to the voice with the least
- * remaining buffer time. `vq` free-slots + note/root give that time; the
- * card's `best` is the same score from its playhead. Send while remaining
- * time is below kStopMs and the ring has room. First SOF burst does not
- * wait for a poll.
+ * Card owns pitch / env / filter. Each tick the host packs every wanting
+ * voice into one bulk transfer (fair share of a 1216-byte FS frame).
+ * `vq` free-slots + note/root give remaining time; the card's `best` is
+ * the same score from its playhead. Send while remaining time is below
+ * kStopMs and the ring has room. First SOF burst does not wait for a poll.
  *
  * Fill is USB-accepted BODY minus consume. `vq` does not overwrite it.
  * Stop if the card already has kStopMs of ring, or free-slot code 0.
  * Burst size is at most the last `vq` free samples (minus BODY sent
  * since that poll). USB NAK when the vendor FIFO is full; a full ring
- * drops the whole burst.
+ * drops the whole chunk.
  *
  * `queued` tracks the host file cursor (attack does not consume body).
  *
@@ -101,6 +101,10 @@ public:
   /** Active voice with the least remaining time that still wants a burst.
    *  0xFF if none. Prefers the card's vq `best` when that voice wants data. */
   uint8_t HungriestWant() const;
+
+  /** Wanting voices, hungriest first (vq `best` first when it wants data).
+   *  Writes at most kSampleVoices ids into dst. Returns the count. */
+  unsigned WantingVoices(uint8_t *dst) const;
 
   /** Copy up to max_n body samples. Sets sof/session. */
   unsigned FillBurst(uint8_t voice, int16_t *dst, unsigned max_n, bool &sof,

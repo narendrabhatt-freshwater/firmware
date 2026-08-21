@@ -44,7 +44,7 @@ void MX_DMA_Init(void)
 
   /* DMA interrupt init */
   /* Preempt 2 — below USB (0) and TIM7 UDR guard (1). CubeMX may reset
-   * these to 0; a long I2S1 mix must not starve ISO OUT or I2S2. */
+   * these to 0; a long I2S1 mix must not starve USB or I2S2. */
   HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 2, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
   HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 2, 0);

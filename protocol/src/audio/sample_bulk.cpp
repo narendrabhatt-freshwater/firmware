@@ -15,8 +15,104 @@ namespace {
 
 constexpr unsigned kPumpHz = 1000;
 constexpr unsigned kWriteTimeoutMs = 100;
-/* Stop spinning if USB never NAKs. A full vendor FIFO NAKs (AbortBurst). */
-constexpr unsigned kMaxSendsPerTick = 64;
+constexpr unsigned kMaxPacksPerTick = 8;
+
+struct PackedChunk {
+  uint8_t voice = 0;
+  unsigned nsamp = 0;
+  bool sof = false;
+};
+
+int PackFrame(SampleDryMixer &mixer, uint8_t *dst, int max,
+              PackedChunk *chunks, unsigned &nchunks)
+{
+  nchunks = 0;
+  if (dst == nullptr || max < static_cast<int>(cardlink::usb::kStreamHdrSize +
+                                               cardlink::usb::kStreamBodyMetaSize +
+                                               2u)) {
+    return 0;
+  }
+  const unsigned cap = static_cast<unsigned>(max);
+
+  uint8_t order[kSampleVoices];
+  const unsigned nwant = mixer.WantingVoices(order);
+  if (nwant == 0) {
+    return 0;
+  }
+
+  unsigned nuse = nwant;
+  while (nuse > 0 && cardlink::usb::PackMaxSamples(nuse) == 0) {
+    --nuse;
+  }
+  if (nuse == 0) {
+    return 0;
+  }
+
+  const unsigned samp_budget = cardlink::usb::PackMaxSamples(nuse);
+  unsigned fair = samp_budget / nuse;
+  unsigned extra = samp_budget % nuse;
+  if (fair == 0) {
+    fair = 1;
+    extra = 0;
+  }
+
+  unsigned used = cardlink::usb::kStreamHdrSize;
+  std::array<int16_t, cardlink::usb::kStreamNsampMax> body{};
+
+  for (unsigned i = 0; i < nuse; ++i) {
+    const uint8_t v = order[i];
+    unsigned want = mixer.WantBurst(v);
+    if (want == 0) {
+      continue;
+    }
+    unsigned give = fair + ((i < extra) ? 1u : 0u);
+    if (give > want) {
+      give = want;
+    }
+    const unsigned room = cap - used;
+    if (room < cardlink::usb::kStreamBodyMetaSize + 2u) {
+      break;
+    }
+    unsigned max_s = (room - cardlink::usb::kStreamBodyMetaSize) / 2u;
+    if (give > max_s) {
+      give = max_s;
+    }
+    if (give == 0) {
+      continue;
+    }
+    bool sof = false;
+    uint8_t session = 0;
+    const unsigned got = mixer.FillBurst(v, body.data(), give, sof, session);
+    if (got == 0) {
+      continue;
+    }
+    cardlink::usb::StreamBodyMeta meta{};
+    meta.voice = v;
+    meta.session = session;
+    meta.sof = sof ? 1u : 0u;
+    meta.nsamp = static_cast<uint16_t>(got);
+    std::memcpy(dst + used, &meta, sizeof meta);
+    std::memcpy(dst + used + sizeof meta, body.data(),
+                got * sizeof(int16_t));
+    used += sizeof meta + got * sizeof(int16_t);
+    chunks[nchunks].voice = v;
+    chunks[nchunks].nsamp = got;
+    chunks[nchunks].sof = sof;
+    ++nchunks;
+  }
+
+  if (nchunks == 0) {
+    return 0;
+  }
+
+  cardlink::usb::StreamHdr hdr{};
+  hdr.magic0 = cardlink::usb::kStreamMagic0;
+  hdr.magic1 = cardlink::usb::kStreamMagic1;
+  hdr.type = cardlink::usb::kStreamTypePack;
+  hdr.nbytes = static_cast<uint16_t>(used - cardlink::usb::kStreamHdrSize);
+  std::memcpy(dst, &hdr, sizeof hdr);
+  return static_cast<int>(used);
+}
 
 } // namespace
 
@@ -61,14 +157,11 @@ bool SampleBulkOut::Start(std::string &err)
     using clock = std::chrono::steady_clock;
     auto last = clock::now();
     auto next = last;
-    std::vector<uint8_t> pkt(cardlink::usb::kStreamHdrSize +
-                             cardlink::usb::kStreamBodyMetaSize +
-                             cardlink::usb::kStreamNsampMax * 2u);
-    std::array<int16_t, cardlink::usb::kStreamNsampMax> body{};
+    std::vector<uint8_t> pkt(cardlink::usb::kStreamFrameMax);
+    std::array<PackedChunk, kSampleVoices> chunks{};
     while (impl_->run.load(std::memory_order_acquire)) {
       const auto now = clock::now();
-      const double dt =
-          std::chrono::duration<double>(now - last).count();
+      const double dt = std::chrono::duration<double>(now - last).count();
       last = now;
       double nframes = dt * static_cast<double>(kSampleRateHz);
       if (nframes > static_cast<double>(kSampleRateHz)) {
@@ -78,42 +171,21 @@ bool SampleBulkOut::Start(std::string &err)
 
       unsigned sends = 0;
       bool usb_ok = true;
-      while (usb_ok && sends < kMaxSendsPerTick) {
-        const uint8_t v = mixer_->HungriestWant();
-        if (v >= kSampleVoices) {
+      while (usb_ok && sends < kMaxPacksPerTick) {
+        unsigned nchunks = 0;
+        const int nbytes =
+            PackFrame(*mixer_, pkt.data(),
+                      static_cast<int>(cardlink::usb::kStreamFrameMax),
+                      chunks.data(), nchunks);
+        if (nbytes <= 0 || nchunks == 0) {
           break;
         }
-        const unsigned n = mixer_->WantBurst(v);
-        if (n == 0) {
-          break;
-        }
-        bool sof = false;
-        uint8_t session = 0;
-        const unsigned got =
-            mixer_->FillBurst(v, body.data(), n, sof, session);
-        if (got == 0) {
-          break;
-        }
-        cardlink::usb::StreamHdr hdr{};
-        hdr.magic0 = cardlink::usb::kStreamMagic0;
-        hdr.magic1 = cardlink::usb::kStreamMagic1;
-        hdr.type = cardlink::usb::kStreamTypeBody;
-        hdr.nbytes = static_cast<uint16_t>(
-            cardlink::usb::kStreamBodyMetaSize + got * 2u);
-        cardlink::usb::StreamBodyMeta meta{};
-        meta.voice = v;
-        meta.session = session;
-        meta.sof = sof ? 1u : 0u;
-        meta.nsamp = static_cast<uint16_t>(got);
-        std::memcpy(pkt.data(), &hdr, sizeof hdr);
-        std::memcpy(pkt.data() + sizeof hdr, &meta, sizeof meta);
-        std::memcpy(pkt.data() + sizeof hdr + sizeof meta, body.data(),
-                    got * sizeof(int16_t));
-        const int nbytes = static_cast<int>(sizeof hdr + sizeof meta +
-                                            got * sizeof(int16_t));
         std::string werr;
         if (!impl_->link.Write(pkt.data(), nbytes, kWriteTimeoutMs, werr)) {
-          mixer_->AbortBurst(v, got, sof);
+          for (unsigned i = 0; i < nchunks; ++i) {
+            mixer_->AbortBurst(chunks[i].voice, chunks[i].nsamp,
+                               chunks[i].sof);
+          }
           usb_ok = false;
           break;
         }

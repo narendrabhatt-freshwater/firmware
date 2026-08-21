@@ -110,7 +110,7 @@ if(NOT TARGET PkgConfig::LIBUSB)
   find_library(LIBUSB_LIBRARY NAMES usb-1.0 libusb-1.0)
   if(NOT LIBUSB_INCLUDE_DIR OR NOT LIBUSB_LIBRARY)
     message(FATAL_ERROR
-      "libusb-1.0 is required for the Channel Card vendor bulk stream "
+      "libusb-1.0 is required for the Channel Card vendor ISO stream "
       "(brew install libusb / apt install libusb-1.0-0-dev)")
   endif()
   add_library(cardlink_libusb INTERFACE)

@@ -121,7 +121,7 @@ namespace cardproto
     const char *p = raw;
     /* RS485 replies are tagged `[C] ok:vq …`. Result::raw should already
      * be the body; accept a leftover tag so a missed strip cannot stall
-     * the idle watch (vq poll then starves ISO OUT). */
+     * the idle watch (vq poll then starves BODY). */
     if (p[0] == '[' && p[1] != '\0' && p[2] == ']' &&
         (p[1] == 'C' || p[1] == 'c' || p[1] == 'E' || p[1] == 'e')) {
       p += 3;

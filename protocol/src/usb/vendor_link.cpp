@@ -61,7 +61,7 @@ bool VendorLink::Open(uint16_t vid, uint16_t pid, std::string &err)
   }
   impl_->handle = libusb_open_device_with_vid_pid(impl_->ctx, vid, pid);
   if (impl_->handle == nullptr) {
-    err = "Channel Card vendor USB not found (VID/PID)";
+    err = "Channel Card vendor USB not found (VID/PID 0x4022 bulk BODY)";
     libusb_exit(impl_->ctx);
     impl_->ctx = nullptr;
     return false;
@@ -97,8 +97,7 @@ bool VendorLink::Write(const void *data, int nbytes, unsigned timeout_ms,
   int rc = libusb_bulk_transfer(impl_->handle, kStreamEpOut,
                                 static_cast<unsigned char *>(
                                     const_cast<void *>(data)),
-                                nbytes, &transferred,
-                                timeout_ms);
+                                nbytes, &transferred, timeout_ms);
   if (rc != 0 || transferred != nbytes) {
     err = std::string("bulk OUT: ") + libusb_error_name(rc);
     return false;

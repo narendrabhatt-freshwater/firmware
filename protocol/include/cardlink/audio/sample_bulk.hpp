@@ -7,7 +7,7 @@
 
 namespace cardlink::audio {
 
-/** Host thread: BODY bursts over vendor bulk. No ACK, no OS audio stack. */
+/** Host thread: packed BODY over vendor bulk. No ACK, no OS audio stack. */
 class SampleBulkOut {
 public:
   SampleBulkOut();

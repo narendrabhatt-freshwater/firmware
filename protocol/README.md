@@ -9,7 +9,7 @@ The single C++17 host library for Freshwater card control:
 | `cardlink::usb` | CDC console + `al` attack upload + vendor bulk BODY (`VendorLink`) |
 | `cardlink::sample` | Plug-and-play SAMPLE session: attack upload, BODY mixer, notes |
 | `cardlink::midi` | MIDI input, pitch helpers, and 8-voice FIFO allocation |
-| `cardlink::audio` | Local speaker and Channel Card BODY stream (`SampleBulkOut`) |
+| `cardlink::audio` | Local speaker and Channel Card BODY stream (`SampleBulkOut`, vendor bulk) |
 | `cardproto` | Command formatting, reply parsing, and typed card clients |
 
 The archive includes the `cardproto` implementation. Existing build-tree

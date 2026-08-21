@@ -1,4 +1,5 @@
 #include "cardlink/audio/sample_dry.hpp"
+#include "cardlink/usb/stream_proto.hpp"
 
 #include <array>
 #include <cstdlib>
@@ -183,6 +184,34 @@ int main()
   mixer.ConsumeOutputSamples(0.0);
   Check(mixer.WantBurst(0) == 0,
         "stale empty vq must not refill a ring already at headroom");
+
+  mixer.Silence(0);
+  mixer.ConsumeOutputSamples(0.0);
+  Check(cardlink::usb::PackMaxSamples(1) == 600,
+        "one-voice bulk pack must use the 1216-byte FS frame");
+  Check(cardlink::usb::PackMaxSamples(5) >= 480,
+        "five C5 voices must fit in one FS bulk frame");
+  Check(cardlink::usb::PackMaxSamples(8) >= 384,
+        "eight C4 voices must fit in one FS bulk frame");
+
+  mixer.NoteOn(0, 0, kDefaultBodyRootHz * 2.0);
+  mixer.NoteOn(1, 0, kDefaultBodyRootHz * 2.0);
+  mixer.NoteOn(2, 0, kDefaultBodyRootHz * 2.0);
+  mixer.NoteOn(3, 0, kDefaultBodyRootHz * 2.0);
+  mixer.NoteOn(4, 0, kDefaultBodyRootHz * 2.0);
+  mixer.ConsumeOutputSamples(0.0);
+  {
+    uint8_t order[kSampleVoices];
+    const unsigned nwant = mixer.WantingVoices(order);
+    Check(nwant == 5, "five C5 notes must all want BODY");
+    unsigned packed = 0;
+    for (unsigned i = 0; i < nwant; ++i) {
+      packed += mixer.WantBurst(order[i]) > 0 ? 1u : 0u;
+    }
+    Check(packed == 5, "fair-share pack must see all five");
+    Check(cardlink::usb::PackMaxSamples(nwant) >= 480,
+          "packed bulk payload must cover 5xC5 consume");
+  }
 
   return EXIT_SUCCESS;
 }

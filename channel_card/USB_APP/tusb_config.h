@@ -7,6 +7,9 @@
  * FS bulk MPS is 64. CFG_TUD_VENDOR_EPSIZE is the DCD OUT buffer so one
  * usbd transfer can collect a full 1 ms frame (~19 packets) before
  * tud_task in main re-arms. The descriptor still advertises 64.
+ *
+ * Do not put an isochronous endpoint on the vendor interface: macOS
+ * IOUSBHostFamily panics on claim_interface / ISO submit for that class.
  */
 
 #ifndef _TUSB_CONFIG_H_
@@ -31,7 +34,6 @@ extern "C" {
 #endif
 
 #define CFG_TUD_ENABLED             1
-/* Embedded PHY on this part is full-speed only */
 #define CFG_TUD_MAX_SPEED           OPT_MODE_FULL_SPEED
 
 #define CFG_TUSB_MEM_SECTION
@@ -61,10 +63,7 @@ extern "C" {
 // VENDOR BULK: max FS frame into one OUT xfer
 //--------------------------------------------------------------------
 
-/* Descriptor wMaxPacketSize stays 64. This is the DCD multi-packet
- * buffer: 19 × 64 = 1216, the FS bulk ceiling per 1 ms frame. */
 #define CFG_TUD_VENDOR_EPSIZE       1216
-/* ~32 ms at a full FS frame. Full FIFO NAKs; it does not drop BODY. */
 #define CFG_TUD_VENDOR_RX_BUFSIZE   32768
 #define CFG_TUD_VENDOR_TX_BUFSIZE   64
 

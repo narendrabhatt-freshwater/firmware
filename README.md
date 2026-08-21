@@ -259,7 +259,7 @@ Both cards currently build clean (no warnings) and are working on
 hardware:
 
 - **Channel Card** — 8 SAMPLE voices: vendor bulk BODY (packed int16
-  bursts per voice) feeds per-voice sustain; rate-scaled attack heads
+  per voice, up to 1216 B per FS frame) feeds per-voice sustain; rate-scaled attack heads
   uploaded over CDC; CS4304 DAC out; DC control voltages on CH2–CH4 (0 V
   at boot); RS485 + USB CDC consoles.
 - **Effect Card** — 8-channel capture from two TLV320ADC6140 ADCs over

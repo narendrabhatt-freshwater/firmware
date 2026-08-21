@@ -11,7 +11,8 @@ If this document and the firmware disagree, trust the firmware.
 ## 1. Host interfaces (both cards)
 
 One RS485 multi-drop bus (`c:` / `e:` / `*:`). USB is per-card: Channel
-is Full-Speed **vendor bulk BODY** (ITF0, packed int16 bursts) plus CDC;
+is Full-Speed **vendor bulk BODY** (ITF0, packed frames up to 1216
+bytes) plus CDC;
 Effect is a Full-Speed **UAC2 microphone** (mono int32 @ 96 kHz) plus CDC.
 
 ```mermaid
@@ -56,18 +57,18 @@ flowchart TB
 ## 2. Channel — SAMPLE voice (one of n0..n7)
 
 Attack and body are storage. The head plays to its committed length
-(≤ 512). Body is a FIFO from vendor bulk BODY bursts, consumed with
+(≤ 512). Body is a FIFO from vendor bulk BODY packs, consumed with
 Q16.16 interpolation. `nX > 0` is always a note-on. A new BODY session
 (`SOF` + session 0–6) starts a new body FIFO; a repeated burst with
 the same session does not.
-The host sends BODY to the voice with the least remaining buffer time
-(card `vq` `best`, plus per-voice free slots → fill → seconds of audio).
-Send while that time is below ~25 ms and the ring has room; do not send
-when it will not run out. First SOF burst does not wait for a poll.
+The host packs every wanting voice into one bulk transfer (fair share
+of a 1216-byte FS frame). Send while remaining time is below ~25 ms
+and the ring has room; do not send when it will not run out. First
+burst does not wait for a poll.
 Host fill is USB-accepted BODY minus consume; `vq` does not overwrite it.
-Free-slot code 0 is a hard stop. A full vendor FIFO NAKs. Missing body
-holds the last sample until USB catches up. A full ring drops the whole
-burst; the producer never overwrites unread FIFO samples.
+Free-slot code 0 is a hard stop. A full vendor FIFO NAKs the host.
+Missing body holds the last sample until USB catches up. A full ring
+drops the whole chunk; the producer never overwrites unread FIFO samples.
 
 ```mermaid
 flowchart TB
@@ -121,7 +122,7 @@ Need-score is remaining play time: `filled / max(phase_inc, target_inc)`.
 The host sends to the hungriest voice while that time is below ~25 ms
 and free slots can take a burst. Burst size is at most the last `vq`
 free samples. A stale `vq` that reports more free space than the host
-has already sent is ignored. USB NAK when the vendor FIFO is full.
+has already sent is ignored. A dropped ISO frame is AbortBurst.
 BODY and `nX` start together. The attack plays to its committed length;
 body consume starts at `len − 32` with the same source fraction. The
 host waits for the first BODY burst, then `nX`; further bursts follow
@@ -276,5 +277,4 @@ Channel `vq` replies are sent from the main loop (same loop as
 `USB_App_Task`). The host polls `vq` at adapter RTT while any note is live
 or releasing: remaining fill time paces BODY, and a zero mask stops the
 stream after release. UART TX of the reply can delay main-loop `tud_task`;
-a full vendor FIFO NAKs the host instead of dropping a frame. Do not poll
-faster than the measured adapter RTT.
+a full vendor FIFO NAKs. Do not poll faster than the measured adapter RTT.

@@ -18,11 +18,6 @@ extern "C"
 {
 #endif
 
-    /**
-     * @brief Enable USB clocks/NVIC and start the TinyUSB device stack.
-     * @note Replaces CubeMX MX_USB_DEVICE_Init(); call once during startup,
-     *       inside a USER CODE block so regeneration preserves it.
-     */
     void USB_App_Init(void);
 
     /**
@@ -32,10 +27,6 @@ extern "C"
      */
     void USB_App_Task(void);
 
-    /**
-     * @brief Write a NUL-terminated string to the CDC console.
-     * @param s String to send; NULL or closed port is a no-op.
-     */
     void USB_CDC_WriteStr(const char *s);
 
     uint32_t USB_App_RxMsgCount(void);

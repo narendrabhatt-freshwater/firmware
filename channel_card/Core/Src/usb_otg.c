@@ -88,7 +88,7 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef* pcdHandle)
     HAL_NVIC_SetPriority(OTG_HS_IRQn, 0, 0);
     HAL_NVIC_EnableIRQ(OTG_HS_IRQn);
   /* USER CODE BEGIN USB_OTG_HS_PCD_MspInit 1 */
-    /* ISO OUT has no retry. USB (prio 0) must preempt the I2S1 DMA fill. */
+    /* Vendor FIFO NAKs when full. USB (prio 0) must preempt I2S1 DMA fill. */
     HAL_NVIC_SetPriority(OTG_HS_IRQn, 0, 0);
   /* USER CODE END USB_OTG_HS_PCD_MspInit 1 */
   }

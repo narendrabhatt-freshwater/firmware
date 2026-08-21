@@ -5,6 +5,7 @@
 #include "cardlink/midi/note_event.hpp"
 #include "cardlink/serial_port.hpp"
 #include "cardlink/usb/cdc_port.hpp"
+#include "cardlink/usb/stream_proto.hpp"
 #include "product.hpp"
 #include "cardproto/types.hpp"
 #include "settings.hpp"
@@ -194,12 +195,12 @@ namespace
     }
   }
 
-  /** One 512-sample BODY fits in a USB FS 1 ms frame (payload). Headers,
-   *  CDC, and refill jitter eat the rest — treat 400 as the working limit
-   *  (8×C4 = 384). Hungriest-voice does not raise this. */
-  constexpr double kUsbBodySampPerMsWire =
-      static_cast<double>(cardlink::audio::kBodyBurstMax);
-  constexpr double kUsbBodySampPerMs = 400.0;
+  /** One packed bulk FS frame is 1216 B. PACK headers eat 8+8×voices;
+   *  five voices still fit 5×C5 (480 samp/ms). Eight C4 = 384. */
+  constexpr double kUsbBodySampPerMsWire = static_cast<double>(
+      cardlink::usb::PackMaxSamples(1));
+  constexpr double kUsbBodySampPerMs = static_cast<double>(
+      cardlink::usb::PackMaxSamples(5));
 
   double BodyIncOf(double freq_hz, double root_hz)
   {
@@ -2234,14 +2235,11 @@ void App::DrawPerform()
           ImGui::PushFont(fs);
           ImGui::Text(
               "Each voice consumes 48 \u00D7 (note Hz / root Hz) samples/ms.\n"
-              "%.0f is one full BODY burst in a USB FS 1 ms frame (payload).\n"
-              "Headers + CDC + refill jitter eat the rest; %.0f is the working\n"
-              "limit (8\u00D7C4 = 384). Hungriest-voice only picks who gets the\n"
-              "next burst \u2014 it does not add bandwidth.\n"
-              "A3 B3 C4 D4 E4 = 5.17 \u00D7 48 = 248  OK\n"
-              "5\u00D7C5 = 10 \u00D7 48 = 480  under %.0f, still OVER %.0f",
-              kUsbBodySampPerMsWire, kUsbBodySampPerMs, kUsbBodySampPerMsWire,
-              kUsbBodySampPerMs);
+              "BODY is vendor bulk: one packed transfer per frame (up to\n"
+              "1216 bytes). Every sounding voice shares that payload.\n"
+              "%.0f samp/ms is one voice; %.0f is five voices\n"
+              "(5\u00D7C5 = 480). 8\u00D7C4 = 384.",
+              kUsbBodySampPerMsWire, kUsbBodySampPerMs);
           ImGui::PopFont();
           ImGui::EndTooltip();
         }
