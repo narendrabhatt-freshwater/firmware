@@ -60,11 +60,14 @@ Attack and body are storage. The head plays to its committed length
 Q16.16 interpolation. `nX > 0` is always a note-on. A new BODY session
 (`SOF` + session 0–6) starts a new body FIFO; a repeated burst with
 the same session does not.
-The host sends per-voice bursts. Optional Channel `vq` (hungriest voice
-+ free slots) is occupancy for pacing — a hard stop when a ring cannot
-take the next burst, not a mux. Missing body holds the last sample until
-USB catches up. A full FIFO drops the whole burst; the producer never
-overwrites unread FIFO samples.
+The host sends BODY to the voice with the least remaining buffer time
+(card `vq` `best`, plus per-voice free slots → fill → seconds of audio).
+Send while that time is below ~25 ms and the ring has room; do not send
+when it will not run out. First SOF burst does not wait for a poll.
+Host fill is USB-accepted BODY minus consume; `vq` does not overwrite it.
+Free-slot code 0 is a hard stop. A full vendor FIFO NAKs. Missing body
+holds the last sample until USB catches up. A full ring drops the whole
+burst; the producer never overwrites unread FIFO samples.
 
 ```mermaid
 flowchart TB
@@ -113,15 +116,16 @@ flowchart TB
 ```
 
 RS485 `vq` returns a 12-byte binary frame containing active mask,
-hungriest voice, and eight packed free-slot codes (0..14; 15 = empty). Need-score is
-`filled / max(phase_inc, target_inc)`; the host uses each reply as
-occupancy (raise `queued` if the card is fuller; stop when free samples
-cannot take a burst). The mixer also tops up free-slot
-credit by phase_inc each pump tick so 256-sample slot rounding does not
-starve a 4× note between polls.
+hungriest voice, and eight packed free-slot codes (0..14; 15 = empty).
+Need-score is remaining play time: `filled / max(phase_inc, target_inc)`.
+The host sends to the hungriest voice while that time is below ~25 ms
+and free slots can take a burst. Burst size is at most the last `vq`
+free samples. A stale `vq` that reports more free space than the host
+has already sent is ignored. USB NAK when the vendor FIFO is full.
 BODY and `nX` start together. The attack plays to its committed length;
 body consume starts at `len − 32` with the same source fraction. The
-host does not wait for FIFO prefill. `StreamRing_Prime` arms consume
+host waits for the first BODY burst, then `nX`; further bursts follow
+`vq` remaining time. `StreamRing_Prime` arms consume
 and does not clear the ring. The host fills the body FIFO, then holds
 the file cursor until the playhead reaches the join — dropped USB must
 not skip ahead in the wav.
@@ -270,7 +274,7 @@ flowchart LR
 
 Channel `vq` replies are sent from the main loop (same loop as
 `USB_App_Task`). The host polls `vq` at adapter RTT while any note is live
-or releasing; the reply (mask, hungriest voice, free slots) is occupancy
-for BODY pacing. UART TX of the reply can delay main-loop `tud_task`; a
-full vendor FIFO NAKs the host instead of dropping a frame. Do not poll
+or releasing: remaining fill time paces BODY, and a zero mask stops the
+stream after release. UART TX of the reply can delay main-loop `tud_task`;
+a full vendor FIFO NAKs the host instead of dropping a frame. Do not poll
 faster than the measured adapter RTT.

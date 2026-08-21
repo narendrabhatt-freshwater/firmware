@@ -25,8 +25,9 @@ SampleDryMixer::SampleDryMixer()
     sent_[i].store(0, std::memory_order_relaxed);
     live_[i].store(false, std::memory_order_relaxed);
     live_wave_[i].store(0xFFFFu, std::memory_order_relaxed);
-    vq_free_samp_[i].store(0, std::memory_order_relaxed);
-    vq_occ_[i].store(0, std::memory_order_relaxed);
+    vq_fill_[i].store(0, std::memory_order_relaxed);
+    vq_free_[i].store(static_cast<uint16_t>(kRingSamples),
+                      std::memory_order_relaxed);
   }
 }
 
@@ -207,7 +208,7 @@ bool SampleDryMixer::BodyDraining(const Voice &v)
 void SampleDryMixer::ConsumeOutputSamples(double nframes)
 {
   DrainCmds();
-  RaiseQueuedFromVq();
+  PullVq();
   if (nframes <= 0.0) {
     return;
   }
@@ -221,42 +222,82 @@ void SampleDryMixer::ConsumeOutputSamples(double nframes)
     if (!BodyDraining(v)) {
       continue;
     }
-    v.queued -= inc * nframes;
+    const double take = inc * nframes;
+    v.queued -= take;
     if (v.queued < 0.0) {
       v.queued = 0.0;
+    }
+    v.fill -= take;
+    if (v.fill < 0.0) {
+      v.fill = 0.0;
     }
   }
 }
 
-bool SampleDryMixer::VqArmed(uint8_t voice) const
+void SampleDryMixer::PullVq()
 {
-  if (voice >= kSampleVoices) {
-    return false;
-  }
-  if (!vq_live_.load(std::memory_order_relaxed)) {
-    return false;
-  }
-  if (sent_[voice].load(std::memory_order_relaxed) == 0u) {
-    return false;
-  }
+  const uint32_t seq = vq_seq_.load(std::memory_order_acquire);
   const uint8_t mask = vq_mask_.load(std::memory_order_relaxed);
-  return (mask & static_cast<uint8_t>(1u << voice)) != 0u;
+  for (uint8_t i = 0; i < kSampleVoices; ++i) {
+    auto &v = voices_[i];
+    if (!v.active || v.vq_seen == seq) {
+      continue;
+    }
+    v.vq_seen = seq;
+    if (sent_[i].load(std::memory_order_relaxed) == 0u) {
+      continue;
+    }
+    if ((mask & static_cast<uint8_t>(1u << i)) == 0u) {
+      continue;
+    }
+    /* Ring occupancy is vq; fill is USB-accepted outstanding. Do not mix. */
+    v.vq_free = vq_free_[i].load(std::memory_order_relaxed);
+    v.fill_at_vq = v.fill;
+    v.vq_have = true;
+  }
 }
 
-bool SampleDryMixer::HasRoom(uint8_t voice, unsigned nsamp) const
+double SampleDryMixer::RemainingMs(const Voice &v) const
 {
-  if (voice >= kSampleVoices || nsamp == 0) {
-    return false;
+  const double inc = IncOf(v);
+  const double rate = static_cast<double>(kSampleRateHz) * inc;
+  if (rate <= 0.0) {
+    return 0.0;
   }
-  if (voices_[voice].queued + static_cast<double>(nsamp) >
-      static_cast<double>(kPrefillSamples)) {
-    return false;
+  return 1000.0 * v.fill / rate;
+}
+
+unsigned SampleDryMixer::TargetFill(const Voice &v) const
+{
+  const double inc = IncOf(v);
+  double target = (static_cast<double>(kStopMs) / 1000.0) *
+                  static_cast<double>(kSampleRateHz) * inc;
+  const double cap = static_cast<double>(kRingSamples - kRingHeadroom);
+  if (target > cap) {
+    target = cap;
   }
-  if (VqArmed(voice) &&
-      vq_free_samp_[voice].load(std::memory_order_relaxed) < nsamp) {
-    return false;
+  if (target < static_cast<double>(kMinBurst)) {
+    target = static_cast<double>(kMinBurst);
   }
-  return true;
+  return static_cast<unsigned>(target);
+}
+
+unsigned SampleDryMixer::VqRoom(const Voice &v) const
+{
+  if (!v.vq_have) {
+    return kRingSamples - kRingHeadroom;
+  }
+  if (v.vq_free == 0u) {
+    return 0;
+  }
+  double credit = static_cast<double>(v.vq_free);
+  if (v.fill > v.fill_at_vq) {
+    credit -= (v.fill - v.fill_at_vq);
+  }
+  if (credit < 1.0) {
+    return 0;
+  }
+  return static_cast<unsigned>(credit);
 }
 
 unsigned SampleDryMixer::WantBurst(uint8_t voice) const
@@ -264,7 +305,33 @@ unsigned SampleDryMixer::WantBurst(uint8_t voice) const
   if (voice >= kSampleVoices || !voices_[voice].active) {
     return 0;
   }
-  double room = static_cast<double>(kPrefillSamples) - voices_[voice].queued;
+  const auto &v = voices_[voice];
+  if (v.vq_have) {
+    const double card_fill =
+        static_cast<double>(vq_fill_[voice].load(std::memory_order_relaxed));
+    const double rate = static_cast<double>(kSampleRateHz) * IncOf(v);
+    if (rate > 0.0 &&
+        (1000.0 * card_fill / rate) >= static_cast<double>(kStopMs)) {
+      return 0;
+    }
+  }
+  const unsigned vq_room = VqRoom(v);
+  if (vq_room == 0u) {
+    return 0;
+  }
+  const unsigned target = TargetFill(v);
+  if (v.fill >= static_cast<double>(target)) {
+    return 0;
+  }
+  double room = static_cast<double>(target) - v.fill;
+  const double hard =
+      static_cast<double>(kRingSamples - kRingHeadroom) - v.fill;
+  if (hard < room) {
+    room = hard;
+  }
+  if (static_cast<double>(vq_room) < room) {
+    room = static_cast<double>(vq_room);
+  }
   if (room < 1.0) {
     return 0;
   }
@@ -272,17 +339,32 @@ unsigned SampleDryMixer::WantBurst(uint8_t voice) const
   if (n > kBodyBurstMax) {
     n = kBodyBurstMax;
   }
-  if (VqArmed(voice)) {
-    const unsigned free_s =
-        vq_free_samp_[voice].load(std::memory_order_relaxed);
-    if (free_s < n) {
-      n = free_s;
-    }
-  }
-  if (n == 0 || !HasRoom(voice, n)) {
+  const double t_ms = RemainingMs(v);
+  if (t_ms >= static_cast<double>(kNeedMs) && n < kMinBurst) {
     return 0;
   }
   return n;
+}
+
+uint8_t SampleDryMixer::HungriestWant() const
+{
+  const uint8_t card_best = vq_best_.load(std::memory_order_relaxed);
+  if (card_best < kSampleVoices && WantBurst(card_best) > 0) {
+    return card_best;
+  }
+  uint8_t best = 0xFF;
+  double best_t = 1.0e9;
+  for (uint8_t i = 0; i < kSampleVoices; ++i) {
+    if (WantBurst(i) == 0) {
+      continue;
+    }
+    const double t = RemainingMs(voices_[i]);
+    if (t < best_t) {
+      best_t = t;
+      best = i;
+    }
+  }
+  return best;
 }
 
 unsigned SampleDryMixer::FillBurst(uint8_t voice, int16_t *dst, unsigned max_n,
@@ -294,6 +376,7 @@ unsigned SampleDryMixer::FillBurst(uint8_t voice, int16_t *dst, unsigned max_n,
     return 0;
   }
   DrainCmds();
+  PullVq();
   auto &v = voices_[voice];
   if (!v.active) {
     return 0;
@@ -302,11 +385,12 @@ unsigned SampleDryMixer::FillBurst(uint8_t voice, int16_t *dst, unsigned max_n,
   if (n > kBodyBurstMax) {
     n = kBodyBurstMax;
   }
-  if (!HasRoom(voice, n)) {
-    n = WantBurst(voice);
-    if (n == 0) {
-      return 0;
-    }
+  const unsigned want = WantBurst(voice);
+  if (want == 0) {
+    return 0;
+  }
+  if (n > want) {
+    n = want;
   }
   session = v.session;
   sof = v.sof_pending;
@@ -315,6 +399,7 @@ unsigned SampleDryMixer::FillBurst(uint8_t voice, int16_t *dst, unsigned max_n,
     dst[i] = NextBody(v);
   }
   v.queued += static_cast<double>(n);
+  v.fill += static_cast<double>(n);
   const unsigned sent = sent_[voice].load(std::memory_order_relaxed) + n;
   sent_[voice].store(sent, std::memory_order_release);
   if (!v.active) {
@@ -338,6 +423,11 @@ void SampleDryMixer::AbortBurst(uint8_t voice, unsigned nsamp, bool sof)
   } else {
     v.queued = 0.0;
   }
+  if (v.fill > static_cast<double>(nsamp)) {
+    v.fill -= static_cast<double>(nsamp);
+  } else {
+    v.fill = 0.0;
+  }
   v.cursor -= static_cast<double>(nsamp);
   const size_t nbody = (v.wave_id < bodies_.size()) ? bodies_[v.wave_id].size() : 0;
   if (nbody > 0 && v.cursor < 0.0) {
@@ -354,35 +444,6 @@ void SampleDryMixer::AbortBurst(uint8_t voice, unsigned nsamp, bool sof)
   }
   const unsigned sent = sent_[voice].load(std::memory_order_relaxed);
   sent_[voice].store(sent > nsamp ? sent - nsamp : 0u, std::memory_order_release);
-}
-
-void SampleDryMixer::RaiseQueuedFromVq()
-{
-  if (!vq_live_.load(std::memory_order_relaxed)) {
-    return;
-  }
-  const uint8_t mask = vq_mask_.load(std::memory_order_relaxed);
-  for (uint8_t i = 0; i < kSampleVoices; ++i) {
-    if (!voices_[i].active) {
-      continue;
-    }
-    if ((mask & static_cast<uint8_t>(1u << i)) == 0u) {
-      continue;
-    }
-    /* SOF empties the card ring; an in-flight vq still reports the old
-     * occupancy. Raising queued here blocks WantBurst for the new session. */
-    if (sent_[i].load(std::memory_order_relaxed) == 0u) {
-      continue;
-    }
-    const double occ =
-        static_cast<double>(vq_occ_[i].load(std::memory_order_relaxed));
-    /* Occupancy overestimates fill by 0..255. Snap down so a phantom
-     * cruise (USB FIFO / dropped burst) cannot block WantBurst. Do not
-     * snap up: a stale pre-SOF vq would freeze prefill. */
-    if (occ < voices_[i].queued) {
-      voices_[i].queued = occ;
-    }
-  }
 }
 
 void SampleDryMixer::Post(const Cmd &c)
@@ -410,13 +471,8 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
       live_[i].store(false, std::memory_order_release);
       live_wave_[i].store(0xFFFFu, std::memory_order_release);
     }
-    vq_live_.store(false, std::memory_order_release);
     vq_mask_.store(0, std::memory_order_relaxed);
     vq_best_.store(0xFF, std::memory_order_relaxed);
-    for (uint8_t i = 0; i < kSampleVoices; ++i) {
-      vq_free_samp_[i].store(0, std::memory_order_relaxed);
-      vq_occ_[i].store(0, std::memory_order_relaxed);
-    }
     return;
   }
   if (c.voice >= kSampleVoices) {
@@ -436,8 +492,6 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
     sent_[c.voice].store(0, std::memory_order_release);
     live_[c.voice].store(false, std::memory_order_release);
     live_wave_[c.voice].store(0xFFFFu, std::memory_order_release);
-    vq_free_samp_[c.voice].store(0, std::memory_order_relaxed);
-    vq_occ_[c.voice].store(0, std::memory_order_relaxed);
     return;
   }
   if (c.wave_id >= bodies_.size() || bodies_[c.wave_id].empty()) {
@@ -457,12 +511,10 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
   /* Join index is this wave's committed head, not the voice slot.
    * MIDI plays wave_id = key on whatever voice was allocated. */
   v.attack_len = attack_len_[c.wave_id].load(std::memory_order_acquire);
+  v.vq_seen = vq_seq_.load(std::memory_order_acquire);
   sent_[c.voice].store(0, std::memory_order_release);
   live_wave_[c.voice].store(c.wave_id, std::memory_order_release);
   live_[c.voice].store(true, std::memory_order_release);
-  vq_free_samp_[c.voice].store(static_cast<uint16_t>(kRingSamples),
-                              std::memory_order_relaxed);
-  vq_occ_[c.voice].store(0, std::memory_order_relaxed);
 }
 
 void SampleDryMixer::DrainCmds()
@@ -521,7 +573,7 @@ bool SampleDryMixer::WaitPrefill(uint8_t voice, unsigned timeout_ms)
   const auto t0 = std::chrono::steady_clock::now();
   while (true) {
     if (voice < kSampleVoices && live_[voice].load(std::memory_order_acquire) &&
-        sent_[voice].load(std::memory_order_acquire) >= kPrefillSamples) {
+        sent_[voice].load(std::memory_order_acquire) >= kBodyBurstMax) {
       return true;
     }
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -544,7 +596,7 @@ bool SampleDryMixer::WaitPrefillActive(unsigned timeout_ms)
         continue;
       }
       any = true;
-      if (sent_[i].load(std::memory_order_acquire) < kPrefillSamples) {
+      if (sent_[i].load(std::memory_order_acquire) < kBodyBurstMax) {
         ready = false;
       }
     }
@@ -641,23 +693,25 @@ void SampleDryMixer::ApplyVoiceQuery(uint8_t mask, uint8_t best,
   vq_mask_.store(mask, std::memory_order_relaxed);
   vq_best_.store(best, std::memory_order_relaxed);
   for (uint8_t i = 0; i < kSampleVoices; ++i) {
-    if ((mask & static_cast<uint8_t>(1u << i)) == 0u) {
-      continue;
-    }
     uint8_t slots = free_slots[i];
-    if (slots > kVqSlotMax) {
-      slots = kVqSlotMax;
+    uint16_t fill = 0;
+    uint16_t free_samp = static_cast<uint16_t>(kRingSamples);
+    if (slots != kVqSlotEmpty) {
+      if (slots > kVqSlotMax) {
+        slots = kVqSlotMax;
+      }
+      const unsigned free_s = static_cast<unsigned>(slots) * kVqSlotSamples;
+      free_samp = (free_s > kRingSamples)
+                      ? static_cast<uint16_t>(kRingSamples)
+                      : static_cast<uint16_t>(free_s);
+      fill = (free_s >= kRingSamples)
+                 ? static_cast<uint16_t>(0)
+                 : static_cast<uint16_t>(kRingSamples - free_s);
     }
-    const uint16_t free_s = (slots == kVqSlotMax)
-                                ? static_cast<uint16_t>(kRingSamples)
-                                : static_cast<uint16_t>(slots * kVqSlotSamples);
-    const uint16_t occ = (free_s >= kRingSamples)
-                             ? static_cast<uint16_t>(0)
-                             : static_cast<uint16_t>(kRingSamples - free_s);
-    vq_free_samp_[i].store(free_s, std::memory_order_relaxed);
-    vq_occ_[i].store(occ, std::memory_order_relaxed);
+    vq_fill_[i].store(fill, std::memory_order_relaxed);
+    vq_free_[i].store(free_samp, std::memory_order_relaxed);
   }
-  vq_live_.store(true, std::memory_order_release);
+  vq_seq_.fetch_add(1, std::memory_order_release);
 }
 
 } // namespace audio

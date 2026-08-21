@@ -64,10 +64,8 @@ extern "C" {
 /* Descriptor wMaxPacketSize stays 64. This is the DCD multi-packet
  * buffer: 19 × 64 = 1216, the FS bulk ceiling per 1 ms frame. */
 #define CFG_TUD_VENDOR_EPSIZE       1216
-/* A few FS frames. 32 KB let the host count samples as queued while they
- * still sat in this FIFO; DrainVendor then overflowed the ring (usb drop)
- * and the playhead starved (hold). Full FIFO NAKs. */
-#define CFG_TUD_VENDOR_RX_BUFSIZE   4096
+/* ~32 ms at a full FS frame. Full FIFO NAKs; it does not drop BODY. */
+#define CFG_TUD_VENDOR_RX_BUFSIZE   32768
 #define CFG_TUD_VENDOR_TX_BUFSIZE   64
 
 #ifdef __cplusplus

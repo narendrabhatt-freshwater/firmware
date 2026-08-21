@@ -184,6 +184,10 @@ if(BUILD_TESTING)
   target_link_libraries(cardlink_controller_tests PRIVATE cardlink::cardlink)
   add_test(NAME cardlink.controller COMMAND cardlink_controller_tests)
 
+  add_executable(cardlink_sample_dry_tests tests/sample_dry_test.cpp)
+  target_link_libraries(cardlink_sample_dry_tests PRIVATE cardlink::cardlink)
+  add_test(NAME cardlink.sample_dry COMMAND cardlink_sample_dry_tests)
+
   add_test(
     NAME cardlink.public_api_contract
     COMMAND ${CMAKE_COMMAND}

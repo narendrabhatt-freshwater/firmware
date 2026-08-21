@@ -57,7 +57,7 @@ public:
 
   bool SetRootHz(uint16_t wave_id, double hz, std::string &err);
 
-  /** Mixer + `aw` + console `nX`. Waits up to 40 ms for BODY prefill.
+  /** Mixer + `aw` + console `nX`. Waits up to 40 ms for the first BODY burst.
    *  wave_id 0xFFFF: use voice, or the first loaded body if that slot is empty. */
   void NoteOn(uint8_t voice, double hz, uint16_t wave_id = 0xFFFFu);
   void NoteOff(uint8_t voice);
