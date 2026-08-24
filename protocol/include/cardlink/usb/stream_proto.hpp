@@ -27,8 +27,8 @@ constexpr unsigned kStreamSessionMod = 7;
 constexpr uint8_t kStreamVendorItf = 0;
 constexpr uint8_t kStreamEpOut = 0x01;
 constexpr unsigned kStreamFsMps = 64;
-/** 19 × 64: Full-Speed bulk payload ceiling in one 1 ms frame. */
-constexpr unsigned kStreamFrameMax = 1216;
+/** 2 × 19 × 64: one permitted bulk transfer spanning two FS frames. */
+constexpr unsigned kStreamFrameMax = 2432;
 
 inline constexpr unsigned PackMaxSamples(unsigned nvoices)
 {
@@ -39,7 +39,9 @@ inline constexpr unsigned PackMaxSamples(unsigned nvoices)
   if (overhead >= kStreamFrameMax) {
     return 0;
   }
-  return (kStreamFrameMax - overhead) / 2u;
+  const unsigned wire = (kStreamFrameMax - overhead) / 2u;
+  const unsigned body = nvoices * kStreamNsampMax;
+  return (wire < body) ? wire : body;
 }
 
 #pragma pack(push, 1)

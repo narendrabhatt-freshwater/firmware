@@ -38,8 +38,8 @@ extern "C" {
 #define USB_STREAM_SESSION_MOD 7u
 #define USB_STREAM_ITF_VENDOR 0u
 #define USB_STREAM_EP_OUT 0x01u
-/** One Full-Speed bulk frame of 64-byte packets (19 × 64). */
-#define USB_STREAM_FRAME_MAX 1216u
+/** One permitted transfer spanning two FS frames (2 × 19 × 64). */
+#define USB_STREAM_FRAME_MAX 2432u
 
 #if defined(__GNUC__)
 #define USB_STREAM_PACKED __attribute__((packed))

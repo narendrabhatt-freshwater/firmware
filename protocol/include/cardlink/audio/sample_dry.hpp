@@ -2,17 +2,16 @@
  * @file sample_dry.hpp
  * @brief Host body feeder: unpitched int16 → vendor bulk BODY packs.
  *
- * Card owns pitch / env / filter. Each tick the host packs every wanting
- * voice into one bulk transfer (fair share of a 1216-byte FS frame).
- * `vq` free-slots + note/root give remaining time; the card's `best` is
- * the same score from its playhead. Send while remaining time is below
- * kStopMs and the ring has room. First SOF burst does not wait for a poll.
+ * Card owns pitch / env / filter. Every fresh `vq` with free slots grants
+ * at most one refill to each voice (at most kBodyBurstMax and at most the
+ * safe free-space credit). Predicted queued/in-flight samples are subtracted from a
+ * fresh grant so a delayed snapshot cannot spend the same space twice.
+ * One PACK divides its payload by source consumption rate so a fast
+ * voice cannot consume its share before the next poll. One
+ * SOF burst may go out before the first `vq` so nX has body in the ring.
  *
- * Fill is USB-accepted BODY minus consume. `vq` does not overwrite it.
- * Stop if the card already has kStopMs of ring, or free-slot code 0.
- * Burst size is at most the last `vq` free samples (minus BODY sent
- * since that poll). USB NAK when the vendor FIFO is full; a full ring
- * drops the whole chunk.
+ * One packed URB per pump iteration (up to two FS frames). USB NAK when the vendor
+ * FIFO is full; a full ring drops the whole chunk.
  *
  * `queued` tracks the host file cursor (attack does not consume body).
  *
@@ -44,14 +43,12 @@ constexpr unsigned kRingHeadroom = 32;
 constexpr unsigned kVqSlotSamples = 256;
 constexpr unsigned kVqSlotMax = 14;
 constexpr unsigned kVqSlotEmpty = 15;
-/** Refill if the ring holds less than this of play time (poll + a few FS frames). */
-constexpr unsigned kNeedMs = 8;
-/** Stop sending once the ring holds this much play time (pitch-aware). */
-constexpr unsigned kStopMs = 25;
 /** Do not emit a BODY header for a handful of samples unless starving. */
 constexpr unsigned kMinBurst = 32;
 constexpr unsigned kStreamSessionMod = 7;
 constexpr unsigned kBodyBurstMax = 512;
+/** Credit held back for one USB burst not yet reflected by the next vq. */
+constexpr unsigned kBodyInFlightReserve = kBodyBurstMax;
 constexpr double kDefaultBodyRootHz = 261.625565;
 
 class SampleDryMixer {
@@ -79,7 +76,7 @@ public:
   void SetBodyOneshot(uint16_t wave_id, bool oneshot);
   bool BodyOneshot(uint16_t wave_id) const;
 
-  /** New session: SOF + prefill this voice from cursor 0. */
+  /** New session: SOF + one prefill burst from cursor 0. */
   void NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz);
 
   /** Key-up: card releases. Body stream continues until Silence. */
@@ -92,7 +89,7 @@ public:
   /** Wave id the bulk thread is streaming for this voice, or 0xFFFF if idle. */
   uint16_t LiveWave(uint8_t voice) const;
 
-  /** Subtract body consume for `nframes` of 48 kHz output (attack does not). */
+  /** Advance attack-join clock / file cursor. Does not pace BODY. */
   void ConsumeOutputSamples(double nframes);
 
   /** Samples this voice can take now (0 if inactive / enough time / full). */
@@ -105,6 +102,11 @@ public:
   /** Wanting voices, hungriest first (vq `best` first when it wants data).
    *  Writes at most kSampleVoices ids into dst. Returns the count. */
   unsigned WantingVoices(uint8_t *dst) const;
+
+  /** Divide a PACK sample budget among wanting voices in proportion to
+   *  source consumption. Each grant is bounded by WantBurst(). */
+  unsigned AllocateBursts(const uint8_t *voices, unsigned nvoices,
+                          unsigned budget, unsigned *grants) const;
 
   /** Copy up to max_n body samples. Sets sof/session. */
   unsigned FillBurst(uint8_t voice, int16_t *dst, unsigned max_n, bool &sof,
@@ -120,7 +122,7 @@ public:
 
   unsigned QueuedSamples(uint8_t voice) const;
 
-  /** True once at least one BODY burst is queued. */
+  /** True once the first BODY burst is queued. */
   bool WaitPrefill(uint8_t voice, unsigned timeout_ms);
   bool WaitPrefillActive(unsigned timeout_ms);
 
@@ -143,11 +145,11 @@ private:
     double cursor = 0.0;
     double phase = 0.0;
     double queued = 0.0;
-    double fill = 0.0;
-    double fill_at_vq = 0.0;
     unsigned attack_len = 0;
     uint32_t vq_seen = 0;
     unsigned vq_free = 0;
+    unsigned vq_card_fill = 0;
+    unsigned sent_this_vq = 0;
     bool vq_have = false;
   };
 
@@ -159,12 +161,9 @@ private:
   int16_t NextBody(Voice &v);
   double IncOf(const Voice &v) const;
   static double Fade0Of(unsigned attack_len);
-  /** True once the card interpolator has reached the attack join. */
   static bool BodyDraining(const Voice &v);
   void PullVq();
   double RemainingMs(const Voice &v) const;
-  unsigned TargetFill(const Voice &v) const;
-  unsigned VqRoom(const Voice &v) const;
   bool WaveInUse(uint16_t wave_id) const;
 
   std::array<Cmd, kCmdCap> cmds_{};

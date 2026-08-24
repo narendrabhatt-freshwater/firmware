@@ -15,7 +15,8 @@ namespace {
 
 constexpr unsigned kPumpHz = 1000;
 constexpr unsigned kWriteTimeoutMs = 100;
-constexpr unsigned kMaxPacksPerTick = 8;
+/* One transfer per vq-paced tick. Extra packs would lack fresh permission. */
+constexpr unsigned kMaxPacksPerTick = 1;
 
 struct PackedChunk {
   uint8_t voice = 0;
@@ -48,26 +49,17 @@ int PackFrame(SampleDryMixer &mixer, uint8_t *dst, int max,
     return 0;
   }
 
-  const unsigned samp_budget = cardlink::usb::PackMaxSamples(nuse);
-  unsigned fair = samp_budget / nuse;
-  unsigned extra = samp_budget % nuse;
-  if (fair == 0) {
-    fair = 1;
-    extra = 0;
-  }
-
+  const unsigned sample_budget = cardlink::usb::PackMaxSamples(nuse);
   unsigned used = cardlink::usb::kStreamHdrSize;
   std::array<int16_t, cardlink::usb::kStreamNsampMax> body{};
+  unsigned grants[kSampleVoices]{};
+  (void)mixer.AllocateBursts(order, nuse, sample_budget, grants);
 
   for (unsigned i = 0; i < nuse; ++i) {
     const uint8_t v = order[i];
-    unsigned want = mixer.WantBurst(v);
-    if (want == 0) {
+    unsigned give = grants[i];
+    if (give == 0u) {
       continue;
-    }
-    unsigned give = fair + ((i < extra) ? 1u : 0u);
-    if (give > want) {
-      give = want;
     }
     const unsigned room = cap - used;
     if (room < cardlink::usb::kStreamBodyMetaSize + 2u) {

@@ -374,10 +374,10 @@ Effect Card still has CDC and a UAC2 microphone (mono, 32-bit, 96 kHz).
 
 Little-endian. The card never replies. `type` `0x03` PACK is the live
 format: one header plus N BODY metas so several voices share one transfer
-(up to 1216 bytes = 19 × 64-byte FS packets).
+(up to 2432 bytes = two frames × 19 × 64-byte FS packets).
 
 ```text
-PACK (type 0x03), one bulk transfer ≤ 1216 bytes
+PACK (type 0x03), one bulk transfer ≤ 2432 bytes
 offset  size  field
 0       1     magic0 = 0x46  'F'
 1       1     magic1 = 0x57  'W'
@@ -400,10 +400,9 @@ offset  size  field
 (still accepted). VID `0xCafe`, PID `0x4022`. Host claims interface 0.
 CDC stays a serial port.
 
-Five C5 voices need 480 samples/ms (fits in one 1216-byte frame). Eight
-C4 voices need 384 samples/ms. Eight C5 (768 samples) still exceeds one
-FS bulk frame; the host sends more than one packed transfer per millisecond
-until the FIFO NAKs or the rings are full.
+Five C5 voices need 480 samples/ms; one permitted two-frame transfer can
+carry at least 960 samples. Eight C4 voices need 384 samples/ms. Sustained
+BODY must still remain below the physical FS bulk rate.
 
 `type` `0x10` STATUS and `0x20` CAPTURE are reserved (not an ACK).
 

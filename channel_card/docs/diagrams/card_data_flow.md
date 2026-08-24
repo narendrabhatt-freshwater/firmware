@@ -11,7 +11,7 @@ If this document and the firmware disagree, trust the firmware.
 ## 1. Host interfaces (both cards)
 
 One RS485 multi-drop bus (`c:` / `e:` / `*:`). USB is per-card: Channel
-is Full-Speed **vendor bulk BODY** (ITF0, packed frames up to 1216
+is Full-Speed **vendor bulk BODY** (ITF0, permitted transfers up to 2432
 bytes) plus CDC;
 Effect is a Full-Speed **UAC2 microphone** (mono int32 @ 96 kHz) plus CDC.
 
@@ -62,10 +62,10 @@ Q16.16 interpolation. `nX > 0` is always a note-on. A new BODY session
 (`SOF` + session 0–6) starts a new body FIFO; a repeated burst with
 the same session does not.
 The host packs every wanting voice into one bulk transfer (fair share
-of a 1216-byte FS frame). Send while remaining time is below ~25 ms
-and the ring has room; do not send when it will not run out. First
-burst does not wait for a poll.
-Host fill is USB-accepted BODY minus consume; `vq` does not overwrite it.
+of a 2432-byte two-frame transfer, weighted by each voice's source-consumption
+rate). Every fresh `vq` free-slot grant permits one bounded refill;
+otherwise wait for the next poll. This keeps the jitter rings full.
+First burst does not wait for a poll.
 Free-slot code 0 is a hard stop. A full vendor FIFO NAKs the host.
 Missing body holds the last sample until USB catches up. A full ring
 drops the whole chunk; the producer never overwrites unread FIFO samples.
@@ -119,10 +119,9 @@ flowchart TB
 RS485 `vq` returns a 12-byte binary frame containing active mask,
 hungriest voice, and eight packed free-slot codes (0..14; 15 = empty).
 Need-score is remaining play time: `filled / max(phase_inc, target_inc)`.
-The host sends to the hungriest voice while that time is below ~25 ms
-and free slots can take a burst. Burst size is at most the last `vq`
-free samples. A stale `vq` that reports more free space than the host
-has already sent is ignored. A dropped ISO frame is AbortBurst.
+The host sends to the hungriest voice while the slot bin is 13+
+and free slots can take a burst. At most one burst per `vq` (≤ 512
+samples, ≤ last free-slot count). A dropped USB write is AbortBurst.
 BODY and `nX` start together. The attack plays to its committed length;
 body consume starts at `len − 32` with the same source fraction. The
 host waits for the first BODY burst, then `nX`; further bursts follow

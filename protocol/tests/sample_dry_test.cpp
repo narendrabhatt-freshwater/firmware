@@ -30,32 +30,18 @@ void LoadTone(cardlink::audio::SampleDryMixer &mixer, uint16_t wave_id)
   mixer.SetBodyRootHz(wave_id, cardlink::audio::kDefaultBodyRootHz);
 }
 
-unsigned FillUntilStop(cardlink::audio::SampleDryMixer &mixer, uint8_t voice)
+unsigned TakeBurst(cardlink::audio::SampleDryMixer &mixer, uint8_t voice)
 {
   std::array<int16_t, cardlink::audio::kBodyBurstMax> buf{};
-  unsigned total = 0;
-  for (unsigned i = 0; i < 16; ++i) {
-    const unsigned want = mixer.WantBurst(voice);
-    if (want == 0) {
-      break;
-    }
-    bool sof = false;
-    uint8_t session = 0;
-    const unsigned got = mixer.FillBurst(voice, buf.data(), want, sof, session);
-    Check(got == want, "FillBurst must match WantBurst");
-    if (total == 0) {
-      Check(sof, "first burst of a session must set SOF");
-    } else {
-      Check(!sof, "later bursts must not set SOF");
-    }
-    total += got;
+  bool sof = false;
+  uint8_t session = 0;
+  const unsigned want = mixer.WantBurst(voice);
+  if (want == 0) {
+    return 0;
   }
-  return total;
-}
-
-unsigned StopFill1x()
-{
-  return (cardlink::audio::kStopMs * cardlink::audio::kSampleRateHz) / 1000u;
+  const unsigned got = mixer.FillBurst(voice, buf.data(), want, sof, session);
+  Check(got == want, "FillBurst must match WantBurst");
+  return got;
 }
 
 } // namespace
@@ -74,87 +60,88 @@ int main()
   mixer.NoteOn(0, 0, kDefaultBodyRootHz);
   mixer.ConsumeOutputSamples(0.0);
   Check(mixer.WantBurst(0) == kBodyBurstMax,
-        "C4 note-on must want a full burst with no poll");
-  const unsigned filled = FillUntilStop(mixer, 0);
-  Check(filled == StopFill1x(),
-        "C4 note-on must stop at ~25 ms of buffer, not a full ring");
-  Check(mixer.WantBurst(0) == 0, "enough play time must not oversend");
+        "C4 note-on must want one SOF burst with no poll");
+  Check(TakeBurst(mixer, 0) == kBodyBurstMax, "first burst must send 512");
+  Check(mixer.WantBurst(0) == 0, "after 512, wait for vq");
 
-  std::array<uint8_t, kSampleVoices> stale{};
-  stale.fill(kVqSlotEmpty);
-  stale[0] = 14; /* 3584 free — FIFO lag; card has not accepted BODY yet */
-  mixer.ApplyVoiceQuery(0x01, 0, stale.data());
+  std::array<uint8_t, kSampleVoices> empty_vq{};
+  empty_vq.fill(kVqSlotEmpty);
+  std::array<uint8_t, kSampleVoices> nearly_empty{};
+  nearly_empty.fill(kVqSlotEmpty);
+  nearly_empty[0] = 14; /* filled 1..512 — playhead can already be at 4 */
+  mixer.ApplyVoiceQuery(0x01, 0, nearly_empty.data());
   mixer.ConsumeOutputSamples(0.0);
-  Check(mixer.WantBurst(0) == 0,
-        "stale low vq must not reopen a voice that already has enough time");
-
-  mixer.ConsumeOutputSamples(479.0);
-  Check(mixer.WantBurst(0) == 0,
-        "attack must not drain fill (would overflow the ring)");
-
-  mixer.ConsumeOutputSamples(1.0 + static_cast<double>(kBodyBurstMax));
   Check(mixer.WantBurst(0) == kBodyBurstMax,
-        "C4 consume after the join must reopen a burst");
-
+        "slot 14 must refill; 4 samples is a hold, not 5 ms of buffer");
+  Check(TakeBurst(mixer, 0) == kBodyBurstMax, "slot 14 gets one burst");
+  mixer.ApplyVoiceQuery(0x01, 0, empty_vq.data());
+  mixer.ConsumeOutputSamples(0.0);
+  for (unsigned i = 0; i < 5u; ++i) {
+    Check(mixer.WantBurst(0) == kBodyBurstMax,
+          "fresh vq may spend only predicted remaining ring credit");
+    Check(TakeBurst(mixer, 0) == kBodyBurstMax,
+          "stale snapshot credit must remain bounded by predicted fill");
+    mixer.ApplyVoiceQuery(0x01, 0, empty_vq.data());
+    mixer.ConsumeOutputSamples(0.0);
+  }
+  Check(mixer.WantBurst(0) == 0,
+        "stale vq must retain one maximum in-flight burst of headroom");
   mixer.Silence(0);
   mixer.ConsumeOutputSamples(0.0);
   mixer.NoteOn(0, 0, kDefaultBodyRootHz);
   mixer.ConsumeOutputSamples(0.0);
-  {
-    std::array<int16_t, kBodyBurstMax> buf{};
-    bool sof = false;
-    uint8_t session = 0;
-    Check(mixer.FillBurst(0, buf.data(), kBodyBurstMax, sof, session) ==
-              kBodyBurstMax,
-          "one burst after note-on");
-  }
+  Check(TakeBurst(mixer, 0) == kBodyBurstMax, "SOF after slot-14 test");
+
+  mixer.ConsumeOutputSamples(2000.0);
+  Check(mixer.WantBurst(0) == 0, "wall-clock must not send without a new vq");
+
+  mixer.ApplyVoiceQuery(0x01, 0, empty_vq.data());
+  mixer.ConsumeOutputSamples(0.0);
+  Check(mixer.WantBurst(0) == kBodyBurstMax,
+        "empty vq must ask for one burst");
+  Check(TakeBurst(mixer, 0) == kBodyBurstMax, "one burst per vq");
+  Check(mixer.WantBurst(0) == 0, "already served this vq");
+
+  std::array<uint8_t, kSampleVoices> slots{};
+  slots.fill(kVqSlotEmpty);
+  slots[0] = 13; /* min fill 513 — last bin before the hold zone */
+  mixer.ApplyVoiceQuery(0x01, 0, slots.data());
+  mixer.ConsumeOutputSamples(0.0);
+  Check(mixer.WantBurst(0) == kBodyBurstMax,
+        "slot 13 must refill; slot 14 is already 1..512");
+  Check(TakeBurst(mixer, 0) == kBodyBurstMax, "slot 13 gets one burst");
+
+  slots.fill(kVqSlotEmpty);
+  slots[0] = 12; /* 3072 samples of safe free-space permission */
+  mixer.ApplyVoiceQuery(0x01, 0, slots.data());
+  mixer.ConsumeOutputSamples(0.0);
+  Check(mixer.WantBurst(0) == kBodyBurstMax,
+        "any fresh vq free-space grant must top up the jitter ring");
+
   std::array<uint8_t, kSampleVoices> full_vq{};
   full_vq.fill(0);
   mixer.ApplyVoiceQuery(0x01, 0, full_vq.data());
   mixer.ConsumeOutputSamples(0.0);
-  Check(mixer.WantBurst(0) == 0, "vq full must stop even with only 512 queued");
-  std::array<uint8_t, kSampleVoices> empty_vq{};
-  empty_vq.fill(kVqSlotEmpty);
+  Check(mixer.WantBurst(0) == 0, "vq free-slot 0 is a hard stop");
+
+  mixer.ConsumeOutputSamples(2000.0);
   mixer.ApplyVoiceQuery(0x01, 0, empty_vq.data());
   mixer.ConsumeOutputSamples(0.0);
   Check(mixer.WantBurst(0) == kBodyBurstMax,
-        "a later empty vq must not leave fill stuck at a full-ring snap");
-
-  mixer.Silence(0);
-  mixer.ConsumeOutputSamples(0.0);
-  mixer.NoteOn(0, 0, kDefaultBodyRootHz);
-  mixer.ConsumeOutputSamples(0.0);
-  {
-    std::array<int16_t, kBodyBurstMax> buf{};
-    bool sof = false;
-    uint8_t session = 0;
-    Check(mixer.FillBurst(0, buf.data(), kBodyBurstMax, sof, session) ==
-              kBodyBurstMax,
-          "one burst to leave host fill below 25 ms");
-  }
-  std::array<uint8_t, kSampleVoices> nearly_full{};
-  nearly_full.fill(kVqSlotEmpty);
-  nearly_full[0] = 1; /* 256 free → ~3840 in the ring, far more than 25 ms */
-  mixer.ApplyVoiceQuery(0x01, 0, nearly_full.data());
-  mixer.ConsumeOutputSamples(0.0);
-  Check(mixer.WantBurst(0) == 0,
-        "vq with 25 ms already on the card must not send a 512 into 256 free");
+        "a later empty vq must send again");
 
   mixer.Silence(0);
   mixer.ConsumeOutputSamples(0.0);
 
-  mixer.NoteOn(0, 0, kDefaultBodyRootHz * 0.5); /* half speed vs C4 root */
+  mixer.NoteOn(0, 0, kDefaultBodyRootHz * 0.5);
   mixer.ConsumeOutputSamples(0.0);
-  const unsigned c3 = FillUntilStop(mixer, 0);
-  Check(c3 == StopFill1x() / 2u,
-        "half-speed notes must keep half the samples for the same time");
-  std::array<uint8_t, kSampleVoices> slots{};
+  Check(TakeBurst(mixer, 0) == kBodyBurstMax, "C3 still gets one SOF burst");
   slots.fill(kVqSlotEmpty);
-  slots[0] = 2; /* 512 free → fill 3584, far more than 25 ms @ 0.5× */
+  slots[0] = 2; /* 512 samples of safe free-space permission */
   mixer.ApplyVoiceQuery(0x01, 0, slots.data());
   mixer.ConsumeOutputSamples(0.0);
-  Check(mixer.WantBurst(0) == 0,
-        "vq must stop a low note that already has enough time");
+  Check(mixer.WantBurst(0) == kBodyBurstMax,
+        "low note must use fresh vq credit instead of a time heuristic");
 
   mixer.Silence(0);
   mixer.ConsumeOutputSamples(0.0);
@@ -163,9 +150,8 @@ int main()
   mixer.NoteOn(1, 0, kDefaultBodyRootHz);
   mixer.ConsumeOutputSamples(0.0);
   Check(mixer.HungriestWant() < kSampleVoices, "two empty notes both need data");
-  (void)FillUntilStop(mixer, 0);
-  Check(mixer.HungriestWant() == 1,
-        "after filling voice 0, voice 1 is hungriest");
+  Check(TakeBurst(mixer, 0) == kBodyBurstMax, "voice 0 SOF");
+  Check(mixer.HungriestWant() == 1, "after voice 0 prefill, voice 1 is hungriest");
   slots.fill(kVqSlotEmpty);
   mixer.ApplyVoiceQuery(0x03, 1, slots.data());
   mixer.ConsumeOutputSamples(0.0);
@@ -174,25 +160,13 @@ int main()
   mixer.Silence(0);
   mixer.Silence(1);
   mixer.ConsumeOutputSamples(0.0);
-  mixer.NoteOn(0, 0, kDefaultBodyRootHz * 8.0);
-  mixer.ConsumeOutputSamples(0.0);
-  const unsigned fast = FillUntilStop(mixer, 0);
-  Check(fast == cardlink::audio::kRingSamples - cardlink::audio::kRingHeadroom,
-        "fast notes must cap at ring headroom");
-  slots.fill(kVqSlotEmpty);
-  mixer.ApplyVoiceQuery(0x01, 0, slots.data());
-  mixer.ConsumeOutputSamples(0.0);
-  Check(mixer.WantBurst(0) == 0,
-        "stale empty vq must not refill a ring already at headroom");
 
-  mixer.Silence(0);
-  mixer.ConsumeOutputSamples(0.0);
-  Check(cardlink::usb::PackMaxSamples(1) == 600,
-        "one-voice bulk pack must use the 1216-byte FS frame");
-  Check(cardlink::usb::PackMaxSamples(5) >= 480,
+  Check(cardlink::usb::PackMaxSamples(1) == kBodyBurstMax,
+        "one-voice bulk pack remains bounded by BODY nsamp max");
+  Check(cardlink::usb::PackMaxSamples(5) >= 960,
         "five C5 voices must fit in one FS bulk frame");
-  Check(cardlink::usb::PackMaxSamples(8) >= 384,
-        "eight C4 voices must fit in one FS bulk frame");
+  Check(cardlink::usb::PackMaxSamples(8) >= 1152,
+        "multi-voice permission must use the two-frame transfer budget");
 
   mixer.NoteOn(0, 0, kDefaultBodyRootHz * 2.0);
   mixer.NoteOn(1, 0, kDefaultBodyRootHz * 2.0);
@@ -203,14 +177,41 @@ int main()
   {
     uint8_t order[kSampleVoices];
     const unsigned nwant = mixer.WantingVoices(order);
-    Check(nwant == 5, "five C5 notes must all want BODY");
-    unsigned packed = 0;
-    for (unsigned i = 0; i < nwant; ++i) {
-      packed += mixer.WantBurst(order[i]) > 0 ? 1u : 0u;
-    }
-    Check(packed == 5, "fair-share pack must see all five");
+    Check(nwant == 5, "five C5 notes must all want the SOF burst");
     Check(cardlink::usb::PackMaxSamples(nwant) >= 480,
           "packed bulk payload must cover 5xC5 consume");
+    unsigned grants[kSampleVoices]{};
+    const unsigned budget = cardlink::usb::PackMaxSamples(nwant);
+    Check(mixer.AllocateBursts(order, nwant, budget, grants) == budget,
+          "fair allocator must use the available PACK payload");
+    for (unsigned i = 0; i < nwant; ++i) {
+      Check(grants[i] > 0u,
+            "fair allocator must not starve a wanting voice");
+    }
+  }
+
+  mixer.AllNotesOff();
+  mixer.ConsumeOutputSamples(0.0);
+  mixer.NoteOn(0, 0, kDefaultBodyRootHz);
+  mixer.NoteOn(1, 0, kDefaultBodyRootHz * 2.0);
+  mixer.NoteOn(2, 0, kDefaultBodyRootHz * 4.0);
+  mixer.ConsumeOutputSamples(0.0);
+  {
+    uint8_t order[kSampleVoices];
+    const unsigned nwant = mixer.WantingVoices(order);
+    unsigned grants[kSampleVoices]{};
+    unsigned by_voice[kSampleVoices]{};
+    const unsigned budget = cardlink::usb::PackMaxSamples(nwant);
+    Check(nwant == 3, "C4+C5+C6 must all want initial BODY");
+    Check(mixer.AllocateBursts(order, nwant, budget, grants) == budget,
+          "C4+C5+C6 must use the full permitted PACK");
+    for (unsigned i = 0; i < nwant; ++i) {
+      by_voice[order[i]] = grants[i];
+    }
+    Check(by_voice[0] >= 227u && by_voice[0] <= 231u &&
+              by_voice[1] >= 457u && by_voice[1] <= 461u &&
+              by_voice[2] == kBodyBurstMax,
+          "C4+C5+C6 grants must be weighted, then redistribute C6's cap");
   }
 
   return EXIT_SUCCESS;

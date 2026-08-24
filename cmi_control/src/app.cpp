@@ -195,12 +195,11 @@ namespace
     }
   }
 
-  /** One packed bulk FS frame is 1216 B. PACK headers eat 8+8×voices;
-   *  five voices still fit 5×C5 (480 samp/ms). Eight C4 = 384. */
-  constexpr double kUsbBodySampPerMsWire = static_cast<double>(
-      cardlink::usb::PackMaxSamples(1));
-  constexpr double kUsbBodySampPerMs = static_cast<double>(
-      cardlink::usb::PackMaxSamples(5));
+  /** One vq-permitted PACK may span two FS frames (2432 B). */
+  constexpr double kUsbBodySampPerMsWire =
+      static_cast<double>(cardlink::usb::kStreamFrameMax) / 4.0;
+  constexpr double kUsbBodySampPerMs =
+      static_cast<double>(cardlink::usb::PackMaxSamples(5)) / 2.0;
 
   double BodyIncOf(double freq_hz, double root_hz)
   {
@@ -2235,8 +2234,8 @@ void App::DrawPerform()
           ImGui::PushFont(fs);
           ImGui::Text(
               "Each voice consumes 48 \u00D7 (note Hz / root Hz) samples/ms.\n"
-              "BODY is vendor bulk: one packed transfer per frame (up to\n"
-              "1216 bytes). Every sounding voice shares that payload.\n"
+              "BODY is vendor bulk: one permitted packed transfer may span\n"
+              "two FS frames (up to 2432 bytes). Every voice shares it.\n"
               "%.0f samp/ms is one voice; %.0f is five voices\n"
               "(5\u00D7C5 = 480). 8\u00D7C4 = 384.",
               kUsbBodySampPerMsWire, kUsbBodySampPerMs);

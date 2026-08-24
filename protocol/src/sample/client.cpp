@@ -550,8 +550,7 @@ void Client::NoteOn(uint8_t voice, double hz, uint16_t wave_id)
     }
   }
   mixer_.NoteOn(voice, wave, hz);
-  /* SOF into the pipe before nX. Cruise fill continues during attack;
-   * waiting for 2048 here starts host consume before the card playhead. */
+  /* One SOF burst into the pipe, then nX. Further BODY waits on vq. */
   (void)mixer_.WaitPrefill(voice, 40);
   char aw[32];
   std::snprintf(aw, sizeof aw, "aw %u %u", static_cast<unsigned>(voice),

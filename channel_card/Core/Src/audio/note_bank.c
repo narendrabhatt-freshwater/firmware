@@ -765,7 +765,11 @@ void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out,
     {
       free_slots[i] = free_s;
     }
-    if (NoteBank_IsActive(i) == 0u)
+    /* nX posts the audible start to the I2S path. Expose its requested gate
+     * immediately so the first vq after the command can authorize BODY
+     * during the attack instead of losing a full request round trip. This
+     * does not delay or start playback; NoteBank_DrainCmd still owns that. */
+    if (NoteBank_IsActive(i) == 0u && note_gate_requested[i] == 0u)
     {
       continue;
     }

@@ -524,6 +524,12 @@ bool Controller::Open(const std::string &path, uint32_t baud,
   options.allow_missing_effect = true;
   options.idle_gap_ms = 0;
   options.post_ack_settle_ms = 0;
+  /* Tagged terminal replies already delimit controller commands. The
+   * generic link default waits 5 ms of RX silence after every non-vq ACK;
+   * that consumed C6's entire attack+initial-BODY bridge before the first
+   * refill request. Keep recovery-time idle waits out of the MIDI path. */
+  options.rx_idle_ms = 0;
+  options.rx_idle_max_ms = 0;
   options.reply_timeout_ms = 400;
   options.retries = 1;
 

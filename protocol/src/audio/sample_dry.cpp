@@ -222,14 +222,9 @@ void SampleDryMixer::ConsumeOutputSamples(double nframes)
     if (!BodyDraining(v)) {
       continue;
     }
-    const double take = inc * nframes;
-    v.queued -= take;
+    v.queued -= inc * nframes;
     if (v.queued < 0.0) {
       v.queued = 0.0;
-    }
-    v.fill -= take;
-    if (v.fill < 0.0) {
-      v.fill = 0.0;
     }
   }
 }
@@ -250,54 +245,44 @@ void SampleDryMixer::PullVq()
     if ((mask & static_cast<uint8_t>(1u << i)) == 0u) {
       continue;
     }
-    /* Ring occupancy is vq; fill is USB-accepted outstanding. Do not mix. */
-    v.vq_free = vq_free_[i].load(std::memory_order_relaxed);
-    v.fill_at_vq = v.fill;
+    unsigned projected = 0u;
+    if (v.queued > 0.0) {
+      projected = static_cast<unsigned>(std::ceil(v.queued));
+      if (projected > kRingSamples) {
+        projected = kRingSamples;
+      }
+    }
+    const unsigned reported_free =
+        vq_free_[i].load(std::memory_order_relaxed);
+    const unsigned projected_free = kRingSamples - projected;
+    const unsigned predicted_credit =
+        (projected_free > kBodyInFlightReserve)
+            ? (projected_free - kBodyInFlightReserve)
+            : 0u;
+    /* vq is the permission for this refill, but its card snapshot can race
+     * the previous USB PACK. Never spend either its reported free space or
+     * the host's predicted free space twice. Hold back one maximum burst
+     * because it can be endpoint-accepted but not yet visible to vq. */
+    v.vq_free = std::min(reported_free, predicted_credit);
+    v.vq_card_fill = std::max(
+        static_cast<unsigned>(vq_fill_[i].load(std::memory_order_relaxed)),
+        projected);
+    v.sent_this_vq = 0u;
     v.vq_have = true;
   }
 }
 
 double SampleDryMixer::RemainingMs(const Voice &v) const
 {
+  if (!v.vq_have) {
+    return 0.0;
+  }
   const double inc = IncOf(v);
   const double rate = static_cast<double>(kSampleRateHz) * inc;
   if (rate <= 0.0) {
     return 0.0;
   }
-  return 1000.0 * v.fill / rate;
-}
-
-unsigned SampleDryMixer::TargetFill(const Voice &v) const
-{
-  const double inc = IncOf(v);
-  double target = (static_cast<double>(kStopMs) / 1000.0) *
-                  static_cast<double>(kSampleRateHz) * inc;
-  const double cap = static_cast<double>(kRingSamples - kRingHeadroom);
-  if (target > cap) {
-    target = cap;
-  }
-  if (target < static_cast<double>(kMinBurst)) {
-    target = static_cast<double>(kMinBurst);
-  }
-  return static_cast<unsigned>(target);
-}
-
-unsigned SampleDryMixer::VqRoom(const Voice &v) const
-{
-  if (!v.vq_have) {
-    return kRingSamples - kRingHeadroom;
-  }
-  if (v.vq_free == 0u) {
-    return 0;
-  }
-  double credit = static_cast<double>(v.vq_free);
-  if (v.fill > v.fill_at_vq) {
-    credit -= (v.fill - v.fill_at_vq);
-  }
-  if (credit < 1.0) {
-    return 0;
-  }
-  return static_cast<unsigned>(credit);
+  return 1000.0 * static_cast<double>(v.vq_card_fill) / rate;
 }
 
 unsigned SampleDryMixer::WantBurst(uint8_t voice) const
@@ -306,41 +291,24 @@ unsigned SampleDryMixer::WantBurst(uint8_t voice) const
     return 0;
   }
   const auto &v = voices_[voice];
-  if (v.vq_have) {
-    const double card_fill =
-        static_cast<double>(vq_fill_[voice].load(std::memory_order_relaxed));
-    const double rate = static_cast<double>(kSampleRateHz) * IncOf(v);
-    if (rate > 0.0 &&
-        (1000.0 * card_fill / rate) >= static_cast<double>(kStopMs)) {
+  if (!v.vq_have) {
+    const unsigned sent = sent_[voice].load(std::memory_order_relaxed);
+    if (sent >= kBodyBurstMax) {
       return 0;
     }
+    return kBodyBurstMax - sent;
   }
-  const unsigned vq_room = VqRoom(v);
-  if (vq_room == 0u) {
+  if (v.sent_this_vq != 0u || v.vq_free == 0u) {
     return 0;
   }
-  const unsigned target = TargetFill(v);
-  if (v.fill >= static_cast<double>(target)) {
-    return 0;
-  }
-  double room = static_cast<double>(target) - v.fill;
-  const double hard =
-      static_cast<double>(kRingSamples - kRingHeadroom) - v.fill;
-  if (hard < room) {
-    room = hard;
-  }
-  if (static_cast<double>(vq_room) < room) {
-    room = static_cast<double>(vq_room);
-  }
-  if (room < 1.0) {
-    return 0;
-  }
-  unsigned n = static_cast<unsigned>(room);
+  /* A fresh vq is both permission and safe credit. Keep the jitter ring as
+   * full as that credit permits instead of stopping at a guessed time
+   * threshold; at C6 even the entire ring is only about 21 ms. */
+  unsigned n = v.vq_free;
   if (n > kBodyBurstMax) {
     n = kBodyBurstMax;
   }
-  const double t_ms = RemainingMs(v);
-  if (t_ms >= static_cast<double>(kNeedMs) && n < kMinBurst) {
+  if (n < kMinBurst && RemainingMs(v) >= 1.0) {
     return 0;
   }
   return n;
@@ -368,8 +336,14 @@ unsigned SampleDryMixer::WantingVoices(uint8_t *dst) const
   for (unsigned i = 1; i < n; ++i) {
     const uint8_t v = tmp[i];
     const double t = RemainingMs(voices_[v]);
+    const double inc = IncOf(voices_[v]);
     unsigned j = i;
-    while (j > 0 && RemainingMs(voices_[tmp[j - 1u]]) > t) {
+    while (j > 0) {
+      const double t0 = RemainingMs(voices_[tmp[j - 1u]]);
+      const double inc0 = IncOf(voices_[tmp[j - 1u]]);
+      if (t0 < t || (t0 == t && inc0 >= inc)) {
+        break;
+      }
       tmp[j] = tmp[j - 1u];
       --j;
     }
@@ -394,6 +368,52 @@ unsigned SampleDryMixer::WantingVoices(uint8_t *dst) const
     }
   }
   return n;
+}
+
+unsigned SampleDryMixer::AllocateBursts(const uint8_t *voices,
+                                        unsigned nvoices, unsigned budget,
+                                        unsigned *grants) const
+{
+  if (voices == nullptr || grants == nullptr || nvoices == 0u ||
+      nvoices > kSampleVoices || budget == 0u) {
+    return 0u;
+  }
+
+  unsigned caps[kSampleVoices]{};
+  double weights[kSampleVoices]{};
+  for (unsigned i = 0; i < nvoices; ++i) {
+    grants[i] = 0u;
+    const uint8_t voice = voices[i];
+    caps[i] = WantBurst(voice);
+    if (voice < kSampleVoices && voices_[voice].active && caps[i] != 0u) {
+      weights[i] = IncOf(voices_[voice]);
+    }
+  }
+
+  /* Weighted fair queueing at sample granularity. PACK holds at most 600
+   * samples, so this bounded loop is small and avoids rounding one voice
+   * down to zero. The input order remains the tie-breaker (vq best first). */
+  unsigned used = 0u;
+  while (used < budget) {
+    unsigned best = nvoices;
+    double best_score = 0.0;
+    for (unsigned i = 0; i < nvoices; ++i) {
+      if (weights[i] <= 0.0 || grants[i] >= caps[i]) {
+        continue;
+      }
+      const double score = static_cast<double>(grants[i]) / weights[i];
+      if (best == nvoices || score < best_score) {
+        best = i;
+        best_score = score;
+      }
+    }
+    if (best == nvoices) {
+      break;
+    }
+    ++grants[best];
+    ++used;
+  }
+  return used;
 }
 
 unsigned SampleDryMixer::FillBurst(uint8_t voice, int16_t *dst, unsigned max_n,
@@ -428,7 +448,7 @@ unsigned SampleDryMixer::FillBurst(uint8_t voice, int16_t *dst, unsigned max_n,
     dst[i] = NextBody(v);
   }
   v.queued += static_cast<double>(n);
-  v.fill += static_cast<double>(n);
+  v.sent_this_vq += n;
   const unsigned sent = sent_[voice].load(std::memory_order_relaxed) + n;
   sent_[voice].store(sent, std::memory_order_release);
   if (!v.active) {
@@ -452,10 +472,10 @@ void SampleDryMixer::AbortBurst(uint8_t voice, unsigned nsamp, bool sof)
   } else {
     v.queued = 0.0;
   }
-  if (v.fill > static_cast<double>(nsamp)) {
-    v.fill -= static_cast<double>(nsamp);
+  if (v.sent_this_vq > nsamp) {
+    v.sent_this_vq -= nsamp;
   } else {
-    v.fill = 0.0;
+    v.sent_this_vq = 0u;
   }
   v.cursor -= static_cast<double>(nsamp);
   const size_t nbody = (v.wave_id < bodies_.size()) ? bodies_[v.wave_id].size() : 0;
@@ -742,9 +762,16 @@ void SampleDryMixer::ApplyVoiceQuery(uint8_t mask, uint8_t best,
       free_samp = (free_s > kRingSamples)
                       ? static_cast<uint16_t>(kRingSamples)
                       : static_cast<uint16_t>(free_s);
-      fill = (free_s >= kRingSamples)
-                 ? static_cast<uint16_t>(0)
-                 : static_cast<uint16_t>(kRingSamples - free_s);
+      /* Slot 14 is clamped: filled is 1..512. Treat it as 1 so a C4
+       * note with 4 samples left is not scored as 5 ms. */
+      if (slots >= kVqSlotMax) {
+        fill = 1;
+      } else {
+        const unsigned min_fill =
+            kRingSamples - (static_cast<unsigned>(slots) + 1u) * kVqSlotSamples +
+            1u;
+        fill = static_cast<uint16_t>(min_fill);
+      }
     }
     vq_fill_[i].store(fill, std::memory_order_relaxed);
     vq_free_[i].store(free_samp, std::memory_order_relaxed);
