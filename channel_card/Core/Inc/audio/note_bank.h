@@ -49,7 +49,7 @@ extern "C"
   NoteBank_Shape_t NoteBank_GetShape(void);
   double NoteBank_GetShapeParam(void);
 
-  /** Body playhead returned the held sample (FIFO miss in sustain). */
+  /** Body FIFO miss counter. A published-body underrun now halts instead. */
   uint32_t NoteBank_HoldCount(void);
   void NoteBank_HoldCountClear(void);
 

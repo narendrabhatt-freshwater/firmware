@@ -112,7 +112,9 @@
 #else
 #define IN_SW_BUF_MEM_SECTION CFG_TUD_MEM_SECTION
 #endif
-#if USE_LINEAR_BUFFER || CFG_TUD_AUDIO_ENABLE_DECODING
+#ifdef CFG_TUD_AUDIO_EP_OUT_SW_BUF_MEM_SECTION
+#define OUT_SW_BUF_MEM_SECTION CFG_TUD_AUDIO_EP_OUT_SW_BUF_MEM_SECTION
+#elif USE_LINEAR_BUFFER || CFG_TUD_AUDIO_ENABLE_DECODING
 #define OUT_SW_BUF_MEM_SECTION
 #else
 #define OUT_SW_BUF_MEM_SECTION CFG_TUD_MEM_SECTION
@@ -299,6 +301,13 @@ typedef struct
 
 #if CFG_TUD_AUDIO_ENABLE_INTERRUPT_EP
   uint8_t ep_int;               // Audio control interrupt EP.
+#endif
+
+#ifdef TUP_DCD_EDPT_ISO_ALLOC
+  // DWC2 allocates ISO FIFOs once per USB reset.  Keep the matching endpoint
+  // activation one-shot as well: re-activating an idle ISO OUT endpoint can
+  // wait indefinitely for an OUT-NAK handshake that has no traffic to finish.
+  uint32_t iso_ep_activated_mask;
 #endif
 
   bool mounted;                 // Device opened
@@ -1936,11 +1945,22 @@ static bool audiod_set_interface(uint8_t rhport, tusb_control_request_t const * 
         {
           tusb_desc_endpoint_t const* desc_ep = (tusb_desc_endpoint_t const *) p_desc;
 #ifdef TUP_DCD_EDPT_ISO_ALLOC
-          TU_ASSERT(usbd_edpt_iso_activate(rhport, desc_ep));
+          uint8_t const ep_addr = desc_ep->bEndpointAddress;
+          uint8_t const ep_bit = (uint8_t) (tu_edpt_number(ep_addr) +
+                                           (tu_edpt_dir(ep_addr) == TUSB_DIR_IN ? 16u : 0u));
+          uint32_t const ep_mask = 1UL << ep_bit;
+
+          if ((audio->iso_ep_activated_mask & ep_mask) == 0)
+          {
+            TU_ASSERT(usbd_edpt_iso_activate(rhport, desc_ep));
+            audio->iso_ep_activated_mask |= ep_mask;
+          }
 #else
           TU_ASSERT(usbd_edpt_open(rhport, desc_ep));
 #endif
+#ifndef TUP_DCD_EDPT_ISO_ALLOC
           uint8_t const ep_addr = desc_ep->bEndpointAddress;
+#endif
 
           //TODO: We need to set EP non busy since this is not taken care of right now in ep_close() - THIS IS A WORKAROUND!
           usbd_edpt_clear_stall(rhport, ep_addr);

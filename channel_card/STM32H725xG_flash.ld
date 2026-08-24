@@ -68,7 +68,10 @@ _estack = ORIGIN(DTCMRAM) + LENGTH(DTCMRAM);    /* end of RAM */
 _sstack = _estack - _Min_Stack_Size;
 /* Generate a link error if heap and stack don't fit into RAM */
 _Min_Heap_Size = 0x200;      /* required amount of heap  */
-_Min_Stack_Size = 0x400; /* required amount of stack */
+/* TinyUSB control/audio handling and newlib scanf can nest below interrupt
+   context. Reserve enough space to make a stack/.bss collision a link-time
+   error instead of intermittent CDC/UAC corruption. */
+_Min_Stack_Size = 0x4000; /* required amount of stack */
 
 /* Define output sections */
 SECTIONS

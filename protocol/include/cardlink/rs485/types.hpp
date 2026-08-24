@@ -41,7 +41,7 @@ enum class Status : uint8_t {
 struct ExchangeResult {
   /** Keep aligned with cardproto::Result buffer sizes (transport bridge). */
   static constexpr std::size_t kErrCodeCapacity = 16;
-  static constexpr std::size_t kRawCapacity = 96;
+  static constexpr std::size_t kRawCapacity = 256;
 
   Status status = Status::Timeout;
   Target from = Target::Channel;

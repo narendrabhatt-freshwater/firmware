@@ -14,6 +14,7 @@
 #include "note_bank.h"
 
 #include "attack_bank.h"
+#include "main.h"
 #include "note_envelope.h"
 #include "note_filter.h"
 #include "stream_ring.h"
@@ -177,9 +178,21 @@ static int NoteBank_InterpAttackBody(uint8_t note, uint16_t wid,
 }
 
 /**
- * Two-tap linear interpolation over the body FIFO. The next sample must
- * exist; holding the last value at a refill boundary would create a click.
+ * Two-tap linear interpolation over the body FIFO. A miss after this
+ * session has published samples is fatal: LED_R and halt until reset.
+ * An empty ring before the first commit is not an underrun.
  */
+static void NoteBank_BodyMiss(uint8_t note)
+{
+  if (StreamRing_HasBody(note) != 0u)
+  {
+    /* An underrun is telemetry, never a control-plane fatal error. Keeping
+     * USB and RS485 alive lets the next independently vq-authorized refill
+     * recover the voice instead of disabling every interrupt forever. */
+    note_hold_miss++;
+  }
+}
+
 static int NoteBank_InterpBody(uint8_t note, int32_t *out)
 {
   uint32_t phase = note_body_frac[note];
@@ -281,6 +294,9 @@ static void NoteBank_CatchUpBody(uint8_t note)
 
 static void NoteBank_StartVoice(uint8_t note, uint32_t inc)
 {
+  /* nX is the sole audible start authority. Retire any previous BODY now;
+   * the first fresh-vq PACK must carry SOF for the new session. */
+  StreamRing_Release(note);
   StreamRing_Prime(note);
   NoteBank_ClearPlayhead(note);
   note_inc[note] = inc;
@@ -375,7 +391,7 @@ static int32_t NoteBank_Sample(uint8_t note)
   {
     if (NoteBank_InterpBody(note, &y) != 0)
     {
-      note_hold_miss++;
+      NoteBank_BodyMiss(note);
       return note_hold[note];
     }
     NoteBank_AdvanceBody(note);
@@ -410,6 +426,10 @@ static int32_t NoteBank_Sample(uint8_t note)
         }
         NoteBank_AdvanceBody(note);
       }
+      else
+      {
+        NoteBank_BodyMiss(note);
+      }
     }
     note_phase[note] = phase + (uint64_t)note_inc[note];
     note_hold[note] = y;
@@ -422,7 +442,7 @@ static int32_t NoteBank_Sample(uint8_t note)
   }
   if (NoteBank_InterpBody(note, &y) != 0)
   {
-    note_hold_miss++;
+    NoteBank_BodyMiss(note);
     return note_hold[note];
   }
   note_body_only[note] = 1u;
@@ -756,39 +776,6 @@ void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out)
   }
 }
 
-void NoteBank_OnBodySof(uint8_t voice)
-{
-  uint32_t inc;
-
-  if (voice >= NOTE_BANK_VOICES)
-  {
-    return;
-  }
-  /* New BODY session already wiped the FIFO. Do not let a delayed SOF
-   * reopen a voice after its explicit note-off. */
-  if (note_gate_requested[voice] == 0u)
-  {
-    return;
-  }
-  inc = note_inc_tgt[voice];
-  if (inc < PHASE_INC_MIN)
-  {
-    inc = PHASE_INC_MIN;
-  }
-  if (inc > PHASE_INC_MAX)
-  {
-    inc = PHASE_INC_MAX;
-  }
-  {
-    float hz = (note_freq_hz[voice] > 0.0) ? (float)note_freq_hz[voice]
-                                           : note_cmd_hz[voice];
-    if (!(hz > 0.0f))
-    {
-      hz = 1.0f;
-    }
-    NoteBank_PostOn(voice, inc, hz);
-  }
-}
 
 int32_t NoteBank_NextSample(void)
 {

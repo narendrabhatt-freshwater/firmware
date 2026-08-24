@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    stream_ring.c
- * @brief   Per-voice body FIFO filled from vendor bulk BODY bursts.
+ * @brief   Per-voice body FIFO filled from packed UAC2 BODY bursts.
  ******************************************************************************
  */
 
@@ -11,14 +11,13 @@
 #include <stddef.h>
 #include <string.h>
 
-void NoteBank_OnBodySof(uint8_t voice);
-
 typedef struct
 {
   volatile uint32_t wr;
   volatile uint32_t rd;
   volatile uint8_t consuming;
   uint8_t session;
+  uint32_t generation;
   int16_t data[STREAM_RING_BASE_SAMPLES];
 } StreamRing_t;
 
@@ -74,6 +73,7 @@ void StreamRing_Reset(uint8_t voice)
     return;
   }
   StreamRing_t *r = StreamRing_At(voice);
+  r->generation++;
   r->wr = 0u;
   r->rd = 0u;
   r->consuming = 0u;
@@ -121,7 +121,7 @@ int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
   if (voice >= SAMPLE_VOICES || nsamp == 0u ||
       nsamp > USB_STREAM_NSAMP_MAX || write == NULL)
   {
-    return -1;
+    return STREAM_RING_WRITE_ERROR;
   }
   memset(write, 0, sizeof *write);
   r = StreamRing_At(voice);
@@ -133,19 +133,43 @@ int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
     r->wr = 0u;
     r->rd = 0u;
     r->session = session;
+    r->generation++;
     s_sof_pkts++;
-    NoteBank_OnBodySof(voice);
+  }
+  else if (sof == 0u && session != r->session)
+  {
+    /* A fresh vq authorized this refill, but note-off/new-note retired its
+     * session before the ISO bytes arrived. It is valid transport data that
+     * must be CRC-checked and ACKed, but it must not repopulate the ring. */
+    return STREAM_RING_WRITE_STALE;
   }
   if (StreamRing_Filled(r) + nsamp > STREAM_RING_SAMPLES)
   {
     s_drop_pkts++;
-    return -1;
+    return STREAM_RING_WRITE_ERROR;
   }
   write->start_wr = r->wr;
   write->nsamp = nsamp;
+  write->generation = r->generation;
   write->voice = voice;
+  write->session = session;
   write->active = 1u;
-  return 0;
+  return STREAM_RING_WRITE_OK;
+}
+
+uint8_t StreamRing_WriteIsCurrent(const StreamRing_Write_t *write)
+{
+  StreamRing_t *r;
+  if (write == NULL || write->active == 0u ||
+      write->voice >= SAMPLE_VOICES)
+  {
+    return 0u;
+  }
+  r = StreamRing_At(write->voice);
+  return (r->generation == write->generation &&
+          r->session == write->session && r->wr == write->start_wr)
+             ? 1u
+             : 0u;
 }
 
 int16_t *StreamRing_WriteSpan(StreamRing_Write_t *write,
@@ -205,7 +229,7 @@ uint32_t StreamRing_WriteCommit(StreamRing_Write_t *write)
     return 0u;
   }
   r = StreamRing_At(write->voice);
-  if (r->wr != write->start_wr)
+  if (StreamRing_WriteIsCurrent(write) == 0u)
   {
     write->active = 0u;
     return 0u;
@@ -323,6 +347,15 @@ uint32_t StreamRing_FillLevel(uint8_t voice)
     uint32_t a = StreamRing_Filled(StreamRing_At(voice));
     return (a > STREAM_RING_SAMPLES) ? STREAM_RING_SAMPLES : a;
   }
+}
+
+uint8_t StreamRing_HasBody(uint8_t voice)
+{
+  if (voice >= SAMPLE_VOICES)
+  {
+    return 0u;
+  }
+  return (StreamRing_At(voice)->wr != 0u) ? 1u : 0u;
 }
 
 uint32_t StreamRing_MaxFill(void)

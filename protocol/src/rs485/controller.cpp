@@ -19,10 +19,11 @@ namespace
 {
 
 constexpr uint8_t kVqVoices = 8;
-/* Sequential vq ping-pong is already spaced by the adapter RTT (~1.2 ms).
- * Do not wait extra while a watch is live. A non-zero idle wait is only
- * so the worker does not spin when no notes or jobs are pending. */
+/* Sequential vq is paced at kVqPeriod while a watch is live. Notes and
+ * jobs still run immediately. A non-zero idle wait is only so the worker
+ * does not spin when no notes or jobs are pending. */
 constexpr auto kWorkerIdleWait = std::chrono::milliseconds(10);
+constexpr auto kVqPeriod = std::chrono::milliseconds(5);
 constexpr int kVqMissLimit = 16;
 
 double ClampNoteHz(double hz)
@@ -124,6 +125,8 @@ struct Controller::Impl
   std::atomic<uint32_t> atten_db{6};
   std::thread worker;
   std::thread open_thread;
+  std::chrono::steady_clock::time_point last_vq{};
+  bool vq_now = false;
 
   bool WorkPendingLocked() const
   {
@@ -148,6 +151,13 @@ struct Controller::Impl
   bool PollPendingLocked() const
   {
     return WatchPendingLocked() || static_cast<bool>(vq_handler);
+  }
+
+  bool VqDueLocked(std::chrono::steady_clock::time_point now) const
+  {
+    return PollPendingLocked() &&
+           (vq_now || last_vq.time_since_epoch().count() == 0 ||
+            now >= last_vq + kVqPeriod);
   }
 
   void MarkNoteSentLocked(uint8_t slot, double hz)
@@ -361,6 +371,12 @@ struct Controller::Impl
         if (handler) {
           handler(job.target, job.command, result);
         }
+        if (job.target != cardproto::Target::Effect) {
+          std::lock_guard<std::mutex> lock(mutex);
+          /* Reconcile immediately after Channel commands (especially nX),
+           * then return to the fixed periodic cadence. */
+          vq_now = true;
+        }
       }
       if (result.status == cardproto::Status::Timeout) {
         MarkFault("*** bus fault — Soft Recover or reconnect");
@@ -374,6 +390,9 @@ struct Controller::Impl
                   cardproto::Target::Channel, result);
         if (result.status == cardproto::Status::Timeout) {
           MarkFault("*** bus fault — Soft Recover or reconnect");
+        } else if (result.ok()) {
+          std::lock_guard<std::mutex> lock(mutex);
+          vq_now = true;
         }
       }
       break;
@@ -389,6 +408,10 @@ struct Controller::Impl
       break;
     case JobKind::Gain: {
       const auto result = bus.Channel().SetGain(1, job.atten_db);
+      if (result.ok()) {
+        std::lock_guard<std::mutex> lock(mutex);
+        vq_now = true;
+      }
       Log(result.ok() ? "ok: g 1 " + std::to_string(job.atten_db)
                       : "err: gain");
       break;
@@ -435,14 +458,32 @@ struct Controller::Impl
 
       {
         std::unique_lock<std::mutex> lock(mutex);
-        const auto wait =
-            (!halted.load() && PollPendingLocked())
-                ? std::chrono::milliseconds(0)
-                : kWorkerIdleWait;
+        std::chrono::milliseconds wait = kWorkerIdleWait;
+        if (!halted.load() &&
+            (!jobs.empty() || WorkPendingLocked() || PollPendingLocked())) {
+          if (!jobs.empty() || WorkPendingLocked()) {
+            wait = std::chrono::milliseconds(0);
+          } else if (vq_now || last_vq.time_since_epoch().count() == 0) {
+            wait = std::chrono::milliseconds(0);
+          } else {
+            const auto now = std::chrono::steady_clock::now();
+            const auto due = last_vq + kVqPeriod;
+            if (due <= now) {
+              wait = std::chrono::milliseconds(0);
+            } else {
+              wait = std::chrono::duration_cast<std::chrono::milliseconds>(
+                  due - now);
+              if (wait.count() == 0) {
+                wait = std::chrono::milliseconds(1);
+              }
+            }
+          }
+        }
         cv.wait_for(lock, wait, [&] {
           return !run.load() || !jobs.empty() ||
                  (!halted.load() &&
-                  (WorkPendingLocked() || PollPendingLocked()));
+                  (WorkPendingLocked() ||
+                   VqDueLocked(std::chrono::steady_clock::now())));
         });
         if (!run.load()) {
           break;
@@ -470,7 +511,8 @@ struct Controller::Impl
               }
             }
           }
-          if (!have_note && PollPendingLocked()) {
+          if (!have_note &&
+              VqDueLocked(std::chrono::steady_clock::now())) {
             do_vq = true;
           }
         }
@@ -487,6 +529,7 @@ struct Controller::Impl
         if (result.ok()) {
           std::lock_guard<std::mutex> lock(mutex);
           MarkNoteSentLocked(note_slot, note_hz);
+          vq_now = true;
         } else {
           MarkFault("*** RS485 fault on n" +
                     std::string(1, "0123456789abcdef"[note_slot]) +
@@ -502,6 +545,11 @@ struct Controller::Impl
         continue;
       }
       if (do_vq) {
+        {
+          std::lock_guard<std::mutex> lock(mutex);
+          last_vq = std::chrono::steady_clock::now();
+          vq_now = false;
+        }
         const auto result = bus.Channel().QueryVoiceStatus();
         if (result.ok()) {
           {
@@ -569,6 +617,8 @@ bool Controller::Open(const std::string &path, uint32_t baud,
     impl_->desired_hz.fill(0.0);
     impl_->sent_hz.fill(0.0);
     impl_->ClearWatchLocked();
+    impl_->last_vq = {};
+    impl_->vq_now = false;
     while (!impl_->jobs.empty()) {
       impl_->jobs.pop();
     }

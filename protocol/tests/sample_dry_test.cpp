@@ -67,16 +67,32 @@ void RunNoFaultCase(const std::array<double, cardlink::audio::kSampleVoices> &in
   std::array<unsigned, kSampleVoices> ring{};
   std::array<double, kSampleVoices> phase{};
   uint8_t mask = 0u;
-  constexpr double kStatusPeriodMs = 1.2;
+  constexpr double kStatusPeriodMs = 10.0;
   const double output_frames = 48.0 * kStatusPeriodMs;
 
   for (uint8_t v = 0; v < nvoices; ++v) {
     mixer.NoteOn(v, 0, body_root_hz * inc[v]);
     mixer.ConsumeOutputSamples(0.0);
-    ring[v] = TakeBurst(mixer, v);
-    Check(ring[v] == kBodyBurstMax,
-          "capacity simulation requires a complete SOF prefill");
     mask = static_cast<uint8_t>(mask | static_cast<uint8_t>(1u << v));
+  }
+  GrantEmpty(mixer, mask, 0u);
+  {
+    uint8_t order[kSampleVoices]{};
+    unsigned grants[kSampleVoices]{};
+    const unsigned nwant = mixer.WantingVoices(order);
+    const unsigned budget = cardlink::usb::PackMaxSamples(nwant);
+    Check(nwant == nvoices, "first vq must authorize every new voice");
+    Check(mixer.AllocateBursts(order, nwant, budget, grants) == budget,
+          "first vq must fill one complete UAC PACK");
+    for (unsigned i = 0; i < nwant; ++i) {
+      std::array<int16_t, kBodyBurstMax> body{};
+      bool sof = false;
+      uint8_t session = 0u;
+      ring[order[i]] = mixer.FillBurst(order[i], body.data(), grants[i], sof,
+                                       session);
+      Check(ring[order[i]] == grants[i],
+            "first vq grant must match its allocated PACK share");
+    }
   }
 
   for (unsigned q = 0; q < quanta; ++q) {
@@ -98,8 +114,9 @@ void RunNoFaultCase(const std::array<double, cardlink::audio::kSampleVoices> &in
       }
     }
 
-    mixer.ApplyVoiceStatus(mask, best, free_samples.data());
     mixer.ConsumeOutputSamples(output_frames);
+    mixer.ApplyVoiceStatus(mask, best, free_samples.data());
+    mixer.ConsumeOutputSamples(0.0);
     uint8_t order[kSampleVoices]{};
     const unsigned nwant = mixer.WantingVoices(order);
     if (nwant == 0u) {
@@ -136,18 +153,18 @@ int main()
 
   mixer.NoteOn(0, 0, kDefaultBodyRootHz);
   mixer.ConsumeOutputSamples(0.0);
-  Check(mixer.WantBurst(0) == kBodyBurstMax,
-        "a new session must offer one safe SOF prefill");
-  Check(TakeBurst(mixer, 0) == kBodyBurstMax,
-        "SOF prefill must fill the attack-to-BODY bridge");
   Check(mixer.WantBurst(0) == 0,
-        "SOF prefill must be emitted only once");
+        "a new session must not refill before vq permission");
   GrantEmpty(mixer, 0x00);
   Check(mixer.WantBurst(0) == 0,
         "vq without the requested voice must not permit its refill");
   GrantEmpty(mixer, 0x01, 0);
   Check(mixer.WantBurst(0) == kBodyBurstMax,
         "empty vq must permit the first C4 SOF burst");
+  GrantEmpty(mixer, 0x00);
+  Check(mixer.WantBurst(0) == 0u,
+        "a newer vq without the voice must revoke an unused older grant");
+  GrantEmpty(mixer, 0x01, 0);
   Check(TakeBurst(mixer, 0) == kBodyBurstMax,
         "first refill must send the full one-voice grant");
   Check(mixer.WantBurst(0) == 0, "after one refill, wait for vq");
@@ -281,12 +298,8 @@ int main()
   mixer.NoteOn(0, 0, kDefaultBodyRootHz);
   mixer.NoteOn(1, 0, kDefaultBodyRootHz);
   mixer.ConsumeOutputSamples(0.0);
-  Check(mixer.HungriestWant() < kSampleVoices,
-        "two new notes must both be eligible for safe SOF prefill");
-  Check(TakeBurst(mixer, 0) == kBodyBurstMax, "voice 0 SOF prefill");
-  Check(TakeBurst(mixer, 1) == kBodyBurstMax, "voice 1 SOF prefill");
   Check(mixer.HungriestWant() == 0xFF,
-        "new notes must await status after their one prefill");
+        "two new notes must both wait for vq permission");
   GrantEmpty(mixer, 0x03, 0);
   Check(mixer.HungriestWant() < kSampleVoices, "two empty notes both need data");
   Check(TakeBurst(mixer, 0) == kBodyBurstMax, "voice 0 refill");
@@ -302,12 +315,56 @@ int main()
 
   Check(cardlink::usb::PackMaxSamples(1) == kBodyBurstMax,
         "one-voice PACK must use its full BODY burst cap");
-  Check(cardlink::usb::PackMaxSamples(3) == 4720u,
+  Check(cardlink::usb::PackMaxSamples(3) == 4782u,
         "three-voice PACK must use all physical wire room");
-  Check(cardlink::usb::PackMaxSamples(5) == 4712u,
+  Check(cardlink::usb::PackMaxSamples(5) == 4774u,
         "five-voice PACK must use all physical wire room");
-  Check(cardlink::usb::PackMaxSamples(8) == 4700u,
+  Check(cardlink::usb::PackMaxSamples(8) == 4762u,
         "eight-voice PACK must use all physical wire room");
+  Check(cardlink::usb::NextPackSequence(0xFFFEu) == 0u,
+        "PACK sequence must reserve 0xffff as the no-ack sentinel");
+  {
+    constexpr uint8_t kCrcVector[] = {'1', '2', '3', '4', '5',
+                                      '6', '7', '8', '9'};
+    Check(cardlink::usb::StreamCrc32(kCrcVector, sizeof kCrcVector) ==
+              0xCBF43926u,
+          "PACK CRC32 must match the standard check vector");
+  }
+  {
+    SampleDryMixer pipelined;
+    LoadTone(pipelined, 0);
+    pipelined.NoteOn(0, 0, kDefaultBodyRootHz);
+    pipelined.ConsumeOutputSamples(0.0);
+    std::array<uint16_t, kSampleVoices> empty{};
+    empty.fill(static_cast<uint16_t>(kRingSamples));
+    std::array<uint16_t, kSampleVoices> pending{};
+    const unsigned expected[] = {4096u, 4096u, 4048u};
+    for (unsigned grant : expected) {
+      pipelined.ApplyVoiceStatus(0x01u, 0u, empty.data(), pending.data());
+      pipelined.ConsumeOutputSamples(0.0);
+      Check(pipelined.WantBurst(0) == grant,
+            "pipelined vq must subtract every unacknowledged PACK");
+      Check(TakeBurst(pipelined, 0) == grant,
+            "pipelined PACK must consume only its exact remaining credit");
+      pending[0] = static_cast<uint16_t>(pending[0] + grant);
+    }
+    pipelined.ApplyVoiceStatus(0x01u, 0u, empty.data(), pending.data());
+    pipelined.ConsumeOutputSamples(0.0);
+    Check(pipelined.WantBurst(0) == 0u,
+          "unacknowledged PACKs must never over-reserve the physical ring");
+  }
+  {
+    constexpr double kSemitones = 1.33;
+    const double pitch_ratio = std::pow(2.0, kSemitones / 12.0);
+    const unsigned samples_per_10ms = static_cast<unsigned>(
+        std::ceil(48.0 * 10.0 * static_cast<double>(kSampleVoices) *
+                  pitch_ratio));
+    const unsigned wire_bytes = cardlink::usb::kStreamHdrSize +
+        kSampleVoices * cardlink::usb::kStreamBodyMetaSize +
+        2u * samples_per_10ms;
+    Check(wire_bytes <= cardlink::usb::kStreamFrameMax,
+          "eight voices at +1.33 semitones must fit one 10 ms iso window");
+  }
   mixer.NoteOn(0, 0, kDefaultBodyRootHz * 2.0);
   mixer.NoteOn(1, 0, kDefaultBodyRootHz * 2.0);
   mixer.NoteOn(2, 0, kDefaultBodyRootHz * 2.0);
@@ -319,8 +376,8 @@ int main()
     uint8_t order[kSampleVoices];
     const unsigned nwant = mixer.WantingVoices(order);
     Check(nwant == 5, "five C5 notes must all want the SOF burst");
-    Check(cardlink::usb::PackMaxSamples(nwant) >= 480,
-          "packed bulk payload must cover 5xC5 consume");
+    Check(cardlink::usb::PackMaxSamples(nwant) == 4774u,
+          "16-bit UAC PACK capacity must include its framing cost");
     unsigned grants[kSampleVoices]{};
     const unsigned budget = cardlink::usb::PackMaxSamples(nwant);
     Check(mixer.AllocateBursts(order, nwant, budget, grants) == budget,
@@ -350,8 +407,10 @@ int main()
     for (unsigned i = 0; i < nwant; ++i) {
       by_voice[order[i]] = grants[i];
     }
-    Check(by_voice[0] == 674u && by_voice[1] == 1349u &&
-              by_voice[2] == 2697u,
+    Check(by_voice[0] >= 683u && by_voice[0] <= 684u &&
+              by_voice[1] >= 1366u && by_voice[1] <= 1367u &&
+              by_voice[2] >= 2732u && by_voice[2] <= 2733u &&
+              by_voice[0] + by_voice[1] + by_voice[2] == 4782u,
           "C4+C5+C6 grants must follow their 1:2:4 consumption rates");
   }
 
@@ -375,10 +434,9 @@ int main()
     for (unsigned i = 0; i < nwant; ++i) {
       by_voice[order[i]] = grants[i];
     }
-    Check(by_voice[0] >= 1573u && by_voice[0] <= 1574u &&
-              by_voice[1] >= 1573u && by_voice[1] <= 1574u &&
-              by_voice[2] >= 1573u && by_voice[2] <= 1574u &&
-              by_voice[0] + by_voice[1] + by_voice[2] == 4720u,
+    Check(by_voice[0] == 1594u && by_voice[1] == 1594u &&
+              by_voice[2] == 1594u &&
+              by_voice[0] + by_voice[1] + by_voice[2] == 4782u,
           "three C6 grants must fairly use the catch-up PACK");
     for (unsigned i = 0; i < nwant; ++i) {
       const uint8_t v = order[i];
@@ -388,8 +446,8 @@ int main()
       Check(mixer.FillBurst(v, body.data(), grants[i], sof, session) ==
                 grants[i],
             "shared C6 prefill must emit its fair partial grant");
-      Check(mixer.WantBurst(v) == kBodyBurstMax - grants[i],
-            "partial chord prefill must remain resumable");
+      Check(mixer.WantBurst(v) == 0u,
+            "one vq must never permit a second partial refill");
     }
   }
 
@@ -404,6 +462,10 @@ int main()
     inc.fill(1.0);
     RunNoFaultCase(inc, 8u, 1000u,
                    "eight C4 voices must run 10 s without hold/drop");
+    inc.fill(std::pow(2.0, 1.33 / 12.0));
+    RunNoFaultCase(
+        inc, 8u, 1000u,
+        "eight voices at +1.33 semitones must run 10 s without hold/drop");
   }
 
   {

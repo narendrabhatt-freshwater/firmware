@@ -9,7 +9,7 @@
 
 namespace cardlink::audio {
 
-/** Host thread: packed BODY over vendor bulk. No ACK, no OS audio stack. */
+/** Packed BODY over the class-compliant 10ch int16 UAC2 output. */
 class SampleBulkOut {
 public:
   SampleBulkOut();
@@ -24,6 +24,8 @@ public:
   bool Start(std::string &err);
   void Stop();
   bool Running() const;
+  /** CoreAudio/RtAudio callback discontinuities in the current stream. */
+  uint32_t XrunCount() const;
 
   /** Feed one authoritative RS-485 vq snapshot to the refill scheduler. */
   void SubmitStatus(uint8_t mask, uint8_t best,

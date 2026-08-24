@@ -1,6 +1,7 @@
 #include "cardlink/audio/sample_bulk.hpp"
 #include "cardlink/rs485/controller.hpp"
 #include "cardlink/sample/client.hpp"
+#include "cardlink/usb/stream_proto.hpp"
 #include "cardproto/types.hpp"
 
 #include <array>
@@ -34,13 +35,13 @@ bool WaitQueue(cardlink::rs485::Controller &bus,
 
 int main(int argc, char **argv)
 {
-  const std::string which = argc > 1 ? argv[1] : "c6x3";
+  const std::string which = argc > 1 ? argv[1] : "c6x3c5";
   const unsigned seconds = argc > 2
       ? static_cast<unsigned>(std::strtoul(argv[2], nullptr, 10))
       : 12u;
   const std::string wave = argc > 3
       ? argv[3]
-      : "../cmi_control/waves/w0_sine_c4.raw";
+      : "cmi_control/waves/w48_sine_c4.raw";
   const std::string rs485 = argc > 4 ? argv[4] : "/dev/cu.usbserial-BG03CSYB";
   const std::string cdc = argc > 5
       ? argv[5]
@@ -54,6 +55,9 @@ int main(int argc, char **argv)
     hz[1] = 698.456463;  // F5
     hz[2] = 783.990872;  // G5
     nvoices = 3u;
+  } else if (which == "c6") {
+    hz[0] = 1046.502261;
+    nvoices = 1u;
   } else if (which == "c6x2") {
     hz[0] = hz[1] = 1046.502261;
     nvoices = 2u;
@@ -74,7 +78,7 @@ int main(int argc, char **argv)
     hz.fill(284.375); /* Eight equal voices: exactly 420 source samples/ms. */
     nvoices = 8u;
   } else {
-    std::cerr << "case must be afg, c6x2, c6x3, c6x3c5, c4x8, edge8, "
+    std::cerr << "case must be afg, c6, c6x2, c6x3, c6x3c5, c4x8, edge8, "
                  "or edge8_420\n";
     return EXIT_FAILURE;
   }
@@ -124,6 +128,30 @@ int main(int argc, char **argv)
     bus.Close();
     return EXIT_FAILURE;
   }
+  /* The earlier UAC experiment could open once but failed on its second
+   * CoreAudio SET_INTERFACE cycle. Prove restart before measuring notes. */
+  std::this_thread::sleep_for(100ms);
+  bulk.Stop();
+  std::this_thread::sleep_for(100ms);
+  if (!bulk.Start(err)) {
+    std::cerr << "16-bit UAC restart failed: " << err << '\n';
+    bus.Close();
+    return EXIT_FAILURE;
+  }
+  std::cout << "ok: 10ch 48k signed-int16 UAC opened twice\n";
+
+  double aggregate_samples_per_ms = 0.0;
+  for (uint8_t v = 0u; v < nvoices; ++v) {
+    aggregate_samples_per_ms += 48.0 * hz[v] / root_hz;
+  }
+  const double capacity_samples_per_ms =
+      static_cast<double>(cardlink::usb::PackMaxSamples(nvoices)) / 10.0;
+  std::cout << "budget: demand=" << aggregate_samples_per_ms
+            << " samples/ms capacity=" << capacity_samples_per_ms << '\n';
+  if (aggregate_samples_per_ms > capacity_samples_per_ms) {
+    std::cout << "warn: case is mathematically over the 16-bit UAC budget; "
+                 "hold is expected\n";
+  }
 
   std::array<cardlink::sample::NoteRequest,
              cardlink::audio::kSampleVoices> notes{};
@@ -157,7 +185,9 @@ int main(int argc, char **argv)
   }
   (void)WaitQueue(bus);
   std::this_thread::sleep_for(100ms);
+  const uint32_t xruns = bulk.XrunCount();
   bulk.Stop();
+  std::cout << "host: CoreAudio callback xruns=" << xruns << '\n';
   (void)bus.QueueExec(cardproto::Target::Channel, "usb");
   (void)WaitQueue(bus);
   bus.Close();

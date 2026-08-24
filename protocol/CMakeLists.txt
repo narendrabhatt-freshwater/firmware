@@ -70,7 +70,6 @@ add_library(cardlink STATIC
   src/usb/cdc_transport.cpp
   src/usb/cdc_port.cpp
   src/usb/attack_upload.cpp
-  src/usb/vendor_link.cpp
   src/audio/sample_dry.cpp
   src/audio/wave_loader.cpp
   src/audio/audio_engine.cpp
@@ -97,32 +96,6 @@ target_link_libraries(cardlink PUBLIC
   $<INSTALL_INTERFACE:RtMidi::rtmidi>
   $<INSTALL_INTERFACE:RtAudio::rtaudio>
 )
-
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-  pkg_check_modules(LIBUSB IMPORTED_TARGET libusb-1.0)
-endif()
-if(NOT TARGET PkgConfig::LIBUSB)
-  if(APPLE)
-    list(APPEND CMAKE_PREFIX_PATH /opt/homebrew /usr/local)
-  endif()
-  find_path(LIBUSB_INCLUDE_DIR NAMES libusb.h PATH_SUFFIXES libusb-1.0)
-  find_library(LIBUSB_LIBRARY NAMES usb-1.0 libusb-1.0)
-  if(NOT LIBUSB_INCLUDE_DIR OR NOT LIBUSB_LIBRARY)
-    message(FATAL_ERROR
-      "libusb-1.0 is required for the Channel Card vendor ISO stream "
-      "(brew install libusb / apt install libusb-1.0-0-dev)")
-  endif()
-  add_library(cardlink_libusb INTERFACE)
-  target_include_directories(cardlink_libusb INTERFACE ${LIBUSB_INCLUDE_DIR})
-  target_link_libraries(cardlink_libusb INTERFACE ${LIBUSB_LIBRARY})
-  if(APPLE)
-    target_link_libraries(cardlink_libusb INTERFACE "-framework IOKit" "-framework Security")
-  endif()
-  target_link_libraries(cardlink PUBLIC cardlink_libusb)
-else()
-  target_link_libraries(cardlink PUBLIC PkgConfig::LIBUSB)
-endif()
 
 if(APPLE)
   target_link_libraries(cardlink PUBLIC
@@ -172,6 +145,9 @@ target_link_libraries(cardlink_rs485_rtt PRIVATE cardlink::cardlink)
 
 add_executable(cardlink_sample_hw_smoke tools/sample_hw_smoke.cpp)
 target_link_libraries(cardlink_sample_hw_smoke PRIVATE cardlink::cardlink)
+
+add_executable(cardlink_uac_restart_smoke tools/uac_restart_smoke.cpp)
+target_link_libraries(cardlink_uac_restart_smoke PRIVATE cardlink::cardlink)
 
 include(CTest)
 if(BUILD_TESTING)

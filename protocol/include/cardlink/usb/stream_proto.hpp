@@ -1,21 +1,13 @@
-/**
- * @file stream_proto.hpp
- * @brief Host copy of Channel Card vendor bulk BODY framing.
- *
- * Must match channel_card/USB_APP/usb_stream.h. USB carries BODY PACKs OUT
- * only; RS-485 vq supplies exact refill credit and PACK acknowledgement.
- * The supported transport is vendor bulk OUT.
- */
-
+/** @file stream_proto.hpp Host copy of packed BODY-over-UAC2 framing. */
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
-namespace cardlink {
-namespace usb {
+namespace cardlink::usb {
 
 constexpr uint16_t kStreamVid = 0xCafe;
-constexpr uint16_t kStreamPid = 0x4022;
+constexpr uint16_t kStreamPid = 0x4029;
 constexpr uint8_t kStreamMagic0 = 0x46;
 constexpr uint8_t kStreamMagic1 = 0x57;
 constexpr uint8_t kStreamTypeBody = 0x01;
@@ -24,13 +16,20 @@ constexpr unsigned kStreamHdrSize = 8;
 constexpr unsigned kStreamBodyMetaSize = 8;
 constexpr unsigned kStreamNsampMax = 4096;
 constexpr unsigned kStreamSessionMod = 7;
-constexpr uint8_t kStreamVendorItf = 0;
-constexpr uint8_t kStreamEpOut = 0x01;
-constexpr unsigned kStreamFsMps = 64;
-/** Maximum PACK frame accepted by the card. */
-constexpr unsigned kStreamFrameMax = 9472;
-/** Async OUT budget; RS-485 status remains independent while this is in flight. */
-constexpr unsigned kStreamSubmitSamples = 2048;
+
+constexpr unsigned kStreamUacChannels = 10;
+constexpr unsigned kStreamUacSampleBytes = 2;
+constexpr unsigned kStreamUacAudioFrameBytes =
+    kStreamUacChannels * kStreamUacSampleBytes;
+constexpr unsigned kStreamUacFramesPerMs = 48;
+constexpr unsigned kStreamUacPacketBytes =
+    kStreamUacAudioFrameBytes * kStreamUacFramesPerMs;
+constexpr unsigned kStreamUacWindowPackets = 10;
+constexpr unsigned kStreamUacWindowBytes =
+    kStreamUacPacketBytes * kStreamUacWindowPackets;
+constexpr unsigned kStreamCrcBytes = 4;
+constexpr unsigned kStreamFrameMax =
+    kStreamUacWindowBytes - kStreamCrcBytes;
 
 inline constexpr unsigned PackMaxSamples(unsigned nvoices)
 {
@@ -44,6 +43,26 @@ inline constexpr unsigned PackMaxSamples(unsigned nvoices)
   const unsigned wire = (kStreamFrameMax - overhead) / 2u;
   const unsigned body = nvoices * kStreamNsampMax;
   return (wire < body) ? wire : body;
+}
+
+/** 0xFFFF is the vq "no PACK applied" sentinel and is never transmitted. */
+inline constexpr uint16_t NextPackSequence(uint16_t sequence)
+{
+  return sequence == 0xFFFEu ? 0u : static_cast<uint16_t>(sequence + 1u);
+}
+
+inline uint32_t StreamCrc32(const uint8_t *data, std::size_t size)
+{
+  uint32_t crc = 0xFFFFFFFFu;
+  for (std::size_t i = 0; i < size; ++i) {
+    crc ^= data[i];
+    for (unsigned bit = 0; bit < 8u; ++bit) {
+      crc = (crc >> 1u) ^
+            (0xEDB88320u & static_cast<uint32_t>(
+                                 -static_cast<int32_t>(crc & 1u)));
+    }
+  }
+  return crc ^ 0xFFFFFFFFu;
 }
 
 #pragma pack(push, 1)
@@ -69,6 +88,8 @@ struct StreamBodyMeta {
 
 static_assert(sizeof(StreamHdr) == kStreamHdrSize, "hdr");
 static_assert(sizeof(StreamBodyMeta) == kStreamBodyMetaSize, "meta");
+static_assert(kStreamUacAudioFrameBytes == 20, "10ch signed-int16 frame");
+static_assert(kStreamFrameMax + kStreamCrcBytes == kStreamUacWindowBytes,
+              "10 ms UAC service window");
 
-} // namespace usb
-} // namespace cardlink
+} // namespace cardlink::usb

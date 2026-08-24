@@ -258,8 +258,8 @@ If a device behaves strangely after a firmware change: Device Manager →
 Both cards currently build clean (no warnings) and are working on
 hardware:
 
-- **Channel Card** — 8 SAMPLE voices: vendor bulk BODY (packed int16
-  per voice, up to 1216 B per FS frame) feeds per-voice sustain; rate-scaled attack heads
+- **Channel Card** — 8 SAMPLE voices: 10-channel, 48 kHz signed-int16 UAC2
+  carries packed BODY data (960 B / 1 ms) into per-voice sustain rings; attack heads
   uploaded over CDC; CS4304 DAC out; DC control voltages on CH2–CH4 (0 V
   at boot); RS485 + USB CDC consoles.
 - **Effect Card** — 8-channel capture from two TLV320ADC6140 ADCs over
@@ -271,5 +271,5 @@ hardware:
   [`cmi_control/README.md`](cmi_control/README.md).
 - **`protocol`** — Single C++17 host SDK: `cardproto` wire API,
   shared serial, RS485 tagged bus / `Bus`, USB CDC and sample upload, MIDI
-  input/voice allocation, local speaker output, and vendor bulk BODY. See
+  input/voice allocation, local speaker output, and UAC2 int16 BODY. See
   [`protocol/README.md`](protocol/README.md).

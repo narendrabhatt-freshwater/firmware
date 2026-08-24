@@ -243,6 +243,11 @@ void SampleDryMixer::PullVq()
     }
     v.vq_seen = seq;
     if ((mask & static_cast<uint8_t>(1u << i)) == 0u) {
+      /* A newer status supersedes any unused older grant. No mask bit means
+       * this voice has no permission in this vq cycle. */
+      v.vq_have = false;
+      v.vq_free = 0u;
+      v.sent_this_vq = 0u;
       continue;
     }
     unsigned projected = 0u;
@@ -301,16 +306,6 @@ unsigned SampleDryMixer::WantBurst(uint8_t voice) const
     return 0;
   }
   const auto &v = voices_[voice];
-  if (v.prefill_pending) {
-    /* A new session resets its card ring, so its one SOF prefill cannot
-     * overflow. It runs concurrently with nX so the attack can bridge into
-     * BODY; later refills still require status. */
-    const unsigned sent = sent_[voice].load(std::memory_order_relaxed);
-    if (sent >= kBodyBurstMax) {
-      return 0;
-    }
-    return kBodyBurstMax - sent;
-  }
   if (!v.vq_have) {
     return 0;
   }
@@ -405,9 +400,10 @@ unsigned SampleDryMixer::AllocateBursts(const uint8_t *voices,
     }
   }
 
-  /* Weighted fair queueing at sample granularity. PACK holds at most 4728
-   * samples, so this bounded loop is small and avoids rounding one voice
-   * down to zero. The input order remains the tie-breaker (vq best first). */
+  /* Weighted fair queueing at sample granularity. One UAC window holds
+   * fewer than 4800 samples, so this bounded loop is small and
+   * avoids rounding one voice down to zero. The input order remains the
+   * tie-breaker (vq best first). */
   unsigned used = 0u;
   while (used < budget) {
     unsigned best = nvoices;
@@ -429,6 +425,21 @@ unsigned SampleDryMixer::AllocateBursts(const uint8_t *voices,
     ++used;
   }
   return used;
+}
+
+unsigned SampleDryMixer::SourceDemandSamples(double interval_ms) const
+{
+  if (!(interval_ms > 0.0) || !std::isfinite(interval_ms)) {
+    return 0u;
+  }
+  double total = 0.0;
+  for (const auto &voice : voices_) {
+    if (voice.active) {
+      total += IncOf(voice) *
+               (static_cast<double>(kSampleRateHz) / 1000.0) * interval_ms;
+    }
+  }
+  return static_cast<unsigned>(std::ceil(total));
 }
 
 unsigned SampleDryMixer::FillBurst(uint8_t voice, int16_t *dst, unsigned max_n,
@@ -466,9 +477,6 @@ unsigned SampleDryMixer::FillBurst(uint8_t voice, int16_t *dst, unsigned max_n,
   v.sent_this_vq += n;
   const unsigned sent = sent_[voice].load(std::memory_order_relaxed) + n;
   sent_[voice].store(sent, std::memory_order_release);
-  if (sent >= kBodyBurstMax) {
-    v.prefill_pending = false;
-  }
   if (!v.active) {
     live_[voice].store(false, std::memory_order_release);
     live_wave_[voice].store(0xFFFFu, std::memory_order_release);
@@ -512,9 +520,6 @@ void SampleDryMixer::AbortBurst(uint8_t voice, unsigned nsamp, bool sof)
   const unsigned sent = sent_[voice].load(std::memory_order_relaxed);
   const unsigned restored = sent > nsamp ? sent - nsamp : 0u;
   sent_[voice].store(restored, std::memory_order_release);
-  if (restored < kBodyBurstMax) {
-    v.prefill_pending = true;
-  }
 }
 
 void SampleDryMixer::CommitBurst(uint8_t voice, unsigned nsamp, bool sof)
@@ -585,7 +590,6 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
   v = Voice{};
   v.active = true;
   v.sof_pending = true;
-  v.prefill_pending = true;
   v.session = session;
   v.wave_id = c.wave_id;
   v.freq_hz = c.freq_hz;
@@ -617,7 +621,7 @@ void SampleDryMixer::NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz)
   if (voice >= kSampleVoices || wave_id >= bodies_.size()) {
     return;
   }
-  /* Mark in-use before the bulk thread drains the command so SetBody
+  /* Mark in-use before the BODY thread drains the command so SetBody
    * cannot reallocate a table FillBurst is about to read. */
   live_wave_[voice].store(wave_id, std::memory_order_release);
   live_[voice].store(true, std::memory_order_release);

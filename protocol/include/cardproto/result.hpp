@@ -27,7 +27,7 @@ struct Result {
   /** Bytes for @ref err_code including the terminating NUL. */
   static constexpr std::size_t kErrCodeCapacity = 16;
   /** Bytes for @ref raw including the terminating NUL. */
-  static constexpr std::size_t kRawCapacity = 96;
+  static constexpr std::size_t kRawCapacity = 256;
 
   Status status = Status::Timeout; /**< Classified outcome. */
   Target from = Target::Channel;   /**< Card that replied, when tagged. */

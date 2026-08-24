@@ -573,7 +573,7 @@ void DrawSamplePage(App &app)
 
     ImGui::SameLine(0.f, S(10.f));
     ImGui::SetCursorPosY(mid_y + S(5.f));
-    MonoText("48 kHz · vendor bulk", kPalette.muted, fs);
+    MonoText("48 kHz · UAC2 int16", kPalette.muted, fs);
   }
   ImGui::EndChild();
   ImGui::PopStyleVar();
@@ -702,7 +702,7 @@ void DrawSamplePage(App &app)
   fw::ui::BeginSection("sample_help", "SIGNAL PATH", ImVec2(0, S(100.f)));
   ImGui::NewLine();
   ImGui::Spacing();
-  MonoText("Attack on card (CDC)  ·  Body via vendor bulk (card pitches)",
+  MonoText("Attack on card (CDC)  ·  Body via UAC2 int16 (card pitches)",
            kPalette.text, fw::theme::g_fonts.mono);
   ImGui::Spacing();
   MonoText("RS485 note + concurrent BODY prefill  ·  env / filter on card.",

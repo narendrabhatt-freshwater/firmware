@@ -1,14 +1,12 @@
 /**
  * @file usb_stream.h
- * @brief Channel Card vendor bulk BODY framing (host must match).
+ * @brief Packed BODY protocol carried inside the Channel Card UAC2 stream.
  *
- * BODY has no USB-side application ACK. USB bulk retries CRC errors and NAKs
- * when the RX FIFO is full. RS-485 vq supplies refill permission and the last
- * fully applied PACK sequence.
- *
- * Full-Speed bulk MPS is 64. The DCD OUT transfer spans multiple packets
- * (CFG_TUD_VENDOR_EPSIZE), allowing one main-loop tud_task call to accept a
- * complete PACK frame.
+ * The USB interface is class-compliant UAC2 (10ch, int16, 48 kHz).
+ * Its bytes are a private request/serve transport, not audible PCM. Every
+ * logical PACK is produced from one fresh RS-485 vq permission. PACK CRC32
+ * validation makes a missed isochronous packet abort unpublished ring
+ * reservations instead of creating a hole in the sample stream.
  */
 
 #ifndef USB_STREAM_H
@@ -21,25 +19,32 @@ extern "C" {
 #endif
 
 #define USB_STREAM_VID 0xCafe
-#define USB_STREAM_PID 0x4022
+#define USB_STREAM_PID 0x4029
 
 #define USB_STREAM_MAGIC0 0x46u /* 'F' */
 #define USB_STREAM_MAGIC1 0x57u /* 'W' */
-
 #define USB_STREAM_TYPE_BODY 0x01u
-#define USB_STREAM_TYPE_PACK 0x03u /* one hdr + N BODY metas */
-#define USB_STREAM_TYPE_ATTACK 0x02u
-#define USB_STREAM_TYPE_CAPTURE 0x20u
-
+#define USB_STREAM_TYPE_PACK 0x03u
 #define USB_STREAM_HDR_SIZE 8u
 #define USB_STREAM_BODY_META_SIZE 8u
 #define USB_STREAM_NSAMP_MAX 4096u
 #define USB_STREAM_SESSION_MOD 7u
-#define USB_STREAM_ITF_VENDOR 0u
-#define USB_STREAM_EP_OUT 0x01u
-#define USB_STREAM_EP_IN 0x81u
-/** Maximum packed catch-up transfer. */
-#define USB_STREAM_FRAME_MAX 9472u
+
+/* 10 channels x int16 x 48 frames = 960 bytes per 1 ms. */
+#define USB_STREAM_UAC_CHANNELS 10u
+#define USB_STREAM_UAC_SAMPLE_BYTES 2u
+#define USB_STREAM_UAC_AUDIO_FRAME_BYTES                              \
+  (USB_STREAM_UAC_CHANNELS * USB_STREAM_UAC_SAMPLE_BYTES)
+#define USB_STREAM_UAC_FRAMES_PER_MS 48u
+#define USB_STREAM_UAC_PACKET_BYTES                                   \
+  (USB_STREAM_UAC_AUDIO_FRAME_BYTES * USB_STREAM_UAC_FRAMES_PER_MS)
+#define USB_STREAM_UAC_WINDOW_PACKETS 10u
+#define USB_STREAM_UAC_WINDOW_BYTES                                    \
+  (USB_STREAM_UAC_PACKET_BYTES * USB_STREAM_UAC_WINDOW_PACKETS)
+#define USB_STREAM_CRC_BYTES 4u
+/* Logical PACK bytes before the trailing CRC32. */
+#define USB_STREAM_FRAME_MAX                                           \
+  (USB_STREAM_UAC_WINDOW_BYTES - USB_STREAM_CRC_BYTES)
 
 #if defined(__GNUC__)
 #define USB_STREAM_PACKED __attribute__((packed))
@@ -53,7 +58,7 @@ typedef struct USB_STREAM_PACKED {
   uint8_t type;
   uint8_t flags;
   uint16_t nbytes;
-  uint16_t pad;
+  uint16_t pad; /* PACK sequence */
 } UsbStreamHdr;
 
 typedef struct USB_STREAM_PACKED {

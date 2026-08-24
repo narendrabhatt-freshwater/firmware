@@ -125,7 +125,7 @@ int main(void)
   MX_USB_OTG_HS_PCD_Init();
   /* USER CODE BEGIN 2 */
 
-  /* USB is owned by TinyUSB (vendor bulk BODY + CDC console) — see USB_APP/.
+  /* USB is owned by TinyUSB (UAC2 int16 BODY + CDC console) — see USB_APP/.
    * ST's MX_USB_DEVICE_Init() is gone with the USB_DEVICE middleware;
    * USB_App_Init() does the clocks, PHY power and NVIC itself.
    * Kept inside USER CODE so CubeMX regeneration preserves it. */
@@ -213,9 +213,9 @@ int main(void)
     /* USER CODE BEGIN 3 */
 
     Audio_I2S1_Poll();     /* Compatibility hook; I2S1 refills in DMA callbacks */
-    USB_App_Task();        /* tud_task + BODY drain */
+    USB_App_Task();        /* UAC BODY drain + CDC */
     ChannelConsole_Poll(); /* RS485 console + LED chaser */
-    USB_App_Task();        /* drain vendor FIFO after a console TX */
+    USB_App_Task();        /* drain UAC FIFO after a console TX */
     Audio_CpuLoad_Poll();  /* queue-mode NoteBank producer (no-op otherwise) */
   }
   /* USER CODE END 3 */

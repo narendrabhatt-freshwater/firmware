@@ -52,7 +52,7 @@ accepts `c:` / `e:` / `*:`.
 
 | Path    | Reply shape                                                       |
 | ------- | ----------------------------------------------------------------- |
-| RS485   | `[C] ` or `[E] ` then the body (note the space after the bracket) |
+| RS485   | `[C]` or `[E]` then the body (note the space after the bracket) |
 | USB CDC | body only, no tag                                                 |
 
 Examples of bodies (tag omitted for clarity):
@@ -352,31 +352,43 @@ Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 
 | Interface                    | Role                                                                |
 | ---------------------------- | ------------------------------------------------------------------- |
-| **Vendor interface** (ITF0)  | Bulk OUT carries packed BODY; its descriptor-compatible IN endpoint is idle. |
+| **UAC2 output** (ITF0/1)     | 10-channel signed 16-bit, 48 kHz; its PCM bytes carry packed BODY data (960 B / 1 ms). |
 | **CDC ACM** (serial)         | Same ASCII console as RS485, plus binary attack-head upload (`al`). |
 
-There is no UAC speaker. USB IRQ is DCD only; BODY parse runs in `tud_task`
-from the main loop. A full vendor FIFO NAKs the host.
-
-Vendor isochronous BODY (PID `0x4021`) is unsupported. Bulk is the production
-transport: it retries CRC errors and NAKs when the receive FIFO is full.
+The Channel device is class-compliant UAC2 so the operating system owns the
+audio endpoint lifecycle; there is no custom vendor/libusb isochronous pipe.
+The audio samples are transport words, not audible multichannel PCM. Iso OUT
+has no retry, so every logical PACK ends in CRC32 and an incomplete or corrupt
+PACK is discarded before its ring reservations are published. A
+primed BODY underrun increments `hold` without disabling USB, RS485, or audio;
+a later authorized refill can recover.
+The UAC topology has no Feature Unit and exposes no mute or volume controls.
+UAC audio-frame alignment is retained only because the class driver requires
+complete 10-channel int16 frames. PACK boundaries are independent: PACK bytes
+may cross callback, USB-packet, and 1 ms boundaries without padding or a
+per-millisecond wrapper.
 
 CDC is a separate function. `al` still uses CDC. Keep that port closed during
 BODY streaming unless console or attack-head traffic is required.
 
 Effect Card still has CDC and a UAC2 microphone (mono, 32-bit, 96 kHz).
 
-### BODY stream (vendor bulk OUT)
+### BODY stream (UAC2 iso OUT, signed 16-bit)
 
 Little-endian. BODY has no per-packet ACK. `type` `0x03` PACK is the live
-OUT format: one header plus N BODY metas so several voices share one transfer.
-The wire format permits 9472 bytes (148 × 64-byte packets); the live host
-submits at most 2048 samples per async PACK. Sequential RS485 `vq` polling
-supplies exact free space and the last applied PACK sequence at approximately
-the adapter's 1.2 ms turnaround. Each voice remains bounded by exact credit.
+OUT format: one header plus N BODY metas so several voices share one
+transfer. The 960-byte nominal UAC packets form one continuous byte stream;
+there is no per-packet envelope or reserved channel. A PACK plus its CRC may
+occupy up to 9600 bytes (10 ms of maximum-rate UAC wire time).
+Sequential RS485 `vq` polling supplies exact free space and the last applied
+PACK sequence every 5 ms. Each voice remains bounded by exact credit.
 
 ```text
-PACK (type 0x03), one bulk transfer ≤ 9472 bytes
+UAC stream: 48 kHz × 10 channels × int16 = 960000 bytes/s
+idle          zero int16 words
+PACK wire     header + BODY records + trailing CRC32, ≤ 9600 bytes
+
+PACK (type 0x03), logical bytes before CRC ≤ 9596
 offset  size  field
 0       1     magic0 = 0x46  'F'
 1       1     magic1 = 0x57  'W'
@@ -388,24 +400,24 @@ offset  size  field
 
   0     1     voice  0..7
   1     1     session 0..6
-  2     1     sof    1 = reset that ring + note-on join
+  2     1     sof    1 = replace that BODY ring session; never start/restart note
   3     1     pad
   4     2     nsamp
   6     2     pad
   8     2*nsamp  int16 LE unpitched body
+
+  final 4 bytes  IEEE CRC32 of the complete header + BODY records
 ```
 
-`type` `0x01` BODY is the same meta+samples as a single-voice message
-(still accepted). VID `0xCafe`, PID `0x4022`. Host claims interface 0.
-CDC stays a serial port.
+VID `0xCafe`, PID `0x4029`. The host opens the 10-channel UAC output through
+RtAudio/CoreAudio; CDC stays a serial port.
 
-Five C5 voices need 480 samples/ms, three C6 voices resampled from a C4 root
-need 576 samples/ms, and eight C4 voices need 384 samples/ms. On the
-RS485-authoritative design, hardware tests establish a safe limit of 437
-samples/ms for one to three voices and 420 samples/ms for four to eight.
-Three C6 voices from a C5 root need 288 samples/ms and fit. Continuous RS485
-`vq` is the sole refill authority and lifecycle monitor; USB vendor traffic
-carries BODY PACKs OUT only.
+After framing, an eight-voice PACK holds 4762 int16 BODY samples per 10 ms
+(476.2 ksample/s aggregate). Workloads above that exact source-consumption
+budget cannot be lossless on this 48 kHz, 10-channel, 16-bit Full-Speed pipe;
+`hold` then records the missing playback samples while control remains alive.
+RS485 `vq` every 5 ms is the sole refill authority and lifecycle monitor;
+USB vendor traffic carries BODY PACKs OUT only.
 
 ```text
 RS485 vq reply, fixed 26-byte binary frame
@@ -422,12 +434,28 @@ offset  size  field
 ```
 
 RS485 `vq` is both refill permission and an exact PACK-order snapshot. One
-fresh reply permits at most one following packed USB OUT refill, bounded for
-each included voice. Its PACK sequence prevents a racing completed OUT from
-being subtracted twice. A new session's safe SOF prefill runs concurrently
-with audible `nX`; the attack head bridges startup, and subsequent refills are
-RS485-vq-gated. `type` `0x20` CAPTURE
-remains reserved.
+fresh reply permits at most one new packed USB OUT refill, or one retry of the
+same unacknowledged PACK, bounded for each included voice. Its sequence
+prevents a racing completed OUT from being subtracted twice. There is no
+ungranted SOF prefill: `nX` starts the attack immediately, and the first BODY
+PACK waits for the next `vq`. `type` `0x20` CAPTURE remains reserved.
+Up to three ordered PACKs may await acknowledgement so the UAC pipe does
+not idle while the next `vq` observes the previous PACK. All their per-voice
+samples are subtracted from every newer exact-credit snapshot; this is
+pipelining, not permission reuse—each PACK still consumes its own fresh `vq`.
+The host caps each new PACK at eight milliseconds of predicted aggregate
+source consumption (and the exact credit, whichever is smaller). This keeps
+the request cadence ahead of playback while preserving the 4762-sample
+physical maximum for catch-up.
+If note-off or a newer note generation retires a ring while one of those
+authorized PACKs is still arriving, the card consumes and CRC-checks the old
+PACK and advances its ACK sequence, but does not publish its samples into the
+new generation. This is a stale authorized response, not malformed traffic,
+and it does not increment `bad`.
+
+`usb` reports `bad N hH sS fF cC uU`: `h` is invalid header, `s` PACK
+sequence, `f` PACK fields/ring reservation, `c` CRC32, and `u` incomplete UAC
+physical-frame alignment. The five reason counts sum to `bad`.
 
 ### CDC vs RS485 (console)
 
@@ -436,7 +464,7 @@ remains reserved.
 | Commands       | Same parsers                                | Same parsers                                                                   |
 | Line framing   | Host `\r`; card `\r\n`                      | Same                                                                           |
 | Address prefix | Useful on a shared bus (`c:` / `e:` / `*:`) | Optional; still accepted                                                       |
-| Reply tag      | `[C] ` / `[E] `                             | None — body only                                                               |
+| Reply tag      | `[C]` / `[E]`                             | None — body only                                                               |
 | Echo           | Channel: off. Effect: `ec` (default off)    | Local keystroke echo on                                                        |
 | Baud           | **921600 8N1** on the UART                  | Host may open any rate (e.g. 115200); TinyUSB CDC ignores line coding for data |
 | `al`           | Rejected (`err:usb`)                        | Allowed                                                                        |

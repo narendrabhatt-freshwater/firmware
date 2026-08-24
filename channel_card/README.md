@@ -14,7 +14,7 @@ those same files live at the repository root (`README.md`,
 | CubeMX project | `channel_MCU.ioc`                                            |
 | Linker script  | `STM32H725xG_flash.ld`                                       |
 | USB stack      | TinyUSB 0.17 (`ThirdParty/tinyusb`)                          |
-| USB device     | Vendor bulk BODY (ITF0) + CDC console                        |
+| USB device     | UAC2 BODY OUT (10ch int16) + CDC console                     |
 | RS485 address  | `c:`                                                         |
 
 ## What this card does
@@ -23,7 +23,7 @@ Receives USB audio from the PC into **per-voice sustain rings**, and
 plays the 8-voice SAMPLE / note bank out of a **CS4304 4-channel DAC**
 over I2S.
 
-- **CH1** — SAMPLE note-bank mix (`n0..n7`). Vendor bulk BODY fills the
+- **CH1** — SAMPLE note-bank mix (`n0..n7`). UAC2 BODY transport fills the
   per-voice rings used for sustain; it is not mixed onto CH1 as PCM.
 - **CH2–CH4** — firmware-generated DC control voltages, clocked purely
   by I2S with no USB involvement (0 V at boot)
@@ -178,21 +178,20 @@ Hand-written modules live under `Core/Src/<domain>/` (and matching
 | `Core/Src/filters/note_filter.c`           | Per-voice LPF wrapper (base/effective cutoff, pitch-k, q/Q31)     |
 | `Core/Src/filters/butterworth_four_pole.c` | Reusable 4-pole DF4 Butterworth kernel                            |
 | `Core/Src/drivers/cs4304.c`                | CS4304 DAC driver (I2C)                                           |
-| `USB_APP/`                                 | TinyUSB descriptors, `tusb_config.h`, vendor bulk BODY + CDC      |
+| `USB_APP/`                                 | TinyUSB descriptors, 10ch int16 UAC2 BODY + CDC                   |
 
 ### `audio_bridge.c` — handle with care
 
 This file holds the playback path as measured on the board. Notable
 parts, all commented in-place:
 
-- **BODY stream** is vendor bulk OUT: packed int16 per voice (session +
-  SOF), with exact free-space STATUS polling every 1 ms and catch-up PACKs
-  up to 9472 bytes. The measured sustainable rate safely carries eight C4
-  voices. A5+F5+G5 and three C6 voices resampled
-  from the supplied 260 Hz body exceed this link's measured int16 budget;
-  three C6 voices require a C5-or-higher matching sample root to fit.
+- **BODY stream** is class-compliant UAC2 OUT: 10-channel signed int16 at
+  48 kHz (960 bytes/ms). Each packet contributes 952 packed BODY bytes after
+  its loss-detection envelope; exact free-space `vq` permission arrives every
+  5 ms. A primed BODY underrun increments `hold`; it never disables USB,
+  RS485, or the audio interrupts, and a later authorized refill can recover.
   CH1 I2S is always the
-  note-bank mix. USB IRQ is DCD only; `tud_task` drains the vendor FIFO.
+  note-bank mix. The USB IRQ re-arms UAC OUT; the main loop parses BODY.
 - **I2S start order matters** — the I2S1 master must be running before
   the I2S2 slave is enabled, or the slave never shifts.
 - **I2S2 slave workarounds** — UDR wedge clearing via the TIM7 pump, and

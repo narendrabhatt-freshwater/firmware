@@ -1,6 +1,6 @@
 /**
  * @file sample_dry.hpp
- * @brief Host body feeder: unpitched int16 → vendor bulk BODY packs.
+ * @brief Host body feeder: unpitched int16 → UAC2 BODY packs.
  *
  * Card owns pitch / env / filter. Every fresh RS-485 `vq` grants
  * at most one refill to each voice (at most kBodyBurstMax and at most the
@@ -10,11 +10,10 @@
  * voice cannot consume its share before the next status.
  *
  * One asynchronous packed USB OUT submission is made per granted status.
- * USB NAKs when the vendor FIFO is full; a full ring drops the whole chunk.
  *
  * `queued` estimates card FIFO occupancy (attack does not consume body).
  *
- * UI note changes reach the bulk thread through an SPSC command queue.
+ * UI note changes reach the BODY thread through an SPSC command queue.
  */
 
 #ifndef CARDLINK_AUDIO_SAMPLE_DRY_HPP
@@ -52,7 +51,7 @@ public:
   bool LoadBodyFile(uint16_t wave_id, const std::string &path, std::string &err);
 
   /** Replace body samples (48 kHz int16, from head_len − overlap).
-   *  Rejected while a voice is playing this id (the bulk thread reads the table). */
+   *  Rejected while a voice is playing this id (the BODY thread reads the table). */
   bool SetBody(uint16_t wave_id, const int16_t *data, size_t nsamp,
                std::string &err);
 
@@ -70,7 +69,7 @@ public:
   void SetBodyOneshot(uint16_t wave_id, bool oneshot);
   bool BodyOneshot(uint16_t wave_id) const;
 
-  /** New session. Its one safe SOF prefill may run ahead of a fresh `vq`. */
+  /** New session. Its first BODY refill waits for a fresh `vq`. */
   void NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz);
 
   /** Key-up: card releases. Body stream continues until Silence. */
@@ -80,7 +79,7 @@ public:
 
   bool AnyActive() const;
 
-  /** Wave id the bulk thread is streaming for this voice, or 0xFFFF if idle. */
+  /** Wave id the BODY thread is streaming for this voice, or 0xFFFF if idle. */
   uint16_t LiveWave(uint8_t voice) const;
 
   /** Advance attack-join clock / file cursor. Does not pace BODY. */
@@ -102,6 +101,9 @@ public:
   unsigned AllocateBursts(const uint8_t *voices, unsigned nvoices,
                           unsigned budget, unsigned *grants) const;
 
+  /** Aggregate source samples predicted for active voices over interval_ms. */
+  unsigned SourceDemandSamples(double interval_ms) const;
+
   /** Copy up to max_n body samples. Sets sof/session. */
   unsigned FillBurst(uint8_t voice, int16_t *dst, unsigned max_n, bool &sof,
                      uint8_t &session);
@@ -109,10 +111,10 @@ public:
   /** Undo FillBurst when the bulk OUT did not accept the packet. */
   void AbortBurst(uint8_t voice, unsigned nsamp, bool sof);
 
-  /** Record successful host-to-device completion for prefill observation. */
+  /** Record successful host-to-device completion. */
   void CommitBurst(uint8_t voice, unsigned nsamp, bool sof);
 
-  /** Wait until the initial SOF BODY burst has completed on USB. */
+  /** Legacy observation helper; note-on never waits for this completion. */
   bool WaitPrefill(uint8_t voice, unsigned timeout_ms);
 
   /** Authoritative RS-485 `vq` with exact per-voice free-sample counts. */
@@ -137,7 +139,6 @@ private:
   struct Voice {
     bool active = false;
     bool sof_pending = false;
-    bool prefill_pending = false;
     uint8_t session = 0;
     uint16_t wave_id = 0;
     double freq_hz = 0.0;

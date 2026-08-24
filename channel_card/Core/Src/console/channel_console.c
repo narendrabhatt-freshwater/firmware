@@ -184,7 +184,7 @@ static uint32_t rs485_vq_count;  /**< exact refill-status frames transmitted */
  * drop: a clipped line still terminates the host's exchange. */
 static void RS485_Reply(const char *s)
 {
-  char frame[160];
+  char frame[224];
   size_t tag_len;
   size_t body_len;
   size_t max_body;
@@ -1694,7 +1694,7 @@ static void Console_Exec(char *line)
     {
       char min_s[12];
       uint32_t minf = StreamRing_MinFill();
-      char usb_b[192];
+      char usb_b[240];
 
       if (minf == 0xFFFFFFFFu)
       {
@@ -1707,16 +1707,23 @@ static void Console_Exec(char *line)
       }
       snprintf(usb_b, sizeof usb_b,
                "ok: usb drop %lu hold %lu min %s fill %lu "
-               "z %lu sof %lu vq %lu rx %lu bytes %lu bad %lu late %lu\r\n",
+               "z %lu sof %lu vq %lu win %lu rx %lu bytes %lu "
+               "bad %lu h%lu s%lu f%lu c%lu u%lu late %lu\r\n",
                (unsigned long)Audio_Bridge_UsbDropCount(),
                (unsigned long)NoteBank_HoldCount(), min_s,
                (unsigned long)Audio_Bridge_MaxFill(),
                (unsigned long)StreamRing_ZeroCount(),
                (unsigned long)StreamRing_SofCount(),
                (unsigned long)rs485_vq_count,
+               (unsigned long)USB_App_UacWindowCount(),
                (unsigned long)USB_App_RxMsgCount(),
                (unsigned long)USB_App_RxByteCount(),
                (unsigned long)USB_App_BadCount(),
+               (unsigned long)USB_App_BadReasonCount(0u),
+               (unsigned long)USB_App_BadReasonCount(1u),
+               (unsigned long)USB_App_BadReasonCount(2u),
+               (unsigned long)USB_App_BadReasonCount(3u),
+               (unsigned long)USB_App_BadReasonCount(4u),
                (unsigned long)Audio_Bridge_FillLate());
       RS485_Reply(usb_b);
     }

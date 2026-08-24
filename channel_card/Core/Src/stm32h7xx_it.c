@@ -60,6 +60,7 @@ extern DMA_HandleTypeDef hdma_spi2_tx;
 extern PCD_HandleTypeDef hpcd_USB_OTG_HS;
 /* USER CODE BEGIN EV */
 #include "tusb.h" /* tud_int_handler for OTG_HS_IRQHandler */
+#include "usb_app.h"
 /* USER CODE END EV */
 
 /******************************************************************************/
@@ -235,11 +236,13 @@ void OTG_HS_IRQHandler(void)
 {
   /* USER CODE BEGIN OTG_HS_IRQn 0 */
 
-  /* TinyUSB owns the OTG core (vendor bulk BODY + CDC console) — route the
+  /* TinyUSB owns the OTG core (UAC2 BODY + CDC console) — route the
    * interrupt to its handler and skip the HAL PCD handler entirely.
    * rhport 0: this part has a single USB core, which TinyUSB's STM32
    * port maps onto controller index 0. */
   tud_int_handler(0);
+  /* UAC ISO OUT has no retry; arm the next transfer before the next SOF. */
+  USB_App_TaskFromIsr();
   return;
 
   /* USER CODE END OTG_HS_IRQn 0 */

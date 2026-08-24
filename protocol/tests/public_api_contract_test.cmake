@@ -10,17 +10,12 @@ if(NOT EXISTS "${CARDLINK_SOURCE_DIR}/include/cardlink/usb/cdc_port.hpp")
   message(FATAL_ERROR "The public USB CDC port helper is missing")
 endif()
 
-if(NOT EXISTS "${CARDLINK_SOURCE_DIR}/include/cardlink/usb/vendor_link.hpp")
-  message(FATAL_ERROR "The public USB vendor link is missing")
-endif()
-
-file(READ "${CARDLINK_SOURCE_DIR}/include/cardlink/usb/vendor_link.hpp"
-  vendor_link_api)
-string(REGEX MATCH "[\n\r ](Read|Write|Opened)\\(" legacy_vendor_api
-  "${vendor_link_api}")
-if(legacy_vendor_api)
-  message(FATAL_ERROR
-    "VendorLink must expose only asynchronous BODY OUT submission")
+file(READ "${CARDLINK_SOURCE_DIR}/include/cardlink/usb/stream_proto.hpp"
+  stream_proto_api)
+string(FIND "${stream_proto_api}" "kStreamUacSampleBytes = 2"
+  uac_int16_api)
+if(uac_int16_api EQUAL -1)
+  message(FATAL_ERROR "Channel BODY UAC transport must remain 16-bit")
 endif()
 
 file(READ "${CARDLINK_SOURCE_DIR}/include/cardlink/audio/sample_dry.hpp"

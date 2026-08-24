@@ -115,8 +115,8 @@ int main(int argc, char **argv)
   app.bus.SetIdleHandler([&app](uint8_t slot) {
     app.samples.Silence(slot);
   });
-  /* RS-485 is the sole BODY refill authority. USB vendor traffic is OUT-only
-   * PCM; vq provides exact credit and its last applied PACK sequence. */
+  /* RS-485 is the sole BODY refill authority. UAC2 carries packed signed
+   * int16 BODY OUT; vq provides exact credit and the applied PACK sequence. */
   app.bus.SetVqHandler(
       [&app](uint8_t mask, uint8_t best,
              const std::array<uint16_t, cardlink::audio::kSampleVoices> &free,
@@ -203,6 +203,9 @@ int main(int argc, char **argv)
 
   fw::settings::Save(app);
   app.AllNotesOff();
+  if (app.sample_bulk) {
+    app.sample_bulk->Stop();
+  }
   app.DisconnectMidi();
   app.DisconnectBus();
   app.ShutdownAudio();

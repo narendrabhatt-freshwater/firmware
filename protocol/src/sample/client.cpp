@@ -534,8 +534,8 @@ void Client::NoteOn(uint8_t voice, double hz, uint16_t wave_id)
 bool Client::NoteOnBatch(const NoteRequest *notes, size_t count,
                          unsigned legacy_timeout_ms)
 {
-  /* Kept in the ABI for existing callers. Note-on no longer waits for BODY:
-   * the card's attack head bridges the asynchronous USB prefill. */
+  /* Kept in the ABI for existing callers. Note-on does not wait for BODY:
+   * the card's attack head bridges to the first vq-authorized UAC PACK. */
   (void)legacy_timeout_ms;
   if (notes == nullptr || count == 0u || count > cardlink::audio::kSampleVoices) {
     return false;
@@ -584,9 +584,8 @@ bool Client::NoteOnBatch(const NoteRequest *notes, size_t count,
     return false;
   }
 
-  /* Start the chord immediately. The mixer has already exposed every voice
-   * to the bulk thread, so their safe SOF prefills proceed concurrently while
-   * the card plays the attack heads and bridges into BODY at the join. */
+  /* Start the chord immediately. The card plays its attack heads while the
+   * BODY thread waits for the next vq, then sends one permitted UAC PACK. */
   for (size_t i = 0u; i < nprepared; ++i) {
     char cmd[48];
     std::snprintf(cmd, sizeof cmd, "n%u %.6g",

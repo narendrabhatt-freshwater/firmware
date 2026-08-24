@@ -36,9 +36,9 @@ void Audio_Bridge_SetDacHandle(CS4304_HandleTypeDef *h)
  * Each I2S frame = 2 × 32-bit words (L + R) = 8 bytes
  * DMA buffer is double-buffered: half/full IRQs each refill one half.
  *
- * Full-speed bulk OUT completes in 1 ms frames when the DCD buffer is
- * a full frame. Size the DMA half to AUDIO_SAMPLE_RATE_HZ/1000 frames
- * so I2S consume and USB fill share that 1 ms cadence.
+ * Full-speed iso OUT is one 1023-byte packet per 1 ms SOF. Size the DMA
+ * half to AUDIO_SAMPLE_RATE_HZ/1000 frames so I2S consume and USB fill
+ * share that 1 ms cadence.
  */
 #define AUDIO_I2S_HALF_FRAMES (AUDIO_SAMPLE_RATE_HZ / 1000u)
 #define AUDIO_I2S_BUF_FRAMES (AUDIO_I2S_HALF_FRAMES * 2u)

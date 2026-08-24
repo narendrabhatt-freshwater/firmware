@@ -6,10 +6,10 @@ The single C++17 host library for Freshwater card control:
 | --------- | ---- |
 | `cardlink::SerialPort` | Shared byte pipe (termios / Win32) |
 | `cardlink::rs485` | Tagged link, `Bus` bootstrap, and threaded `Controller` |
-| `cardlink::usb` | CDC console + `al` attack upload + vendor bulk BODY (`VendorLink`) |
+| `cardlink::usb` | CDC console + `al` attack upload + packed UAC2 BODY framing |
 | `cardlink::sample` | Plug-and-play SAMPLE session: attack upload, BODY mixer, notes |
 | `cardlink::midi` | MIDI input, pitch helpers, and 8-voice FIFO allocation |
-| `cardlink::audio` | Local speaker and Channel Card BODY stream (`SampleBulkOut`, vendor bulk) |
+| `cardlink::audio` | Local speaker and Channel Card BODY stream (`SampleBulkOut`, UAC2 int16) |
 | `cardproto` | Command formatting, reply parsing, and typed card clients |
 
 The archive includes the `cardproto` implementation. Existing build-tree
@@ -20,12 +20,23 @@ target. The normative wire contract is
 ## Build and consume
 
 ```bash
-# libusb-1.0 is required (brew install libusb / apt install libusb-1.0-0-dev)
 cmake -S protocol -B protocol/build -DBUILD_TESTING=ON
 cmake --build protocol/build
 ctest --test-dir protocol/build --output-on-failure
 cmake --install protocol/build --prefix <prefix>
 ```
+
+After flashing the Channel Card, the hardware smoke test opens and closes the
+10-channel 48 kHz signed-int16 UAC stream once before reopening it for the
+measurement. This catches the historical second-open failure as well as BODY
+stream errors:
+
+```bash
+protocol/build/cardlink_sample_hw_smoke c6x3c5 12 <body.raw> <rs485-port> <cdc-port>
+```
+
+It prints the requested source-sample rate and the exact framed UAC capacity;
+an over-budget case is labelled before playback.
 
 Build-tree consumers use:
 
@@ -84,5 +95,5 @@ bus.QueueChannel([](cardproto::ChannelClient &ch) {
 UI adapter that sends controller logs to `LogBuffer` and converts successful
 raw-command notifications into UI mirror patches.
 
-Public headers are installed under `cardlink/` and `cardproto/`. RtMidi,
-RtAudio, and libusb-1.0 are transitive dependencies of `cardlink::cardlink`.
+Public headers are installed under `cardlink/` and `cardproto/`. RtMidi and
+RtAudio are transitive dependencies of `cardlink::cardlink`.

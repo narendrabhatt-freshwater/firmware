@@ -1,10 +1,10 @@
 /**
  ******************************************************************************
  * @file    usb_app.h
- * @brief   TinyUSB application layer: vendor bulk BODY + CDC console.
+ * @brief   TinyUSB application layer: UAC2 BODY + CDC console.
  *
- * USB ISR is DCD only (tud_int_handler). tud_task and BODY parse run in
- * USB_App_Task() from the main loop. A full vendor RX FIFO NAKs the host.
+ * TinyUSB task service runs from the USB ISR so UAC ISO OUT is re-armed before
+ * the next SOF. BODY parsing and CDC line handling run in USB_App_Task().
  ******************************************************************************
  */
 
@@ -21,18 +21,24 @@ extern "C"
     void USB_App_Init(void);
 
     /**
-     * @brief Run TinyUSB, drain BODY into the rings, poll CDC.
+     * @brief Drain UAC BODY into the rings and poll CDC.
      * @note Call from main. Call again after ChannelConsole_Poll() so a
-     *       long RS485 TX cannot sit on a full vendor RX FIFO.
+     *       long RS485 TX cannot sit on a full UAC RX FIFO.
      */
     void USB_App_Task(void);
+
+    /** Re-arm the UAC endpoint from OTG_HS_IRQHandler (tud_task only). */
+    void USB_App_TaskFromIsr(void);
 
     void USB_CDC_WriteStr(const char *s);
 
     uint32_t USB_App_RxMsgCount(void);
     uint32_t USB_App_RxByteCount(void);
+    uint32_t USB_App_UacWindowCount(void);
     uint32_t USB_App_BadCount(void);
-    /** Most recent vendor OUT PACK fully applied to the BODY rings. */
+    /** Breakdown: 0 header, 1 sequence, 2 structure/ring, 3 CRC, 4 UAC. */
+    uint32_t USB_App_BadReasonCount(uint8_t reason);
+    /** Most recent UAC PACK fully applied to the BODY rings. */
     uint16_t USB_App_LastPackSequence(void);
     void USB_App_StatsClear(void);
 
