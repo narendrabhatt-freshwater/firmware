@@ -4,18 +4,17 @@
  *
  * Card owns pitch / env / filter. Every fresh `vq` with free slots grants
  * at most one refill to each voice (at most kBodyBurstMax and at most the
- * safe free-space credit). Predicted queued/in-flight samples are subtracted from a
- * fresh grant so a delayed snapshot cannot spend the same space twice.
+ * safe free-space credit). Each vq reconciles predicted occupancy to the
+ * card's reported bin plus the exact per-voice samples in concurrent OUT.
  * One PACK divides its payload by source consumption rate so a fast
- * voice cannot consume its share before the next poll. One
- * SOF burst may go out before the first `vq` so nX has body in the ring.
+ * voice cannot consume its share before the next status.
  *
- * One packed URB per pump iteration (up to two FS frames). USB NAK when the vendor
+ * One packed URB per granted status (four FS frames). USB NAK when the vendor
  * FIFO is full; a full ring drops the whole chunk.
  *
- * `queued` tracks the host file cursor (attack does not consume body).
+ * `queued` estimates card FIFO occupancy (attack does not consume body).
  *
- * The bulk thread posts no mutex: UI posts to a SPSC command queue.
+ * UI note changes reach the bulk thread through an SPSC command queue.
  */
 
 #ifndef CARDLINK_AUDIO_SAMPLE_DRY_HPP
@@ -36,19 +35,18 @@ constexpr unsigned kSampleRateHz = 48000;
 constexpr unsigned kAttackSamples = 512;
 constexpr unsigned kCrossfadeSamples = 32;
 constexpr unsigned kBodyOrigin = kAttackSamples - kCrossfadeSamples;
-constexpr unsigned kRingSamples = 4096;
+constexpr unsigned kRingSamples = 5632;
 /** Leave room for interpolator taps. */
 constexpr unsigned kRingHeadroom = 32;
 /** vq free-slot code: 0..14 complete 256-sample slots; 15 = empty. */
 constexpr unsigned kVqSlotSamples = 256;
 constexpr unsigned kVqSlotMax = 14;
 constexpr unsigned kVqSlotEmpty = 15;
-/** Do not emit a BODY header for a handful of samples unless starving. */
-constexpr unsigned kMinBurst = 32;
+/** Coalesce exact 1 ms credits to amortize eight per-voice BODY metas. */
+constexpr unsigned kMinBurst = 1024;
 constexpr unsigned kStreamSessionMod = 7;
-constexpr unsigned kBodyBurstMax = 512;
-/** Credit held back for one USB burst not yet reflected by the next vq. */
-constexpr unsigned kBodyInFlightReserve = kBodyBurstMax;
+/** One BODY meta remains bounded; the larger ring absorbs poll/host jitter. */
+constexpr unsigned kBodyBurstMax = 4096;
 constexpr double kDefaultBodyRootHz = 261.625565;
 
 class SampleDryMixer {
@@ -76,7 +74,7 @@ public:
   void SetBodyOneshot(uint16_t wave_id, bool oneshot);
   bool BodyOneshot(uint16_t wave_id) const;
 
-  /** New session: SOF + one prefill burst from cursor 0. */
+  /** New session. Its first SOF burst also requires a fresh `vq`. */
   void NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz);
 
   /** Key-up: card releases. Body stream continues until Silence. */
@@ -115,16 +113,25 @@ public:
   /** Undo FillBurst when the bulk OUT did not accept the packet. */
   void AbortBurst(uint8_t voice, unsigned nsamp, bool sof);
 
-  /** RS485/CDC `vq`: mask, hungriest, per-voice free-slot codes 0..15. */
-  void ApplyVoiceQuery(uint8_t mask, uint8_t best, const uint8_t *free_slots);
+  /** Record successful host-to-device completion (used by note prefill). */
+  void CommitBurst(uint8_t voice, unsigned nsamp, bool sof);
+
+  /** Wait until the initial SOF BODY burst has completed on USB. */
+  bool WaitPrefill(uint8_t voice, unsigned timeout_ms);
+
+  /** USB/RS485 `vq`: mask, hungriest, per-voice free-slot codes 0..15.
+   *  unreflected optionally gives exact samples in the concurrent USB OUT. */
+  void ApplyVoiceQuery(uint8_t mask, uint8_t best, const uint8_t *free_slots,
+                       const uint16_t *unreflected = nullptr);
+
+  /** USB `vq` with exact per-voice free-sample counts. */
+  void ApplyVoiceStatus(uint8_t mask, uint8_t best,
+                        const uint16_t *free_samples,
+                        const uint16_t *unreflected = nullptr);
 
   void SetPitchHz(uint8_t voice, double freq_hz);
 
   unsigned QueuedSamples(uint8_t voice) const;
-
-  /** True once the first BODY burst is queued. */
-  bool WaitPrefill(uint8_t voice, unsigned timeout_ms);
-  bool WaitPrefillActive(unsigned timeout_ms);
 
 private:
   enum class CmdKind : uint8_t { On, Pitch, Silence, AllOff };
@@ -139,6 +146,7 @@ private:
   struct Voice {
     bool active = false;
     bool sof_pending = false;
+    bool prefill_pending = false;
     uint8_t session = 0;
     uint16_t wave_id = 0;
     double freq_hz = 0.0;
@@ -172,13 +180,16 @@ private:
 
   std::array<Voice, kSampleVoices> voices_{};
   std::array<std::atomic<unsigned>, kSampleVoices> sent_{};
+  std::array<std::atomic<unsigned>, kSampleVoices> committed_{};
   std::array<std::atomic<bool>, kSampleVoices> live_{};
   std::array<std::atomic<uint16_t>, kSampleVoices> live_wave_{};
   std::atomic<uint32_t> vq_seq_{1};
   std::atomic<uint8_t> vq_mask_{0};
   std::atomic<uint8_t> vq_best_{0xFF};
   std::array<std::atomic<uint16_t>, kSampleVoices> vq_fill_{};
+  std::array<std::atomic<uint16_t>, kSampleVoices> vq_fill_max_{};
   std::array<std::atomic<uint16_t>, kSampleVoices> vq_free_{};
+  std::array<std::atomic<uint16_t>, kSampleVoices> vq_unreflected_{};
 
   std::array<std::vector<int16_t>, 256> bodies_{};
   std::array<std::atomic<double>, 256> root_hz_{};

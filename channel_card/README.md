@@ -186,7 +186,12 @@ This file holds the playback path as measured on the board. Notable
 parts, all commented in-place:
 
 - **BODY stream** is vendor bulk OUT: packed int16 per voice (session +
-  SOF), up to 1216 bytes per Full-Speed frame. CH1 I2S is always the
+  SOF), with exact free-space STATUS polling every 1 ms and catch-up PACKs
+  up to 9472 bytes. The measured sustainable rate safely carries eight C4
+  voices. A5+F5+G5 and three C6 voices resampled
+  from the supplied 260 Hz body exceed this link's measured int16 budget;
+  three C6 voices require a C5-or-higher matching sample root to fit.
+  CH1 I2S is always the
   note-bank mix. USB IRQ is DCD only; `tud_task` drains the vendor FIFO.
 - **I2S start order matters** — the I2S1 master must be running before
   the I2S2 slave is enabled, or the slave never shifts.

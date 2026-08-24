@@ -214,6 +214,16 @@ SECTIONS
   PROVIDE( __arm32_tls_tcb_offset = MAX(8, __tls_align) );
   PROVIDE( __arm64_tls_tcb_offset = MAX(16, __tls_align) );
 
+  /* TinyUSB clears this interface explicitly in vendord_init(). Keep its
+     large RX FIFO and endpoint buffers in USB-accessible AXI SRAM rather
+     than consuming the DTCM needed by the per-voice audio rings. This must
+     precede the catch-all .bss output section. */
+  .usb_buffer (NOLOAD) : ALIGN(4)
+  {
+    *(.bss._vendord_itf)
+    . = ALIGN(4);
+  } >RAM_D1
+
   .bss (NOLOAD) : ALIGN(4)
   {
     *(.bss)

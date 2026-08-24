@@ -195,12 +195,8 @@ namespace
     }
   }
 
-  /** One vq-permitted PACK may span two FS frames (2432 B). */
-  constexpr double kUsbBodySampPerMsWire =
-      static_cast<double>(cardlink::usb::kStreamFrameMax) / 4.0;
-  constexpr double kUsbBodySampPerMs =
-      static_cast<double>(cardlink::usb::PackMaxSamples(5)) / 2.0;
-
+  /** Maximum 9472-byte packed OUT wire room. */
+  constexpr double kUsbBodySampPerMsWire = 472.8;
   double BodyIncOf(double freq_hz, double root_hz)
   {
     double inc = 1.0;
@@ -222,10 +218,12 @@ namespace
   /** Sum sounding voices: 48 × (note Hz / root Hz) samples/ms. */
   void SumUsbBodyLoad(const cardlink::midi::VoiceBank &bank,
                       const cardlink::audio::SampleDryMixer &mixer,
-                      double &c4_units, double &samp_ms)
+                      double &c4_units, double &samp_ms,
+                      unsigned &active_voices)
   {
     c4_units = 0.0;
     samp_ms = 0.0;
+    active_voices = 0u;
     const double rate_ms =
         static_cast<double>(cardlink::audio::kSampleRateHz) / 1000.0;
     const auto &slots = bank.Slots();
@@ -249,6 +247,7 @@ namespace
       const double inc = BodyIncOf(s.freq_hz, root);
       c4_units += inc;
       samp_ms += rate_ms * inc;
+      ++active_voices;
     }
   }
 
@@ -551,6 +550,23 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
     (void)EnsureSampleStream();
   }
 
+  std::array<cardlink::sample::NoteRequest,
+             cardlink::audio::kSampleVoices> pending{};
+  std::array<bool, cardlink::audio::kSampleVoices> pending_voice{};
+  size_t npending = 0u;
+  const auto flush_card_notes = [&]()
+  {
+    if (npending != 0u)
+    {
+      if (!samples.NoteOnBatch(pending.data(), npending))
+      {
+        log.Push("err: sample chord prefill timed out");
+      }
+      pending_voice.fill(false);
+      npending = 0u;
+    }
+  };
+
   for (const auto &ev : events)
   {
     if (want_speakers && audio)
@@ -562,11 +578,22 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
       switch (ev.kind)
       {
       case cardlink::midi::BankEventKind::Off:
+        /* Keep ordering if a single MIDI poll reuses this voice. */
+        if (pending_voice[ev.slot])
+        {
+          flush_card_notes();
+        }
         samples.NoteOff(ev.slot);
         break;
       case cardlink::midi::BankEventKind::On:
       case cardlink::midi::BankEventKind::Retrig:
-        samples.NoteOn(ev.slot, ev.freq_hz, ev.midi_key);
+        if (pending_voice[ev.slot])
+        {
+          flush_card_notes();
+        }
+        pending[npending++] = cardlink::sample::NoteRequest{
+            ev.slot, ev.freq_hz, ev.midi_key};
+        pending_voice[ev.slot] = true;
         break;
       case cardlink::midi::BankEventKind::Steal:
         /* The following On reuses this slot. Starting a session for the
@@ -575,6 +602,7 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
       }
     }
   }
+  flush_card_notes();
 }
 
 void App::ApplyLocalBankEvents(
@@ -844,6 +872,15 @@ void App::Tick()
       midi_activity = true;
       midi_activity_timer = 0.18f;
     }
+    std::vector<cardlink::midi::BankEvent> pending_events;
+    const auto flush_midi_events = [&]()
+    {
+      if (!pending_events.empty())
+      {
+        ApplyBankEvents(pending_events);
+        pending_events.clear();
+      }
+    };
     for (const auto &n : notes)
     {
       std::vector<cardlink::midi::BankEvent> evs;
@@ -853,6 +890,7 @@ void App::Tick()
       }
       else if (n.action == cardlink::midi::NoteAction::AllOff)
       {
+        flush_midi_events();
         AllNotesOff();
         continue;
       }
@@ -860,8 +898,9 @@ void App::Tick()
       {
         evs = bank.NoteOff(n.key);
       }
-      ApplyBankEvents(evs);
+      pending_events.insert(pending_events.end(), evs.begin(), evs.end());
     }
+    flush_midi_events();
   }
   if (midi_activity_timer > 0.f)
   {
@@ -2194,8 +2233,12 @@ void App::DrawPerform()
 
       double c4_units = 0.0;
       double samp_ms = 0.0;
-      SumUsbBodyLoad(bank, samples.Mixer(), c4_units, samp_ms);
-      const bool over = samp_ms > kUsbBodySampPerMs;
+      unsigned active_voices = 0u;
+      SumUsbBodyLoad(bank, samples.Mixer(), c4_units, samp_ms,
+                     active_voices);
+      const double body_capacity = static_cast<double>(
+          cardlink::usb::StreamSustainableSamplesPerMs(active_voices));
+      const bool over = samp_ms > body_capacity;
       const ImVec4 load_col = over ? kPalette.danger : kPalette.accent;
       ImGui::SetCursorPosX(S(12.f));
       ImGui::Dummy(ImVec2(1.f, S(6.f)));
@@ -2203,7 +2246,7 @@ void App::DrawPerform()
       Mono("USB BODY", kPalette.text_dim, fs);
       char load[48];
       std::snprintf(load, sizeof(load), "%.0f/%.0f /ms", samp_ms,
-                    kUsbBodySampPerMs);
+                    body_capacity);
       ImGui::SetCursorPosX(S(12.f));
       Mono(load, load_col, fm);
       char units[48];
@@ -2219,7 +2262,7 @@ void App::DrawPerform()
         const ImVec2 bp0 = ImGui::GetItemRectMin();
         const ImVec2 bp1(bp0.x + bar_w, bp0.y + bar_h);
         const float frac = static_cast<float>(
-            std::min(1.0, samp_ms / kUsbBodySampPerMs));
+            std::min(1.0, samp_ms / body_capacity));
         dl->AddRectFilled(bp0, bp1, fw::theme::U32(kPalette.bg), S(1.f));
         if (frac > 0.f)
         {
@@ -2234,11 +2277,14 @@ void App::DrawPerform()
           ImGui::PushFont(fs);
           ImGui::Text(
               "Each voice consumes 48 \u00D7 (note Hz / root Hz) samples/ms.\n"
-              "BODY is vendor bulk: one permitted packed transfer may span\n"
-              "two FS frames (up to 2432 bytes). Every voice shares it.\n"
-              "%.0f samp/ms is one voice; %.0f is five voices\n"
-              "(5\u00D7C5 = 480). 8\u00D7C4 = 384.",
-              kUsbBodySampPerMsWire, kUsbBodySampPerMs);
+              "BODY is vendor bulk: one permitted packed transfer per USB\n"
+              "1ms exact-free-space polling; OUT can catch up with a packed\n"
+              "transfer up to 9472 bytes instead of losing a missed poll.\n"
+              "Wire room is %.0f samples/ms after one voice meta. Measured\n"
+              "safe budget is 437 samples/ms for 1-3 voices and 420 for 4-8.\n"
+              "(5\u00D7C5 = 480: over). 3\u00D7C6 = 576: over. 8\u00D7C4 = 384.\n"
+              "A5+F5+G5 from the supplied 260Hz root = 436: OK.",
+              kUsbBodySampPerMsWire);
           ImGui::PopFont();
           ImGui::EndTooltip();
         }

@@ -15,6 +15,7 @@
 #include "cardlink/serial_port.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -28,6 +29,12 @@ struct Slot {
   std::string label;
   bool head_on_card = false;
   bool body_ready = false;
+};
+
+struct NoteRequest {
+  uint8_t voice = 0u;
+  double hz = 0.0;
+  uint16_t wave_id = 0xFFFFu;
 };
 
 class Client {
@@ -57,9 +64,12 @@ public:
 
   bool SetRootHz(uint16_t wave_id, double hz, std::string &err);
 
-  /** Mixer + `aw` + console `nX`. Waits up to 40 ms for the first BODY burst.
-   *  wave_id 0xFFFF: use voice, or the first loaded body if that slot is empty. */
+  /** Prefill one note safely, then issue `nX`. */
   void NoteOn(uint8_t voice, double hz, uint16_t wave_id = 0xFFFFu);
+  /** Prepare all BODY sessions together, wait for their concurrent polling
+   *  prefill, then issue their audible `nX` commands as one chord. */
+  bool NoteOnBatch(const NoteRequest *notes, size_t count,
+                   unsigned timeout_ms = 200u);
   void NoteOff(uint8_t voice);
   void AllNotesOff();
   void Silence(uint8_t voice);

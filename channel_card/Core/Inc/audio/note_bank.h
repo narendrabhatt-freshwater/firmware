@@ -50,7 +50,7 @@ extern "C"
   double NoteBank_GetShapeParam(void);
 
   /**
-   * @brief 8-tap sinc (1, default) or nearest-neighbour (0).
+   * @brief 2-tap linear interpolation (1, default) or nearest-neighbour (0).
    *        Diagnostic: NN only needs one FIFO sample, so a still-broken
    *        E3/F3 is not the interpolator / lookahead hold.
    */

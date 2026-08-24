@@ -313,7 +313,7 @@ static const SwitchDef_t switches[] = {
  *   al <id> <len>     — CDC attack-head upload (2..ATTACK_BANK_BYTES)
  *   ar <id> <Hz>      — sample root pitch (id = wave 0..255); a — loaded mask
  *   a / vq            — loaded heads per voice / hungriest + free slots
- *   interp [0|1]      — 0 = nearest sample, 1 = 8-tap (default)
+ *   interp [0|1]      — 0 = nearest sample, 1 = 2-tap linear (default)
  *   usb               — BODY counters: drop/hold/min/fill/z/sof/rx/bytes/bad
  *   usb 0             — clear those counters, then same reply
  *   en0..enf / en     — envelope: end slope[±k] … release_slope[±k]
@@ -1655,7 +1655,7 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- interp [0|1]: nearest-neighbour vs 8-tap (scope A/B) ---- */
+  /* ---- interp [0|1]: nearest-neighbour vs 2-tap linear (scope A/B) ---- */
   if (strncmp(line, "interp", 6) == 0 && (line[6] == '\0' || line[6] == ' '))
   {
     unsigned v = 0u;
@@ -1712,12 +1712,13 @@ static void Console_Exec(char *line)
       }
       snprintf(usb_b, sizeof usb_b,
                "ok: usb drop %lu hold %lu min %s fill %lu "
-               "z %lu sof %lu rx %lu bytes %lu bad %lu late %lu\r\n",
+               "z %lu sof %lu vq %lu rx %lu bytes %lu bad %lu late %lu\r\n",
                (unsigned long)Audio_Bridge_UsbDropCount(),
                (unsigned long)NoteBank_HoldCount(), min_s,
                (unsigned long)Audio_Bridge_MaxFill(),
                (unsigned long)StreamRing_ZeroCount(),
                (unsigned long)StreamRing_SofCount(),
+               (unsigned long)USB_App_StatusCount(),
                (unsigned long)USB_App_RxMsgCount(),
                (unsigned long)USB_App_RxByteCount(),
                (unsigned long)USB_App_BadCount(),

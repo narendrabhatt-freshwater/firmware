@@ -170,6 +170,9 @@ install(FILES
 add_executable(cardlink_rs485_rtt tools/rs485_rtt.cpp)
 target_link_libraries(cardlink_rs485_rtt PRIVATE cardlink::cardlink)
 
+add_executable(cardlink_sample_hw_smoke tools/sample_hw_smoke.cpp)
+target_link_libraries(cardlink_sample_hw_smoke PRIVATE cardlink::cardlink)
+
 include(CTest)
 if(BUILD_TESTING)
   add_executable(cardlink_voice_bank_tests tests/voice_bank_test.cpp)

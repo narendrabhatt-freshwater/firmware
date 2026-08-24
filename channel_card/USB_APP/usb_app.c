@@ -10,11 +10,16 @@
 #include "attack_upload.h"
 #include "channel_console.h"
 #include "main.h"
+#include "note_bank.h"
 #include "stream_ring.h"
 #include "tusb.h"
 #include "usb_stream.h"
 
 #include <string.h>
+
+static volatile uint32_t s_status_frame;
+static uint32_t s_status_sent_frame = 0xFFFFFFFFu;
+static uint16_t s_last_pack_sequence = 0xFFFFu;
 
 static void USB_LowLevel_Init(void)
 {
@@ -53,12 +58,21 @@ void USB_App_Init(void)
 
 void tud_mount_cb(void)
 {
+  s_status_sent_frame = 0xFFFFFFFFu;
+  s_last_pack_sequence = 0xFFFFu;
+  tud_sof_cb_enable(true);
   Audio_Bridge_Start();
 }
 
 void tud_umount_cb(void)
 {
+  tud_sof_cb_enable(false);
   Audio_Bridge_StreamStop();
+}
+
+void tud_sof_cb(uint32_t frame_count)
+{
+  s_status_frame = frame_count;
 }
 
 void USB_CDC_WriteStr(const char *s)
@@ -131,13 +145,16 @@ static void CDC_Console_Poll(void)
   }
 }
 
-static uint8_t s_msg[USB_STREAM_MSG_MAX];
+/* The packed BODY assembly is too large for the nearly-full DTCM .bss.
+ * AXI SRAM is CPU-visible and already owns the USB/DMA working buffers. */
+static uint8_t s_msg[USB_STREAM_MSG_MAX]
+    __attribute__((aligned(4), section(".dma_buffer")));
 static uint32_t s_got;
 static uint32_t s_need;
 static uint32_t s_rx_msg;
 static uint32_t s_rx_bytes;
 static uint32_t s_bad;
-
+static uint32_t s_status_tx;
 static void USB_App_ResetAsm(void)
 {
   s_got = 0u;
@@ -280,6 +297,10 @@ static void USB_App_DrainVendor(void)
       else if (hdr->type == USB_STREAM_TYPE_PACK)
       {
         USB_App_HandlePack(s_msg + USB_STREAM_HDR_SIZE, hdr->nbytes);
+        /* Publish only after every BODY in this PACK has been applied. The
+         * host uses this acknowledgement to decide whether an OUT transfer
+         * was already reflected by a racing exact-free-space snapshot. */
+        s_last_pack_sequence = hdr->pad;
       }
       else
       {
@@ -290,10 +311,49 @@ static void USB_App_DrainVendor(void)
   }
 }
 
+static void USB_App_PushStatus(void)
+{
+  uint8_t slots[NOTE_BANK_VOICES];
+  uint8_t i;
+  struct
+  {
+    UsbStreamHdr hdr;
+    UsbStreamStatus status;
+  } msg;
+
+  const uint32_t frame = s_status_frame;
+  if ((frame % USB_STREAM_STATUS_FRAME_PERIOD) != 0u ||
+      frame == s_status_sent_frame || !tud_vendor_mounted() ||
+      tud_vendor_write_available() < (uint32_t)sizeof msg)
+  {
+    return;
+  }
+  msg.hdr.magic0 = USB_STREAM_MAGIC0;
+  msg.hdr.magic1 = USB_STREAM_MAGIC1;
+  msg.hdr.type = USB_STREAM_TYPE_STATUS;
+  msg.hdr.flags = 0u;
+  msg.hdr.nbytes = (uint16_t)sizeof msg.status;
+  msg.hdr.pad = 0u;
+  NoteBank_VoiceQuery(&msg.status.mask, &msg.status.best, slots);
+  for (i = 0u; i < NOTE_BANK_VOICES; i++)
+  {
+    msg.status.free_samples[i] =
+        (uint16_t)(STREAM_RING_SAMPLES - StreamRing_FillLevel(i));
+  }
+  msg.status.last_pack_sequence = s_last_pack_sequence;
+  if (tud_vendor_write(&msg, sizeof msg) == sizeof msg)
+  {
+    s_status_sent_frame = frame;
+    s_status_tx++;
+    (void)tud_vendor_write_flush();
+  }
+}
+
 void USB_App_Task(void)
 {
   tud_task();
   USB_App_DrainVendor();
+  USB_App_PushStatus();
   CDC_Console_Poll();
 }
 
@@ -312,9 +372,15 @@ uint32_t USB_App_BadCount(void)
   return s_bad;
 }
 
+uint32_t USB_App_StatusCount(void)
+{
+  return s_status_tx;
+}
+
 void USB_App_StatsClear(void)
 {
   s_rx_msg = 0u;
   s_rx_bytes = 0u;
   s_bad = 0u;
+  s_status_tx = 0u;
 }

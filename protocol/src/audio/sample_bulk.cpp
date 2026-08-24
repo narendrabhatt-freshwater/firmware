@@ -3,20 +3,21 @@
 #include "cardlink/usb/stream_proto.hpp"
 #include "cardlink/usb/vendor_link.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
+#include <mutex>
 #include <thread>
 #include <vector>
 
 namespace cardlink::audio {
 namespace {
 
-constexpr unsigned kPumpHz = 1000;
 constexpr unsigned kWriteTimeoutMs = 100;
-/* One transfer per vq-paced tick. Extra packs would lack fresh permission. */
-constexpr unsigned kMaxPacksPerTick = 1;
 
 struct PackedChunk {
   uint8_t voice = 0;
@@ -25,7 +26,8 @@ struct PackedChunk {
 };
 
 int PackFrame(SampleDryMixer &mixer, uint8_t *dst, int max,
-              PackedChunk *chunks, unsigned &nchunks)
+              PackedChunk *chunks, unsigned &nchunks,
+              uint16_t pack_sequence)
 {
   nchunks = 0;
   if (dst == nullptr || max < static_cast<int>(cardlink::usb::kStreamHdrSize +
@@ -42,6 +44,14 @@ int PackFrame(SampleDryMixer &mixer, uint8_t *dst, int max,
   }
 
   unsigned nuse = nwant;
+  /* Maximum-size synchronous transfers plateau below the rate sustained by
+   * pipelined ~2 KB transfers on the production macOS/hub/TinyUSB path.
+   * Do not split a coalesced per-voice grant across many metas: serve the
+   * hungriest eligible voices on successive 1 ms polls instead. */
+  while (nuse > 1u &&
+         nuse * kMinBurst > cardlink::usb::kStreamSubmitSamples) {
+    --nuse;
+  }
   while (nuse > 0 && cardlink::usb::PackMaxSamples(nuse) == 0) {
     --nuse;
   }
@@ -49,7 +59,9 @@ int PackFrame(SampleDryMixer &mixer, uint8_t *dst, int max,
     return 0;
   }
 
-  const unsigned sample_budget = cardlink::usb::PackMaxSamples(nuse);
+  const unsigned wire_budget = cardlink::usb::PackMaxSamples(nuse);
+  const unsigned sample_budget =
+      std::min(wire_budget, cardlink::usb::kStreamSubmitSamples);
   unsigned used = cardlink::usb::kStreamHdrSize;
   std::array<int16_t, cardlink::usb::kStreamNsampMax> body{};
   unsigned grants[kSampleVoices]{};
@@ -102,6 +114,7 @@ int PackFrame(SampleDryMixer &mixer, uint8_t *dst, int max,
   hdr.magic1 = cardlink::usb::kStreamMagic1;
   hdr.type = cardlink::usb::kStreamTypePack;
   hdr.nbytes = static_cast<uint16_t>(used - cardlink::usb::kStreamHdrSize);
+  hdr.pad = pack_sequence;
   std::memcpy(dst, &hdr, sizeof hdr);
   return static_cast<int>(used);
 }
@@ -109,9 +122,26 @@ int PackFrame(SampleDryMixer &mixer, uint8_t *dst, int max,
 } // namespace
 
 struct SampleBulkOut::Impl {
+  struct StatusRequest {
+    cardlink::usb::StreamStatus status{};
+    std::array<uint16_t, kSampleVoices> unreflected{};
+  };
+
+  struct OutstandingPack {
+    uint16_t sequence = 0u;
+    std::array<uint16_t, kSampleVoices> samples{};
+  };
+
   cardlink::usb::VendorLink link;
   std::thread th;
+  std::thread status_th;
   std::atomic<bool> run{false};
+  std::mutex status_mu;
+  std::mutex mixer_mu;
+  std::condition_variable status_cv;
+  std::deque<cardlink::usb::StreamStatus> status_queue;
+  std::deque<OutstandingPack> outstanding;
+  uint16_t next_pack_sequence = 0u;
 };
 
 SampleBulkOut::SampleBulkOut() : impl_(std::make_unique<Impl>()) {}
@@ -131,8 +161,12 @@ void SampleBulkOut::Stop()
     return;
   }
   impl_->run.store(false, std::memory_order_release);
+  impl_->status_cv.notify_all();
   if (impl_->th.joinable()) {
     impl_->th.join();
+  }
+  if (impl_->status_th.joinable()) {
+    impl_->status_th.join();
   }
   impl_->link.Close();
 }
@@ -144,14 +178,104 @@ bool SampleBulkOut::Start(std::string &err)
                         err)) {
     return false;
   }
+  {
+    std::lock_guard<std::mutex> lock(impl_->status_mu);
+    impl_->status_queue.clear();
+    impl_->outstanding.clear();
+  }
   impl_->run.store(true, std::memory_order_release);
+  impl_->status_th = std::thread([this]() {
+    std::array<uint8_t, cardlink::usb::kStreamFsMps> rx{};
+    std::array<uint8_t, cardlink::usb::kStreamFsMps * 4u> pending{};
+    unsigned have = 0u;
+    while (impl_->run.load(std::memory_order_acquire)) {
+      int got = 0;
+      std::string rerr;
+      if (!impl_->link.Read(rx.data(), static_cast<int>(rx.size()), got,
+                            100u, rerr)) {
+        continue;
+      }
+      if (got <= 0 || static_cast<unsigned>(got) > pending.size() - have) {
+        have = 0u;
+        continue;
+      }
+      std::memcpy(pending.data() + have, rx.data(), static_cast<unsigned>(got));
+      have += static_cast<unsigned>(got);
+
+      while (have >= 2u) {
+        if (pending[0] != cardlink::usb::kStreamMagic0 ||
+            pending[1] != cardlink::usb::kStreamMagic1) {
+          std::memmove(pending.data(), pending.data() + 1u, --have);
+          continue;
+        }
+        if (have < cardlink::usb::kStreamHdrSize) {
+          break;
+        }
+        cardlink::usb::StreamHdr hdr{};
+        std::memcpy(&hdr, pending.data(), sizeof hdr);
+        const unsigned frame_n = cardlink::usb::kStreamHdrSize + hdr.nbytes;
+        if (frame_n > pending.size()) {
+          std::memmove(pending.data(), pending.data() + 1u, --have);
+          continue;
+        }
+        if (have < frame_n) {
+          break;
+        }
+        if (hdr.type == cardlink::usb::kStreamTypeStatus &&
+            hdr.nbytes == sizeof(cardlink::usb::StreamStatus)) {
+          cardlink::usb::StreamStatus status{};
+          std::memcpy(&status,
+                      pending.data() + cardlink::usb::kStreamHdrSize,
+                      sizeof status);
+          {
+            std::lock_guard<std::mutex> lock(impl_->status_mu);
+            /* Preserve every polling grant in wire order. Collapsing these
+             * snapshots loses a complete refill opportunity whenever the
+             * synchronous OUT overlaps the next STATUS. Acknowledgement and
+             * unreflected-PACK accounting happen on dequeue in the same
+             * order, so an older snapshot can never reuse newer credit. */
+            impl_->status_queue.push_back(status);
+          }
+          impl_->status_cv.notify_one();
+        }
+        have -= frame_n;
+        std::memmove(pending.data(), pending.data() + frame_n, have);
+      }
+    }
+  });
   impl_->th = std::thread([this]() {
     using clock = std::chrono::steady_clock;
     auto last = clock::now();
-    auto next = last;
     std::vector<uint8_t> pkt(cardlink::usb::kStreamFrameMax);
     std::array<PackedChunk, kSampleVoices> chunks{};
     while (impl_->run.load(std::memory_order_acquire)) {
+      std::unique_lock<std::mutex> lock(impl_->status_mu);
+      impl_->status_cv.wait(lock, [this]() {
+        return !impl_->run.load(std::memory_order_acquire) ||
+               !impl_->status_queue.empty();
+      });
+      if (!impl_->run.load(std::memory_order_acquire)) {
+        break;
+      }
+      Impl::StatusRequest request{};
+      request.status = impl_->status_queue.front();
+      impl_->status_queue.pop_front();
+      for (auto it = impl_->outstanding.begin();
+           it != impl_->outstanding.end(); ++it) {
+        if (it->sequence == request.status.last_pack_sequence) {
+          impl_->outstanding.erase(impl_->outstanding.begin(), std::next(it));
+          break;
+        }
+      }
+      for (const auto &pack : impl_->outstanding) {
+        for (unsigned v = 0u; v < kSampleVoices; ++v) {
+          const unsigned total = static_cast<unsigned>(request.unreflected[v]) +
+                                 pack.samples[v];
+          request.unreflected[v] = static_cast<uint16_t>(
+              total > 0xFFFFu ? 0xFFFFu : total);
+        }
+      }
+
       const auto now = clock::now();
       const double dt = std::chrono::duration<double>(now - last).count();
       last = now;
@@ -159,37 +283,79 @@ bool SampleBulkOut::Start(std::string &err)
       if (nframes > static_cast<double>(kSampleRateHz)) {
         nframes = static_cast<double>(kSampleRateHz);
       }
-      mixer_->ConsumeOutputSamples(nframes);
-
-      unsigned sends = 0;
-      bool usb_ok = true;
-      while (usb_ok && sends < kMaxPacksPerTick) {
-        unsigned nchunks = 0;
-        const int nbytes =
-            PackFrame(*mixer_, pkt.data(),
-                      static_cast<int>(cardlink::usb::kStreamFrameMax),
-                      chunks.data(), nchunks);
-        if (nbytes <= 0 || nchunks == 0) {
-          break;
-        }
-        std::string werr;
-        if (!impl_->link.Write(pkt.data(), nbytes, kWriteTimeoutMs, werr)) {
-          for (unsigned i = 0; i < nchunks; ++i) {
-            mixer_->AbortBurst(chunks[i].voice, chunks[i].nsamp,
-                               chunks[i].sof);
-          }
-          usb_ok = false;
-          break;
-        }
-        ++sends;
+      unsigned nchunks = 0;
+      const uint16_t pack_sequence = impl_->next_pack_sequence++;
+      int nbytes = 0;
+      {
+        std::lock_guard<std::mutex> mixer_lock(impl_->mixer_mu);
+        mixer_->ApplyVoiceStatus(request.status.mask, request.status.best,
+                                 request.status.free_samples,
+                                 request.unreflected.data());
+        mixer_->ConsumeOutputSamples(nframes);
+        nbytes = PackFrame(*mixer_, pkt.data(),
+                           static_cast<int>(cardlink::usb::kStreamFrameMax),
+                           chunks.data(), nchunks, pack_sequence);
       }
+      if (nbytes <= 0 || nchunks == 0) {
+        lock.unlock();
+        continue;
+      }
+      Impl::OutstandingPack outstanding{};
+      outstanding.sequence = pack_sequence;
+      for (unsigned i = 0; i < nchunks; ++i) {
+        outstanding.samples[chunks[i].voice] =
+            static_cast<uint16_t>(chunks[i].nsamp);
+      }
+      impl_->outstanding.push_back(outstanding);
+      lock.unlock();
 
-      next += std::chrono::microseconds(1000000 / kPumpHz);
-      const auto wake = clock::now();
-      if (wake < next) {
-        std::this_thread::sleep_until(next);
-      } else {
-        next = wake;
+      std::string werr;
+      const auto submitted_chunks = chunks;
+      const bool submitted = impl_->link.SubmitWrite(
+          pkt.data(), nbytes, kWriteTimeoutMs,
+          [this, submitted_chunks, nchunks, pack_sequence](bool wrote) {
+            if (!wrote) {
+              {
+                std::lock_guard<std::mutex> done_lock(impl_->status_mu);
+                for (auto it = impl_->outstanding.begin();
+                     it != impl_->outstanding.end(); ++it) {
+                  if (it->sequence == pack_sequence) {
+                    impl_->outstanding.erase(it);
+                    break;
+                  }
+                }
+              }
+              std::lock_guard<std::mutex> mixer_lock(impl_->mixer_mu);
+              for (unsigned i = 0; i < nchunks; ++i) {
+                mixer_->AbortBurst(submitted_chunks[i].voice,
+                                   submitted_chunks[i].nsamp,
+                                   submitted_chunks[i].sof);
+              }
+            } else {
+              for (unsigned i = 0; i < nchunks; ++i) {
+                mixer_->CommitBurst(submitted_chunks[i].voice,
+                                    submitted_chunks[i].nsamp,
+                                    submitted_chunks[i].sof);
+              }
+            }
+          },
+          werr);
+      if (!submitted) {
+        {
+          std::lock_guard<std::mutex> done_lock(impl_->status_mu);
+          for (auto it = impl_->outstanding.begin();
+               it != impl_->outstanding.end(); ++it) {
+            if (it->sequence == pack_sequence) {
+              impl_->outstanding.erase(it);
+              break;
+            }
+          }
+        }
+        std::lock_guard<std::mutex> mixer_lock(impl_->mixer_mu);
+        for (unsigned i = 0; i < nchunks; ++i) {
+          mixer_->AbortBurst(chunks[i].voice, chunks[i].nsamp,
+                             chunks[i].sof);
+        }
       }
     }
   });

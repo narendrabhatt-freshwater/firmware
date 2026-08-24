@@ -8,11 +8,13 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
-#include <system_error>
 #include <fstream>
+#include <system_error>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -527,38 +529,88 @@ int Client::LoadFolder(const std::string &dir, std::string &err)
 
 void Client::NoteOn(uint8_t voice, double hz, uint16_t wave_id)
 {
-  if (voice >= cardlink::audio::kSampleVoices) {
-    return;
+  const NoteRequest note{voice, hz, wave_id};
+  (void)NoteOnBatch(&note, 1u);
+}
+
+bool Client::NoteOnBatch(const NoteRequest *notes, size_t count,
+                         unsigned timeout_ms)
+{
+  if (notes == nullptr || count == 0u || count > cardlink::audio::kSampleVoices) {
+    return false;
   }
-  uint16_t wave = wave_id;
-  if (wave >= cardlink::audio::kAttackWaves) {
-    wave = voice;
-    if (!slots_[voice].body_ready) {
-      for (uint8_t i = 0; i < cardlink::audio::kSampleVoices; ++i) {
-        if (slots_[i].body_ready) {
+  std::array<NoteRequest, cardlink::audio::kSampleVoices> prepared{};
+  std::array<bool, cardlink::audio::kSampleVoices> seen{};
+  size_t nprepared = 0u;
+  for (size_t ni = 0u; ni < count; ++ni) {
+    const auto &note = notes[ni];
+    if (note.voice >= cardlink::audio::kSampleVoices || !(note.hz > 0.0) ||
+        seen[note.voice]) {
+      continue;
+    }
+    seen[note.voice] = true;
+    uint16_t wave = note.wave_id;
+    if (wave >= cardlink::audio::kAttackWaves) {
+      wave = note.voice;
+      if (!slots_[note.voice].body_ready) {
+        for (uint16_t i = 0; i < cardlink::audio::kAttackWaves; ++i) {
+          if (mixer_.HasBody(i)) {
+            wave = i;
+            break;
+          }
+        }
+      }
+    } else if (!mixer_.HasBody(wave)) {
+      for (uint16_t i = 0; i < cardlink::audio::kAttackWaves; ++i) {
+        if (mixer_.HasBody(i)) {
           wave = i;
           break;
         }
       }
     }
-  } else if (!mixer_.HasBody(wave)) {
-    for (uint16_t i = 0; i < cardlink::audio::kAttackWaves; ++i) {
-      if (mixer_.HasBody(i)) {
-        wave = i;
-        break;
+    char aw[32];
+    std::snprintf(aw, sizeof aw, "aw %u %u",
+                  static_cast<unsigned>(note.voice),
+                  static_cast<unsigned>(wave));
+    SendConsole(aw);
+    mixer_.NoteOn(note.voice, wave, note.hz);
+    prepared[nprepared++] = NoteRequest{note.voice, note.hz, wave};
+  }
+  if (nprepared == 0u) {
+    return false;
+  }
+
+  /* Every pending voice is visible to the same fresh STATUS polls, so the
+   * fair allocator fills the whole chord concurrently. Nothing is audible
+   * until every ring owns its complete safe startup reservoir. */
+  const auto deadline = std::chrono::steady_clock::now() +
+      std::chrono::milliseconds(timeout_ms);
+  bool all_ready = false;
+  while (std::chrono::steady_clock::now() < deadline) {
+    all_ready = true;
+    for (size_t i = 0u; i < nprepared; ++i) {
+      if (!mixer_.WaitPrefill(prepared[i].voice, 0u)) {
+        all_ready = false;
       }
     }
+    if (all_ready) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  mixer_.NoteOn(voice, wave, hz);
-  /* One SOF burst into the pipe, then nX. Further BODY waits on vq. */
-  (void)mixer_.WaitPrefill(voice, 40);
-  char aw[32];
-  std::snprintf(aw, sizeof aw, "aw %u %u", static_cast<unsigned>(voice),
-                static_cast<unsigned>(wave));
-  SendConsole(aw);
-  char cmd[48];
-  std::snprintf(cmd, sizeof cmd, "n%u %.6g", static_cast<unsigned>(voice), hz);
-  SendConsole(cmd);
+  if (!all_ready) {
+    for (size_t i = 0u; i < nprepared; ++i) {
+      mixer_.Silence(prepared[i].voice);
+    }
+    return false;
+  }
+  for (size_t i = 0u; i < nprepared; ++i) {
+    char cmd[48];
+    std::snprintf(cmd, sizeof cmd, "n%u %.6g",
+                  static_cast<unsigned>(prepared[i].voice), prepared[i].hz);
+    SendConsole(cmd);
+  }
+  return true;
 }
 
 void Client::NoteOff(uint8_t voice)

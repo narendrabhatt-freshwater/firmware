@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -23,6 +24,14 @@ public:
   /** Fire-and-forget bulk OUT. No ACK. */
   bool Write(const void *data, int nbytes, unsigned timeout_ms,
              std::string &err);
+
+  /** Queue a copied bulk OUT buffer without waiting for its USB completion. */
+  bool SubmitWrite(const void *data, int nbytes, unsigned timeout_ms,
+                   std::function<void(bool)> completion, std::string &err);
+
+  /** Blocking vendor bulk IN read. Safe alongside Write while open. */
+  bool Read(void *data, int capacity, int &nbytes, unsigned timeout_ms,
+            std::string &err);
 
 private:
   struct Impl;

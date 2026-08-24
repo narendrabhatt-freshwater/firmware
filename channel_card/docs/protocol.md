@@ -134,9 +134,9 @@ and are lost on reset.
 | `aw <v> <id>`       | Assign head `<id>` to voice `<v>` 0…7                               |
 | `a`                 | Loaded count + 256-bit hex mask (bit 0 = wave 0)                    |
 | `vq`                | Active mask + hungriest voice + free-slot code per ring               |
-| `interp`            | Query: 8-tap sinc (1, default) or nearest sample (0)                  |
-| `interp 0` / `1`    | Diagnostic playhead. `0` needs one FIFO sample; `1` needs 4 ahead     |
-| `usb`               | BODY counters: FIFO drop, hold, min/max fill, rx/bytes/bad            |
+| `interp`            | Query: 2-tap linear (1, default) or nearest sample (0)                |
+| `interp 0` / `1`    | Diagnostic playhead. `0` needs one FIFO sample; `1` needs one ahead   |
+| `usb`               | BODY counters: drop/hold/fill, USB `vq`, rx/bytes/bad                 |
 | `usb 0`             | Clear those counters, then same reply                                 |
 
 Replies: `ok: ar <id> <Hz>`, `ok: aw <v> <id>`, `ok: a <n> <64 hex>`.
@@ -147,8 +147,8 @@ Best is 0–7 or 255. Slot codes 0–14 count complete 256-sample slots;
 15 means the ring is empty. At 921600 8N1 the 12-byte frame is ~150 µs
 on the wire. That is not USB BODY (vendor bulk PACK).
 
-Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 8-tap
-sinc. The attack plays to its committed length (not a hold-pad to
+Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 2-tap
+linear interpolation. The attack plays to its committed length (not a hold-pad to
 512). Body starts at `len − 32` with the same source index and
 fraction as the attack. The host does not count body-FIFO consume
 until that join. `nX > 0` is always a note-on.
@@ -355,7 +355,7 @@ Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 
 | Interface                    | Role                                                                |
 | ---------------------------- | ------------------------------------------------------------------- |
-| **Vendor bulk OUT** (ITF0)   | Fire-and-forget BODY. Host packs every sounding voice into one URB. |
+| **Vendor bulk OUT/IN** (ITF0)| OUT carries packed BODY; IN grants each refill with fresh `vq` status. |
 | **CDC ACM** (serial)         | Same ASCII console as RS485, plus binary attack-head upload (`al`). |
 
 There is no UAC speaker. USB IRQ is DCD only; BODY parse runs in `tud_task`
@@ -372,19 +372,22 @@ Effect Card still has CDC and a UAC2 microphone (mono, 32-bit, 96 kHz).
 
 ### BODY stream (vendor bulk OUT)
 
-Little-endian. The card never replies. `type` `0x03` PACK is the live
-format: one header plus N BODY metas so several voices share one transfer
-(up to 2432 bytes = two frames × 19 × 64-byte FS packets).
+Little-endian. BODY has no per-packet ACK. `type` `0x03` PACK is the live
+OUT format: one header plus N BODY metas so several voices share one transfer.
+The host caps each packed catch-up transfer at 9472 bytes (148 × 64-byte
+packets). Exact free-space STATUS is attempted every 1 ms. PACK size follows
+actual ring credit rather than an artificial per-poll cap, so a delayed host
+wakeup does not permanently discard a refill opportunity.
 
 ```text
-PACK (type 0x03), one bulk transfer ≤ 2432 bytes
+PACK (type 0x03), one bulk transfer ≤ 9472 bytes
 offset  size  field
 0       1     magic0 = 0x46  'F'
 1       1     magic1 = 0x57  'W'
 2       1     type   = 0x03  PACK
 3       1     flags  (0)
 4       2     nbytes rest of packet
-6       2     pad
+6       2     wrapping PACK sequence
 8       …     repeated BODY meta + int16 samples:
 
   0     1     voice  0..7
@@ -400,11 +403,32 @@ offset  size  field
 (still accepted). VID `0xCafe`, PID `0x4022`. Host claims interface 0.
 CDC stays a serial port.
 
-Five C5 voices need 480 samples/ms; one permitted two-frame transfer can
-carry at least 960 samples. Eight C4 voices need 384 samples/ms. Sustained
-BODY must still remain below the physical FS bulk rate.
+Five C5 voices need 480 samples/ms, three C6 voices resampled from a C4 root
+need 576 samples/ms, and eight C4 voices need 384 samples/ms. The measured
+safe multi-voice limit is 420 samples/ms, so the first two examples are over
+budget.
+Three C6 voices from a C5 root need 288 samples/ms and fit. USB vendor IN
+supplies one fresh `vq` status per 1 ms USB frame; RS485 `vq` remains
+available for lifecycle monitoring and diagnostics. A new session gets one
+safe SOF prefill before `nX`; all subsequent refills require fresh exact
+free-space status.
 
-`type` `0x10` STATUS and `0x20` CAPTURE are reserved (not an ACK).
+```text
+STATUS (type 0x10), one vendor bulk IN transfer = 28 bytes
+offset  size  field
+0       8     common header; nbytes = 20
+8       1     active/requested voice mask
+9       1     hungriest voice, or 255
+10      16    exact uint16 LE free samples for voices 0..7 (0..5632)
+26      2     last PACK sequence already reflected by these free counts
+```
+
+STATUS is both refill permission and an exact PACK-order snapshot. One fresh
+STATUS permits at most one following packed refill, bounded separately for
+each included voice. Its echoed PACK sequence prevents a racing completed OUT
+from being subtracted twice. A new session receives one safe SOF prefill before
+audible `nX`; subsequent refills are STATUS-gated. `type` `0x20` CAPTURE
+remains reserved.
 
 ### CDC vs RS485 (console)
 

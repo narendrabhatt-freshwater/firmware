@@ -113,10 +113,8 @@ int main(int argc, char **argv)
   app.bus.SetIdleHandler([&app](uint8_t slot) {
     app.samples.Silence(slot);
   });
-  app.bus.SetVqHandler([&app](uint8_t mask, uint8_t best,
-                              const std::array<uint8_t, 8> &slots) {
-    app.samples.Mixer().ApplyVoiceQuery(mask, best, slots.data());
-  });
+  /* RS485 vq remains the lifecycle/diagnostic monitor. BODY refill
+   * permission arrives at USB-frame rate on vendor IN. */
   fw::settings::Load(app);
   app.samples.SetCdcPath(app.attack_cdc_path);
 

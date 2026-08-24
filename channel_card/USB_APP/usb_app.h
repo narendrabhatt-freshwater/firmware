@@ -32,6 +32,7 @@ extern "C"
     uint32_t USB_App_RxMsgCount(void);
     uint32_t USB_App_RxByteCount(void);
     uint32_t USB_App_BadCount(void);
+    uint32_t USB_App_StatusCount(void);
     void USB_App_StatsClear(void);
 
 #ifdef __cplusplus

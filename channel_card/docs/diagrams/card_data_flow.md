@@ -11,8 +11,8 @@ If this document and the firmware disagree, trust the firmware.
 ## 1. Host interfaces (both cards)
 
 One RS485 multi-drop bus (`c:` / `e:` / `*:`). USB is per-card: Channel
-is Full-Speed **vendor bulk BODY** (ITF0, permitted transfers up to 2432
-bytes) plus CDC;
+is Full-Speed **vendor bulk BODY/status** (ITF0, packed OUT quanta up to
+9472 bytes per catch-up transfer, plus exact status IN every 1 ms) plus CDC;
 Effect is a Full-Speed **UAC2 microphone** (mono int32 @ 96 kHz) plus CDC.
 
 ```mermaid
@@ -62,10 +62,11 @@ Q16.16 interpolation. `nX > 0` is always a note-on. A new BODY session
 (`SOF` + session 0–6) starts a new body FIFO; a repeated burst with
 the same session does not.
 The host packs every wanting voice into one bulk transfer (fair share
-of a 2432-byte two-frame transfer, weighted by each voice's source-consumption
-rate). Every fresh `vq` free-slot grant permits one bounded refill;
-otherwise wait for the next poll. This keeps the jitter rings full.
-First burst does not wait for a poll.
+of a 9472-byte catch-up FS OUT budget, weighted by each voice's
+source-consumption rate). Every fresh USB vendor-IN `vq` exact free-space
+grant permits one bounded packed refill; otherwise the host waits for the
+next status. A new session gets one safe SOF prefill before `nX`; later
+refills are status-gated. This keeps the jitter rings full at note start.
 Free-slot code 0 is a hard stop. A full vendor FIFO NAKs the host.
 Missing body holds the last sample until USB catches up. A full ring
 drops the whole chunk; the producer never overwrites unread FIFO samples.
@@ -82,7 +83,7 @@ flowchart TB
 
   subgraph usb [USB FS]
     Tag["BODY: hdr + voice/session/SOF + int16"]
-    Slots["2 x 2048 int16 DTCM ping-pong"]
+    Slots["2 x 2816 int16 DTCM ping-pong"]
     Body --> Tag --> Slots
   end
 
@@ -116,16 +117,18 @@ flowchart TB
   end
 ```
 
-RS485 `vq` returns a 12-byte binary frame containing active mask,
-hungriest voice, and eight packed free-slot codes (0..14; 15 = empty).
+USB vendor IN pushes a 28-byte framed `vq` status containing active mask,
+hungriest voice, eight exact uint16 free-sample counts, and the last PACK
+sequence already reflected by those counts.
+RS485 `vq` returns the same state in its compact 12-byte diagnostic frame.
 Need-score is remaining play time: `filled / max(phase_inc, target_inc)`.
-The host sends to the hungriest voice while the slot bin is 13+
-and free slots can take a burst. At most one burst per `vq` (≤ 512
-samples, ≤ last free-slot count). A dropped USB write is AbortBurst.
-BODY and `nX` start together. The attack plays to its committed length;
+The host shares one PACK by the wanting voices' source-consumption rates.
+At most one packed refill follows each fresh `vq`; each voice is bounded to
+512 samples and its safe free-space credit. A dropped USB write is AbortBurst.
+`nX` starts immediately. The attack plays to its committed length;
 body consume starts at `len − 32` with the same source fraction. The
-host waits for the first BODY burst, then `nX`; further bursts follow
-`vq` remaining time. `StreamRing_Prime` arms consume
+first requested-gate `vq` permits the SOF BODY burst; further bursts require
+fresh status too. `StreamRing_Prime` arms consume
 and does not clear the ring. The host fills the body FIFO, then holds
 the file cursor until the playhead reaches the join — dropped USB must
 not skip ahead in the wav.
@@ -272,8 +275,7 @@ flowchart LR
   end
 ```
 
-Channel `vq` replies are sent from the main loop (same loop as
-`USB_App_Task`). The host polls `vq` at adapter RTT while any note is live
-or releasing: remaining fill time paces BODY, and a zero mask stops the
-stream after release. UART TX of the reply can delay main-loop `tud_task`;
-a full vendor FIFO NAKs. Do not poll faster than the measured adapter RTT.
+Channel USB `vq` status is pushed from `USB_App_Task` and endpoint
+backpressure limits it to host service rate. It is the refill permission.
+The slower RS485 `vq` poll remains for lifecycle monitoring and diagnostics;
+it does not authorize BODY. A full vendor FIFO NAKs the host.

@@ -637,9 +637,13 @@ void DrawSamplePage(App &app)
     ImGui::SameLine(0.f, S(12.f));
     ImGui::BeginDisabled(!bus_ok);
     if (fw::ui::Btn("8-note chord", ImVec2(0, S(24.f)), BtnKind::Primary)) {
+      std::array<cardlink::sample::NoteRequest, kVoices> notes{};
       for (int v = 0; v < kVoices; ++v) {
-        NoteOn(app, v, kChordHz[v]);
+        notes[static_cast<size_t>(v)] = cardlink::sample::NoteRequest{
+            static_cast<uint8_t>(v), kChordHz[v], 0xFFFFu};
       }
+      (void)app.EnsureSampleStream();
+      (void)app.samples.NoteOnBatch(notes.data(), notes.size());
     }
     ImGui::SameLine(0.f, S(6.f));
     if (fw::ui::Btn("All off", ImVec2(0, S(24.f)), BtnKind::Neutral)) {
