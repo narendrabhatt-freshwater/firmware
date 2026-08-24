@@ -317,9 +317,8 @@ unsigned SampleDryMixer::WantBurst(uint8_t voice) const
   if (v.sent_this_vq != 0u || v.vq_free == 0u) {
     return 0;
   }
-  /* A fresh vq is both permission and safe credit. Keep the jitter ring as
-   * full as that credit permits instead of stopping at a guessed time
-   * threshold; at C6 the entire ring is about 64 ms. */
+  /* A fresh vq is both permission and safe credit. Fill the jitter ring up to
+   * the reported credit, bounded by the per-voice burst limit. */
   unsigned n = v.vq_free;
   if (n > kBodyBurstMax) {
     n = kBodyBurstMax;
@@ -750,49 +749,6 @@ int16_t SampleDryMixer::NextBody(Voice &v)
   }
   v.cursor = ph;
   return s;
-}
-
-void SampleDryMixer::ApplyVoiceQuery(uint8_t mask, uint8_t best,
-                                     const uint8_t *free_slots,
-                                     const uint16_t *unreflected)
-{
-  if (free_slots == nullptr) {
-    return;
-  }
-  vq_mask_.store(mask, std::memory_order_relaxed);
-  vq_best_.store(best, std::memory_order_relaxed);
-  for (uint8_t i = 0; i < kSampleVoices; ++i) {
-    uint8_t slots = free_slots[i];
-    uint16_t fill = 0;
-    uint16_t fill_max = 0;
-    uint16_t free_samp = static_cast<uint16_t>(kRingSamples);
-    if (slots != kVqSlotEmpty) {
-      if (slots > kVqSlotMax) {
-        slots = kVqSlotMax;
-      }
-      const unsigned free_s = static_cast<unsigned>(slots) * kVqSlotSamples;
-      free_samp = (free_s > kRingSamples)
-                      ? static_cast<uint16_t>(kRingSamples)
-                      : static_cast<uint16_t>(free_s);
-      fill_max = static_cast<uint16_t>(kRingSamples - free_samp);
-      /* Slot 14 is clamped: filled is 1..512. Treat it as 1 so a C4
-       * note with 4 samples left is not scored as 5 ms. */
-      if (slots >= kVqSlotMax) {
-        fill = 1;
-      } else {
-        const unsigned min_fill =
-            kRingSamples - (static_cast<unsigned>(slots) + 1u) * kVqSlotSamples +
-            1u;
-        fill = static_cast<uint16_t>(min_fill);
-      }
-    }
-    vq_fill_[i].store(fill, std::memory_order_relaxed);
-    vq_fill_max_[i].store(fill_max, std::memory_order_relaxed);
-    vq_free_[i].store(free_samp, std::memory_order_relaxed);
-    vq_unreflected_[i].store(unreflected != nullptr ? unreflected[i] : 0u,
-                             std::memory_order_relaxed);
-  }
-  vq_seq_.fetch_add(1, std::memory_order_release);
 }
 
 void SampleDryMixer::ApplyVoiceStatus(uint8_t mask, uint8_t best,

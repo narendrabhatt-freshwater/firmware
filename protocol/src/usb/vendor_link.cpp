@@ -68,11 +68,6 @@ VendorLink::VendorLink() : impl_(std::make_unique<Impl>()) {}
 
 VendorLink::~VendorLink() { Close(); }
 
-bool VendorLink::Opened() const
-{
-  return impl_ && impl_->handle != nullptr;
-}
-
 void VendorLink::Close()
 {
   if (!impl_) {
@@ -147,30 +142,6 @@ bool VendorLink::Open(uint16_t vid, uint16_t pid, std::string &err)
   return true;
 }
 
-bool VendorLink::Write(const void *data, int nbytes, unsigned timeout_ms,
-                       std::string &err)
-{
-  if (data == nullptr || nbytes <= 0) {
-    err = "empty write";
-    return false;
-  }
-  std::lock_guard<std::mutex> lock(impl_->mu);
-  if (impl_->handle == nullptr) {
-    err = "vendor USB closed";
-    return false;
-  }
-  int transferred = 0;
-  int rc = libusb_bulk_transfer(impl_->handle, kStreamEpOut,
-                                static_cast<unsigned char *>(
-                                    const_cast<void *>(data)),
-                                nbytes, &transferred, timeout_ms);
-  if (rc != 0 || transferred != nbytes) {
-    err = std::string("bulk OUT: ") + libusb_error_name(rc);
-    return false;
-  }
-  return true;
-}
-
 bool VendorLink::SubmitWrite(const void *data, int nbytes,
                              unsigned timeout_ms,
                              std::function<void(bool)> completion,
@@ -211,32 +182,6 @@ bool VendorLink::SubmitWrite(const void *data, int nbytes,
     err = std::string("submit bulk OUT: ") + libusb_error_name(rc);
     return false;
   }
-  return true;
-}
-
-bool VendorLink::Read(void *data, int capacity, int &nbytes,
-                      unsigned timeout_ms, std::string &err)
-{
-  nbytes = 0;
-  if (data == nullptr || capacity <= 0) {
-    err = "empty read";
-    return false;
-  }
-  /* Descriptor-compatible diagnostic endpoint; live BODY flow is OUT-only. */
-  std::lock_guard<std::mutex> lock(impl_->mu);
-  if (impl_->handle == nullptr) {
-    err = "vendor USB closed";
-    return false;
-  }
-  int transferred = 0;
-  const int rc = libusb_bulk_transfer(
-      impl_->handle, kStreamEpIn, static_cast<unsigned char *>(data), capacity,
-      &transferred, timeout_ms);
-  if (rc != 0) {
-    err = std::string("bulk IN: ") + libusb_error_name(rc);
-    return false;
-  }
-  nbytes = transferred;
   return true;
 }
 

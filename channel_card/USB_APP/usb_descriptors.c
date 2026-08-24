@@ -6,8 +6,8 @@
  * here must stay 64 on Full-Speed.
  *
  * PID bump on any descriptor change (macOS caches by VID/PID).
- * 0x4019 = UAC2; 0x4020 = vendor bulk; 0x4021 = vendor ISO (withdrawn:
- * macOS panics); 0x4022 = vendor bulk PACK + CDC.
+ * 0x4019 = UAC2; 0x4020 = vendor bulk; 0x4021 = retired vendor isochronous;
+ * 0x4022 = vendor bulk PACK + CDC.
  */
 
 #include "tusb.h"

@@ -379,9 +379,8 @@ static void I2S2_PumpTimerInit(void)
   TIM7->PSC = 274; /* 275 MHz / 275 = 1 MHz            */
   TIM7->ARR = 9;   /* 1 MHz / 10 = 100 kHz tick        */
   TIM7->DIER = TIM_DIER_UIE;
-  /* prio 1: USB ISO (prio 0) must preempt this 100 kHz tick; this must
-   * still preempt the I2S1 DMA fill (prio 2 after dma.c) so a long mix
-   * cannot wedge the I2S2 slave. FIFO is ~40 µs deep at 48 kHz. */
+  /* USB OTG (priority 0) preempts this tick. This tick preempts the I2S1 DMA
+   * fill (priority 2) so a long mix cannot wedge the I2S2 slave. */
   HAL_NVIC_SetPriority(TIM7_IRQn, 1, 0);
   HAL_NVIC_EnableIRQ(TIM7_IRQn);
   TIM7->CR1 = TIM_CR1_CEN;

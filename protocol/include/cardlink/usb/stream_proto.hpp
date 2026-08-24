@@ -4,7 +4,7 @@
  *
  * Must match channel_card/USB_APP/usb_stream.h. USB carries BODY PACKs OUT
  * only; RS-485 vq supplies exact refill credit and PACK acknowledgement.
- * Vendor ISO is not used (macOS IOUSBHostFamily panics on that path).
+ * The supported transport is vendor bulk OUT.
  */
 
 #pragma once
@@ -26,15 +26,9 @@ constexpr unsigned kStreamNsampMax = 4096;
 constexpr unsigned kStreamSessionMod = 7;
 constexpr uint8_t kStreamVendorItf = 0;
 constexpr uint8_t kStreamEpOut = 0x01;
-constexpr uint8_t kStreamEpIn = 0x81;
 constexpr unsigned kStreamFsMps = 64;
-/** Conservative measured host/hub service quantum. */
+/** Maximum PACK frame accepted by the card. */
 constexpr unsigned kStreamFrameMax = 9472;
-/** Nominal sequential RS-485 request/reply interval used by simulation. */
-constexpr double kStreamStatusNominalPeriodMs = 1.2;
-/** Measured sustainable int16 BODY rates used for capacity classification. */
-constexpr unsigned kStreamSustainableSamplesPerMs = 420;
-constexpr unsigned kStreamSustainableFewVoiceSamplesPerMs = 437;
 /** Async OUT budget; RS-485 status remains independent while this is in flight. */
 constexpr unsigned kStreamSubmitSamples = 2048;
 
@@ -50,14 +44,6 @@ inline constexpr unsigned PackMaxSamples(unsigned nvoices)
   const unsigned wire = (kStreamFrameMax - overhead) / 2u;
   const unsigned body = nvoices * kStreamNsampMax;
   return (wire < body) ? wire : body;
-}
-
-/** Conservative measured service limit, including per-voice card overhead. */
-inline constexpr unsigned StreamSustainableSamplesPerMs(unsigned nvoices)
-{
-  return (nvoices > 0u && nvoices <= 3u)
-      ? kStreamSustainableFewVoiceSamplesPerMs
-      : kStreamSustainableSamplesPerMs;
 }
 
 #pragma pack(push, 1)

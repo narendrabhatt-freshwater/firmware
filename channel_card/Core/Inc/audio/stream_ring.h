@@ -32,10 +32,6 @@ extern "C"
 #define STREAM_RING_BASE_SAMPLES (STREAM_BASE_BANKS * STREAM_BANK_LEN)
 #define STREAM_RING_TAIL_SAMPLES (STREAM_TAIL_BANKS * STREAM_BANK_LEN)
 #define STREAM_RING_SAMPLES (STREAM_BANKS * STREAM_BANK_LEN)
-/** vq reports 0..14 free 256-sample slots; 15 means the ring is empty. */
-#define STREAM_SLOT_LEN 256u
-#define STREAM_SLOT_MAX 14u
-#define STREAM_SLOT_EMPTY 15u
 
   void StreamRing_Init(void);
   void StreamRing_Reset(uint8_t voice);
@@ -68,9 +64,6 @@ extern "C"
   void StreamRing_Advance(uint8_t voice, uint32_t n);
 
   uint32_t StreamRing_FillLevel(uint8_t voice);
-
-  /** Free-slot code: 0..14 complete slots; 15 means empty. */
-  uint8_t StreamRing_FreeSlots(uint8_t voice);
 
   /** Highest fill among all voices (feedback / console). */
   uint32_t StreamRing_MaxFill(void);

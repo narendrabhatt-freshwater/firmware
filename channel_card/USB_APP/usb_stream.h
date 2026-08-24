@@ -6,10 +6,9 @@
  * when the RX FIFO is full. RS-485 vq supplies refill permission and the last
  * fully applied PACK sequence.
  *
- * Full-Speed bulk MPS is 64. The DCD OUT transfer is many packets
- * (CFG_TUD_VENDOR_EPSIZE) so one main-loop tud_task can take a whole
- * 1 ms frame. Vendor isochronous OUT is not used: claiming a vendor ISO
- * interface panics macOS IOUSBHostFamily.
+ * Full-Speed bulk MPS is 64. The DCD OUT transfer spans multiple packets
+ * (CFG_TUD_VENDOR_EPSIZE), allowing one main-loop tud_task call to accept a
+ * complete PACK frame.
  */
 
 #ifndef USB_STREAM_H

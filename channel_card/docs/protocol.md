@@ -133,9 +133,7 @@ and are lost on reset.
 | `ar <id> <Hz>`      | Set head `<id>`'s root pitch (Hz > 0)                               |
 | `aw <v> <id>`       | Assign head `<id>` to voice `<v>` 0…7                               |
 | `a`                 | Loaded count + 256-bit hex mask (bit 0 = wave 0)                    |
-| `vq`                | Active mask + hungriest + exact ring credit + USB PACK ACK             |
-| `interp`            | Query: 2-tap linear (1, default) or nearest sample (0)                |
-| `interp 0` / `1`    | Diagnostic playhead. `0` needs one FIFO sample; `1` needs one ahead   |
+| `vq`                | Active mask + hungriest + exact ring credit + USB PACK ACK            |
 | `usb`               | BODY counters: drop/hold/fill, RS-485 `vq`, rx/bytes/bad              |
 | `usb 0`             | Clear those counters, then same reply                                 |
 
@@ -360,12 +358,11 @@ Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 There is no UAC speaker. USB IRQ is DCD only; BODY parse runs in `tud_task`
 from the main loop. A full vendor FIFO NAKs the host.
 
-Vendor isochronous BODY (PID `0x4021`) was withdrawn: claiming that
-interface panics macOS IOUSBHostFamily. Bulk retries CRC and NAKs when
-full; it does not reserve a SOF slot the way UAC ISO did.
+Vendor isochronous BODY (PID `0x4021`) is unsupported. Bulk is the production
+transport: it retries CRC errors and NAKs when the receive FIFO is full.
 
-CDC is a separate function. `al` still uses CDC; leave that port closed
-while notes are down if you want the remaining FS leftovers for hub traffic.
+CDC is a separate function. `al` still uses CDC. Keep that port closed during
+BODY streaming unless console or attack-head traffic is required.
 
 Effect Card still has CDC and a UAC2 microphone (mono, 32-bit, 96 kHz).
 

@@ -38,10 +38,6 @@ constexpr unsigned kBodyOrigin = kAttackSamples - kCrossfadeSamples;
 constexpr unsigned kRingSamples = 12240;
 /** Leave room for interpolator taps. */
 constexpr unsigned kRingHeadroom = 32;
-/** vq free-slot code: 0..14 complete 256-sample slots; 15 = empty. */
-constexpr unsigned kVqSlotSamples = 256;
-constexpr unsigned kVqSlotMax = 14;
-constexpr unsigned kVqSlotEmpty = 15;
 /** Coalesce refill credit to amortize eight per-voice BODY metas. */
 constexpr unsigned kMinBurst = 512;
 constexpr unsigned kStreamSessionMod = 7;
@@ -118,11 +114,6 @@ public:
 
   /** Wait until the initial SOF BODY burst has completed on USB. */
   bool WaitPrefill(uint8_t voice, unsigned timeout_ms);
-
-  /** Legacy quantized `vq`: mask, hungriest, free-slot codes 0..15.
-   *  unreflected optionally gives exact samples in the concurrent USB OUT. */
-  void ApplyVoiceQuery(uint8_t mask, uint8_t best, const uint8_t *free_slots,
-                       const uint16_t *unreflected = nullptr);
 
   /** Authoritative RS-485 `vq` with exact per-voice free-sample counts. */
   void ApplyVoiceStatus(uint8_t mask, uint8_t best,

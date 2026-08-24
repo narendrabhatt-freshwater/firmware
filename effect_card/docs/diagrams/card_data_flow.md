@@ -276,7 +276,6 @@ flowchart LR
   end
 ```
 
-Channel USB `vq` status is pushed from `USB_App_Task` and endpoint
-backpressure limits it to host service rate. It is the refill permission.
-The slower RS485 `vq` poll remains for lifecycle monitoring and diagnostics;
-it does not authorize BODY. A full vendor FIFO NAKs the host.
+Continuous RS485 `vq` request/reply cycles provide the sole refill permission
+and report the last applied USB PACK sequence. USB carries BODY data only.
+A full vendor FIFO NAKs the host.

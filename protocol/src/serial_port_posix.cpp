@@ -86,6 +86,16 @@ bool SerialPort::Open(const std::string &path, uint32_t baud) {
     return false;
   }
 
+  /* A serial byte stream cannot be safely shared by independent protocol
+   * readers: one process can consume another process's RS-485 reply. Ask the
+   * tty driver for exclusive ownership so a second CMI instance fails to
+   * connect instead of silently starving authoritative vq snapshots. */
+  if (ioctl(fd, TIOCEXCL) != 0) {
+    SetError("ioctl(TIOCEXCL, " + path + ")");
+    ::close(fd);
+    return false;
+  }
+
   /* Drop O_NONBLOCK now that the open() race (which needs it, e.g. to
    * open a port with no DCD) is past — ReadTimeout()/Write() manage
    * blocking themselves via poll(). */

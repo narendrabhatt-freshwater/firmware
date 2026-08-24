@@ -14,6 +14,23 @@ if(NOT EXISTS "${CARDLINK_SOURCE_DIR}/include/cardlink/usb/vendor_link.hpp")
   message(FATAL_ERROR "The public USB vendor link is missing")
 endif()
 
+file(READ "${CARDLINK_SOURCE_DIR}/include/cardlink/usb/vendor_link.hpp"
+  vendor_link_api)
+string(REGEX MATCH "[\n\r ](Read|Write|Opened)\\(" legacy_vendor_api
+  "${vendor_link_api}")
+if(legacy_vendor_api)
+  message(FATAL_ERROR
+    "VendorLink must expose only asynchronous BODY OUT submission")
+endif()
+
+file(READ "${CARDLINK_SOURCE_DIR}/include/cardlink/audio/sample_dry.hpp"
+  sample_dry_api)
+string(FIND "${sample_dry_api}" "ApplyVoiceQuery" legacy_vq_api)
+if(NOT legacy_vq_api EQUAL -1)
+  message(FATAL_ERROR
+    "SampleDryMixer must use exact ApplyVoiceStatus credit only")
+endif()
+
 if(NOT EXISTS "${CARDLINK_SOURCE_DIR}/include/cardlink/rs485/controller.hpp")
   message(FATAL_ERROR "The public RS485 controller is missing")
 endif()

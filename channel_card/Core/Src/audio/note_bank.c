@@ -4,10 +4,10 @@
  * @brief   SAMPLE voices: attack RAM + body slots → sample → LPF → env.
  *
  * Attack is an AXI head of committed length (not hold-padded). Body is
- * the USB BODY FIFO. Pitch uses 2-tap linear interpolation (Q16.16). At the join the
- * body playhead is locked to the attack source index so both sides
- * read the same sample. nX > 0 is always a note-on. Playhead changes
- * apply on the I2S sample.
+ * the USB BODY FIFO. Pitch uses 2-tap linear interpolation (Q16.16). At the
+ * join, the body playhead is locked to the attack source index so both sides
+ * read the same sample. nX > 0 is always a note-on. Playhead changes apply on
+ * the I2S sample.
  ******************************************************************************
  */
 
@@ -54,8 +54,6 @@ static uint16_t note_play_alen[NOTE_BANK_VOICES];
 static uint8_t note_body_only[NOTE_BANK_VOICES];
 static NoteBank_Shape_t note_shape = NOTE_SHAPE_SINE;
 static double note_shape_param = 0.5;
-/* 1 = 2-tap linear; 0 = nearest sample (scope A/B). */
-static uint8_t note_interp = 1u;
 static volatile uint32_t note_hold_miss;
 
 #define NOTE_CMD_NONE 0u
@@ -122,15 +120,6 @@ static int32_t NoteBank_InterpAttack(uint16_t wid, uint64_t phase)
   }
   /* Attack heads are ≤ ATTACK_BANK_LEN; Q16.16 index fits in 32 bits. */
   phase_q16 = (phase > 0xffffffffull) ? 0xffffffffu : (uint32_t)phase;
-  if (note_interp == 0u)
-  {
-    uint32_t i = phase_q16 >> 16;
-    if (i >= len)
-    {
-      i = len - 1u;
-    }
-    return ((int32_t)tab[i]) << 16;
-  }
   i0 = phase_q16 >> 16;
   if (i0 >= len)
   {
@@ -157,28 +146,6 @@ static int NoteBank_InterpAttackBody(uint8_t note, uint16_t wid,
   if (out == NULL || attack == NULL || alen == 0u)
   {
     return -1;
-  }
-  if (note_interp == 0u)
-  {
-    if (source_i0 < 0)
-    {
-      source_i0 = 0;
-    }
-    if ((uint32_t)source_i0 < alen)
-    {
-      *out = ((int32_t)attack[source_i0]) << 16;
-      return 0;
-    }
-    {
-      int16_t sample;
-      if (body_i0 < 0 ||
-          StreamRing_GetRel(note, (uint32_t)body_i0, &sample) != 0)
-      {
-        return -1;
-      }
-      *out = (int32_t)sample * 65536;
-      return 0;
-    }
   }
   for (t = 0u; t < 2u; t++)
   {
@@ -225,17 +192,6 @@ static int NoteBank_InterpBody(uint8_t note, int32_t *out)
   {
     StreamRing_ObserveFill(note);
     return -1;
-  }
-  if (note_interp == 0u)
-  {
-    int16_t sample;
-    if (StreamRing_GetRel(note, i0, &sample) != 0)
-    {
-      StreamRing_ObserveFill(note);
-      return -1;
-    }
-    *out = (int32_t)sample * 65536;
-    return 0;
   }
   if (i0 + 1u >= filled)
   {
@@ -540,7 +496,6 @@ void NoteBank_Init(void)
 
   note_shape = NOTE_SHAPE_SINE;
   note_shape_param = 0.5;
-  note_interp = 1u;
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
     note_freq_hz[i] = 0.0;
@@ -705,21 +660,6 @@ double NoteBank_GetShapeParam(void)
   return note_shape_param;
 }
 
-int NoteBank_SetInterp(uint8_t enable)
-{
-  if (enable > 1u)
-  {
-    return -1;
-  }
-  note_interp = enable;
-  return 0;
-}
-
-uint8_t NoteBank_GetInterp(void)
-{
-  return note_interp;
-}
-
 uint32_t NoteBank_HoldCount(void)
 {
   return note_hold_miss;
@@ -760,8 +700,7 @@ uint8_t NoteBank_AnyActive(void)
   return 0u;
 }
 
-void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out,
-                         uint8_t *free_slots)
+void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out)
 {
   uint8_t i;
   uint8_t mask = 0u;
@@ -771,15 +710,10 @@ void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out,
 
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
-    uint8_t free_s = StreamRing_FreeSlots(i);
     uint32_t filled;
     uint32_t inc;
     uint32_t t;
 
-    if (free_slots != NULL)
-    {
-      free_slots[i] = free_s;
-    }
     /* nX posts the audible start to the I2S path. Expose its requested gate
      * immediately so the first vq after the command can authorize BODY
      * during the attack instead of losing a full request round trip. This
@@ -789,11 +723,11 @@ void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out,
       continue;
     }
     mask = (uint8_t)(mask | (uint8_t)(1u << i));
-    if (free_s == 0u)
+    filled = StreamRing_FillLevel(i);
+    if (filled >= STREAM_RING_SAMPLES)
     {
       continue;
     }
-    filled = StreamRing_FillLevel(i);
     inc = note_inc[i];
     if (note_inc_tgt[i] > inc)
     {

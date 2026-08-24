@@ -321,8 +321,7 @@ static const SwitchDef_t switches[] = {
  *   s / p <d> / t <a> — global note-bank shape (sine / pulse duty / tri asym)
  *   al <id> <len>     — CDC attack-head upload (2..ATTACK_BANK_BYTES)
  *   ar <id> <Hz>      — sample root pitch (id = wave 0..255); a — loaded mask
- *   a / vq            — loaded heads per voice / hungriest + free slots
- *   interp [0|1]      — 0 = nearest sample, 1 = 2-tap linear (default)
+ *   a / vq            — loaded heads per voice / hungriest + exact credit
  *   usb               — BODY counters: drop/hold/min/fill/z/sof/rx/bytes/bad
  *   usb 0             — clear those counters, then same reply
  *   en0..enf / en     — envelope: end slope[±k] … release_slope[±k]
@@ -1369,13 +1368,11 @@ static void Console_CmdVoiceQuery(void)
   int n;
   uint8_t mask = 0u;
   uint8_t best = 0xFFu;
-  uint8_t slots[NOTE_BANK_VOICES];
   uint16_t free_samples[NOTE_BANK_VOICES];
   uint16_t last_pack_sequence;
   uint8_t i;
 
-  NoteBank_VoiceQuery(&mask, &best, slots);
-  (void)slots;
+  NoteBank_VoiceQuery(&mask, &best);
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
     free_samples[i] =
@@ -1672,37 +1669,10 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- vq: active-voice mask + per-voice ring fill quarters ---- */
+  /* ---- vq: active-voice mask + exact per-voice free samples ---- */
   if (strcmp(line, "vq") == 0)
   {
     Console_CmdVoiceQuery();
-    return;
-  }
-
-  /* ---- interp [0|1]: nearest-neighbour vs 2-tap linear (scope A/B) ---- */
-  if (strncmp(line, "interp", 6) == 0 && (line[6] == '\0' || line[6] == ' '))
-  {
-    unsigned v = 0u;
-
-    if (line[6] == '\0')
-    {
-      snprintf(b, sizeof b, "ok: interp %u\r\n",
-               (unsigned)NoteBank_GetInterp());
-      RS485_Reply(b);
-      return;
-    }
-    if (sscanf(line + 7, "%u", &v) != 1)
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-    if (v > 1u || NoteBank_SetInterp((uint8_t)v) != 0)
-    {
-      RS485_Reply("err:range\r\n");
-      return;
-    }
-    snprintf(b, sizeof b, "ok: interp %u\r\n", v);
-    RS485_Reply(b);
     return;
   }
 

@@ -48,9 +48,10 @@ unsigned TakeBurst(cardlink::audio::SampleDryMixer &mixer, uint8_t voice)
 void GrantEmpty(cardlink::audio::SampleDryMixer &mixer, uint8_t mask,
                 uint8_t best = 0xFFu)
 {
-  std::array<uint8_t, cardlink::audio::kSampleVoices> slots{};
-  slots.fill(cardlink::audio::kVqSlotEmpty);
-  mixer.ApplyVoiceQuery(mask, best, slots.data());
+  std::array<uint16_t, cardlink::audio::kSampleVoices> free_samples{};
+  free_samples.fill(
+      static_cast<uint16_t>(cardlink::audio::kRingSamples));
+  mixer.ApplyVoiceStatus(mask, best, free_samples.data());
   mixer.ConsumeOutputSamples(0.0);
 }
 
@@ -65,8 +66,8 @@ void RunNoFaultCase(const std::array<double, cardlink::audio::kSampleVoices> &in
   std::array<unsigned, kSampleVoices> ring{};
   std::array<double, kSampleVoices> phase{};
   uint8_t mask = 0u;
-  const double output_frames = 48.0 *
-      cardlink::usb::kStreamStatusNominalPeriodMs;
+  constexpr double kStatusPeriodMs = 1.2;
+  const double output_frames = 48.0 * kStatusPeriodMs;
 
   for (uint8_t v = 0; v < nvoices; ++v) {
     mixer.NoteOn(v, 0, body_root_hz * inc[v]);
@@ -128,7 +129,6 @@ int main()
   using cardlink::audio::kDefaultBodyRootHz;
   using cardlink::audio::kRingSamples;
   using cardlink::audio::kSampleVoices;
-  using cardlink::audio::kVqSlotEmpty;
 
   SampleDryMixer mixer;
   LoadTone(mixer, 0);
@@ -151,18 +151,17 @@ int main()
         "first refill must send the full one-voice grant");
   Check(mixer.WantBurst(0) == 0, "after one refill, wait for vq");
 
-  std::array<uint8_t, kSampleVoices> empty_vq{};
-  empty_vq.fill(kVqSlotEmpty);
-  std::array<uint8_t, kSampleVoices> nearly_empty{};
-  nearly_empty.fill(kVqSlotEmpty);
-  nearly_empty[0] = 14; /* filled 1..512 — playhead can already be at 4 */
-  mixer.ApplyVoiceQuery(0x01, 0, nearly_empty.data());
+  std::array<uint16_t, kSampleVoices> exact_free{};
+  exact_free.fill(static_cast<uint16_t>(kRingSamples));
+  exact_free[0] = static_cast<uint16_t>(kRingSamples - 4u);
+  mixer.ApplyVoiceStatus(0x01, 0, exact_free.data());
   mixer.ConsumeOutputSamples(0.0);
-  Check(mixer.WantBurst(0) == 14u * cardlink::audio::kVqSlotSamples,
-        "slot 14 must refill; 4 samples is a hold, not 5 ms of buffer");
-  Check(TakeBurst(mixer, 0) == 14u * cardlink::audio::kVqSlotSamples,
-        "slot 14 gets its complete safe credit");
-  mixer.ApplyVoiceQuery(0x01, 0, empty_vq.data());
+  Check(mixer.WantBurst(0) == kBodyBurstMax,
+        "a four-sample fill must request a maximum rebuild burst");
+  Check(TakeBurst(mixer, 0) == kBodyBurstMax,
+        "near-empty status must use the bounded exact credit");
+  exact_free[0] = static_cast<uint16_t>(kRingSamples);
+  mixer.ApplyVoiceStatus(0x01, 0, exact_free.data());
   mixer.ConsumeOutputSamples(0.0);
   for (unsigned i = 0; i < 5u; ++i) {
     Check(mixer.WantBurst(0) == kBodyBurstMax,
@@ -171,33 +170,28 @@ int main()
           "fresh vq refill must stay within the per-voice burst cap");
     Check(mixer.WantBurst(0) == 0,
           "one fresh vq must never permit a second refill");
-    mixer.ApplyVoiceQuery(0x01, 0, empty_vq.data());
+    mixer.ApplyVoiceStatus(0x01, 0, exact_free.data());
     mixer.ConsumeOutputSamples(0.0);
   }
-  std::array<uint8_t, kSampleVoices> fuller_vq{};
-  fuller_vq.fill(kVqSlotEmpty);
-  fuller_vq[0] = 10;
-  mixer.ApplyVoiceQuery(0x01, 0, fuller_vq.data());
+  exact_free[0] = 2560u;
+  mixer.ApplyVoiceStatus(0x01, 0, exact_free.data());
   mixer.ConsumeOutputSamples(0.0);
-  Check(TakeBurst(mixer, 0) == 10u * cardlink::audio::kVqSlotSamples,
-        "fresh fuller-ring vq must still permit exactly one refill");
-  mixer.ApplyVoiceQuery(0x01, 0, nearly_empty.data());
+  Check(TakeBurst(mixer, 0) == 2560u,
+        "fresh status must permit one exact refill");
+  exact_free[0] = static_cast<uint16_t>(kRingSamples - 4u);
+  mixer.ApplyVoiceStatus(0x01, 0, exact_free.data());
   mixer.ConsumeOutputSamples(0.0);
-  Check(mixer.WantBurst(0) == 14u * cardlink::audio::kVqSlotSamples,
-        "vq must reconcile an overestimated host fill back to its card bin");
-  Check(TakeBurst(mixer, 0) == 14u * cardlink::audio::kVqSlotSamples,
-        "reconciled vq must rebuild the real ring reservoir");
+  Check(mixer.WantBurst(0) == kBodyBurstMax,
+        "status must reconcile an overestimated host fill");
+  Check(TakeBurst(mixer, 0) == kBodyBurstMax,
+        "reconciled status must rebuild the ring reservoir");
   std::array<uint16_t, kSampleVoices> unreflected{};
   unreflected[0] = 400u;
-  std::array<uint8_t, kSampleVoices> two_slots{};
-  two_slots.fill(kVqSlotEmpty);
-  two_slots[0] = 2u;
-  mixer.ApplyVoiceQuery(0x01, 0, two_slots.data(), unreflected.data());
+  exact_free[0] = 512u;
+  mixer.ApplyVoiceStatus(0x01, 0, exact_free.data(), unreflected.data());
   mixer.ConsumeOutputSamples(0.0);
   Check(mixer.WantBurst(0) == 0u,
         "small safe credit must coalesce while the ring is healthy");
-  std::array<uint16_t, kSampleVoices> exact_free{};
-  exact_free.fill(static_cast<uint16_t>(kRingSamples));
   exact_free[0] = 100u;
   unreflected[0] = 40u;
   mixer.ApplyVoiceStatus(0x01, 0, exact_free.data(), unreflected.data());
@@ -222,43 +216,41 @@ int main()
   mixer.NoteOn(0, 0, kDefaultBodyRootHz);
   mixer.ConsumeOutputSamples(0.0);
   GrantEmpty(mixer, 0x01, 0);
-  Check(TakeBurst(mixer, 0) == kBodyBurstMax, "SOF after slot-14 test");
+  Check(TakeBurst(mixer, 0) == kBodyBurstMax, "SOF after exact-credit test");
 
   mixer.ConsumeOutputSamples(2000.0);
   Check(mixer.WantBurst(0) == 0, "wall-clock must not send without a new vq");
 
-  mixer.ApplyVoiceQuery(0x01, 0, empty_vq.data());
+  exact_free.fill(static_cast<uint16_t>(kRingSamples));
+  mixer.ApplyVoiceStatus(0x01, 0, exact_free.data());
   mixer.ConsumeOutputSamples(0.0);
   Check(mixer.WantBurst(0) == kBodyBurstMax,
         "empty vq must ask for one burst");
   Check(TakeBurst(mixer, 0) == kBodyBurstMax, "one burst per vq");
   Check(mixer.WantBurst(0) == 0, "already served this vq");
 
-  std::array<uint8_t, kSampleVoices> slots{};
-  slots.fill(kVqSlotEmpty);
-  slots[0] = 13; /* min fill 513 — last bin before the hold zone */
-  mixer.ApplyVoiceQuery(0x01, 0, slots.data());
+  exact_free[0] = 3328u;
+  mixer.ApplyVoiceStatus(0x01, 0, exact_free.data());
   mixer.ConsumeOutputSamples(0.0);
-  Check(mixer.WantBurst(0) == 13u * cardlink::audio::kVqSlotSamples,
-        "slot 13 must refill; slot 14 is already 1..512");
-  Check(TakeBurst(mixer, 0) == 13u * cardlink::audio::kVqSlotSamples,
-        "slot 13 gets its complete safe credit");
+  Check(mixer.WantBurst(0) == 3328u,
+        "exact credit below the burst cap must be preserved");
+  Check(TakeBurst(mixer, 0) == 3328u,
+        "refill must match the exact safe credit");
 
-  slots.fill(kVqSlotEmpty);
-  slots[0] = 12; /* 3072 samples of safe free-space permission */
-  mixer.ApplyVoiceQuery(0x01, 0, slots.data());
+  exact_free[0] = 3072u;
+  mixer.ApplyVoiceStatus(0x01, 0, exact_free.data());
   mixer.ConsumeOutputSamples(0.0);
-  Check(mixer.WantBurst(0) == 12u * cardlink::audio::kVqSlotSamples,
-        "any fresh vq free-space grant must top up the jitter ring");
+  Check(mixer.WantBurst(0) == 3072u,
+        "any fresh free-space grant must top up the jitter ring");
 
-  std::array<uint8_t, kSampleVoices> full_vq{};
-  full_vq.fill(0);
-  mixer.ApplyVoiceQuery(0x01, 0, full_vq.data());
+  exact_free[0] = 0u;
+  mixer.ApplyVoiceStatus(0x01, 0, exact_free.data());
   mixer.ConsumeOutputSamples(0.0);
-  Check(mixer.WantBurst(0) == 0, "vq free-slot 0 is a hard stop");
+  Check(mixer.WantBurst(0) == 0, "zero free-space credit is a hard stop");
 
   mixer.ConsumeOutputSamples(2000.0);
-  mixer.ApplyVoiceQuery(0x01, 0, empty_vq.data());
+  exact_free[0] = static_cast<uint16_t>(kRingSamples);
+  mixer.ApplyVoiceStatus(0x01, 0, exact_free.data());
   mixer.ConsumeOutputSamples(0.0);
   Check(mixer.WantBurst(0) == kBodyBurstMax,
         "a later empty vq must send again");
@@ -271,14 +263,13 @@ int main()
   GrantEmpty(mixer, 0x01, 0);
   Check(TakeBurst(mixer, 0) == kBodyBurstMax,
         "C3 gets one permitted SOF burst");
-  slots.fill(kVqSlotEmpty);
-  slots[0] = 1; /* 256 samples: below the per-voice packing threshold */
-  mixer.ApplyVoiceQuery(0x01, 0, slots.data());
+  exact_free[0] = 256u;
+  mixer.ApplyVoiceStatus(0x01, 0, exact_free.data());
   mixer.ConsumeOutputSamples(0.0);
   Check(mixer.WantBurst(0) == 0u,
         "healthy low note must coalesce sub-threshold fresh credit");
-  slots[0] = 2; /* 512 samples: enough to amortize one BODY meta */
-  mixer.ApplyVoiceQuery(0x01, 0, slots.data());
+  exact_free[0] = 512u;
+  mixer.ApplyVoiceStatus(0x01, 0, exact_free.data());
   mixer.ConsumeOutputSamples(0.0);
   Check(mixer.WantBurst(0) == 512u,
         "low note must serve coalesced fresh credit exactly");
@@ -299,8 +290,8 @@ int main()
   Check(mixer.HungriestWant() < kSampleVoices, "two empty notes both need data");
   Check(TakeBurst(mixer, 0) == kBodyBurstMax, "voice 0 refill");
   Check(mixer.HungriestWant() == 1, "after voice 0 prefill, voice 1 is hungriest");
-  slots.fill(kVqSlotEmpty);
-  mixer.ApplyVoiceQuery(0x03, 1, slots.data());
+  exact_free.fill(static_cast<uint16_t>(kRingSamples));
+  mixer.ApplyVoiceStatus(0x03, 1, exact_free.data());
   mixer.ConsumeOutputSamples(0.0);
   Check(mixer.HungriestWant() == 1, "card best must win when it wants data");
 
@@ -316,17 +307,6 @@ int main()
         "five-voice PACK must use all physical wire room");
   Check(cardlink::usb::PackMaxSamples(8) == 4700u,
         "eight-voice PACK must use all physical wire room");
-  Check(cardlink::usb::StreamSustainableSamplesPerMs(3) < 3u * 4u * 48u,
-        "three C6 voices from a C4 body must be reported over budget");
-  Check(cardlink::usb::StreamSustainableSamplesPerMs(3) >= 3u * 2u * 48u,
-        "three C6 voices from a C5 body must fit the service deadline");
-  Check(cardlink::usb::StreamSustainableSamplesPerMs(8) >= 8u * 48u,
-        "eight C4 voices must fit the one-frame service deadline");
-  Check(cardlink::usb::StreamSustainableSamplesPerMs(3) >= 437u,
-        "A5+F5+G5 must fit the measured three-voice capacity");
-  Check(cardlink::usb::StreamSustainableSamplesPerMs(8) < 437u,
-        "the same aggregate rate must be over the eight-voice capacity");
-
   mixer.NoteOn(0, 0, kDefaultBodyRootHz * 2.0);
   mixer.NoteOn(1, 0, kDefaultBodyRootHz * 2.0);
   mixer.NoteOn(2, 0, kDefaultBodyRootHz * 2.0);

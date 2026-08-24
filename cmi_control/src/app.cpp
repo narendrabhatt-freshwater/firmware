@@ -195,8 +195,6 @@ namespace
     }
   }
 
-  /** Maximum 9472-byte packed OUT wire room. */
-  constexpr double kUsbBodySampPerMsWire = 472.8;
   double BodyIncOf(double freq_hz, double root_hz)
   {
     double inc = 1.0;
@@ -218,12 +216,10 @@ namespace
   /** Sum sounding voices: 48 × (note Hz / root Hz) samples/ms. */
   void SumUsbBodyLoad(const cardlink::midi::VoiceBank &bank,
                       const cardlink::audio::SampleDryMixer &mixer,
-                      double &c4_units, double &samp_ms,
-                      unsigned &active_voices)
+                      double &c4_units, double &samp_ms)
   {
     c4_units = 0.0;
     samp_ms = 0.0;
-    active_voices = 0u;
     const double rate_ms =
         static_cast<double>(cardlink::audio::kSampleRateHz) / 1000.0;
     const auto &slots = bank.Slots();
@@ -247,7 +243,6 @@ namespace
       const double inc = BodyIncOf(s.freq_hz, root);
       c4_units += inc;
       samp_ms += rate_ms * inc;
-      ++active_voices;
     }
   }
 
@@ -2233,62 +2228,20 @@ void App::DrawPerform()
 
       double c4_units = 0.0;
       double samp_ms = 0.0;
-      unsigned active_voices = 0u;
-      SumUsbBodyLoad(bank, samples.Mixer(), c4_units, samp_ms,
-                     active_voices);
-      const double body_capacity = static_cast<double>(
-          cardlink::usb::StreamSustainableSamplesPerMs(active_voices));
-      const bool over = samp_ms > body_capacity;
-      const ImVec4 load_col = over ? kPalette.danger : kPalette.accent;
+      SumUsbBodyLoad(bank, samples.Mixer(), c4_units, samp_ms);
       ImGui::SetCursorPosX(S(12.f));
       ImGui::Dummy(ImVec2(1.f, S(6.f)));
       ImGui::SetCursorPosX(S(12.f));
       Mono("USB BODY", kPalette.text_dim, fs);
       char load[48];
-      std::snprintf(load, sizeof(load), "%.0f/%.0f /ms", samp_ms,
-                    body_capacity);
+      std::snprintf(load, sizeof(load), "%.0f samples/ms", samp_ms);
       ImGui::SetCursorPosX(S(12.f));
-      Mono(load, load_col, fm);
+      Mono(load, kPalette.accent, fm);
       char units[48];
-      std::snprintf(units, sizeof(units), "%.2f\u00D7C4  %s", c4_units,
-                    over ? "OVER" : "OK");
+      std::snprintf(units, sizeof(units), "%.2f\u00D7 C4 source rate",
+                    c4_units);
       ImGui::SetCursorPosX(S(12.f));
-      Mono(units, over ? kPalette.danger : kPalette.text_dim, fs);
-      {
-        const float bar_w = wsz.x - S(24.f);
-        const float bar_h = S(4.f);
-        ImGui::SetCursorPosX(S(12.f));
-        ImGui::InvisibleButton("##usb_body_load", ImVec2(bar_w, bar_h + S(8.f)));
-        const ImVec2 bp0 = ImGui::GetItemRectMin();
-        const ImVec2 bp1(bp0.x + bar_w, bp0.y + bar_h);
-        const float frac = static_cast<float>(
-            std::min(1.0, samp_ms / body_capacity));
-        dl->AddRectFilled(bp0, bp1, fw::theme::U32(kPalette.bg), S(1.f));
-        if (frac > 0.f)
-        {
-          dl->AddRectFilled(bp0,
-                            ImVec2(bp0.x + bar_w * frac, bp1.y),
-                            fw::theme::U32(load_col), S(1.f));
-        }
-        dl->AddRect(bp0, bp1, fw::theme::U32(kPalette.border), S(1.f));
-        if (ImGui::IsItemHovered())
-        {
-          ImGui::BeginTooltip();
-          ImGui::PushFont(fs);
-          ImGui::Text(
-              "Each voice consumes 48 \u00D7 (note Hz / root Hz) samples/ms.\n"
-              "BODY is USB vendor bulk OUT; continuous RS-485 vq polling\n"
-              "supplies exact ring credit and the applied PACK sequence.\n"
-              "Each reply can grant one async PACK of up to 2048 samples.\n"
-              "Wire room is %.0f samples/ms after one voice meta. Measured\n"
-              "safe budget is 437 samples/ms for 1-3 voices and 420 for 4-8.\n"
-              "(5\u00D7C5 = 480: over). 3\u00D7C6 = 576: over. 8\u00D7C4 = 384.\n"
-              "A5+F5+G5 from the supplied 260Hz root = 436: OK.",
-              kUsbBodySampPerMsWire);
-          ImGui::PopFont();
-          ImGui::EndTooltip();
-        }
-      }
+      Mono(units, kPalette.text_dim, fs);
     }
   }
   ImGui::EndChild();

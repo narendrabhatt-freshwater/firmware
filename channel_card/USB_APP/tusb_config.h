@@ -4,13 +4,9 @@
  *   - Vendor bulk BODY stream (host → per-voice rings), fire-and-forget
  *   - CDC-ACM console + attack-head binary load
  *
- * FS bulk MPS is 64. CFG_TUD_VENDOR_EPSIZE is the DCD OUT buffer so one
- * RS-485-vq-permitted refill can span 148 packets. This deliberately
- * amortizes the measured host/hub round-trip. The vendor IN endpoint remains
- * descriptor-compatible but idle; BODY traffic is vendor OUT only.
- *
- * Do not put an isochronous endpoint on the vendor interface: macOS
- * IOUSBHostFamily panics on claim_interface / ISO submit for that class.
+ * FS bulk MPS is 64. CFG_TUD_VENDOR_EPSIZE is the DCD OUT buffer, allowing
+ * one RS-485-vq-permitted refill to span 148 packets. The vendor IN endpoint
+ * remains descriptor-compatible but idle; BODY traffic is vendor OUT only.
  */
 
 #ifndef _TUSB_CONFIG_H_

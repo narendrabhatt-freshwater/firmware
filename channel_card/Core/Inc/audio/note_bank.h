@@ -49,14 +49,6 @@ extern "C"
   NoteBank_Shape_t NoteBank_GetShape(void);
   double NoteBank_GetShapeParam(void);
 
-  /**
-   * @brief 2-tap linear interpolation (1, default) or nearest-neighbour (0).
-   *        Diagnostic: NN only needs one FIFO sample, so a still-broken
-   *        E3/F3 is not the interpolator / lookahead hold.
-   */
-  int NoteBank_SetInterp(uint8_t enable);
-  uint8_t NoteBank_GetInterp(void);
-
   /** Body playhead returned the held sample (FIFO miss in sustain). */
   uint32_t NoteBank_HoldCount(void);
   void NoteBank_HoldCountClear(void);
@@ -66,12 +58,8 @@ extern "C"
   uint8_t NoteBank_AnyActive(void);
   int32_t NoteBank_NextSample(void);
 
-  /**
-   * @brief vq payload: active mask, hungriest voice (0xFF if none), free slots
-   *        0..8 per voice.
-   */
-  void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out,
-                           uint8_t *free_slots);
+  /** Active mask and hungriest voice (0xFF if none). */
+  void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out);
 
   /** New BODY session: same as note-on (FIFO was wiped). */
 
