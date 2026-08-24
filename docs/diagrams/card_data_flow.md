@@ -11,8 +11,8 @@ If this document and the firmware disagree, trust the firmware.
 ## 1. Host interfaces (both cards)
 
 One RS485 multi-drop bus (`c:` / `e:` / `*:`). USB is per-card: Channel
-is Full-Speed **UAC2 BODY OUT** (10-channel signed int16 at 48 kHz,
-960 B / 1 ms) plus CDC. Sequential
+is Full-Speed **UAC2 BODY OUT** (10-channel signed int16 carrier at 51 kHz,
+1020 B / 1 ms; BODY/DAC remain 48 kHz) plus CDC. Sequential
 RS485 `vq` request/reply cycles every 5 ms provide exact refill credit and PACK ack;
 Effect is a Full-Speed **UAC2 microphone** (mono int32 @ 96 kHz) plus CDC.
 
@@ -21,7 +21,7 @@ flowchart TB
   subgraph host [Host]
     RS485[RS485 921600 8N1]
     CDC[USB CDC ACM]
-    BodyOut[UAC2 OUT 10ch int16 48 kHz]
+    BodyOut[UAC2 OUT 10ch int16 51 kHz carrier]
     UacIn[UAC2 IN mono int32 96 kHz]
   end
 
@@ -126,7 +126,7 @@ USB carries BODY PACKs OUT and does not publish status.
 Need-score is remaining play time: `filled / max(phase_inc, target_inc)`.
 The host shares one PACK by the wanting voices' source-consumption rates.
 At most one new logical PACK (or retry of the same unacknowledged PACK) follows
-each fresh `vq`; its complete CRC-protected wire image is ≤ 9600 B inside the
+each fresh `vq`; its complete CRC-protected wire image is ≤ 10200 B inside the
 continuous 16-bit UAC stream.
 Up to three sequence-ordered PACKs may await acknowledgement; their samples
 are all subtracted from later exact-credit replies, so this keeps UAC busy

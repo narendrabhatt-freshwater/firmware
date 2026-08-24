@@ -315,11 +315,11 @@ int main()
 
   Check(cardlink::usb::PackMaxSamples(1) == kBodyBurstMax,
         "one-voice PACK must use its full BODY burst cap");
-  Check(cardlink::usb::PackMaxSamples(3) == 4782u,
+  Check(cardlink::usb::PackMaxSamples(3) == 5082u,
         "three-voice PACK must use all physical wire room");
-  Check(cardlink::usb::PackMaxSamples(5) == 4774u,
+  Check(cardlink::usb::PackMaxSamples(5) == 5074u,
         "five-voice PACK must use all physical wire room");
-  Check(cardlink::usb::PackMaxSamples(8) == 4762u,
+  Check(cardlink::usb::PackMaxSamples(8) == 5062u,
         "eight-voice PACK must use all physical wire room");
   Check(cardlink::usb::NextPackSequence(0xFFFEu) == 0u,
         "PACK sequence must reserve 0xffff as the no-ack sentinel");
@@ -376,7 +376,7 @@ int main()
     uint8_t order[kSampleVoices];
     const unsigned nwant = mixer.WantingVoices(order);
     Check(nwant == 5, "five C5 notes must all want the SOF burst");
-    Check(cardlink::usb::PackMaxSamples(nwant) == 4774u,
+    Check(cardlink::usb::PackMaxSamples(nwant) == 5074u,
           "16-bit UAC PACK capacity must include its framing cost");
     unsigned grants[kSampleVoices]{};
     const unsigned budget = cardlink::usb::PackMaxSamples(nwant);
@@ -407,10 +407,11 @@ int main()
     for (unsigned i = 0; i < nwant; ++i) {
       by_voice[order[i]] = grants[i];
     }
-    Check(by_voice[0] >= 683u && by_voice[0] <= 684u &&
-              by_voice[1] >= 1366u && by_voice[1] <= 1367u &&
-              by_voice[2] >= 2732u && by_voice[2] <= 2733u &&
-              by_voice[0] + by_voice[1] + by_voice[2] == 4782u,
+    Check(std::abs(static_cast<int>(2u * by_voice[0]) -
+                       static_cast<int>(by_voice[1])) <= 2 &&
+              std::abs(static_cast<int>(2u * by_voice[1]) -
+                       static_cast<int>(by_voice[2])) <= 2 &&
+              by_voice[0] + by_voice[1] + by_voice[2] == 5082u,
           "C4+C5+C6 grants must follow their 1:2:4 consumption rates");
   }
 
@@ -434,9 +435,9 @@ int main()
     for (unsigned i = 0; i < nwant; ++i) {
       by_voice[order[i]] = grants[i];
     }
-    Check(by_voice[0] == 1594u && by_voice[1] == 1594u &&
-              by_voice[2] == 1594u &&
-              by_voice[0] + by_voice[1] + by_voice[2] == 4782u,
+    Check(by_voice[0] == 1694u && by_voice[1] == 1694u &&
+              by_voice[2] == 1694u &&
+              by_voice[0] + by_voice[1] + by_voice[2] == 5082u,
           "three C6 grants must fairly use the catch-up PACK");
     for (unsigned i = 0; i < nwant; ++i) {
       const uint8_t v = order[i];

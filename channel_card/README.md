@@ -185,9 +185,10 @@ Hand-written modules live under `Core/Src/<domain>/` (and matching
 This file holds the playback path as measured on the board. Notable
 parts, all commented in-place:
 
-- **BODY stream** is class-compliant UAC2 OUT: 10-channel signed int16 at
-  48 kHz (960 bytes/ms). Each packet contributes 952 packed BODY bytes after
-  its loss-detection envelope; exact free-space `vq` permission arrives every
+- **BODY stream** is class-compliant synchronous UAC2 OUT: a 10-channel
+  signed-int16 51 kHz carrier (1020 bytes/ms) for 48 kHz BODY/DAC data. PACKs
+  form one continuous CRC32-protected byte stream; exact free-space `vq`
+  permission arrives every
   5 ms. A primed BODY underrun increments `hold`; it never disables USB,
   RS485, or the audio interrupts, and a later authorized refill can recover.
   CH1 I2S is always the

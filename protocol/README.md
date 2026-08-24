@@ -27,7 +27,7 @@ cmake --install protocol/build --prefix <prefix>
 ```
 
 After flashing the Channel Card, the hardware smoke test opens and closes the
-10-channel 48 kHz signed-int16 UAC stream once before reopening it for the
+10-channel 51 kHz signed-int16 UAC carrier once before reopening it for the
 measurement. This catches the historical second-open failure as well as BODY
 stream errors:
 

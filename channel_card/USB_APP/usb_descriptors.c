@@ -1,17 +1,18 @@
 /* USB descriptors — Channel Card composite
- *   ITF0/1: UAC2 output (10ch int16, 48 kHz) + feedback
+ *   ITF0/1: synchronous UAC2 output (10ch int16, 51 kHz)
  *   ITF2/3: CDC-ACM console
  *
- * PID 0x4029 identifies the control-free, maximum-payload UAC revision.
+ * PID 0x402F identifies the fixed-51 kHz maximum-payload UAC revision.
  */
 #include "tusb.h"
 #include "usb_stream.h"
 
 #include <string.h>
 
-#define TUD_AUDIO_SPEAKER_10CH_FB_DESC_LEN                                 \
+#define TUD_AUDIO_SPEAKER_10CH_SYNC_DESC_LEN                               \
   (TUD_AUDIO_SPEAKER_MONO_FB_DESC_LEN -                                   \
-   (TUD_AUDIO_DESC_FEATURE_UNIT_ONE_CHANNEL_LEN))
+   (TUD_AUDIO_DESC_FEATURE_UNIT_ONE_CHANNEL_LEN) -                         \
+   TUD_AUDIO_DESC_STD_AS_ISO_FB_EP_LEN)
 
 tusb_desc_device_t const desc_device = {
     .bLength = sizeof(tusb_desc_device_t),
@@ -44,10 +45,9 @@ enum {
 };
 
 #define CONFIG_TOTAL_LEN                                                   \
-  (TUD_CONFIG_DESC_LEN + TUD_AUDIO_SPEAKER_10CH_FB_DESC_LEN +              \
+  (TUD_CONFIG_DESC_LEN + TUD_AUDIO_SPEAKER_10CH_SYNC_DESC_LEN +            \
    TUD_CDC_DESC_LEN)
 #define EPNUM_AUDIO_OUT 0x01
-#define EPNUM_AUDIO_FB 0x81
 #define EPNUM_CDC_NOTIF 0x82
 #define EPNUM_CDC_OUT 0x03
 #define EPNUM_CDC_IN 0x83
@@ -70,7 +70,7 @@ uint8_t const desc_configuration[] = {
     TUD_AUDIO_DESC_OUTPUT_TERM(0x03, AUDIO_TERM_TYPE_OUT_DESKTOP_SPEAKER, 0x01,
                                0x01, 0x04, 0x0000, 0x00),
     TUD_AUDIO_DESC_STD_AS_INT((uint8_t)(_SPK_ITF + 1), 0x00, 0x00, 0x00),
-    TUD_AUDIO_DESC_STD_AS_INT((uint8_t)(_SPK_ITF + 1), 0x01, 0x02, 0x00),
+    TUD_AUDIO_DESC_STD_AS_INT((uint8_t)(_SPK_ITF + 1), 0x01, 0x01, 0x00),
     TUD_AUDIO_DESC_CS_AS_INT(0x01, AUDIO_CTRL_NONE, AUDIO_FORMAT_TYPE_I,
                              AUDIO_DATA_FORMAT_TYPE_I_PCM, 0x0A,
                              AUDIO_CHANNEL_CONFIG_NON_PREDEFINED, 0x00),
@@ -78,13 +78,12 @@ uint8_t const desc_configuration[] = {
                                  CFG_TUD_AUDIO_FUNC_1_RESOLUTION_RX),
     TUD_AUDIO_DESC_STD_AS_ISO_EP(
         EPNUM_AUDIO_OUT,
-        (uint8_t)(TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ASYNCHRONOUS |
+        (uint8_t)(TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_SYNCHRONOUS |
                   TUSB_ISO_EP_ATT_DATA),
         CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX, 0x01),
     TUD_AUDIO_DESC_CS_AS_ISO_EP(
         AUDIO_CS_AS_ISO_DATA_EP_ATT_NON_MAX_PACKETS_OK, AUDIO_CTRL_NONE,
         AUDIO_CS_AS_ISO_DATA_EP_LOCK_DELAY_UNIT_UNDEFINED, 0x0000),
-    TUD_AUDIO_DESC_STD_AS_ISO_FB_EP(EPNUM_AUDIO_FB, 4, 1),
 #undef _SPK_ITF
     TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 5, EPNUM_CDC_NOTIF, 8, EPNUM_CDC_OUT,
                        EPNUM_CDC_IN, 64),
@@ -92,13 +91,14 @@ uint8_t const desc_configuration[] = {
 
 TU_VERIFY_STATIC(sizeof(desc_configuration) == CONFIG_TOTAL_LEN,
                  "CONFIG_TOTAL_LEN mismatch");
-TU_VERIFY_STATIC(TUD_AUDIO_SPEAKER_10CH_FB_DESC_LEN ==
+TU_VERIFY_STATIC(TUD_AUDIO_SPEAKER_10CH_SYNC_DESC_LEN ==
                      CFG_TUD_AUDIO_FUNC_1_DESC_LEN,
                  "audio desc mismatch");
 TU_VERIFY_STATIC(USB_STREAM_UAC_PACKET_BYTES ==
                      CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX *
-                         CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX * 48,
-                 "nominal UAC packet must be 960 bytes");
+                         CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX *
+                         USB_STREAM_UAC_FRAMES_PER_MS,
+                 "nominal UAC packet must be 1020 bytes");
 TU_VERIFY_STATIC(CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX >=
                      USB_STREAM_UAC_PACKET_BYTES,
                  "UAC endpoint must hold the nominal packet");
@@ -124,7 +124,7 @@ char const *string_desc_arr[] = {
     (const char[]){0x09, 0x04},
     "Freshwater",
     "Channel Card Audio",
-    "CHCARD-UAC-003",
+    "CHCARD-UAC-009",
     "Channel Card BODY",
     "Channel Card Console",
 };

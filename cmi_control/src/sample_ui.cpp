@@ -573,7 +573,7 @@ void DrawSamplePage(App &app)
 
     ImGui::SameLine(0.f, S(10.f));
     ImGui::SetCursorPosY(mid_y + S(5.f));
-    MonoText("48 kHz · UAC2 int16", kPalette.muted, fs);
+    MonoText("51 kHz UAC · 48 kHz BODY", kPalette.muted, fs);
   }
   ImGui::EndChild();
   ImGui::PopStyleVar();

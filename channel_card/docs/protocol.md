@@ -352,7 +352,7 @@ Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 
 | Interface                    | Role                                                                |
 | ---------------------------- | ------------------------------------------------------------------- |
-| **UAC2 output** (ITF0/1)     | 10-channel signed 16-bit, 48 kHz; its PCM bytes carry packed BODY data (960 B / 1 ms). |
+| **UAC2 output** (ITF0/1)     | 10-channel signed 16-bit, synchronous 51 kHz carrier; its PCM bytes carry packed 48 kHz BODY data (1020 B / 1 ms). |
 | **CDC ACM** (serial)         | Same ASCII console as RS485, plus binary attack-head upload (`al`). |
 
 The Channel device is class-compliant UAC2 so the operating system owns the
@@ -377,18 +377,19 @@ Effect Card still has CDC and a UAC2 microphone (mono, 32-bit, 96 kHz).
 
 Little-endian. BODY has no per-packet ACK. `type` `0x03` PACK is the live
 OUT format: one header plus N BODY metas so several voices share one
-transfer. The 960-byte nominal UAC packets form one continuous byte stream;
+transfer. The 1020-byte UAC packets form one continuous byte stream;
 there is no per-packet envelope or reserved channel. A PACK plus its CRC may
-occupy up to 9600 bytes (10 ms of maximum-rate UAC wire time).
+occupy up to 10200 bytes (10 ms of maximum-rate UAC wire time).
 Sequential RS485 `vq` polling supplies exact free space and the last applied
 PACK sequence every 5 ms. Each voice remains bounded by exact credit.
 
 ```text
-UAC stream: 48 kHz × 10 channels × int16 = 960000 bytes/s
+UAC carrier: 51 kHz × 10 channels × int16 = 1020000 bytes/s
+BODY/DAC:    48 kHz (pitch and playback rate are unchanged)
 idle          zero int16 words
-PACK wire     header + BODY records + trailing CRC32, ≤ 9600 bytes
+PACK wire     header + BODY records + trailing CRC32, ≤ 10200 bytes
 
-PACK (type 0x03), logical bytes before CRC ≤ 9596
+PACK (type 0x03), logical bytes before CRC ≤ 10196
 offset  size  field
 0       1     magic0 = 0x46  'F'
 1       1     magic1 = 0x57  'W'
@@ -409,15 +410,18 @@ offset  size  field
   final 4 bytes  IEEE CRC32 of the complete header + BODY records
 ```
 
-VID `0xCafe`, PID `0x4029`. The host opens the 10-channel UAC output through
+VID `0xCafe`, PID `0x402F`. The host opens the 10-channel UAC output through
 RtAudio/CoreAudio; CDC stays a serial port.
 
-After framing, an eight-voice PACK holds 4762 int16 BODY samples per 10 ms
-(476.2 ksample/s aggregate). Workloads above that exact source-consumption
-budget cannot be lossless on this 48 kHz, 10-channel, 16-bit Full-Speed pipe;
+After framing, an eight-voice PACK holds 5062 int16 BODY samples per 10 ms
+(506.2 ksample/s aggregate). Workloads above that single-PACK source-consumption
+ceiling cannot be lossless on this 51 kHz, 10-channel, 16-bit Full-Speed carrier;
 `hold` then records the missing playback samples while control remains alive.
+With the 8 ms prediction horizon, repeated eight-voice framing gives a
+continuous theoretical ceiling of about 505.25 ksample/s; hardware smoke has
+passed 500 ksample/s with zero hold, drop, bad PACKs, late replies, or xruns.
 RS485 `vq` every 5 ms is the sole refill authority and lifecycle monitor;
-USB vendor traffic carries BODY PACKs OUT only.
+The UAC OUT stream carries BODY PACKs only.
 
 ```text
 RS485 vq reply, fixed 26-byte binary frame

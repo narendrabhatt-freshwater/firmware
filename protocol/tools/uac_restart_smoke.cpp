@@ -28,7 +28,7 @@ int main(int argc, char **argv)
       return EXIT_FAILURE;
     }
     std::cout << "UAC open " << (cycle + 1u) << '/' << cycles
-              << ": 10ch 48k signed-int16\n";
+              << ": 10ch 51k signed-int16\n";
     std::this_thread::sleep_for(std::chrono::milliseconds(run_ms));
     bulk.Stop();
     std::this_thread::sleep_for(std::chrono::milliseconds(100));

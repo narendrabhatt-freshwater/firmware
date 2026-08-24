@@ -511,15 +511,8 @@ void USB_App_TaskFromIsr(void)
 
 void USB_App_Task(void)
 {
-  static uint32_t feedback_tick;
   USB_App_DrainUac();
   CDC_Console_Poll();
-  if ((HAL_GetTick() - feedback_tick) >= 8u)
-  {
-    feedback_tick = HAL_GetTick();
-    if (tud_audio_mounted())
-      (void)tud_audio_fb_set(48u << 16);
-  }
 }
 
 uint16_t USB_App_LastPackSequence(void) { return s_last_pack_sequence; }
@@ -621,7 +614,6 @@ bool tud_audio_set_itf_cb(uint8_t rhport,
   {
     s_last_pack_sequence = 0xFFFFu;
     Audio_Bridge_Start();
-    tud_audio_n_fb_set(0, 48u << 16);
   }
   return true;
 }
@@ -634,14 +626,6 @@ bool tud_audio_set_itf_close_EP_cb(uint8_t rhport,
   s_uac_audio_frames = 0u;
   Audio_Bridge_StreamStop();
   return true;
-}
-
-void tud_audio_feedback_params_cb(uint8_t func_id, uint8_t alt_itf,
-                                  audio_feedback_params_t *params)
-{
-  (void)func_id; (void)alt_itf;
-  params->method = AUDIO_FEEDBACK_METHOD_DISABLED;
-  params->sample_freq = CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE;
 }
 
 bool tud_audio_rx_done_post_read_cb(uint8_t rhport, uint16_t nbytes,

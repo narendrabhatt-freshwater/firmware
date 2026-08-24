@@ -146,6 +146,7 @@ struct SampleBulkOut::Impl {
   std::thread th;
   std::atomic<bool> run{false};
   std::atomic<uint32_t> xruns{0u};
+  std::atomic<uint64_t> render_frames{0u};
   std::mutex mu;
   std::mutex mixer_mu;
   std::condition_variable cv;
@@ -174,6 +175,7 @@ struct SampleBulkOut::Impl {
 
   void Render(void *output, unsigned nframes, RtAudioStreamStatus status)
   {
+    render_frames.fetch_add(nframes, std::memory_order_relaxed);
     if (status != 0u) {
       xruns.fetch_add(1u, std::memory_order_relaxed);
     }
@@ -236,6 +238,11 @@ bool SampleBulkOut::Running() const
 uint32_t SampleBulkOut::XrunCount() const
 {
   return impl_ ? impl_->xruns.load(std::memory_order_relaxed) : 0u;
+}
+
+uint64_t SampleBulkOut::RenderFrameCount() const
+{
+  return impl_ ? impl_->render_frames.load(std::memory_order_relaxed) : 0u;
 }
 
 void SampleBulkOut::Stop()
@@ -310,6 +317,7 @@ bool SampleBulkOut::Start(std::string &err)
     impl_->next_pack_sequence = 0u;
   }
   impl_->xruns.store(0u, std::memory_order_relaxed);
+  impl_->render_frames.store(0u, std::memory_order_relaxed);
   unsigned device = 0u;
   bool found = false;
   std::string seen;
@@ -338,9 +346,10 @@ bool SampleBulkOut::Start(std::string &err)
   params.deviceId = device;
   params.nChannels = cardlink::usb::kStreamUacChannels;
   params.firstChannel = 0u;
-  unsigned buffer_frames = 96u;
+  unsigned buffer_frames = 102u;
   RtAudioErrorType rc = impl_->dac.openStream(
-      &params, nullptr, RTAUDIO_SINT16, kSampleRateHz, &buffer_frames,
+      &params, nullptr, RTAUDIO_SINT16, cardlink::usb::kStreamUacRateHz,
+      &buffer_frames,
       &Impl::AudioCallback, impl_.get());
   if (rc != RTAUDIO_NO_ERROR) {
     err = impl_->dac.getErrorText();

@@ -7,7 +7,7 @@
 namespace cardlink::usb {
 
 constexpr uint16_t kStreamVid = 0xCafe;
-constexpr uint16_t kStreamPid = 0x4029;
+constexpr uint16_t kStreamPid = 0x402F;
 constexpr uint8_t kStreamMagic0 = 0x46;
 constexpr uint8_t kStreamMagic1 = 0x57;
 constexpr uint8_t kStreamTypeBody = 0x01;
@@ -21,7 +21,9 @@ constexpr unsigned kStreamUacChannels = 10;
 constexpr unsigned kStreamUacSampleBytes = 2;
 constexpr unsigned kStreamUacAudioFrameBytes =
     kStreamUacChannels * kStreamUacSampleBytes;
-constexpr unsigned kStreamUacFramesPerMs = 48;
+/* USB carrier only. BODY files, pitch demand, and card playback stay 48 kHz. */
+constexpr unsigned kStreamUacRateHz = 51000;
+constexpr unsigned kStreamUacFramesPerMs = kStreamUacRateHz / 1000u;
 constexpr unsigned kStreamUacPacketBytes =
     kStreamUacAudioFrameBytes * kStreamUacFramesPerMs;
 constexpr unsigned kStreamUacWindowPackets = 10;
@@ -89,6 +91,11 @@ struct StreamBodyMeta {
 static_assert(sizeof(StreamHdr) == kStreamHdrSize, "hdr");
 static_assert(sizeof(StreamBodyMeta) == kStreamBodyMetaSize, "meta");
 static_assert(kStreamUacAudioFrameBytes == 20, "10ch signed-int16 frame");
+static_assert(kStreamUacRateHz % 1000u == 0u,
+              "fixed Full-Speed carrier needs whole frames per millisecond");
+static_assert(kStreamUacPacketBytes == 1020u,
+              "maximum complete-frame 10ch int16 carrier packet");
+static_assert(kStreamUacPacketBytes <= 1023u, "Full-Speed ISO packet limit");
 static_assert(kStreamFrameMax + kStreamCrcBytes == kStreamUacWindowBytes,
               "10 ms UAC service window");
 

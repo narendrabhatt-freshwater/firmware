@@ -2,7 +2,7 @@
  * @file usb_stream.h
  * @brief Packed BODY protocol carried inside the Channel Card UAC2 stream.
  *
- * The USB interface is class-compliant UAC2 (10ch, int16, 48 kHz).
+ * The USB interface is class-compliant UAC2 (10ch, int16, 51 kHz).
  * Its bytes are a private request/serve transport, not audible PCM. Every
  * logical PACK is produced from one fresh RS-485 vq permission. PACK CRC32
  * validation makes a missed isochronous packet abort unpublished ring
@@ -19,7 +19,7 @@ extern "C" {
 #endif
 
 #define USB_STREAM_VID 0xCafe
-#define USB_STREAM_PID 0x4029
+#define USB_STREAM_PID 0x402F
 
 #define USB_STREAM_MAGIC0 0x46u /* 'F' */
 #define USB_STREAM_MAGIC1 0x57u /* 'W' */
@@ -30,14 +30,17 @@ extern "C" {
 #define USB_STREAM_NSAMP_MAX 4096u
 #define USB_STREAM_SESSION_MOD 7u
 
-/* 10 channels x int16 x 48 frames = 960 bytes per 1 ms. */
+/* USB carrier only: BODY data and DAC playback remain 48 kHz. */
 #define USB_STREAM_UAC_CHANNELS 10u
 #define USB_STREAM_UAC_SAMPLE_BYTES 2u
 #define USB_STREAM_UAC_AUDIO_FRAME_BYTES                              \
   (USB_STREAM_UAC_CHANNELS * USB_STREAM_UAC_SAMPLE_BYTES)
-#define USB_STREAM_UAC_FRAMES_PER_MS 48u
+#define USB_STREAM_UAC_RATE_HZ 51000u
+#define USB_STREAM_UAC_FRAMES_PER_MS (USB_STREAM_UAC_RATE_HZ / 1000u)
 #define USB_STREAM_UAC_PACKET_BYTES                                   \
   (USB_STREAM_UAC_AUDIO_FRAME_BYTES * USB_STREAM_UAC_FRAMES_PER_MS)
+/* Synchronous carrier always transmits exactly one nominal packet. */
+#define USB_STREAM_UAC_EP_MAX_BYTES USB_STREAM_UAC_PACKET_BYTES
 #define USB_STREAM_UAC_WINDOW_PACKETS 10u
 #define USB_STREAM_UAC_WINDOW_BYTES                                    \
   (USB_STREAM_UAC_PACKET_BYTES * USB_STREAM_UAC_WINDOW_PACKETS)

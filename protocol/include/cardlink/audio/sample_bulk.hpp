@@ -26,6 +26,8 @@ public:
   bool Running() const;
   /** CoreAudio/RtAudio callback discontinuities in the current stream. */
   uint32_t XrunCount() const;
+  /** Audio frames requested by CoreAudio in the current stream generation. */
+  uint64_t RenderFrameCount() const;
 
   /** Feed one authoritative RS-485 vq snapshot to the refill scheduler. */
   void SubmitStatus(uint8_t mask, uint8_t best,

@@ -45,7 +45,7 @@ int main(int argc, char **argv)
   const std::string rs485 = argc > 4 ? argv[4] : "/dev/cu.usbserial-BG03CSYB";
   const std::string cdc = argc > 5
       ? argv[5]
-      : "/dev/cu.usbmodemCHCARD_0012";
+      : "/dev/cu.usbmodemCHCARD_UAC_0093";
 
   std::array<double, cardlink::audio::kSampleVoices> hz{};
   unsigned nvoices = 0u;
@@ -77,9 +77,15 @@ int main(int argc, char **argv)
   } else if (which == "edge8_420") {
     hz.fill(284.375); /* Eight equal voices: exactly 420 source samples/ms. */
     nvoices = 8u;
+  } else if (which == "edge8_480") {
+    hz.fill(325.0); /* Eight equal voices: exactly 480 source samples/ms. */
+    nvoices = 8u;
+  } else if (which == "edge8_500") {
+    hz.fill(338.5416667); /* Eight voices: exactly 500 source samples/ms. */
+    nvoices = 8u;
   } else {
     std::cerr << "case must be afg, c6, c6x2, c6x3, c6x3c5, c4x8, edge8, "
-                 "or edge8_420\n";
+                 "edge8_420, edge8_480, or edge8_500\n";
     return EXIT_FAILURE;
   }
 
@@ -138,7 +144,7 @@ int main(int argc, char **argv)
     bus.Close();
     return EXIT_FAILURE;
   }
-  std::cout << "ok: 10ch 48k signed-int16 UAC opened twice\n";
+  std::cout << "ok: 10ch 51k signed-int16 UAC opened twice\n";
 
   double aggregate_samples_per_ms = 0.0;
   for (uint8_t v = 0u; v < nvoices; ++v) {
@@ -186,8 +192,10 @@ int main(int argc, char **argv)
   (void)WaitQueue(bus);
   std::this_thread::sleep_for(100ms);
   const uint32_t xruns = bulk.XrunCount();
+  const uint64_t render_frames = bulk.RenderFrameCount();
   bulk.Stop();
-  std::cout << "host: CoreAudio callback xruns=" << xruns << '\n';
+  std::cout << "host: CoreAudio render_frames=" << render_frames
+            << " callback_xruns=" << xruns << '\n';
   (void)bus.QueueExec(cardproto::Target::Channel, "usb");
   (void)WaitQueue(bus);
   bus.Close();
