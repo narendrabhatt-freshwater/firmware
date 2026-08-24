@@ -2277,9 +2277,9 @@ void App::DrawPerform()
           ImGui::PushFont(fs);
           ImGui::Text(
               "Each voice consumes 48 \u00D7 (note Hz / root Hz) samples/ms.\n"
-              "BODY is vendor bulk: one permitted packed transfer per USB\n"
-              "1ms exact-free-space polling; OUT can catch up with a packed\n"
-              "transfer up to 9472 bytes instead of losing a missed poll.\n"
+              "BODY is USB vendor bulk OUT; continuous RS-485 vq polling\n"
+              "supplies exact ring credit and the applied PACK sequence.\n"
+              "Each reply can grant one async PACK of up to 2048 samples.\n"
               "Wire room is %.0f samples/ms after one voice meta. Measured\n"
               "safe budget is 437 samples/ms for 1-3 voices and 420 for 4-8.\n"
               "(5\u00D7C5 = 480: over). 3\u00D7C6 = 576: over. 8\u00D7C4 = 384.\n"

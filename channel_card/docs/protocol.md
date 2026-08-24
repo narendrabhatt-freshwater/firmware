@@ -133,19 +133,18 @@ and are lost on reset.
 | `ar <id> <Hz>`      | Set head `<id>`'s root pitch (Hz > 0)                               |
 | `aw <v> <id>`       | Assign head `<id>` to voice `<v>` 0…7                               |
 | `a`                 | Loaded count + 256-bit hex mask (bit 0 = wave 0)                    |
-| `vq`                | Active mask + hungriest voice + free-slot code per ring               |
+| `vq`                | Active mask + hungriest + exact ring credit + USB PACK ACK             |
 | `interp`            | Query: 2-tap linear (1, default) or nearest sample (0)                |
 | `interp 0` / `1`    | Diagnostic playhead. `0` needs one FIFO sample; `1` needs one ahead   |
-| `usb`               | BODY counters: drop/hold/fill, USB `vq`, rx/bytes/bad                 |
+| `usb`               | BODY counters: drop/hold/fill, RS-485 `vq`, rx/bytes/bad              |
 | `usb 0`             | Clear those counters, then same reply                                 |
 
 Replies: `ok: ar <id> <Hz>`, `ok: aw <v> <id>`, `ok: a <n> <64 hex>`.
-USB CDC returns `vq` as `ok:vq <mask> <best> s0 … s7`. RS485 returns
-the same fields in a 12-byte binary frame: `a5 5a 43 01`, mask, best,
-four packed slot bytes (two 4-bit counts each), CRC-8/0x07, then `0a`.
-Best is 0–7 or 255. Slot codes 0–14 count complete 256-sample slots;
-15 means the ring is empty. At 921600 8N1 the 12-byte frame is ~150 µs
-on the wire. That is not USB BODY (vendor bulk PACK).
+USB CDC returns `vq` as `ok:vq <mask> <best> free0 … free7 <pack_seq>`.
+RS485 returns the same fields in a 26-byte binary frame: `a5 5a 43 02`,
+mask, best, eight uint16 LE exact free-sample counts, uint16 LE last applied
+USB PACK sequence, CRC-8/0x07, then `0a`. Best is 0–7 or 255; each free
+count is 0–12240. At 921600 8N1 the reply is about 282 µs on the wire.
 
 Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 2-tap
 linear interpolation. The attack plays to its committed length (not a hold-pad to
@@ -355,7 +354,7 @@ Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 
 | Interface                    | Role                                                                |
 | ---------------------------- | ------------------------------------------------------------------- |
-| **Vendor bulk OUT/IN** (ITF0)| OUT carries packed BODY; IN grants each refill with fresh `vq` status. |
+| **Vendor interface** (ITF0)  | Bulk OUT carries packed BODY; its descriptor-compatible IN endpoint is idle. |
 | **CDC ACM** (serial)         | Same ASCII console as RS485, plus binary attack-head upload (`al`). |
 
 There is no UAC speaker. USB IRQ is DCD only; BODY parse runs in `tud_task`
@@ -374,10 +373,10 @@ Effect Card still has CDC and a UAC2 microphone (mono, 32-bit, 96 kHz).
 
 Little-endian. BODY has no per-packet ACK. `type` `0x03` PACK is the live
 OUT format: one header plus N BODY metas so several voices share one transfer.
-The host caps each packed catch-up transfer at 9472 bytes (148 × 64-byte
-packets). Exact free-space STATUS is attempted every 1 ms. PACK size follows
-actual ring credit rather than an artificial per-poll cap, so a delayed host
-wakeup does not permanently discard a refill opportunity.
+The wire format permits 9472 bytes (148 × 64-byte packets); the live host
+submits at most 2048 samples per async PACK. Sequential RS485 `vq` polling
+supplies exact free space and the last applied PACK sequence at approximately
+the adapter's 1.2 ms turnaround. Each voice remains bounded by exact credit.
 
 ```text
 PACK (type 0x03), one bulk transfer ≤ 9472 bytes
@@ -404,30 +403,32 @@ offset  size  field
 CDC stays a serial port.
 
 Five C5 voices need 480 samples/ms, three C6 voices resampled from a C4 root
-need 576 samples/ms, and eight C4 voices need 384 samples/ms. The measured
-safe multi-voice limit is 420 samples/ms, so the first two examples are over
-budget.
-Three C6 voices from a C5 root need 288 samples/ms and fit. USB vendor IN
-supplies one fresh `vq` status per 1 ms USB frame; RS485 `vq` remains
-available for lifecycle monitoring and diagnostics. A new session gets one
-safe SOF prefill before `nX`; all subsequent refills require fresh exact
-free-space status.
+need 576 samples/ms, and eight C4 voices need 384 samples/ms. On the
+RS485-authoritative design, hardware tests establish a safe limit of 437
+samples/ms for one to three voices and 420 samples/ms for four to eight.
+Three C6 voices from a C5 root need 288 samples/ms and fit. Continuous RS485
+`vq` is the sole refill authority and lifecycle monitor; USB vendor traffic
+carries BODY PACKs OUT only.
 
 ```text
-STATUS (type 0x10), one vendor bulk IN transfer = 28 bytes
+RS485 vq reply, fixed 26-byte binary frame
 offset  size  field
-0       8     common header; nbytes = 20
-8       1     active/requested voice mask
-9       1     hungriest voice, or 255
-10      16    exact uint16 LE free samples for voices 0..7 (0..5632)
-26      2     last PACK sequence already reflected by these free counts
+0       2     sync = a5 5a
+2       1     card = 43 ('C')
+3       1     type = 02 exact refill status
+4       1     active/requested voice mask
+5       1     hungriest voice, or 255
+6       16    exact uint16 LE free samples for voices 0..7 (0..12240)
+22      2     last USB PACK sequence reflected by these free counts
+24      1     CRC-8/0x07 over bytes 0..23
+25      1     terminator = 0a
 ```
 
-STATUS is both refill permission and an exact PACK-order snapshot. One fresh
-STATUS permits at most one following packed refill, bounded separately for
-each included voice. Its echoed PACK sequence prevents a racing completed OUT
-from being subtracted twice. A new session receives one safe SOF prefill before
-audible `nX`; subsequent refills are STATUS-gated. `type` `0x20` CAPTURE
+RS485 `vq` is both refill permission and an exact PACK-order snapshot. One
+fresh reply permits at most one following packed USB OUT refill, bounded for
+each included voice. Its PACK sequence prevents a racing completed OUT from
+being subtracted twice. A new session receives one safe SOF prefill before
+audible `nX`; subsequent refills are RS485-vq-gated. `type` `0x20` CAPTURE
 remains reserved.
 
 ### CDC vs RS485 (console)

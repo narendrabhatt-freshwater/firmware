@@ -47,7 +47,7 @@ int PackFrame(SampleDryMixer &mixer, uint8_t *dst, int max,
   /* Maximum-size synchronous transfers plateau below the rate sustained by
    * pipelined ~2 KB transfers on the production macOS/hub/TinyUSB path.
    * Do not split a coalesced per-voice grant across many metas: serve the
-   * hungriest eligible voices on successive 1 ms polls instead. */
+   * hungriest eligible voices on successive RS-485 polls instead. */
   while (nuse > 1u &&
          nuse * kMinBurst > cardlink::usb::kStreamSubmitSamples) {
     --nuse;
@@ -122,8 +122,15 @@ int PackFrame(SampleDryMixer &mixer, uint8_t *dst, int max,
 } // namespace
 
 struct SampleBulkOut::Impl {
+  struct RefillStatus {
+    uint8_t mask = 0u;
+    uint8_t best = 0xFFu;
+    std::array<uint16_t, kSampleVoices> free_samples{};
+    uint16_t last_pack_sequence = 0xFFFFu;
+  };
+
   struct StatusRequest {
-    cardlink::usb::StreamStatus status{};
+    RefillStatus status{};
     std::array<uint16_t, kSampleVoices> unreflected{};
   };
 
@@ -134,12 +141,11 @@ struct SampleBulkOut::Impl {
 
   cardlink::usb::VendorLink link;
   std::thread th;
-  std::thread status_th;
   std::atomic<bool> run{false};
   std::mutex status_mu;
   std::mutex mixer_mu;
   std::condition_variable status_cv;
-  std::deque<cardlink::usb::StreamStatus> status_queue;
+  std::deque<RefillStatus> status_queue;
   std::deque<OutstandingPack> outstanding;
   uint16_t next_pack_sequence = 0u;
 };
@@ -165,10 +171,29 @@ void SampleBulkOut::Stop()
   if (impl_->th.joinable()) {
     impl_->th.join();
   }
-  if (impl_->status_th.joinable()) {
-    impl_->status_th.join();
-  }
   impl_->link.Close();
+}
+
+void SampleBulkOut::SubmitStatus(
+    uint8_t mask, uint8_t best,
+    const std::array<uint16_t, kSampleVoices> &free_samples,
+    uint16_t last_pack_sequence)
+{
+  if (!impl_ || !impl_->run.load(std::memory_order_acquire)) {
+    return;
+  }
+  Impl::RefillStatus status{};
+  status.mask = mask;
+  status.best = best;
+  status.free_samples = free_samples;
+  status.last_pack_sequence = last_pack_sequence;
+  {
+    std::lock_guard<std::mutex> lock(impl_->status_mu);
+    /* Preserve every sequential RS-485 snapshot. Each one is a distinct
+     * refill opportunity and acknowledges a precise USB PACK frontier. */
+    impl_->status_queue.push_back(status);
+  }
+  impl_->status_cv.notify_one();
 }
 
 bool SampleBulkOut::Start(std::string &err)
@@ -184,65 +209,6 @@ bool SampleBulkOut::Start(std::string &err)
     impl_->outstanding.clear();
   }
   impl_->run.store(true, std::memory_order_release);
-  impl_->status_th = std::thread([this]() {
-    std::array<uint8_t, cardlink::usb::kStreamFsMps> rx{};
-    std::array<uint8_t, cardlink::usb::kStreamFsMps * 4u> pending{};
-    unsigned have = 0u;
-    while (impl_->run.load(std::memory_order_acquire)) {
-      int got = 0;
-      std::string rerr;
-      if (!impl_->link.Read(rx.data(), static_cast<int>(rx.size()), got,
-                            100u, rerr)) {
-        continue;
-      }
-      if (got <= 0 || static_cast<unsigned>(got) > pending.size() - have) {
-        have = 0u;
-        continue;
-      }
-      std::memcpy(pending.data() + have, rx.data(), static_cast<unsigned>(got));
-      have += static_cast<unsigned>(got);
-
-      while (have >= 2u) {
-        if (pending[0] != cardlink::usb::kStreamMagic0 ||
-            pending[1] != cardlink::usb::kStreamMagic1) {
-          std::memmove(pending.data(), pending.data() + 1u, --have);
-          continue;
-        }
-        if (have < cardlink::usb::kStreamHdrSize) {
-          break;
-        }
-        cardlink::usb::StreamHdr hdr{};
-        std::memcpy(&hdr, pending.data(), sizeof hdr);
-        const unsigned frame_n = cardlink::usb::kStreamHdrSize + hdr.nbytes;
-        if (frame_n > pending.size()) {
-          std::memmove(pending.data(), pending.data() + 1u, --have);
-          continue;
-        }
-        if (have < frame_n) {
-          break;
-        }
-        if (hdr.type == cardlink::usb::kStreamTypeStatus &&
-            hdr.nbytes == sizeof(cardlink::usb::StreamStatus)) {
-          cardlink::usb::StreamStatus status{};
-          std::memcpy(&status,
-                      pending.data() + cardlink::usb::kStreamHdrSize,
-                      sizeof status);
-          {
-            std::lock_guard<std::mutex> lock(impl_->status_mu);
-            /* Preserve every polling grant in wire order. Collapsing these
-             * snapshots loses a complete refill opportunity whenever the
-             * synchronous OUT overlaps the next STATUS. Acknowledgement and
-             * unreflected-PACK accounting happen on dequeue in the same
-             * order, so an older snapshot can never reuse newer credit. */
-            impl_->status_queue.push_back(status);
-          }
-          impl_->status_cv.notify_one();
-        }
-        have -= frame_n;
-        std::memmove(pending.data(), pending.data() + frame_n, have);
-      }
-    }
-  });
   impl_->th = std::thread([this]() {
     using clock = std::chrono::steady_clock;
     auto last = clock::now();
@@ -289,7 +255,7 @@ bool SampleBulkOut::Start(std::string &err)
       {
         std::lock_guard<std::mutex> mixer_lock(impl_->mixer_mu);
         mixer_->ApplyVoiceStatus(request.status.mask, request.status.best,
-                                 request.status.free_samples,
+                                 request.status.free_samples.data(),
                                  request.unreflected.data());
         mixer_->ConsumeOutputSamples(nframes);
         nbytes = PackFrame(*mixer_, pkt.data(),

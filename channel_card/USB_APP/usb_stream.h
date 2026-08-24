@@ -2,8 +2,9 @@
  * @file usb_stream.h
  * @brief Channel Card vendor bulk BODY framing (host must match).
  *
- * BODY has no per-packet ACK. USB bulk retries CRC errors and NAKs when the
- * RX FIFO is full; vendor IN pushes STATUS permission for each refill.
+ * BODY has no USB-side application ACK. USB bulk retries CRC errors and NAKs
+ * when the RX FIFO is full. RS-485 vq supplies refill permission and the last
+ * fully applied PACK sequence.
  *
  * Full-Speed bulk MPS is 64. The DCD OUT transfer is many packets
  * (CFG_TUD_VENDOR_EPSIZE) so one main-loop tud_task can take a whole
@@ -28,7 +29,6 @@ extern "C" {
 
 #define USB_STREAM_TYPE_BODY 0x01u
 #define USB_STREAM_TYPE_PACK 0x03u /* one hdr + N BODY metas */
-#define USB_STREAM_TYPE_STATUS 0x10u
 #define USB_STREAM_TYPE_ATTACK 0x02u
 #define USB_STREAM_TYPE_CAPTURE 0x20u
 
@@ -39,9 +39,8 @@ extern "C" {
 #define USB_STREAM_ITF_VENDOR 0u
 #define USB_STREAM_EP_OUT 0x01u
 #define USB_STREAM_EP_IN 0x81u
-/** Maximum packed catch-up transfer. STATUS is published every USB frame. */
+/** Maximum packed catch-up transfer. */
 #define USB_STREAM_FRAME_MAX 9472u
-#define USB_STREAM_STATUS_FRAME_PERIOD 1u
 
 #if defined(__GNUC__)
 #define USB_STREAM_PACKED __attribute__((packed))
@@ -66,14 +65,6 @@ typedef struct USB_STREAM_PACKED {
   uint16_t nsamp;
   uint16_t pad2;
 } UsbStreamBodyMeta;
-
-typedef struct USB_STREAM_PACKED {
-  uint8_t mask;
-  uint8_t best;
-  uint16_t free_samples[8];
-  /** Most recent PACK sequence already reflected by free_samples. */
-  uint16_t last_pack_sequence;
-} UsbStreamStatus;
 
 #define USB_STREAM_MSG_MAX USB_STREAM_FRAME_MAX
 

@@ -140,21 +140,26 @@ namespace cardproto
     }
     unsigned mask = 0;
     unsigned best = 0;
-    unsigned s[8] = {};
-    const int n = std::sscanf(p, " %x %u %u %u %u %u %u %u %u %u", &mask, &best,
-                              &s[0], &s[1], &s[2], &s[3], &s[4], &s[5], &s[6],
-                              &s[7]);
-    if (n != 10 || mask > 0xffu || best > 0xffu) {
+    unsigned free_samples[8] = {};
+    unsigned last_pack_sequence = 0;
+    const int n = std::sscanf(
+        p, " %x %u %u %u %u %u %u %u %u %u %u", &mask, &best,
+        &free_samples[0], &free_samples[1], &free_samples[2],
+        &free_samples[3], &free_samples[4], &free_samples[5],
+        &free_samples[6], &free_samples[7], &last_pack_sequence);
+    if (n != 11 || mask > 0xffu || best > 0xffu ||
+        last_pack_sequence > 0xffffu) {
       return false;
     }
     for (unsigned i = 0; i < 8; ++i) {
-      if (s[i] > 15u) {
+      if (free_samples[i] > 12240u) {
         return false;
       }
-      out.free_slots[i] = static_cast<uint8_t>(s[i]);
+      out.free_samples[i] = static_cast<uint16_t>(free_samples[i]);
     }
     out.mask = static_cast<uint8_t>(mask);
     out.best = static_cast<uint8_t>(best);
+    out.last_pack_sequence = static_cast<uint16_t>(last_pack_sequence);
     return true;
   }
 

@@ -105,6 +105,8 @@ int main(int argc, char **argv)
 
   App app;
   g_app = &app;
+  app.sample_bulk = std::make_unique<cardlink::audio::SampleBulkOut>();
+  app.sample_bulk->BindMixer(app.samples.Mixer());
   app.bus.SetPollLog(&app.poll_log);
   /* Stop BODY stream when card finishes release (vq reports idle). */
   app.samples.SetConsole([&app](const std::string &cmd) {
@@ -113,8 +115,14 @@ int main(int argc, char **argv)
   app.bus.SetIdleHandler([&app](uint8_t slot) {
     app.samples.Silence(slot);
   });
-  /* RS485 vq remains the lifecycle/diagnostic monitor. BODY refill
-   * permission arrives at USB-frame rate on vendor IN. */
+  /* RS-485 is the sole BODY refill authority. USB vendor traffic is OUT-only
+   * PCM; vq provides exact credit and its last applied PACK sequence. */
+  app.bus.SetVqHandler(
+      [&app](uint8_t mask, uint8_t best,
+             const std::array<uint16_t, cardlink::audio::kSampleVoices> &free,
+             uint16_t last_pack_sequence) {
+        app.sample_bulk->SubmitStatus(mask, best, free, last_pack_sequence);
+      });
   fw::settings::Load(app);
   app.samples.SetCdcPath(app.attack_cdc_path);
 

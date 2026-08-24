@@ -5,10 +5,9 @@
  *   - CDC-ACM console + attack-head binary load
  *
  * FS bulk MPS is 64. CFG_TUD_VENDOR_EPSIZE is the DCD OUT buffer so one
- * vq-permitted refill can span 148 packets. This deliberately amortizes the
- * measured host/hub round-trip (small synchronous transfers delivered only
- * about 864 kB/s). STATUS is attempted every 1 ms; the descriptor still
- * advertises the required 64-byte Full-Speed bulk MPS.
+ * RS-485-vq-permitted refill can span 148 packets. This deliberately
+ * amortizes the measured host/hub round-trip. The vendor IN endpoint remains
+ * descriptor-compatible but idle; BODY traffic is vendor OUT only.
  *
  * Do not put an isochronous endpoint on the vendor interface: macOS
  * IOUSBHostFamily panics on claim_interface / ISO submit for that class.

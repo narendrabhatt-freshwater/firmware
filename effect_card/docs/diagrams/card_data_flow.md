@@ -11,8 +11,9 @@ If this document and the firmware disagree, trust the firmware.
 ## 1. Host interfaces (both cards)
 
 One RS485 multi-drop bus (`c:` / `e:` / `*:`). USB is per-card: Channel
-is Full-Speed **vendor bulk BODY/status** (ITF0, packed OUT quanta up to
-9472 bytes per catch-up transfer, plus exact status IN every 1 ms) plus CDC;
+is Full-Speed **vendor bulk BODY OUT only** (ITF0, pipelined packed OUT
+transfers; the descriptor-compatible IN endpoint is idle) plus CDC. Sequential
+RS485 `vq` request/reply cycles provide exact refill credit and PACK ack;
 Effect is a Full-Speed **UAC2 microphone** (mono int32 @ 96 kHz) plus CDC.
 
 ```mermaid
@@ -27,7 +28,7 @@ flowchart TB
   subgraph ch [Channel STM32H725]
     ChCon[channel_console]
     ChAtk[AXI attack heads al]
-    ChRing[DTCM body slots]
+    ChRing[DTCM/D2/D3 body rings]
     ChMix[note_bank mix]
     ChI2S[I2S1/I2S2 DMA AXI]
     ChDac[CS4304]
@@ -61,11 +62,11 @@ Attack and body are storage. The head plays to its committed length
 Q16.16 interpolation. `nX > 0` is always a note-on. A new BODY session
 (`SOF` + session 0–6) starts a new body FIFO; a repeated burst with
 the same session does not.
-The host packs every wanting voice into one bulk transfer (fair share
-of a 9472-byte catch-up FS OUT budget, weighted by each voice's
-source-consumption rate). Every fresh USB vendor-IN `vq` exact free-space
-grant permits one bounded packed refill; otherwise the host waits for the
-next status. A new session gets one safe SOF prefill before `nX`; later
+The host packs the hungriest wanting voices into each bulk transfer (fair share
+of a 2048-sample async OUT budget, weighted by each voice's source-consumption
+rate). Every fresh RS485 `vq` exact free-space grant permits one bounded packed
+refill; otherwise the host waits for the next reply. A new session gets one
+safe SOF prefill before `nX`; later
 refills are status-gated. This keeps the jitter rings full at note start.
 Free-slot code 0 is a hard stop. A full vendor FIFO NAKs the host.
 Missing body holds the last sample until USB catches up. A full ring
@@ -83,7 +84,7 @@ flowchart TB
 
   subgraph usb [USB FS]
     Tag["BODY: hdr + voice/session/SOF + int16"]
-    Slots["2 x 2816 int16 DTCM ping-pong"]
+    Slots["12240 int16 per voice · DTCM/D2/D3/ITCM SRAM"]
     Body --> Tag --> Slots
   end
 
@@ -117,13 +118,14 @@ flowchart TB
   end
 ```
 
-USB vendor IN pushes a 28-byte framed `vq` status containing active mask,
-hungriest voice, eight exact uint16 free-sample counts, and a sequence.
-RS485 `vq` returns the same state in its compact 12-byte diagnostic frame.
+RS485 `vq` returns a 26-byte binary frame containing active mask, hungriest
+voice, eight exact uint16 free-sample counts, and the last USB PACK sequence
+already reflected by those counts. It is the only live refill authority;
+USB carries BODY PACKs OUT and does not publish status.
 Need-score is remaining play time: `filled / max(phase_inc, target_inc)`.
 The host shares one PACK by the wanting voices' source-consumption rates.
-At most one packed refill follows each fresh `vq`; each voice is bounded to
-512 samples and its safe free-space credit. A dropped USB write is AbortBurst.
+At most one 2048-sample packed refill follows each fresh `vq`; each voice is
+bounded by its exact safe free-space credit. A dropped USB write is AbortBurst.
 `nX` starts immediately. The attack plays to its committed length;
 body consume starts at `len − 32` with the same source fraction. The
 first requested-gate `vq` permits the SOF BODY burst; further bursts require

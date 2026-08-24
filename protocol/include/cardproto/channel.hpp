@@ -108,8 +108,8 @@ public:
   Result AllNotesOff();
 
   /**
-   * @brief Query active-voice mask, hungriest voice, free slot counts 0..8.
-   * @return Exchange result for wire `vq` (`ok:vq <mask> <best> s0..s7`).
+   * @brief Query active mask, hungriest voice, exact ring credit and PACK ACK.
+   * @return `ok:vq <mask> <best> free0..free7 last_pack_sequence`.
    */
   Result QueryVoiceStatus();
 
@@ -402,10 +402,11 @@ std::string FormatCpu(CpuProbe kind, uint8_t nvoices = 0);
 struct VoiceQuery {
   uint8_t mask = 0;
   uint8_t best = 0xFF; /**< Hungriest voice, or 0xFF if none. */
-  std::array<uint8_t, 8> free_slots{};
+  std::array<uint16_t, 8> free_samples{};
+  uint16_t last_pack_sequence = 0xFFFFu;
 };
 
-/** Parse `ok:vq <mask_hex> <best> s0..s7`. Accepts an optional `[C]`/`[E]` tag. */
+/** Parse exact-credit `ok:vq`; accepts an optional `[C]`/`[E]` tag. */
 bool ParseVoiceQuery(const char *raw, VoiceQuery &out);
 
 } // namespace cardproto

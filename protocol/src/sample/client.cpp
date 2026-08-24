@@ -580,7 +580,7 @@ bool Client::NoteOnBatch(const NoteRequest *notes, size_t count,
     return false;
   }
 
-  /* Every pending voice is visible to the same fresh STATUS polls, so the
+  /* Every pending voice is visible to the same fresh RS-485 vq polls, so the
    * fair allocator fills the whole chord concurrently. Nothing is audible
    * until every ring owns its complete safe startup reservoir. */
   const auto deadline = std::chrono::steady_clock::now() +

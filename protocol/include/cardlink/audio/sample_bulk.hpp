@@ -2,6 +2,8 @@
 
 #include "cardlink/audio/sample_dry.hpp"
 
+#include <array>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -22,6 +24,11 @@ public:
   bool Start(std::string &err);
   void Stop();
   bool Running() const;
+
+  /** Feed one authoritative RS-485 vq snapshot to the refill scheduler. */
+  void SubmitStatus(uint8_t mask, uint8_t best,
+                    const std::array<uint16_t, kSampleVoices> &free_samples,
+                    uint16_t last_pack_sequence);
 
 private:
   struct Impl;

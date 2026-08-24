@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    stream_ring.h
- * @brief   Per-voice body FIFO: 2 × 2816 int16 (ping-pong), filled from USB.
+ * @brief   Per-voice body FIFO: 3 × 4080 int16, filled from USB.
  *
  * SPSC: USB writes from main, the playhead reads in I2S. A full FIFO drops
  * the write (never unread samples). An empty FIFO is an underrun.
@@ -24,9 +24,13 @@ extern "C"
 
 #include "attack_bank.h" /* SAMPLE_VOICES, SAMPLE_CROSSFADE_LEN */
 
-/** One bank is a full jitter buffer; USB fills the other while it plays. */
-#define STREAM_BANK_LEN 2816u
-#define STREAM_BANKS 2u
+/** Two base banks live in DTCM/D2/D3 and one extension bank lives in ITCM. */
+#define STREAM_BANK_LEN 4080u
+#define STREAM_BASE_BANKS 2u
+#define STREAM_TAIL_BANKS 1u
+#define STREAM_BANKS (STREAM_BASE_BANKS + STREAM_TAIL_BANKS)
+#define STREAM_RING_BASE_SAMPLES (STREAM_BASE_BANKS * STREAM_BANK_LEN)
+#define STREAM_RING_TAIL_SAMPLES (STREAM_TAIL_BANKS * STREAM_BANK_LEN)
 #define STREAM_RING_SAMPLES (STREAM_BANKS * STREAM_BANK_LEN)
 /** vq reports 0..14 free 256-sample slots; 15 means the ring is empty. */
 #define STREAM_SLOT_LEN 256u

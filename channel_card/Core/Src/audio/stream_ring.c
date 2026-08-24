@@ -19,11 +19,35 @@ typedef struct
   volatile uint32_t rd;
   volatile uint8_t consuming;
   uint8_t session;
-  int16_t data[STREAM_RING_SAMPLES];
+  int16_t data[STREAM_RING_BASE_SAMPLES];
 } StreamRing_t;
 
-/* .bss is DTCM on this part — CPU fill from USB, mix reads in the I2S path. */
-static StreamRing_t s_rings[SAMPLE_VOICES];
+/* Use all three CPU SRAM domains for genuine per-voice jitter storage. These
+ * buffers are single-core CPU data (USB main loop + I2S ISR), never DMA, so
+ * no cache-maintenance boundary is introduced. */
+static StreamRing_t s_rings_dtcm[5];
+static StreamRing_t s_rings_d2[2]
+    __attribute__((aligned(32), section(".ring_d2")));
+static StreamRing_t s_rings_d3[1]
+    __attribute__((aligned(32), section(".ring_d3")));
+/* The H725's otherwise-unused 64 KiB ITCM is CPU-accessible zero-wait-state
+ * RAM. One extension bank per voice increases real jitter tolerance without
+ * delaying playback or changing the 48 kHz int16 stream. */
+static int16_t s_ring_tail[SAMPLE_VOICES][STREAM_RING_TAIL_SAMPLES]
+    __attribute__((aligned(32), section(".ring_itcm")));
+
+static StreamRing_t *StreamRing_At(uint8_t voice)
+{
+  if (voice < 5u)
+  {
+    return &s_rings_dtcm[voice];
+  }
+  if (voice < 7u)
+  {
+    return &s_rings_d2[voice - 5u];
+  }
+  return &s_rings_d3[0];
+}
 static volatile uint32_t s_drop_pkts;
 static volatile uint32_t s_rx_pkts;
 static volatile uint32_t s_sof_pkts;
@@ -49,10 +73,11 @@ void StreamRing_Reset(uint8_t voice)
   {
     return;
   }
-  s_rings[voice].wr = 0u;
-  s_rings[voice].rd = 0u;
-  s_rings[voice].consuming = 0u;
-  s_rings[voice].session = 0xFFu;
+  StreamRing_t *r = StreamRing_At(voice);
+  r->wr = 0u;
+  r->rd = 0u;
+  r->consuming = 0u;
+  r->session = 0xFFu;
 }
 
 void StreamRing_Prime(uint8_t voice)
@@ -61,7 +86,7 @@ void StreamRing_Prime(uint8_t voice)
   {
     return;
   }
-  s_rings[voice].consuming = 1u;
+  StreamRing_At(voice)->consuming = 1u;
 }
 
 void StreamRing_Release(uint8_t voice)
@@ -78,21 +103,35 @@ void StreamRing_ResetAll(void)
   }
 }
 
-static void StreamRing_CopyIn(StreamRing_t *r, const int16_t *s, uint32_t n)
+static int16_t *StreamRing_DataAt(StreamRing_t *r, uint8_t voice,
+                                  uint32_t index)
+{
+  if (index < STREAM_RING_BASE_SAMPLES)
+  {
+    return &r->data[index];
+  }
+  return &s_ring_tail[voice][index - STREAM_RING_BASE_SAMPLES];
+}
+
+static void StreamRing_CopyIn(StreamRing_t *r, uint8_t voice,
+                              const int16_t *s, uint32_t n)
 {
   uint32_t idx = r->wr % STREAM_RING_SAMPLES;
-  uint32_t first = STREAM_RING_SAMPLES - idx;
-
-  if (first > n)
+  while (n != 0u)
   {
-    first = n;
+    uint32_t room = (idx < STREAM_RING_BASE_SAMPLES)
+                        ? (STREAM_RING_BASE_SAMPLES - idx)
+                        : (STREAM_RING_SAMPLES - idx);
+    uint32_t chunk = (n < room) ? n : room;
+    memcpy(StreamRing_DataAt(r, voice, idx), s, chunk * sizeof(int16_t));
+    s += chunk;
+    n -= chunk;
+    idx += chunk;
+    if (idx == STREAM_RING_SAMPLES)
+    {
+      idx = 0u;
+    }
   }
-  memcpy(&r->data[idx], s, first * sizeof(int16_t));
-  if (n > first)
-  {
-    memcpy(&r->data[0], s + first, (n - first) * sizeof(int16_t));
-  }
-  r->wr += n;
 }
 
 uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
@@ -107,7 +146,7 @@ uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
   {
     return 0u;
   }
-  r = &s_rings[voice];
+  r = StreamRing_At(voice);
   if (sof != 0u && session != r->session)
   {
     r->wr = 0u;
@@ -131,7 +170,8 @@ uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
       break;
     }
   }
-  StreamRing_CopyIn(r, samples, nsamp);
+  StreamRing_CopyIn(r, voice, samples, nsamp);
+  r->wr += nsamp;
   s_rx_pkts++;
   if (all_zero != 0u)
   {
@@ -150,14 +190,15 @@ int StreamRing_GetRel(uint8_t voice, uint32_t offset, int16_t *out)
   {
     return -1;
   }
-  r = &s_rings[voice];
+  r = StreamRing_At(voice);
   rd = r->rd;
   wr = r->wr;
   if (offset >= (wr - rd))
   {
     return -1;
   }
-  *out = r->data[(rd + offset) % STREAM_RING_SAMPLES];
+  *out = *StreamRing_DataAt(r, voice,
+                            (rd + offset) % STREAM_RING_SAMPLES);
   return 0;
 }
 
@@ -170,7 +211,7 @@ void StreamRing_Advance(uint8_t voice, uint32_t n)
   {
     return;
   }
-  r = &s_rings[voice];
+  r = StreamRing_At(voice);
   filled = StreamRing_Filled(r);
   if (n > filled)
   {
@@ -187,7 +228,7 @@ uint32_t StreamRing_FillLevel(uint8_t voice)
     return 0u;
   }
   {
-    uint32_t a = StreamRing_Filled(&s_rings[voice]);
+    uint32_t a = StreamRing_Filled(StreamRing_At(voice));
     return (a > STREAM_RING_SAMPLES) ? STREAM_RING_SAMPLES : a;
   }
 }
@@ -231,11 +272,12 @@ void StreamRing_ObserveFill(uint8_t voice)
   {
     return;
   }
-  if (s_rings[voice].consuming == 0u)
+  StreamRing_t *r = StreamRing_At(voice);
+  if (r->consuming == 0u)
   {
     return;
   }
-  f = StreamRing_Filled(&s_rings[voice]);
+  f = StreamRing_Filled(r);
   if (f < s_min_fill)
   {
     s_min_fill = f;

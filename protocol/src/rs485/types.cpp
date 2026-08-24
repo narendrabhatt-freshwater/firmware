@@ -150,44 +150,47 @@ ExchangeResult ParseVqBinaryReply(const uint8_t *frame, size_t len) {
   constexpr uint8_t kSync0 = 0xA5;
   constexpr uint8_t kSync1 = 0x5A;
   constexpr uint8_t kCardChannel = 0x43;
-  constexpr uint8_t kTypeStatus = 0x01;
+  constexpr uint8_t kTypeStatus = 0x02;
 
   ExchangeResult out;
   out.from = Target::Channel;
   if (frame == nullptr || len != kVqBinaryFrameLen ||
       frame[0] != kSync0 || frame[1] != kSync1 ||
       frame[2] != kCardChannel || frame[3] != kTypeStatus ||
-      frame[11] != '\n' || frame[10] != Crc8(frame, 10)) {
+      frame[25] != '\n' || frame[24] != Crc8(frame, 24)) {
     out.status = Status::BadReply;
     std::snprintf(out.raw, sizeof(out.raw), "bad binary vq frame");
     return out;
   }
 
-  std::array<uint8_t, 8> slots{};
-  for (size_t i = 0; i < slots.size(); i += 2) {
-    const uint8_t packed = frame[6 + i / 2];
-    slots[i] = static_cast<uint8_t>(packed & 0x0Fu);
-    slots[i + 1] = static_cast<uint8_t>((packed >> 4u) & 0x0Fu);
-    if (slots[i] > 15u || slots[i + 1] > 15u) {
+  std::array<uint16_t, 8> free_samples{};
+  for (size_t i = 0; i < free_samples.size(); ++i) {
+    free_samples[i] = static_cast<uint16_t>(frame[6 + 2 * i]) |
+                      static_cast<uint16_t>(frame[7 + 2 * i] << 8u);
+    if (free_samples[i] > 12240u) {
       out.status = Status::BadReply;
-      std::snprintf(out.raw, sizeof(out.raw), "bad binary vq slots");
+      std::snprintf(out.raw, sizeof(out.raw), "bad binary vq free count");
       return out;
     }
   }
+  const uint16_t last_pack_sequence =
+      static_cast<uint16_t>(frame[22]) |
+      static_cast<uint16_t>(frame[23] << 8u);
 
   out.status = Status::Ok;
   std::snprintf(out.raw, sizeof(out.raw),
-                "ok:vq %02x %u %u %u %u %u %u %u %u %u",
+                "ok:vq %02x %u %u %u %u %u %u %u %u %u %u",
                 static_cast<unsigned>(frame[4]),
                 static_cast<unsigned>(frame[5]),
-                static_cast<unsigned>(slots[0]),
-                static_cast<unsigned>(slots[1]),
-                static_cast<unsigned>(slots[2]),
-                static_cast<unsigned>(slots[3]),
-                static_cast<unsigned>(slots[4]),
-                static_cast<unsigned>(slots[5]),
-                static_cast<unsigned>(slots[6]),
-                static_cast<unsigned>(slots[7]));
+                static_cast<unsigned>(free_samples[0]),
+                static_cast<unsigned>(free_samples[1]),
+                static_cast<unsigned>(free_samples[2]),
+                static_cast<unsigned>(free_samples[3]),
+                static_cast<unsigned>(free_samples[4]),
+                static_cast<unsigned>(free_samples[5]),
+                static_cast<unsigned>(free_samples[6]),
+                static_cast<unsigned>(free_samples[7]),
+                static_cast<unsigned>(last_pack_sequence));
   return out;
 }
 

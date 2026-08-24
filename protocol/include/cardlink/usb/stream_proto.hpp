@@ -2,9 +2,8 @@
  * @file stream_proto.hpp
  * @brief Host copy of Channel Card vendor bulk BODY framing.
  *
- * Must match channel_card/USB_APP/usb_stream.h. BODY has no per-packet ACK;
- * vendor IN pushes STATUS (type 0x10), and every refill requires a fresh one.
- * One bulk OUT transfer holds a PACK (type 0x03) of per-voice BODY metas.
+ * Must match channel_card/USB_APP/usb_stream.h. USB carries BODY PACKs OUT
+ * only; RS-485 vq supplies exact refill credit and PACK acknowledgement.
  * Vendor ISO is not used (macOS IOUSBHostFamily panics on that path).
  */
 
@@ -21,7 +20,6 @@ constexpr uint8_t kStreamMagic0 = 0x46;
 constexpr uint8_t kStreamMagic1 = 0x57;
 constexpr uint8_t kStreamTypeBody = 0x01;
 constexpr uint8_t kStreamTypePack = 0x03;
-constexpr uint8_t kStreamTypeStatus = 0x10;
 constexpr unsigned kStreamHdrSize = 8;
 constexpr unsigned kStreamBodyMetaSize = 8;
 constexpr unsigned kStreamNsampMax = 4096;
@@ -32,12 +30,13 @@ constexpr uint8_t kStreamEpIn = 0x81;
 constexpr unsigned kStreamFsMps = 64;
 /** Conservative measured host/hub service quantum. */
 constexpr unsigned kStreamFrameMax = 9472;
-constexpr unsigned kStreamServiceFrames = 1;
+/** Nominal sequential RS-485 request/reply interval used by simulation. */
+constexpr double kStreamStatusNominalPeriodMs = 1.2;
 /** Measured sustainable int16 BODY rates used for capacity classification. */
 constexpr unsigned kStreamSustainableSamplesPerMs = 420;
 constexpr unsigned kStreamSustainableFewVoiceSamplesPerMs = 437;
-/** Measured sweet spot for pipelined macOS/TinyUSB OUT submissions. */
-constexpr unsigned kStreamSubmitSamples = 1024;
+/** Async OUT budget; RS-485 status remains independent while this is in flight. */
+constexpr unsigned kStreamSubmitSamples = 2048;
 
 inline constexpr unsigned PackMaxSamples(unsigned nvoices)
 {
@@ -80,18 +79,10 @@ struct StreamBodyMeta {
   uint16_t pad2;
 };
 
-struct StreamStatus {
-  uint8_t mask;
-  uint8_t best;
-  uint16_t free_samples[8];
-  /** Most recent PACK sequence already reflected by free_samples. */
-  uint16_t last_pack_sequence;
-};
 #pragma pack(pop)
 
 static_assert(sizeof(StreamHdr) == kStreamHdrSize, "hdr");
 static_assert(sizeof(StreamBodyMeta) == kStreamBodyMetaSize, "meta");
-static_assert(sizeof(StreamStatus) == 20u, "status");
 
 } // namespace usb
 } // namespace cardlink

@@ -63,7 +63,8 @@ void LogResult(const Controller::LogHandler &push,
 }
 
 bool ParseVq(const char *raw, uint8_t &mask_out, uint8_t &best_out,
-             std::array<uint8_t, kVqVoices> &slots_out)
+             std::array<uint16_t, kVqVoices> &free_out,
+             uint16_t &last_pack_sequence_out)
 {
   cardproto::VoiceQuery query;
   if (!cardproto::ParseVoiceQuery(raw, query)) {
@@ -71,7 +72,8 @@ bool ParseVq(const char *raw, uint8_t &mask_out, uint8_t &best_out,
   }
   mask_out = query.mask;
   best_out = query.best;
-  slots_out = query.free_slots;
+  free_out = query.free_samples;
+  last_pack_sequence_out = query.last_pack_sequence;
   return true;
 }
 
@@ -142,6 +144,11 @@ struct Controller::Impl
     return false;
   }
 
+  bool PollPendingLocked() const
+  {
+    return WatchPendingLocked() || static_cast<bool>(vq_handler);
+  }
+
   void MarkNoteSentLocked(uint8_t slot, double hz)
   {
     sent_hz[slot] = hz;
@@ -206,8 +213,10 @@ struct Controller::Impl
   {
     uint8_t mask = 0;
     uint8_t best = 0xFF;
-    std::array<uint8_t, kVqVoices> slots{};
-    if (!ParseVq(result.raw, mask, best, slots)) {
+    std::array<uint16_t, kVqVoices> free_samples{};
+    uint16_t last_pack_sequence = 0xFFFFu;
+    if (!ParseVq(result.raw, mask, best, free_samples,
+                 last_pack_sequence)) {
       LogPoll(std::string("warn: bad vq reply: ") +
               (result.raw[0] ? result.raw : "(empty)"));
       return;
@@ -222,8 +231,7 @@ struct Controller::Impl
       vq = vq_handler;
       for (uint8_t i = 0; i < kVqVoices; ++i) {
         const bool active = (mask & static_cast<uint8_t>(1u << i)) != 0;
-        /* Slot code 15 is reserved for a genuinely empty body ring. */
-        if (active && slots[i] == 15u) {
+        if (active && free_samples[i] >= 12240u) {
           if (!underrun_logged[i]) {
             LogHandler handler =
                 poll_log_handler ? poll_log_handler : log_handler;
@@ -247,7 +255,7 @@ struct Controller::Impl
     }
 
     if (vq) {
-      vq(mask, best, slots);
+      vq(mask, best, free_samples, last_pack_sequence);
     }
     if (!idle) {
       return;
@@ -269,7 +277,7 @@ struct Controller::Impl
       return;
     }
 
-    /* Status poll only: a late USB stall must not halt notes. */
+    /* Status poll only: an RS-485 status miss must not halt note control. */
     int misses = 0;
     bool give_up = false;
     IdleHandler idle;
@@ -415,12 +423,13 @@ struct Controller::Impl
       {
         std::unique_lock<std::mutex> lock(mutex);
         const auto wait =
-            (!halted.load() && WatchPendingLocked())
+            (!halted.load() && PollPendingLocked())
                 ? std::chrono::milliseconds(0)
                 : kWorkerIdleWait;
         cv.wait_for(lock, wait, [&] {
           return !run.load() || !jobs.empty() ||
-                 (!halted.load() && WorkPendingLocked());
+                 (!halted.load() &&
+                  (WorkPendingLocked() || PollPendingLocked()));
         });
         if (!run.load()) {
           break;
@@ -448,7 +457,7 @@ struct Controller::Impl
               }
             }
           }
-          if (!have_note && WatchPendingLocked()) {
+          if (!have_note && PollPendingLocked()) {
             do_vq = true;
           }
         }
@@ -797,8 +806,11 @@ void Controller::SetIdleHandler(IdleHandler handler)
 
 void Controller::SetVqHandler(VqHandler handler)
 {
-  std::lock_guard<std::mutex> lock(impl_->mutex);
-  impl_->vq_handler = std::move(handler);
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->vq_handler = std::move(handler);
+  }
+  impl_->cv.notify_one();
 }
 
 } // namespace cardlink::rs485

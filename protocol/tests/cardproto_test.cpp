@@ -39,6 +39,18 @@ int main()
             std::strcmp(ok.raw, "ok:vq ff 0 1 1 1 1 1 1 1 1") == 0,
         "tagged ok reply parsing changed");
 
+  cardproto::VoiceQuery query;
+  Check(cardproto::ParseVoiceQuery(
+            "ok:vq 81 7 0 1 255 256 1024 2048 4096 12240 4660", query) &&
+            query.mask == 0x81u && query.best == 7u &&
+            query.free_samples[0] == 0u &&
+            query.free_samples[7] == 12240u &&
+            query.last_pack_sequence == 4660u,
+        "exact-credit vq parsing changed");
+  Check(!cardproto::ParseVoiceQuery(
+            "ok:vq 01 0 12241 0 0 0 0 0 0 0 0", query),
+        "vq must reject free space beyond the physical ring");
+
   const auto err =
       cardproto::ParseReplyBody("[E]err:range detail",
                                 cardproto::Target::Channel);

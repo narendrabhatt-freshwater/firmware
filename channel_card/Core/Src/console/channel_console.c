@@ -43,8 +43,8 @@ void ChannelConsole_SetDacHandle(CS4304_HandleTypeDef *h)
 #define RS485_BUS_TIMEOUT_MS 250
 #define RS485_ECHO 0
 
-/* 921600 8N1 ≈ 12 µs/byte. HAL Timeout is a deadline, not the payload
- * size. The 12-byte vq frame is ~150 µs on the wire; 50 ms was a poll
+/* 921600 8N1 ≈ 11 µs/byte. HAL Timeout is a deadline, not the payload
+ * size. The 26-byte vq frame is ~282 µs on the wire; 50 ms was a poll
  * cap that could eat TinyUSB's ~32 ms ISO software FIFO if TX stalled. */
 static uint32_t RS485_TxDeadlineMs(uint32_t nbytes)
 {
@@ -174,6 +174,7 @@ static uint8_t console_via_usb = 0;
 static uint32_t rs485_cmd_count; /**< commands executed from the bus */
 static uint32_t rs485_tx_fail;   /**< HAL_UART_Transmit did not return OK */
 static uint32_t rs485_tx_trunc;  /**< reply longer than the frame buffer */
+static uint32_t rs485_vq_count;  /**< exact refill-status frames transmitted */
 
 /** Send a tagged response: prefixes the string with [C] so the host knows
  * which card replied.
@@ -217,18 +218,19 @@ static void RS485_Reply(const char *s)
 }
 
 /*
- * Fixed vq frame: sync[2], card, type, active mask, best voice,
- * four packed free-slot bytes, CRC-8, terminator. Keeping the status
- * exchange below one USB frame reduces the time this blocking UART write
- * can delay TinyUSB service.
+ * Fixed vq frame: sync[2], card, type, active mask, best voice, eight exact
+ * uint16 LE free-sample counts, last applied USB PACK sequence, CRC-8 and
+ * terminator. This is the sole BODY refill-credit/acknowledgement source.
  */
-#define VQ_FRAME_LEN 12u
+#define VQ_FRAME_LEN 26u
 #define VQ_SYNC_0 0xA5u
 #define VQ_SYNC_1 0x5Au
 #define VQ_CARD_CHANNEL 0x43u
-#define VQ_TYPE_STATUS 0x01u
+#define VQ_TYPE_STATUS 0x02u
 _Static_assert(NOTE_BANK_VOICES == 8u,
                "vq binary frame packs exactly eight voices");
+_Static_assert(STREAM_RING_SAMPLES <= 65535u,
+               "vq exact free count is uint16");
 
 static uint8_t RS485_Crc8(const uint8_t *data, uint32_t len)
 {
@@ -249,7 +251,8 @@ static uint8_t RS485_Crc8(const uint8_t *data, uint32_t len)
 }
 
 static void RS485_ReplyVq(uint8_t mask, uint8_t best,
-                          const uint8_t *slots)
+                          const uint16_t *free_samples,
+                          uint16_t last_pack_sequence)
 {
   uint8_t frame[VQ_FRAME_LEN];
   uint8_t i;
@@ -260,19 +263,25 @@ static void RS485_ReplyVq(uint8_t mask, uint8_t best,
   frame[3] = VQ_TYPE_STATUS;
   frame[4] = mask;
   frame[5] = best;
-  for (i = 0u; i < NOTE_BANK_VOICES; i += 2u)
+  for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
-    frame[6u + (i / 2u)] =
-        (uint8_t)((slots[i] & 0x0Fu) | ((slots[i + 1u] & 0x0Fu) << 4u));
+    frame[6u + (2u * i)] = (uint8_t)(free_samples[i] & 0xFFu);
+    frame[7u + (2u * i)] = (uint8_t)(free_samples[i] >> 8u);
   }
-  frame[10] = RS485_Crc8(frame, 10u);
-  frame[11] = '\n';
+  frame[22] = (uint8_t)(last_pack_sequence & 0xFFu);
+  frame[23] = (uint8_t)(last_pack_sequence >> 8u);
+  frame[24] = RS485_Crc8(frame, 24u);
+  frame[25] = '\n';
 
   RS485_BusAcquire();
   if (HAL_UART_Transmit(&huart5, frame, VQ_FRAME_LEN,
                         RS485_TxDeadlineMs(VQ_FRAME_LEN)) != HAL_OK)
   {
     rs485_tx_fail++;
+  }
+  else
+  {
+    rs485_vq_count++;
   }
   RS485_BusRelease();
 }
@@ -1349,10 +1358,10 @@ static void Console_CmdCpu(char *line, char *b, size_t bsz)
 }
 
 /**
- * vq — hungriest voice + free slot counts (bench / RS485).
- * Reply: ok:vq <mask_hex> <best> <s0>..<s7>
+ * vq — hungriest voice + exact ring credit + USB PACK acknowledgement.
+ * Reply: ok:vq <mask_hex> <best> <free0>..<free7> <last_pack_seq>
  *   mask bit i = NoteBank_IsActive; best = 0..7 or 255.
- *   si = 0..14 free 256-sample slots; 15 means the ring is empty.
+ *   freei = exact free int16 samples (0..STREAM_RING_SAMPLES).
  */
 static void Console_CmdVoiceQuery(void)
 {
@@ -1361,9 +1370,18 @@ static void Console_CmdVoiceQuery(void)
   uint8_t mask = 0u;
   uint8_t best = 0xFFu;
   uint8_t slots[NOTE_BANK_VOICES];
+  uint16_t free_samples[NOTE_BANK_VOICES];
+  uint16_t last_pack_sequence;
   uint8_t i;
 
   NoteBank_VoiceQuery(&mask, &best, slots);
+  (void)slots;
+  for (i = 0u; i < NOTE_BANK_VOICES; i++)
+  {
+    free_samples[i] =
+        (uint16_t)(STREAM_RING_SAMPLES - StreamRing_FillLevel(i));
+  }
+  last_pack_sequence = USB_App_LastPackSequence();
 
   n = snprintf(b, sizeof b, "ok:vq %02x %u", (unsigned)mask, (unsigned)best);
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
@@ -1373,7 +1391,13 @@ static void Console_CmdVoiceQuery(void)
       RS485_Reply("err:buf\r\n");
       return;
     }
-    n += snprintf(b + n, sizeof b - (size_t)n, " %u", (unsigned)slots[i]);
+    n += snprintf(b + n, sizeof b - (size_t)n, " %u",
+                  (unsigned)free_samples[i]);
+  }
+  if (n >= 0 && (size_t)n < sizeof b)
+  {
+    n += snprintf(b + n, sizeof b - (size_t)n, " %u",
+                  (unsigned)last_pack_sequence);
   }
   if (n < 0 || (size_t)n >= sizeof b - 2u)
   {
@@ -1389,7 +1413,7 @@ static void Console_CmdVoiceQuery(void)
   }
   else
   {
-    RS485_ReplyVq(mask, best, slots);
+    RS485_ReplyVq(mask, best, free_samples, last_pack_sequence);
   }
 }
 
@@ -1695,6 +1719,7 @@ static void Console_Exec(char *line)
       }
       Audio_Bridge_UsbDropCountClear();
       USB_App_StatsClear();
+      rs485_vq_count = 0u;
     }
     {
       char min_s[12];
@@ -1718,7 +1743,7 @@ static void Console_Exec(char *line)
                (unsigned long)Audio_Bridge_MaxFill(),
                (unsigned long)StreamRing_ZeroCount(),
                (unsigned long)StreamRing_SofCount(),
-               (unsigned long)USB_App_StatusCount(),
+               (unsigned long)rs485_vq_count,
                (unsigned long)USB_App_RxMsgCount(),
                (unsigned long)USB_App_RxByteCount(),
                (unsigned long)USB_App_BadCount(),

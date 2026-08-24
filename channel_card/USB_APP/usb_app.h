@@ -32,7 +32,8 @@ extern "C"
     uint32_t USB_App_RxMsgCount(void);
     uint32_t USB_App_RxByteCount(void);
     uint32_t USB_App_BadCount(void);
-    uint32_t USB_App_StatusCount(void);
+    /** Most recent vendor OUT PACK fully applied to the BODY rings. */
+    uint16_t USB_App_LastPackSequence(void);
     void USB_App_StatsClear(void);
 
 #ifdef __cplusplus

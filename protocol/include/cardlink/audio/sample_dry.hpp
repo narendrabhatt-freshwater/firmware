@@ -2,15 +2,15 @@
  * @file sample_dry.hpp
  * @brief Host body feeder: unpitched int16 → vendor bulk BODY packs.
  *
- * Card owns pitch / env / filter. Every fresh `vq` with free slots grants
+ * Card owns pitch / env / filter. Every fresh RS-485 `vq` grants
  * at most one refill to each voice (at most kBodyBurstMax and at most the
  * safe free-space credit). Each vq reconciles predicted occupancy to the
- * card's reported bin plus the exact per-voice samples in concurrent OUT.
+ * the card's exact occupancy plus per-voice samples in concurrent USB OUT.
  * One PACK divides its payload by source consumption rate so a fast
  * voice cannot consume its share before the next status.
  *
- * One packed URB per granted status (four FS frames). USB NAK when the vendor
- * FIFO is full; a full ring drops the whole chunk.
+ * One asynchronous packed USB OUT submission is made per granted status.
+ * USB NAKs when the vendor FIFO is full; a full ring drops the whole chunk.
  *
  * `queued` estimates card FIFO occupancy (attack does not consume body).
  *
@@ -35,15 +35,15 @@ constexpr unsigned kSampleRateHz = 48000;
 constexpr unsigned kAttackSamples = 512;
 constexpr unsigned kCrossfadeSamples = 32;
 constexpr unsigned kBodyOrigin = kAttackSamples - kCrossfadeSamples;
-constexpr unsigned kRingSamples = 5632;
+constexpr unsigned kRingSamples = 12240;
 /** Leave room for interpolator taps. */
 constexpr unsigned kRingHeadroom = 32;
 /** vq free-slot code: 0..14 complete 256-sample slots; 15 = empty. */
 constexpr unsigned kVqSlotSamples = 256;
 constexpr unsigned kVqSlotMax = 14;
 constexpr unsigned kVqSlotEmpty = 15;
-/** Coalesce exact 1 ms credits to amortize eight per-voice BODY metas. */
-constexpr unsigned kMinBurst = 1024;
+/** Coalesce refill credit to amortize eight per-voice BODY metas. */
+constexpr unsigned kMinBurst = 512;
 constexpr unsigned kStreamSessionMod = 7;
 /** One BODY meta remains bounded; the larger ring absorbs poll/host jitter. */
 constexpr unsigned kBodyBurstMax = 4096;
@@ -119,12 +119,12 @@ public:
   /** Wait until the initial SOF BODY burst has completed on USB. */
   bool WaitPrefill(uint8_t voice, unsigned timeout_ms);
 
-  /** USB/RS485 `vq`: mask, hungriest, per-voice free-slot codes 0..15.
+  /** Legacy quantized `vq`: mask, hungriest, free-slot codes 0..15.
    *  unreflected optionally gives exact samples in the concurrent USB OUT. */
   void ApplyVoiceQuery(uint8_t mask, uint8_t best, const uint8_t *free_slots,
                        const uint16_t *unreflected = nullptr);
 
-  /** USB `vq` with exact per-voice free-sample counts. */
+  /** Authoritative RS-485 `vq` with exact per-voice free-sample counts. */
   void ApplyVoiceStatus(uint8_t mask, uint8_t best,
                         const uint16_t *free_samples,
                         const uint16_t *unreflected = nullptr);

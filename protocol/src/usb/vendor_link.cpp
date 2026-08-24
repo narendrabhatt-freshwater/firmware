@@ -16,7 +16,9 @@
 
 #include <mutex>
 #include <condition_variable>
+#include <atomic>
 #include <cstring>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -37,6 +39,8 @@ struct VendorLink::Impl {
   std::mutex mu;
   std::condition_variable cv;
   std::unordered_set<AsyncOut *> async_out;
+  std::thread event_thread;
+  std::atomic<bool> events_run{false};
   bool closing = false;
   static void LIBUSB_CALL AsyncOutComplete(libusb_transfer *transfer);
 };
@@ -74,27 +78,24 @@ void VendorLink::Close()
   if (!impl_) {
     return;
   }
-  std::vector<libusb_transfer *> cancel;
   {
     std::lock_guard<std::mutex> lock(impl_->mu);
     impl_->closing = true;
-    cancel.reserve(impl_->async_out.size());
+    /* Keep ownership locked while issuing cancellation. Otherwise an event
+     * callback can erase/free a transfer after its pointer is copied but
+     * before libusb_cancel_transfer() uses it. Cancellation is asynchronous;
+     * callbacks drain below after this lock is released. */
     for (auto *out : impl_->async_out) {
-      cancel.push_back(out->transfer);
+      (void)libusb_cancel_transfer(out->transfer);
     }
   }
-  for (auto *transfer : cancel) {
-    (void)libusb_cancel_transfer(transfer);
+  if (impl_->ctx) {
+    std::unique_lock<std::mutex> lock(impl_->mu);
+    impl_->cv.wait(lock, [this] { return impl_->async_out.empty(); });
   }
-  while (true) {
-    {
-      std::lock_guard<std::mutex> lock(impl_->mu);
-      if (impl_->async_out.empty()) {
-        break;
-      }
-    }
-    timeval tv{0, 10000};
-    (void)libusb_handle_events_timeout(impl_->ctx, &tv);
+  impl_->events_run.store(false, std::memory_order_release);
+  if (impl_->event_thread.joinable()) {
+    impl_->event_thread.join();
   }
   std::lock_guard<std::mutex> lock(impl_->mu);
   if (impl_->handle) {
@@ -136,6 +137,13 @@ bool VendorLink::Open(uint16_t vid, uint16_t pid, std::string &err)
     impl_->ctx = nullptr;
     return false;
   }
+  impl_->events_run.store(true, std::memory_order_release);
+  impl_->event_thread = std::thread([this] {
+    while (impl_->events_run.load(std::memory_order_acquire)) {
+      timeval tv{0, 10000};
+      (void)libusb_handle_events_timeout(impl_->ctx, &tv);
+    }
+  });
   return true;
 }
 
@@ -214,8 +222,8 @@ bool VendorLink::Read(void *data, int capacity, int &nbytes,
     err = "empty read";
     return false;
   }
-  /* SampleBulkOut joins its IN/OUT threads before Close, and libusb permits
-   * concurrent transfers on separate endpoints of one claimed interface. */
+  /* Descriptor-compatible diagnostic endpoint; live BODY flow is OUT-only. */
+  std::lock_guard<std::mutex> lock(impl_->mu);
   if (impl_->handle == nullptr) {
     err = "vendor USB closed";
     return false;

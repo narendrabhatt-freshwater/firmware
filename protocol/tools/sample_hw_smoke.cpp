@@ -81,7 +81,11 @@ int main(int argc, char **argv)
 
   cardlink::rs485::Controller bus;
   bus.SetLogHandler([](const std::string &s) { std::cout << s << '\n'; });
-  bus.SetPollLogHandler([](const std::string &) {});
+  bus.SetPollLogHandler([](const std::string &s) {
+    if (s.rfind("warn:", 0) == 0) {
+      std::cout << s << '\n';
+    }
+  });
   if (!bus.Open(rs485, 921600u, 6u)) {
     std::cerr << "cannot open RS485 " << rs485 << '\n';
     return EXIT_FAILURE;
@@ -109,6 +113,12 @@ int main(int argc, char **argv)
 
   cardlink::audio::SampleBulkOut bulk;
   bulk.BindMixer(sample.Mixer());
+  bus.SetVqHandler(
+      [&bulk](uint8_t mask, uint8_t best,
+              const std::array<uint16_t, cardlink::audio::kSampleVoices> &free,
+              uint16_t last_pack_sequence) {
+        bulk.SubmitStatus(mask, best, free, last_pack_sequence);
+      });
   if (!bulk.Start(err)) {
     std::cerr << "BODY open failed: " << err << '\n';
     bus.Close();

@@ -66,7 +66,7 @@ void RunNoFaultCase(const std::array<double, cardlink::audio::kSampleVoices> &in
   std::array<double, kSampleVoices> phase{};
   uint8_t mask = 0u;
   const double output_frames = 48.0 *
-      static_cast<double>(cardlink::usb::kStreamServiceFrames);
+      cardlink::usb::kStreamStatusNominalPeriodMs;
 
   for (uint8_t v = 0; v < nvoices; ++v) {
     mixer.NoteOn(v, 0, body_root_hz * inc[v]);
@@ -272,15 +272,15 @@ int main()
   Check(TakeBurst(mixer, 0) == kBodyBurstMax,
         "C3 gets one permitted SOF burst");
   slots.fill(kVqSlotEmpty);
-  slots[0] = 2; /* 512 samples of safe free-space permission */
+  slots[0] = 1; /* 256 samples: below the per-voice packing threshold */
   mixer.ApplyVoiceQuery(0x01, 0, slots.data());
   mixer.ConsumeOutputSamples(0.0);
   Check(mixer.WantBurst(0) == 0u,
         "healthy low note must coalesce sub-threshold fresh credit");
-  slots[0] = 4; /* 1024 samples: enough to amortize one BODY meta */
+  slots[0] = 2; /* 512 samples: enough to amortize one BODY meta */
   mixer.ApplyVoiceQuery(0x01, 0, slots.data());
   mixer.ConsumeOutputSamples(0.0);
-  Check(mixer.WantBurst(0) == 1024u,
+  Check(mixer.WantBurst(0) == 512u,
         "low note must serve coalesced fresh credit exactly");
 
   mixer.Silence(0);

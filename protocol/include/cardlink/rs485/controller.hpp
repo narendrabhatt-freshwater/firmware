@@ -41,9 +41,10 @@ public:
                          const cardproto::Result &)>;
   /** Called when vq reports a voice idle after note activity. */
   using IdleHandler = std::function<void(uint8_t slot)>;
-  /** Occupancy correction for BODY pacing (slots 0..14; 15 means empty). */
+  /** Exact BODY refill credit plus last applied USB PACK sequence. */
   using VqHandler = std::function<void(uint8_t, uint8_t,
-                                       const std::array<uint8_t, 8> &)>;
+                                       const std::array<uint16_t, 8> &,
+                                       uint16_t)>;
 
   Controller();
   ~Controller();
@@ -86,6 +87,7 @@ public:
   /** Called after each successful raw QueueExec command. */
   void SetCommandHandler(CommandHandler handler);
   void SetIdleHandler(IdleHandler handler);
+  /** Installing a handler enables continuous sequential vq polling. */
   void SetVqHandler(VqHandler handler);
 
 private:

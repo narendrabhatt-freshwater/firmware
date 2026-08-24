@@ -319,7 +319,7 @@ unsigned SampleDryMixer::WantBurst(uint8_t voice) const
   }
   /* A fresh vq is both permission and safe credit. Keep the jitter ring as
    * full as that credit permits instead of stopping at a guessed time
-   * threshold; at C6 even the entire ring is only about 21 ms. */
+   * threshold; at C6 the entire ring is about 64 ms. */
   unsigned n = v.vq_free;
   if (n > kBodyBurstMax) {
     n = kBodyBurstMax;
