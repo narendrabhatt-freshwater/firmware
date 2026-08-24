@@ -108,6 +108,7 @@ struct Controller::Impl
   std::array<double, cardlink::midi::kVoiceCount> desired_hz{};
   std::array<double, cardlink::midi::kVoiceCount> sent_hz{};
   std::array<bool, kVqVoices> watch_idle{};
+  std::array<bool, kVqVoices> ring_primed{};
   std::array<bool, kVqVoices> underrun_logged{};
   int vq_misses = 0;
   std::queue<Job> jobs;
@@ -155,6 +156,9 @@ struct Controller::Impl
     if (slot < kVqVoices) {
       /* Note-on and note-off both watch until vq reports card-side idle. */
       watch_idle[slot] = true;
+      if (hz > 0.0) {
+        ring_primed[slot] = false;
+      }
       underrun_logged[slot] = false;
     }
   }
@@ -162,6 +166,7 @@ struct Controller::Impl
   void ClearWatchLocked()
   {
     watch_idle.fill(false);
+    ring_primed.fill(false);
     underrun_logged.fill(false);
     vq_misses = 0;
   }
@@ -231,7 +236,15 @@ struct Controller::Impl
       vq = vq_handler;
       for (uint8_t i = 0; i < kVqVoices; ++i) {
         const bool active = (mask & static_cast<uint8_t>(1u << i)) != 0;
-        if (active && free_samples[i] >= 12240u) {
+        if (!active) {
+          ring_primed[i] = false;
+          underrun_logged[i] = false;
+        } else if (free_samples[i] < 12240u) {
+          /* An empty ring is normal while the attack bridges asynchronous
+           * startup. It becomes an underrun only after BODY was observed. */
+          ring_primed[i] = true;
+          underrun_logged[i] = false;
+        } else if (ring_primed[i]) {
           if (!underrun_logged[i]) {
             LogHandler handler =
                 poll_log_handler ? poll_log_handler : log_handler;
@@ -565,6 +578,11 @@ bool Controller::Open(const std::string &path, uint32_t baud,
   impl_->open.store(true);
   impl_->Log("ok: connected " + path + " gain " +
              std::to_string(atten_db) + " dB");
+  if (impl_->bus.EchoDisabled()) {
+    impl_->Log("ok: Effect Card RS485 echo verified off");
+  } else {
+    impl_->Log("warn: Effect Card echo could not be verified off");
+  }
   return true;
 }
 
@@ -707,6 +725,9 @@ QueueResult Controller::QueueExec(cardproto::Target target, std::string command)
         /* Arm the idle watch after the card ACKs nX (MarkNoteSentLocked).
          * Arming here races an in-flight vq and drops the BODY stream. */
         impl_->underrun_logged[slot] = false;
+        if (value > 0.0) {
+          impl_->ring_primed[slot] = false;
+        }
       }
       impl_->cv.notify_one();
       return QueueResult::Ok;
@@ -764,6 +785,7 @@ void Controller::AcknowledgeSlotHz(uint8_t slot, double hz)
   impl_->desired_hz[slot] = value;
   impl_->sent_hz[slot] = value;
   impl_->watch_idle[slot] = true;
+  impl_->ring_primed[slot] = false;
   impl_->underrun_logged[slot] = false;
 }
 
@@ -776,6 +798,7 @@ void Controller::AcknowledgeAllHz(double hz)
   /* Every acknowledged voice watches until the card reports it idle. */
   for (uint8_t i = 0; i < kVqVoices; ++i) {
     impl_->watch_idle[i] = true;
+    impl_->ring_primed[i] = false;
     impl_->underrun_logged[i] = false;
   }
 }

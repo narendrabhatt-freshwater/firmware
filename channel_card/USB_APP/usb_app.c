@@ -135,182 +135,257 @@ static void CDC_Console_Poll(void)
   }
 }
 
-/* The packed BODY assembly is too large for the nearly-full DTCM .bss.
- * AXI SRAM is CPU-visible and already owns the USB/DMA working buffers. */
-static uint8_t s_msg[USB_STREAM_MSG_MAX]
-    __attribute__((aligned(4), section(".dma_buffer")));
-static uint32_t s_got;
-static uint32_t s_need;
+typedef enum
+{
+  USB_RX_HEADER = 0,
+  USB_RX_META,
+  USB_RX_SAMPLES,
+  USB_RX_DISCARD
+} USB_RxState_t;
+
+/* TinyUSB already owns the vendor RX FIFO. Keep only framing state here and
+ * read PCM directly into an unpublished per-voice ring reservation. */
+static struct
+{
+  USB_RxState_t state;
+  UsbStreamHdr hdr;
+  UsbStreamBodyMeta meta;
+  StreamRing_Write_t write;
+  uint32_t header_got;
+  uint32_t meta_got;
+  uint32_t payload_left;
+  uint32_t sample_bytes_left;
+} s_rx;
 static uint32_t s_rx_msg;
 static uint32_t s_rx_bytes;
 static uint32_t s_bad;
-static void USB_App_ResetAsm(void)
+
+static void USB_App_ResetRx(void)
 {
-  s_got = 0u;
-  s_need = 0u;
+  StreamRing_WriteAbort(&s_rx.write);
+  memset(&s_rx, 0, sizeof s_rx);
+  s_rx.state = USB_RX_HEADER;
 }
 
-static int USB_App_HandleBody(const uint8_t *payload, uint16_t nbytes)
+static void USB_App_DiscardFrame(void)
 {
-  const UsbStreamBodyMeta *meta;
-  const int16_t *samples;
-
-  if (nbytes < USB_STREAM_BODY_META_SIZE)
+  StreamRing_WriteAbort(&s_rx.write);
+  if (s_rx.payload_left == 0u)
   {
-    s_bad++;
-    return -1;
+    USB_App_ResetRx();
   }
-  meta = (const UsbStreamBodyMeta *)(const void *)payload;
-  if (meta->nsamp == 0u || meta->nsamp > USB_STREAM_NSAMP_MAX)
+  else
   {
-    s_bad++;
-    return -1;
+    s_rx.state = USB_RX_DISCARD;
   }
-  if ((uint32_t)nbytes !=
-      (USB_STREAM_BODY_META_SIZE + ((uint32_t)meta->nsamp * 2u)))
-  {
-    s_bad++;
-    return -1;
-  }
-  samples = (const int16_t *)(const void *)(payload + USB_STREAM_BODY_META_SIZE);
-  return StreamRing_WriteVoice(meta->voice, meta->session, meta->sof, samples,
-                               meta->nsamp) == meta->nsamp
-             ? 0
-             : -1;
 }
 
-static int USB_App_HandlePack(const uint8_t *payload, uint16_t nbytes)
+static void USB_App_FinishFrame(void)
 {
-  uint32_t po = 0u;
-  while ((po + USB_STREAM_BODY_META_SIZE) <= (uint32_t)nbytes)
+  if (s_rx.hdr.type == USB_STREAM_TYPE_PACK)
   {
-    UsbStreamBodyMeta meta;
-    uint32_t chunk;
-
-    memcpy(&meta, payload + po, sizeof meta);
-    chunk = USB_STREAM_BODY_META_SIZE + ((uint32_t)meta.nsamp * 2u);
-    if (meta.nsamp == 0u || meta.nsamp > USB_STREAM_NSAMP_MAX ||
-        (po + chunk) > (uint32_t)nbytes)
-    {
-      s_bad++;
-      return -1;
-    }
-    if (USB_App_HandleBody(payload + po, (uint16_t)chunk) != 0)
-    {
-      return -1;
-    }
-    po += chunk;
-    s_rx_msg++;
+    s_last_pack_sequence = s_rx.hdr.pad;
   }
-  if (po != (uint32_t)nbytes)
-  {
-    s_bad++;
-    return -1;
-  }
-  return 0;
+  USB_App_ResetRx();
 }
 
 static void USB_App_DrainVendor(void)
 {
+  static uint8_t discard[64];
+
   if (!tud_vendor_mounted())
   {
-    USB_App_ResetAsm();
+    USB_App_ResetRx();
     return;
   }
 
-  for (;;)
+  while (tud_vendor_available() != 0u)
   {
     uint32_t avail = tud_vendor_available();
     uint32_t n;
 
-    if (avail == 0u)
+    if (s_rx.state == USB_RX_DISCARD)
     {
-      break;
-    }
-
-    if (s_got < USB_STREAM_HDR_SIZE)
-    {
-      n = USB_STREAM_HDR_SIZE - s_got;
+      n = s_rx.payload_left;
       if (n > avail)
       {
         n = avail;
       }
-      n = tud_vendor_read(s_msg + s_got, n);
+      if (n > sizeof discard)
+      {
+        n = sizeof discard;
+      }
+      n = tud_vendor_read(discard, n);
       if (n == 0u)
       {
         break;
       }
-      s_got += n;
+      s_rx.payload_left -= n;
       s_rx_bytes += n;
-      if (s_got < USB_STREAM_HDR_SIZE)
+      if (s_rx.payload_left == 0u)
+      {
+        USB_App_ResetRx();
+      }
+      continue;
+    }
+
+    if (s_rx.state == USB_RX_HEADER)
+    {
+      uint8_t *header = (uint8_t *)(void *)&s_rx.hdr;
+      n = USB_STREAM_HDR_SIZE - s_rx.header_got;
+      if (n > avail)
+      {
+        n = avail;
+      }
+      n = tud_vendor_read(header + s_rx.header_got, n);
+      if (n == 0u)
       {
         break;
       }
-      if (s_msg[0] != USB_STREAM_MAGIC0 || s_msg[1] != USB_STREAM_MAGIC1)
+      s_rx.header_got += n;
+      s_rx_bytes += n;
+      if (s_rx.header_got < USB_STREAM_HDR_SIZE)
       {
-        s_bad++;
-        memmove(s_msg, s_msg + 1, USB_STREAM_HDR_SIZE - 1u);
-        s_got = USB_STREAM_HDR_SIZE - 1u;
         continue;
       }
+      if (header[0] != USB_STREAM_MAGIC0 || header[1] != USB_STREAM_MAGIC1)
       {
-        const UsbStreamHdr *hdr = (const UsbStreamHdr *)(const void *)s_msg;
-        if (hdr->nbytes > (USB_STREAM_MSG_MAX - USB_STREAM_HDR_SIZE))
-        {
-          s_bad++;
-          USB_App_ResetAsm();
-          continue;
-        }
-        s_need = USB_STREAM_HDR_SIZE + (uint32_t)hdr->nbytes;
+        s_bad++;
+        memmove(header, header + 1, USB_STREAM_HDR_SIZE - 1u);
+        s_rx.header_got = USB_STREAM_HDR_SIZE - 1u;
+        continue;
       }
+      if (s_rx.hdr.nbytes > (USB_STREAM_MSG_MAX - USB_STREAM_HDR_SIZE))
+      {
+        s_bad++;
+        USB_App_ResetRx();
+        continue;
+      }
+      s_rx.payload_left = s_rx.hdr.nbytes;
+      if (s_rx.hdr.type != USB_STREAM_TYPE_BODY &&
+          s_rx.hdr.type != USB_STREAM_TYPE_PACK)
+      {
+        s_bad++;
+        USB_App_DiscardFrame();
+        continue;
+      }
+      if (s_rx.payload_left < USB_STREAM_BODY_META_SIZE)
+      {
+        s_bad++;
+        USB_App_DiscardFrame();
+        continue;
+      }
+      s_rx.state = USB_RX_META;
+      s_rx.meta_got = 0u;
+      continue;
     }
 
-    if (s_got < s_need)
+    if (s_rx.state == USB_RX_META)
     {
-      avail = tud_vendor_available();
-      if (avail == 0u)
-      {
-        break;
-      }
-      n = s_need - s_got;
+      uint8_t *meta = (uint8_t *)(void *)&s_rx.meta;
+      n = USB_STREAM_BODY_META_SIZE - s_rx.meta_got;
       if (n > avail)
       {
         n = avail;
       }
-      n = tud_vendor_read(s_msg + s_got, n);
+      n = tud_vendor_read(meta + s_rx.meta_got, n);
       if (n == 0u)
       {
         break;
       }
-      s_got += n;
+      s_rx.meta_got += n;
+      s_rx.payload_left -= n;
       s_rx_bytes += n;
-    }
-
-    if (s_got >= s_need && s_need >= USB_STREAM_HDR_SIZE)
-    {
-      const UsbStreamHdr *hdr = (const UsbStreamHdr *)(const void *)s_msg;
-      if (hdr->type == USB_STREAM_TYPE_BODY)
+      if (s_rx.meta_got < USB_STREAM_BODY_META_SIZE)
       {
-        if (USB_App_HandleBody(s_msg + USB_STREAM_HDR_SIZE, hdr->nbytes) == 0)
-        {
-          s_rx_msg++;
-        }
+        continue;
       }
-      else if (hdr->type == USB_STREAM_TYPE_PACK)
-      {
-        /* Publish only after every BODY in this PACK has been applied. The
-         * host uses this acknowledgement to decide whether an OUT transfer
-         * was already reflected by a racing exact-free-space snapshot. */
-        if (USB_App_HandlePack(s_msg + USB_STREAM_HDR_SIZE, hdr->nbytes) == 0)
-        {
-          s_last_pack_sequence = hdr->pad;
-        }
-      }
-      else
+      s_rx.sample_bytes_left = (uint32_t)s_rx.meta.nsamp * 2u;
+      if (s_rx.meta.voice >= SAMPLE_VOICES || s_rx.meta.nsamp == 0u ||
+          s_rx.meta.nsamp > USB_STREAM_NSAMP_MAX ||
+          s_rx.sample_bytes_left > s_rx.payload_left ||
+          (s_rx.hdr.type == USB_STREAM_TYPE_BODY &&
+           s_rx.sample_bytes_left != s_rx.payload_left))
       {
         s_bad++;
+        USB_App_DiscardFrame();
+        continue;
       }
-      USB_App_ResetAsm();
+      if (StreamRing_WriteBegin(s_rx.meta.voice, s_rx.meta.session,
+                                s_rx.meta.sof, s_rx.meta.nsamp,
+                                &s_rx.write) != 0)
+      {
+        /* Ring overflow is already counted as a dropped BODY burst. Do not
+         * acknowledge a PACK that the host must reconcile/retry. */
+        USB_App_DiscardFrame();
+        continue;
+      }
+      s_rx.state = USB_RX_SAMPLES;
+      continue;
+    }
+
+    if (s_rx.state == USB_RX_SAMPLES)
+    {
+      uint32_t span_samples = 0u;
+      int16_t *span = StreamRing_WriteSpan(&s_rx.write, &span_samples);
+      if (span == NULL || span_samples == 0u)
+      {
+        s_bad++;
+        USB_App_DiscardFrame();
+        continue;
+      }
+      n = span_samples * 2u;
+      if (n > s_rx.sample_bytes_left)
+      {
+        n = s_rx.sample_bytes_left;
+      }
+      if (n > avail)
+      {
+        n = avail;
+      }
+      /* Valid PCM payloads and every FS packet boundary are 16-bit aligned. */
+      n &= ~1u;
+      if (n == 0u)
+      {
+        break;
+      }
+      n = tud_vendor_read(span, n);
+      if (n == 0u || (n & 1u) != 0u ||
+          StreamRing_WriteAdvance(&s_rx.write, n / 2u) != 0)
+      {
+        s_bad++;
+        USB_App_DiscardFrame();
+        continue;
+      }
+      s_rx.sample_bytes_left -= n;
+      s_rx.payload_left -= n;
+      s_rx_bytes += n;
+      if (s_rx.sample_bytes_left != 0u)
+      {
+        continue;
+      }
+      if (StreamRing_WriteCommit(&s_rx.write) != s_rx.meta.nsamp)
+      {
+        s_bad++;
+        USB_App_DiscardFrame();
+        continue;
+      }
+      s_rx_msg++;
+      if (s_rx.payload_left == 0u)
+      {
+        USB_App_FinishFrame();
+        continue;
+      }
+      if (s_rx.hdr.type != USB_STREAM_TYPE_PACK ||
+          s_rx.payload_left < USB_STREAM_BODY_META_SIZE)
+      {
+        s_bad++;
+        USB_App_DiscardFrame();
+        continue;
+      }
+      memset(&s_rx.meta, 0, sizeof s_rx.meta);
+      s_rx.meta_got = 0u;
+      s_rx.state = USB_RX_META;
     }
   }
 }

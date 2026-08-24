@@ -303,8 +303,8 @@ unsigned SampleDryMixer::WantBurst(uint8_t voice) const
   const auto &v = voices_[voice];
   if (v.prefill_pending) {
     /* A new session resets its card ring, so its one SOF prefill cannot
-     * overflow. Sending it before nX gives high notes their full attack
-     * interval to bridge into BODY; later refills still require status. */
+     * overflow. It runs concurrently with nX so the attack can bridge into
+     * BODY; later refills still require status. */
     const unsigned sent = sent_[voice].load(std::memory_order_relaxed);
     if (sent >= kBodyBurstMax) {
       return 0;

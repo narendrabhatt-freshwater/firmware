@@ -1,4 +1,5 @@
 #include "cardlink/audio/sample_dry.hpp"
+#include "cardlink/sample/client.hpp"
 #include "cardlink/usb/stream_proto.hpp"
 
 #include <array>
@@ -403,6 +404,24 @@ int main()
     inc.fill(1.0);
     RunNoFaultCase(inc, 8u, 1000u,
                    "eight C4 voices must run 10 s without hold/drop");
+  }
+
+  {
+    cardlink::sample::Client client;
+    LoadTone(client.Mixer(), 0);
+    std::vector<std::string> commands;
+    client.SetConsole(
+        [&commands](const std::string &cmd) { commands.push_back(cmd); });
+    const std::array<cardlink::sample::NoteRequest, 2> chord{{
+        {0u, 261.625565, 0u},
+        {1u, 329.627557, 0u},
+    }};
+    Check(client.NoteOnBatch(chord.data(), chord.size(), 0u),
+          "chord must start without waiting for BODY completion");
+    Check(commands.size() == 4u && commands[0] == "aw 0 0" &&
+              commands[1] == "aw 1 0" && commands[2].rfind("n0 ", 0u) == 0u &&
+              commands[3].rfind("n1 ", 0u) == 0u,
+          "audible chord commands must follow session setup immediately");
   }
 
   return EXIT_SUCCESS;

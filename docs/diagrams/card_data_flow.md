@@ -66,8 +66,8 @@ The host packs the hungriest wanting voices into each bulk transfer (fair share
 of a 2048-sample async OUT budget, weighted by each voice's source-consumption
 rate). Every fresh RS485 `vq` exact free-space grant permits one bounded packed
 refill; otherwise the host waits for the next reply. A new session gets one
-safe SOF prefill before `nX`; later
-refills are status-gated. This keeps the jitter rings full at note start.
+safe SOF prefill concurrently with `nX`; later
+refills are status-gated. This starts filling the jitter rings during attack.
 Free-slot code 0 is a hard stop. A full vendor FIFO NAKs the host.
 Missing body holds the last sample until USB catches up. A full ring
 drops the whole chunk; the producer never overwrites unread FIFO samples.

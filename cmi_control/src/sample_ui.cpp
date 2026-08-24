@@ -705,7 +705,7 @@ void DrawSamplePage(App &app)
   MonoText("Attack on card (CDC)  ·  Body via vendor bulk (card pitches)",
            kPalette.text, fw::theme::g_fonts.mono);
   ImGui::Spacing();
-  MonoText("Prefill BODY then RS485 n0..n7  ·  env / filter on card.",
+  MonoText("RS485 note + concurrent BODY prefill  ·  env / filter on card.",
            kPalette.text_dim, fs);
   ImGui::Spacing();
   MonoText("Pass wav/raw per wave_id 0..255; SDK splits attack (CDC) + body (USB).",

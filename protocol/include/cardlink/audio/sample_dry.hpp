@@ -70,7 +70,7 @@ public:
   void SetBodyOneshot(uint16_t wave_id, bool oneshot);
   bool BodyOneshot(uint16_t wave_id) const;
 
-  /** New session. Its first SOF burst also requires a fresh `vq`. */
+  /** New session. Its one safe SOF prefill may run ahead of a fresh `vq`. */
   void NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz);
 
   /** Key-up: card releases. Body stream continues until Silence. */
@@ -109,7 +109,7 @@ public:
   /** Undo FillBurst when the bulk OUT did not accept the packet. */
   void AbortBurst(uint8_t voice, unsigned nsamp, bool sof);
 
-  /** Record successful host-to-device completion (used by note prefill). */
+  /** Record successful host-to-device completion for prefill observation. */
   void CommitBurst(uint8_t voice, unsigned nsamp, bool sof);
 
   /** Wait until the initial SOF BODY burst has completed on USB. */

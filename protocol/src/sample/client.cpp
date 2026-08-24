@@ -8,13 +8,11 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <system_error>
-#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -534,8 +532,11 @@ void Client::NoteOn(uint8_t voice, double hz, uint16_t wave_id)
 }
 
 bool Client::NoteOnBatch(const NoteRequest *notes, size_t count,
-                         unsigned timeout_ms)
+                         unsigned legacy_timeout_ms)
 {
+  /* Kept in the ABI for existing callers. Note-on no longer waits for BODY:
+   * the card's attack head bridges the asynchronous USB prefill. */
+  (void)legacy_timeout_ms;
   if (notes == nullptr || count == 0u || count > cardlink::audio::kSampleVoices) {
     return false;
   }
@@ -568,6 +569,9 @@ bool Client::NoteOnBatch(const NoteRequest *notes, size_t count,
         }
       }
     }
+    if (!mixer_.HasBody(wave)) {
+      continue;
+    }
     char aw[32];
     std::snprintf(aw, sizeof aw, "aw %u %u",
                   static_cast<unsigned>(note.voice),
@@ -580,30 +584,9 @@ bool Client::NoteOnBatch(const NoteRequest *notes, size_t count,
     return false;
   }
 
-  /* Every pending voice is visible to the same fresh RS-485 vq polls, so the
-   * fair allocator fills the whole chord concurrently. Nothing is audible
-   * until every ring owns its complete safe startup reservoir. */
-  const auto deadline = std::chrono::steady_clock::now() +
-      std::chrono::milliseconds(timeout_ms);
-  bool all_ready = false;
-  while (std::chrono::steady_clock::now() < deadline) {
-    all_ready = true;
-    for (size_t i = 0u; i < nprepared; ++i) {
-      if (!mixer_.WaitPrefill(prepared[i].voice, 0u)) {
-        all_ready = false;
-      }
-    }
-    if (all_ready) {
-      break;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  if (!all_ready) {
-    for (size_t i = 0u; i < nprepared; ++i) {
-      mixer_.Silence(prepared[i].voice);
-    }
-    return false;
-  }
+  /* Start the chord immediately. The mixer has already exposed every voice
+   * to the bulk thread, so their safe SOF prefills proceed concurrently while
+   * the card plays the attack heads and bridges into BODY at the join. */
   for (size_t i = 0u; i < nprepared; ++i) {
     char cmd[48];
     std::snprintf(cmd, sizeof cmd, "n%u %.6g",

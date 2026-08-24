@@ -64,10 +64,11 @@ public:
 
   bool SetRootHz(uint16_t wave_id, double hz, std::string &err);
 
-  /** Prefill one note safely, then issue `nX`. */
+  /** Start one note while its safe SOF BODY prefill runs asynchronously. */
   void NoteOn(uint8_t voice, double hz, uint16_t wave_id = 0xFFFFu);
-  /** Prepare all BODY sessions together, wait for their concurrent polling
-   *  prefill, then issue their audible `nX` commands as one chord. */
+  /** Prepare all BODY sessions, then issue the audible `nX` chord immediately.
+   *  SOF prefills run concurrently and the card's attack heads bridge them.
+   *  The timeout argument remains for source/ABI compatibility and is ignored. */
   bool NoteOnBatch(const NoteRequest *notes, size_t count,
                    unsigned timeout_ms = 200u);
   void NoteOff(uint8_t voice);

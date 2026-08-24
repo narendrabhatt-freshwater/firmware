@@ -113,71 +113,163 @@ static int16_t *StreamRing_DataAt(StreamRing_t *r, uint8_t voice,
   return &s_ring_tail[voice][index - STREAM_RING_BASE_SAMPLES];
 }
 
-static void StreamRing_CopyIn(StreamRing_t *r, uint8_t voice,
-                              const int16_t *s, uint32_t n)
-{
-  uint32_t idx = r->wr % STREAM_RING_SAMPLES;
-  while (n != 0u)
-  {
-    uint32_t room = (idx < STREAM_RING_BASE_SAMPLES)
-                        ? (STREAM_RING_BASE_SAMPLES - idx)
-                        : (STREAM_RING_SAMPLES - idx);
-    uint32_t chunk = (n < room) ? n : room;
-    memcpy(StreamRing_DataAt(r, voice, idx), s, chunk * sizeof(int16_t));
-    s += chunk;
-    n -= chunk;
-    idx += chunk;
-    if (idx == STREAM_RING_SAMPLES)
-    {
-      idx = 0u;
-    }
-  }
-}
-
-uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
-                               const int16_t *samples, uint32_t nsamp)
+int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
+                          uint32_t nsamp, StreamRing_Write_t *write)
 {
   StreamRing_t *r;
-  uint32_t i;
-  uint8_t all_zero = 1u;
 
-  if (voice >= SAMPLE_VOICES || samples == NULL || nsamp == 0u ||
-      nsamp > USB_STREAM_NSAMP_MAX)
+  if (voice >= SAMPLE_VOICES || nsamp == 0u ||
+      nsamp > USB_STREAM_NSAMP_MAX || write == NULL)
   {
-    return 0u;
+    return -1;
   }
+  memset(write, 0, sizeof *write);
   r = StreamRing_At(voice);
   if (sof != 0u && session != r->session)
   {
+    /* The new producer may overwrite index zero before commit, so retire the
+     * old session now. The consumer sees an empty ring until the full BODY
+     * reservation is published. */
     r->wr = 0u;
     r->rd = 0u;
     r->session = session;
     s_sof_pkts++;
     NoteBank_OnBodySof(voice);
   }
-  /* Whole burst or none. A partial push with the host cursor already
-   * advanced is a hole in the wav. */
   if (StreamRing_Filled(r) + nsamp > STREAM_RING_SAMPLES)
   {
     s_drop_pkts++;
+    return -1;
+  }
+  write->start_wr = r->wr;
+  write->nsamp = nsamp;
+  write->voice = voice;
+  write->active = 1u;
+  return 0;
+}
+
+int16_t *StreamRing_WriteSpan(StreamRing_Write_t *write,
+                              uint32_t *nsamp_out)
+{
+  StreamRing_t *r;
+  uint32_t idx;
+  uint32_t room;
+  uint32_t remain;
+
+  if (nsamp_out != NULL)
+  {
+    *nsamp_out = 0u;
+  }
+  if (write == NULL || write->active == 0u ||
+      write->voice >= SAMPLE_VOICES || write->written >= write->nsamp)
+  {
+    return NULL;
+  }
+  r = StreamRing_At(write->voice);
+  idx = (write->start_wr + write->written) % STREAM_RING_SAMPLES;
+  room = (idx < STREAM_RING_BASE_SAMPLES)
+             ? (STREAM_RING_BASE_SAMPLES - idx)
+             : (STREAM_RING_SAMPLES - idx);
+  remain = write->nsamp - write->written;
+  if (room > remain)
+  {
+    room = remain;
+  }
+  if (nsamp_out != NULL)
+  {
+    *nsamp_out = room;
+  }
+  return StreamRing_DataAt(r, write->voice, idx);
+}
+
+int StreamRing_WriteAdvance(StreamRing_Write_t *write, uint32_t nsamp)
+{
+  if (write == NULL || write->active == 0u || nsamp == 0u ||
+      nsamp > (write->nsamp - write->written))
+  {
+    return -1;
+  }
+  write->written += nsamp;
+  return 0;
+}
+
+uint32_t StreamRing_WriteCommit(StreamRing_Write_t *write)
+{
+  StreamRing_t *r;
+  uint32_t i;
+  uint8_t all_zero = 1u;
+
+  if (write == NULL || write->active == 0u ||
+      write->voice >= SAMPLE_VOICES || write->written != write->nsamp)
+  {
     return 0u;
   }
-  for (i = 0u; i < nsamp; i++)
+  r = StreamRing_At(write->voice);
+  if (r->wr != write->start_wr)
   {
-    if (samples[i] != 0)
+    write->active = 0u;
+    return 0u;
+  }
+  for (i = 0u; i < write->nsamp; i++)
+  {
+    uint32_t idx = (write->start_wr + i) % STREAM_RING_SAMPLES;
+    if (*StreamRing_DataAt(r, write->voice, idx) != 0)
     {
       all_zero = 0u;
       break;
     }
   }
-  StreamRing_CopyIn(r, voice, samples, nsamp);
-  r->wr += nsamp;
+  r->wr = write->start_wr + write->nsamp;
   s_rx_pkts++;
   if (all_zero != 0u)
   {
     s_zero_pkts++;
   }
-  return nsamp;
+  write->active = 0u;
+  return write->nsamp;
+}
+
+void StreamRing_WriteAbort(StreamRing_Write_t *write)
+{
+  if (write != NULL)
+  {
+    write->active = 0u;
+  }
+}
+
+uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
+                               const int16_t *samples, uint32_t nsamp)
+{
+  StreamRing_Write_t write;
+  uint32_t copied = 0u;
+
+  if (voice >= SAMPLE_VOICES || samples == NULL || nsamp == 0u ||
+      nsamp > USB_STREAM_NSAMP_MAX)
+  {
+    return 0u;
+  }
+  if (StreamRing_WriteBegin(voice, session, sof, nsamp, &write) != 0)
+  {
+    return 0u;
+  }
+  while (copied < nsamp)
+  {
+    uint32_t span_n = 0u;
+    int16_t *span = StreamRing_WriteSpan(&write, &span_n);
+    if (span == NULL || span_n == 0u)
+    {
+      StreamRing_WriteAbort(&write);
+      return 0u;
+    }
+    memcpy(span, samples + copied, span_n * sizeof(int16_t));
+    if (StreamRing_WriteAdvance(&write, span_n) != 0)
+    {
+      StreamRing_WriteAbort(&write);
+      return 0u;
+    }
+    copied += span_n;
+  }
+  return StreamRing_WriteCommit(&write);
 }
 
 int StreamRing_GetRel(uint8_t voice, uint32_t offset, int16_t *out)

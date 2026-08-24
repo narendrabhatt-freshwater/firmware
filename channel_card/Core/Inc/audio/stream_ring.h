@@ -33,6 +33,17 @@ extern "C"
 #define STREAM_RING_TAIL_SAMPLES (STREAM_TAIL_BANKS * STREAM_BANK_LEN)
 #define STREAM_RING_SAMPLES (STREAM_BANKS * STREAM_BANK_LEN)
 
+  /** One in-progress producer reservation. Samples remain invisible to the
+   *  audio consumer until StreamRing_WriteCommit advances the ring writer. */
+  typedef struct
+  {
+    uint32_t start_wr;
+    uint32_t nsamp;
+    uint32_t written;
+    uint8_t voice;
+    uint8_t active;
+  } StreamRing_Write_t;
+
   void StreamRing_Init(void);
   void StreamRing_Reset(uint8_t voice);
   void StreamRing_ResetAll(void);
@@ -52,6 +63,23 @@ extern "C"
    */
   uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
                                  const int16_t *samples, uint32_t nsamp);
+
+  /** Reserve a complete BODY burst without publishing it to the consumer. */
+  int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
+                            uint32_t nsamp, StreamRing_Write_t *write);
+
+  /** Contiguous writable portion of a reservation, bounded by bank/wrap. */
+  int16_t *StreamRing_WriteSpan(StreamRing_Write_t *write,
+                                uint32_t *nsamp_out);
+
+  /** Record samples placed in the current writable span. */
+  int StreamRing_WriteAdvance(StreamRing_Write_t *write, uint32_t nsamp);
+
+  /** Atomically publish a completely written reservation. */
+  uint32_t StreamRing_WriteCommit(StreamRing_Write_t *write);
+
+  /** Abandon an incomplete reservation; no samples become visible. */
+  void StreamRing_WriteAbort(StreamRing_Write_t *write);
 
   /**
    * @brief Body sample at offset from rd (0 = next unread).

@@ -555,7 +555,7 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
     {
       if (!samples.NoteOnBatch(pending.data(), npending))
       {
-        log.Push("err: sample chord prefill timed out");
+        log.Push("err: sample chord has no loaded BODY");
       }
       pending_voice.fill(false);
       npending = 0u;

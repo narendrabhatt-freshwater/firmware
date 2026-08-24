@@ -131,7 +131,7 @@ int main(int argc, char **argv)
     notes[v] = cardlink::sample::NoteRequest{v, hz[v], 0u};
   }
   if (!sample.NoteOnBatch(notes.data(), nvoices)) {
-    std::cerr << "concurrent note prefill timed out\n";
+    std::cerr << "cannot start chord: no loaded BODY\n";
     bulk.Stop();
     bus.Close();
     return EXIT_FAILURE;

@@ -423,8 +423,9 @@ offset  size  field
 RS485 `vq` is both refill permission and an exact PACK-order snapshot. One
 fresh reply permits at most one following packed USB OUT refill, bounded for
 each included voice. Its PACK sequence prevents a racing completed OUT from
-being subtracted twice. A new session receives one safe SOF prefill before
-audible `nX`; subsequent refills are RS485-vq-gated. `type` `0x20` CAPTURE
+being subtracted twice. A new session's safe SOF prefill runs concurrently
+with audible `nX`; the attack head bridges startup, and subsequent refills are
+RS485-vq-gated. `type` `0x20` CAPTURE
 remains reserved.
 
 ### CDC vs RS485 (console)

@@ -58,6 +58,26 @@ cardproto::Result Bus::Open(const std::string &path, const BusOptions &opts)
       echo_disabled_ = false;
     } else {
       echo_disabled_ = !want_on;
+      if (!want_on) {
+        /* Do not merely trust the setter ACK. Echo on a multidrop bus can
+         * corrupt Channel vq traffic, so verify the Effect Card's runtime
+         * state and reassert ec 0 if the first query is inconclusive. */
+        for (unsigned attempt = 0u; attempt < 3u; ++attempt) {
+          const cardproto::Result verify = effect_->GetEcho();
+          last_ = verify;
+          if (verify.ok() &&
+              std::string(verify.raw).find("ec 0") != std::string::npos) {
+            echo_disabled_ = true;
+            break;
+          }
+          echo_disabled_ = false;
+          echo = effect_->SetEcho(false);
+          last_ = echo;
+          if (!echo.ok()) {
+            break;
+          }
+        }
+      }
     }
   }
 
