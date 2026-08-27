@@ -110,6 +110,9 @@ extern "C"
    */
   void NoteEnv_NoteOff(uint8_t voice);
 
+  /** Immediately make one runtime envelope idle without clearing its program. */
+  void NoteEnv_Stop(uint8_t voice);
+
   /**
    * True while running, holding, or releasing (programmed voices only).
    * Unprogrammed → 0.

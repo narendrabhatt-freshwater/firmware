@@ -55,15 +55,19 @@ static uint16_t note_wave_id[NOTE_BANK_VOICES];
 static uint16_t note_play_wid[NOTE_BANK_VOICES];
 static uint16_t note_play_alen[NOTE_BANK_VOICES];
 static uint8_t note_body_only[NOTE_BANK_VOICES];
-/* On a slot reuse, the new attack starts now while this old body tail ramps
- * out. The replacement BODY ring starts after its reserved source samples. */
+/* On a slot reuse, the old voice completes its DSP chain and ramps out before
+ * the staged replacement starts. New BODY follows the retained old tail. */
 static uint32_t note_crash_left[NOTE_BANK_VOICES];
 static uint32_t note_crash_total[NOTE_BANK_VOICES];
 static uint32_t note_crash_frac[NOTE_BANK_VOICES];
 static uint32_t note_crash_inc[NOTE_BANK_VOICES];
 static int32_t note_crash_hold[NOTE_BANK_VOICES];
-static int32_t note_crash_amp_q15[NOTE_BANK_VOICES];
 static uint8_t note_crash_ring[NOTE_BANK_VOICES];
+static uint32_t note_next_inc[NOTE_BANK_VOICES];
+static float note_next_hz[NOTE_BANK_VOICES];
+static int32_t note_next_amp_q15[NOTE_BANK_VOICES];
+static uint16_t note_next_wid[NOTE_BANK_VOICES];
+static uint8_t note_next_pending[NOTE_BANK_VOICES];
 static uint8_t note_crash_release_ms = 3u;
 static NoteBank_Shape_t note_shape = NOTE_SHAPE_SINE;
 static double note_shape_param = 0.5;
@@ -261,6 +265,26 @@ static void NoteBank_ClearPlayhead(uint8_t note)
   note_body_only[note] = 0u;
 }
 
+static void NoteBank_ActivateReplacement(uint8_t note)
+{
+  if (note_next_pending[note] == 0u)
+  {
+    return;
+  }
+  NoteBank_ClearPlayhead(note);
+  note_inc[note] = note_next_inc[note];
+  note_inc_tgt[note] = note_next_inc[note];
+  note_play_amp_q15[note] = note_next_amp_q15[note];
+  note_play_wid[note] = note_next_wid[note];
+  note_play_alen[note] = (uint16_t)AttackBank_GetLen(note_play_wid[note]);
+  note_body_only[note] = (note_play_alen[note] == 0u) ? 1u : 0u;
+  NoteFilter_Reset(note);
+  NoteFilter_OnNoteFreq(note, (double)note_next_hz[note]);
+  NoteEnv_NoteOn(note, note_next_hz[note]);
+  note_next_pending[note] = 0u;
+  note_active[note] = 1u;
+}
+
 static void NoteBank_SyncBodyPlayhead(uint8_t note, uint64_t phase,
                                      uint64_t fade0)
 {
@@ -306,17 +330,32 @@ static void NoteBank_CatchUpBody(uint8_t note)
   note_body_skip[note] = 0u;
 }
 
-static void NoteBank_StartVoice(uint8_t note, uint32_t inc)
+static void NoteBank_StartVoice(uint8_t note, uint32_t inc, float hz)
 {
   uint32_t release_out = 0u;
   uint32_t release_source = 0u;
   uint32_t kept = 0u;
 
+  note_next_inc[note] = inc;
+  note_next_hz[note] = hz;
+  note_next_amp_q15[note] = note_amp_q15[note];
+  note_next_wid[note] = note_wave_id[note];
+  note_next_pending[note] = 1u;
+
+  /* A newer replacement during an existing release changes only the staged
+   * note/BODY session. Keep the audible old DSP state and remaining ramp. */
+  if (note_crash_left[note] != 0u)
+  {
+    kept = StreamRing_BeginReplacement(
+        note, note_next_wid[note], StreamRing_ReleaseLevel(note));
+    note_crash_ring[note] = (kept >= 2u) ? 1u : 0u;
+    return;
+  }
+
   if (note_active[note] != 0u)
   {
     release_out = (uint32_t)note_crash_release_ms * NOTE_SAMPLE_RATE_PER_MS;
     note_crash_hold[note] = note_hold[note];
-    note_crash_amp_q15[note] = note_play_amp_q15[note];
     note_crash_inc[note] = note_inc[note];
     note_crash_frac[note] = note_body_frac[note];
     if (note_body_only[note] != 0u && StreamRing_FillLevel(note) >= 2u)
@@ -326,28 +365,25 @@ static void NoteBank_StartVoice(uint8_t note, uint32_t inc)
           (uint64_t)note_crash_frac[note]) >> 16) + 2u;
     }
   }
-  kept = StreamRing_BeginReplacement(note, note_wave_id[note], release_source);
+  kept = StreamRing_BeginReplacement(note, note_next_wid[note], release_source);
   note_crash_total[note] = release_out;
   note_crash_left[note] = release_out;
   note_crash_ring[note] = (kept >= 2u) ? 1u : 0u;
 
-  /* nX is the sole audible start authority. Its first BODY SOF is written at
-   * the replacement origin after the reserved old tail. */
-  NoteBank_ClearPlayhead(note);
-  note_inc[note] = inc;
-  note_inc_tgt[note] = inc;
-  note_play_amp_q15[note] = note_amp_q15[note];
-  note_play_wid[note] = note_wave_id[note];
-  note_play_alen[note] = (uint16_t)AttackBank_GetLen(note_play_wid[note]);
-  note_body_only[note] = (note_play_alen[note] == 0u) ? 1u : 0u;
-  NoteFilter_Reset(note);
-  NoteEnv_NoteOn(note, (float)note_freq_hz[note]);
-  note_active[note] = 1u;
+  if (release_out == 0u)
+  {
+    NoteBank_ActivateReplacement(note);
+  }
 }
 
 static int32_t NoteBank_CrashSample(uint8_t note)
 {
   int32_t y = note_crash_hold[note];
+  float env;
+  int32_t env_q15 = NOTE_AMP_Q15_MAX;
+  int32_t gain_q15;
+  int32_t amp;
+  int32_t out;
   uint32_t left = note_crash_left[note];
   uint32_t total = note_crash_total[note];
 
@@ -376,19 +412,32 @@ static int32_t NoteBank_CrashSample(uint8_t note)
     }
   }
 
+  y = NoteFilter_Process(note, y);
+  if (NoteEnv_IsProgrammed(note) != 0u)
+  {
+    env = NoteEnv_Process(note);
+    if (env < 0.0f)
+    {
+      env = 0.0f;
+    }
+    if (env > 1.0f)
+    {
+      env = 1.0f;
+    }
+    env_q15 = (int32_t)(env * (float)NOTE_AMP_Q15_MAX + 0.5f);
+  }
+  gain_q15 = (int32_t)(((int64_t)note_play_amp_q15[note] *
+                        (int64_t)env_q15) >> 15);
+  amp = (int32_t)(((int64_t)y * (int64_t)gain_q15) >> 15);
+  out = (int32_t)(((int64_t)amp * (int64_t)left) / (int64_t)total);
+
   note_crash_left[note] = left - 1u;
   if (note_crash_left[note] == 0u)
   {
     StreamRing_AdvanceRelease(note, StreamRing_ReleaseLevel(note));
+    NoteBank_ActivateReplacement(note);
   }
-  y = (int32_t)(((int64_t)y * note_crash_amp_q15[note]) >> 15);
-  return (int32_t)(((int64_t)y * (int64_t)left) / (int64_t)total);
-}
-
-static int32_t NoteBank_AddCrash(uint8_t note, int32_t current)
-{
-  return NoteBank_Saturate((int64_t)current +
-                           (int64_t)NoteBank_CrashSample(note));
+  return out;
 }
 
 static void NoteBank_PostOn(uint8_t note, uint32_t inc, float hz)
@@ -402,10 +451,15 @@ static void NoteBank_HardOff(uint8_t note)
 {
   note_freq_hz[note] = 0.0;
   note_active[note] = 0u;
+  note_crash_left[note] = 0u;
+  note_crash_total[note] = 0u;
+  note_crash_ring[note] = 0u;
+  note_next_pending[note] = 0u;
   NoteBank_ClearPlayhead(note);
   StreamRing_Release(note);
   AttackBank_Stop(note);
   NoteFilter_Reset(note);
+  NoteEnv_Stop(note);
 }
 
 static void NoteBank_DrainCmd(uint8_t note)
@@ -419,12 +473,17 @@ static void NoteBank_DrainCmd(uint8_t note)
   if (cmd == NOTE_CMD_ON)
   {
     note_freq_hz[note] = (double)note_cmd_hz[note];
-    NoteBank_StartVoice(note, note_cmd_inc[note]);
+    NoteBank_StartVoice(note, note_cmd_inc[note], note_cmd_hz[note]);
     return;
   }
   if (cmd == NOTE_CMD_REL)
   {
     note_freq_hz[note] = 0.0;
+    if (note_crash_left[note] != 0u || note_next_pending[note] != 0u)
+    {
+      NoteBank_HardOff(note);
+      return;
+    }
     if (NoteEnv_IsProgrammed(note) != 0u && NoteEnv_IsActive(note) != 0u)
     {
       NoteEnv_NoteOff(note);
@@ -556,10 +615,9 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
 
   if (NoteEnv_IsProgrammed(note) == 0u)
   {
-    gain_q15 = (int32_t)(((int64_t)note_amp_q15[note] *
+    gain_q15 = (int32_t)(((int64_t)note_play_amp_q15[note] *
                           (int64_t)NOTE_AMP_Q15_MAX) >> 15);
-    return NoteBank_AddCrash(
-        note, (int32_t)(((int64_t)s * (int64_t)gain_q15) >> 15));
+    return (int32_t)(((int64_t)s * (int64_t)gain_q15) >> 15);
   }
   else
   {
@@ -583,9 +641,9 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
     env_q15 = 0;
   }
   gain_q15 =
-      (int32_t)(((int64_t)note_amp_q15[note] * (int64_t)env_q15) >> 15);
+      (int32_t)(((int64_t)note_play_amp_q15[note] * (int64_t)env_q15) >> 15);
   amp = (int32_t)(((int64_t)s * (int64_t)gain_q15) >> 15);
-  return NoteBank_AddCrash(note, amp);
+  return amp;
 }
 
 static inline int32_t NoteBank_Saturate(int64_t sum)
@@ -630,8 +688,12 @@ void NoteBank_Init(void)
     note_crash_frac[i] = 0u;
     note_crash_inc[i] = PHASE_ONE;
     note_crash_hold[i] = 0;
-    note_crash_amp_q15[i] = 0;
     note_crash_ring[i] = 0u;
+    note_next_inc[i] = PHASE_ONE;
+    note_next_hz[i] = 0.0f;
+    note_next_amp_q15[i] = 0;
+    note_next_wid[i] = (uint16_t)i;
+    note_next_pending[i] = 0u;
     note_cmd[i] = NOTE_CMD_NONE;
     note_cmd_inc[i] = PHASE_ONE;
     note_cmd_hz[i] = 0.0f;
@@ -664,15 +726,13 @@ void NoteBank_PanicAll(void)
     note_crash_left[i] = 0u;
     note_crash_total[i] = 0u;
     note_crash_ring[i] = 0u;
+    note_next_pending[i] = 0u;
     note_cmd[i] = NOTE_CMD_NONE;
     note_cmd_inc[i] = PHASE_ONE;
     note_cmd_hz[i] = 0.0f;
     note_gate_requested[i] = 0u;
     NoteFilter_Reset(i);
-    if (NoteEnv_IsProgrammed(i) != 0u)
-    {
-      NoteEnv_NoteOff(i);
-    }
+    NoteEnv_Stop(i);
   }
 }
 
@@ -733,7 +793,6 @@ static void NoteBank_SetFreqBound(uint8_t note, double freq_hz, double scale,
   note_scale[note] = scale;
   note_amp_q15[note] = NoteBank_ScaleToQ15(scale);
   note_inc_tgt[note] = inc;
-  NoteFilter_OnNoteFreq(note, freq_hz);
   note_gate_requested[note] = 1u;
   StreamRing_ArmReplacement(note, note_wave_id[note], session);
   /* Every nX > 0 is a gate-on. Pitch slew is not this command. */

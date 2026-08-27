@@ -331,6 +331,21 @@ void NoteEnv_NoteOff(uint8_t voice)
   }
 }
 
+void NoteEnv_Stop(uint8_t voice)
+{
+  NoteEnv_Voice_t *v;
+  if (voice >= NOTE_ENV_VOICES)
+  {
+    return;
+  }
+  v = &s_voices[voice];
+  v->state = NOTE_ENV_IDLE;
+  v->seg_idx = 0u;
+  v->amp = 0.0f;
+  v->target = 0.0f;
+  v->step = 0.0f;
+}
+
 uint8_t NoteEnv_IsActive(uint8_t voice)
 {
   if (voice >= NOTE_ENV_VOICES)
