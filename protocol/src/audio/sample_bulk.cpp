@@ -1,3 +1,4 @@
+/* Direct tagged BODY samples over the class-compliant 10ch UAC2 output. */
 #include "cardlink/audio/sample_bulk.hpp"
 
 #include "cardlink/usb/stream_proto.hpp"
@@ -5,227 +6,19 @@
 #include <RtAudio.h>
 
 #include <algorithm>
-#include <array>
 #include <atomic>
-#include <chrono>
-#include <condition_variable>
-#include <cmath>
-#include <cstring>
-#include <deque>
-#include <memory>
-#include <mutex>
-#include <thread>
-#include <vector>
 
 namespace cardlink::audio {
 namespace {
 
-constexpr unsigned kMaxOutstandingPacks = 3u;
-/** Already-rendered refills still await vq ACK but occupy no UAC queue space.
- * Let one urgent starter per physical voice follow them immediately. */
-constexpr unsigned kMaxOutstandingWithUrgent =
-    kMaxOutstandingPacks + kSampleVoices;
-constexpr unsigned kRetryAfterUnackedVq = 4u;
-constexpr auto kRetryMinAge = std::chrono::milliseconds(30);
-constexpr double kUrgentScheduleMarginMs = 0.5;
-constexpr double kUrgentQuantumMinMs = 0.1;
-constexpr double kUrgentBridgeQuantumMs = 1.0;
-
-struct PackedChunk {
-  uint8_t voice = 0;
-  uint8_t session = 0;
-  uint16_t wave_id = 0xFFFFu;
-  unsigned nsamp = 0;
-  bool sof = false;
-  bool urgent_control = false;
-};
-
-int UrgentPackFrame(SampleDryMixer &mixer, uint8_t *dst, int max,
-                    PackedChunk *chunks, unsigned &nchunks,
-                    uint16_t pack_sequence, UrgentScheduleStats &schedule,
-                    bool &has_sof)
+int16_t EncodeTag(uint8_t voice, uint8_t session, bool sof)
 {
-  nchunks = 0u;
-  has_sof = false;
-  if (dst == nullptr || max < static_cast<int>(
-          cardlink::usb::kStreamHdrSize + cardlink::usb::kStreamBodyMetaSize)) {
-    return 0;
-  }
-  uint8_t order[kSampleVoices]{};
-  const unsigned nvoices = mixer.UrgentVoices(order);
-  if (nvoices == 0u || chunks == nullptr) {
-    return 0;
-  }
-  const bool new_sof_pending = mixer.UrgentSofPending();
-  double demand = 0.0;
-  double first_join_ms = 1.0e9;
-  for (unsigned i = 0u; i < nvoices; ++i) {
-    demand += mixer.VoiceSourceSamplesPerMs(order[i]);
-    first_join_ms = std::min(first_join_ms,
-                             mixer.VoiceAttackLeadMs(order[i]));
-  }
-  const double overhead_bytes =
-      static_cast<double>(cardlink::usb::kStreamHdrSize +
-                          nvoices * cardlink::usb::kStreamBodyMetaSize +
-                          cardlink::usb::kStreamCrcBytes);
-  const double carrier_bytes_per_ms =
-      static_cast<double>(cardlink::usb::kStreamUacPacketBytes);
-  double quantum_ms = kUrgentQuantumMaxMs;
-  const double spare_bytes_per_ms = carrier_bytes_per_ms - 2.0 * demand;
-  double sustainable_ms = 0.0;
-  if (spare_bytes_per_ms > 0.0) {
-    sustainable_ms = overhead_bytes / spare_bytes_per_ms;
-    const double deadline_room_ms = first_join_ms - kUrgentScheduleMarginMs;
-    if (demand > 0.0) {
-      const double deadline_ms =
-          (std::max(0.0, deadline_room_ms) * carrier_bytes_per_ms -
-           overhead_bytes) /
-          (2.0 * demand);
-      quantum_ms = std::min(
-          quantum_ms, std::max(kUrgentQuantumMinMs, deadline_ms));
-    }
-    quantum_ms = std::max(quantum_ms, sustainable_ms);
-  }
-  quantum_ms = std::max(kUrgentQuantumMinMs, quantum_ms);
-  if (nvoices > 1u || !new_sof_pending) {
-    quantum_ms = std::min(quantum_ms, kUrgentBridgeQuantumMs);
-    quantum_ms = std::max(quantum_ms, sustainable_ms);
-  }
-  schedule.voices = nvoices;
-  schedule.demand_samples_per_ms = demand;
-  schedule.remaining_attack_ms = first_join_ms;
-  schedule.quantum_ms = quantum_ms;
-
-  std::array<int16_t, cardlink::usb::kStreamNsampMax> body{};
-  unsigned used = cardlink::usb::kStreamHdrSize;
-  for (unsigned i = 0u; i < nvoices; ++i) {
-    if (used + cardlink::usb::kStreamBodyMetaSize + 2u >
-        static_cast<unsigned>(max)) {
-      break;
-    }
-    const unsigned cap_samples = std::min<unsigned>(
-        cardlink::usb::kStreamNsampMax,
-        (static_cast<unsigned>(max) - used -
-         cardlink::usb::kStreamBodyMetaSize) / 2u);
-    UrgentBurst urgent{};
-    if (!mixer.FillUrgentBurstForVoice(order[i], body.data(), cap_samples,
-                                        quantum_ms, urgent)) {
-      continue;
-    }
-    cardlink::usb::StreamBodyMeta meta{};
-    meta.voice = urgent.voice;
-    meta.session = urgent.session;
-    meta.flags = urgent.sof ? cardlink::usb::kStreamBodyFlagSof : 0u;
-    meta.nsamp = static_cast<uint16_t>(urgent.nsamp);
-    meta.wave_id = urgent.wave_id;
-    std::memcpy(dst + used, &meta, sizeof meta);
-    used += sizeof meta;
-    std::memcpy(dst + used, body.data(), urgent.nsamp * sizeof(int16_t));
-    used += urgent.nsamp * sizeof(int16_t);
-    chunks[nchunks++] = PackedChunk{
-        urgent.voice, urgent.session, urgent.wave_id,
-        urgent.nsamp, urgent.sof, true};
-    has_sof = has_sof || urgent.sof;
-  }
-  if (nchunks == 0u) {
-    return 0;
-  }
-  cardlink::usb::StreamHdr hdr{};
-  hdr.magic0 = cardlink::usb::kStreamMagic0;
-  hdr.magic1 = cardlink::usb::kStreamMagic1;
-  hdr.type = cardlink::usb::kStreamTypePack;
-  hdr.nbytes = static_cast<uint16_t>(used - cardlink::usb::kStreamHdrSize);
-  hdr.pad = pack_sequence;
-  std::memcpy(dst, &hdr, sizeof hdr);
-  return static_cast<int>(used);
-}
-
-int PackFrame(SampleDryMixer &mixer, uint8_t *dst, int max,
-              PackedChunk *chunks, unsigned &nchunks,
-              uint16_t pack_sequence)
-{
-  nchunks = 0;
-  if (dst == nullptr ||
-      max < static_cast<int>(cardlink::usb::kStreamHdrSize +
-                             cardlink::usb::kStreamBodyMetaSize + 2u)) {
-    return 0;
-  }
-  const unsigned cap = static_cast<unsigned>(max);
-  uint8_t order[kSampleVoices];
-  const unsigned nwant = mixer.WantingVoices(order);
-  if (nwant == 0u) {
-    return 0;
-  }
-  unsigned nuse = nwant;
-  while (nuse > 0u && cardlink::usb::PackMaxSamples(nuse) == 0u) {
-    --nuse;
-  }
-  if (nuse == 0u) {
-    return 0;
-  }
-
-  const unsigned wire_budget = cardlink::usb::PackMaxSamples(nuse);
-  /* vq_free is exact card credit and already subtracts concurrent OUT data.
-   * Use all of it up to physical wire capacity. A fixed demand horizon can
-   * deterministically starve high notes whenever polling slips beyond that
-   * horizon (for example C6 consumes 1920 source samples in 10 ms). */
-  const unsigned sample_budget = wire_budget;
-  if (sample_budget == 0u) {
-    return 0;
-  }
-  unsigned used = cardlink::usb::kStreamHdrSize;
-  std::array<int16_t, cardlink::usb::kStreamNsampMax> body{};
-  unsigned grants[kSampleVoices]{};
-  (void)mixer.AllocateBursts(order, nuse, sample_budget, grants);
-
-  for (unsigned i = 0u; i < nuse; ++i) {
-    const uint8_t voice = order[i];
-    unsigned give = grants[i];
-    if (give == 0u) {
-      continue;
-    }
-    const unsigned room = cap - used;
-    if (room < cardlink::usb::kStreamBodyMetaSize + 2u) {
-      break;
-    }
-    const unsigned max_samples =
-        (room - cardlink::usb::kStreamBodyMetaSize) / 2u;
-    if (give > max_samples) {
-      give = max_samples;
-    }
-    bool sof = false;
-    uint8_t session = 0u;
-    /* Capture before FillBurst: a one-shot may retire itself after producing
-     * its final valid chunk, at which point LiveWave intentionally goes idle. */
-    const uint16_t wave_id = mixer.LiveWave(voice);
-    const unsigned got =
-        mixer.FillBurst(voice, body.data(), give, sof, session);
-    if (got == 0u) {
-      continue;
-    }
-    cardlink::usb::StreamBodyMeta meta{};
-    meta.voice = voice;
-    meta.session = session;
-    meta.flags = sof ? cardlink::usb::kStreamBodyFlagSof : 0u;
-    meta.nsamp = static_cast<uint16_t>(got);
-    meta.wave_id = wave_id;
-    std::memcpy(dst + used, &meta, sizeof meta);
-    std::memcpy(dst + used + sizeof meta, body.data(),
-                got * sizeof(int16_t));
-    used += sizeof meta + got * sizeof(int16_t);
-    chunks[nchunks++] = PackedChunk{voice, session, wave_id, got, sof, false};
-  }
-  if (nchunks == 0u) {
-    return 0;
-  }
-  cardlink::usb::StreamHdr hdr{};
-  hdr.magic0 = cardlink::usb::kStreamMagic0;
-  hdr.magic1 = cardlink::usb::kStreamMagic1;
-  hdr.type = cardlink::usb::kStreamTypePack;
-  hdr.nbytes = static_cast<uint16_t>(used - cardlink::usb::kStreamHdrSize);
-  hdr.pad = pack_sequence;
-  std::memcpy(dst, &hdr, sizeof hdr);
-  return static_cast<int>(used);
+  const uint16_t tag = cardlink::usb::kStreamTagBase |
+      (static_cast<uint16_t>(session) <<
+       cardlink::usb::kStreamTagSessionShift) |
+      (sof ? cardlink::usb::kStreamTagSof : 0u) |
+      (static_cast<uint16_t>(voice) & cardlink::usb::kStreamTagVoiceMask);
+  return static_cast<int16_t>(tag);
 }
 
 bool NameMatches(const std::string &name)
@@ -238,124 +31,159 @@ bool NameMatches(const std::string &name)
 } // namespace
 
 struct SampleBulkOut::Impl {
-  using clock = std::chrono::steady_clock;
-
-  struct RefillStatus {
-    uint8_t mask = 0u;
-    uint8_t best = 0xFFu;
-    std::array<uint16_t, kSampleVoices> free_samples{};
-    uint16_t last_pack_sequence = 0xFFFFu;
-  };
-
-  struct OutstandingPack {
-    uint16_t sequence = 0u;
-    std::vector<uint8_t> wire;
-    std::array<PackedChunk, kSampleVoices> chunks{};
-    unsigned nchunks = 0u;
-    std::array<uint16_t, kSampleVoices> samples{};
-    bool rendered = false;
-    bool queued = false;
-    unsigned unacked_vq = 0u;
-    clock::time_point rendered_at{};
-  };
-
   RtAudio dac;
-  std::thread th;
-  std::atomic<bool> run{false};
   std::atomic<uint32_t> xruns{0u};
   std::atomic<uint64_t> render_frames{0u};
   std::atomic<unsigned> urgent_voices{0u};
   std::atomic<double> urgent_demand{0.0};
   std::atomic<double> urgent_attack_ms{0.0};
   std::atomic<double> urgent_quantum_ms{0.0};
-  std::mutex mu;
-  std::mutex mixer_mu;
-  std::condition_variable cv;
-  std::deque<RefillStatus> status_queue;
-  RefillStatus refill_credit{};
-  bool refill_credit_pending = false;
-  std::deque<std::shared_ptr<OutstandingPack>> outstanding;
-  std::deque<std::shared_ptr<OutstandingPack>> render_queue;
-  std::shared_ptr<OutstandingPack> render_pack;
-  size_t render_pack_offset = 0u;
-  uint16_t next_pack_sequence = 0u;
-
-  void QueueForRender(const std::shared_ptr<OutstandingPack> &pack,
-                      bool priority = false)
-  {
-    if (!pack || pack->queued) {
-      return;
-    }
-    pack->queued = true;
-    pack->rendered = false;
-    pack->unacked_vq = 0u;
-    if (priority) {
-      render_queue.push_front(pack);
-    } else {
-      render_queue.push_back(pack);
-    }
-  }
-
-  void Render(void *output, unsigned nframes, RtAudioStreamStatus status)
-  {
-    render_frames.fetch_add(nframes, std::memory_order_relaxed);
-    if (status != 0u) {
-      xruns.fetch_add(1u, std::memory_order_relaxed);
-    }
-    uint8_t *dst = static_cast<uint8_t *>(output);
-    size_t remaining = static_cast<size_t>(nframes) *
-                       cardlink::usb::kStreamUacChannels *
-                       cardlink::usb::kStreamUacSampleBytes;
-    if (dst == nullptr) {
-      return;
-    }
-    std::lock_guard<std::mutex> lock(mu);
-    while (remaining != 0u) {
-      if (!render_pack && !render_queue.empty()) {
-        render_pack = render_queue.front();
-        render_queue.pop_front();
-        render_pack_offset = 0u;
-      }
-      if (!render_pack) {
-        std::memset(dst, 0, remaining);
-        break;
-      }
-      const size_t take = std::min(
-          remaining, render_pack->wire.size() - render_pack_offset);
-      std::memcpy(dst, render_pack->wire.data() + render_pack_offset, take);
-      dst += take;
-      remaining -= take;
-      render_pack_offset += take;
-      if (render_pack_offset == render_pack->wire.size()) {
-        render_pack->rendered = true;
-        render_pack->queued = false;
-        render_pack->rendered_at = clock::now();
-        render_pack.reset();
-        render_pack_offset = 0u;
-        cv.notify_one();
-      }
-    }
-  }
-
-  static int AudioCallback(void *output, void *, unsigned nframes, double,
-                           RtAudioStreamStatus status, void *user)
-  {
-    auto *impl = static_cast<Impl *>(user);
-    if (impl != nullptr) {
-      impl->Render(output, nframes, status);
-    }
-    return 0;
-  }
 };
 
 SampleBulkOut::SampleBulkOut() : impl_(std::make_unique<Impl>()) {}
 SampleBulkOut::~SampleBulkOut() { Stop(); }
 void SampleBulkOut::BindMixer(SampleDryMixer &mixer) { mixer_ = &mixer; }
 
+bool SampleBulkOut::Start(std::string &err)
+{
+  Stop();
+  if (!impl_) {
+    err = "no RtAudio";
+    return false;
+  }
+  unsigned device = 0u;
+  bool found = false;
+  std::string seen;
+  for (unsigned id : impl_->dac.getDeviceIds()) {
+    const RtAudio::DeviceInfo info = impl_->dac.getDeviceInfo(id);
+    if (!seen.empty()) {
+      seen += ", ";
+    }
+    seen += info.name + "[" + std::to_string(info.outputChannels) + "ch]";
+    if (info.outputChannels >= cardlink::usb::kStreamUacChannels &&
+        NameMatches(info.name)) {
+      device = id;
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    err = "no 10-channel Channel Card UAC output";
+    if (!seen.empty()) {
+      err += " (seen: " + seen + ")";
+    }
+    return false;
+  }
+
+  impl_->xruns.store(0u, std::memory_order_relaxed);
+  impl_->render_frames.store(0u, std::memory_order_relaxed);
+  RtAudio::StreamParameters params;
+  params.deviceId = device;
+  params.nChannels = cardlink::usb::kStreamUacChannels;
+  params.firstChannel = 0u;
+  /* Keep producer latency to one physical USB millisecond. At C6 the local
+   * attack reaches BODY in about 2.5 ms, so a two-millisecond CoreAudio
+   * callback plus command acknowledgement can expose the boundary. */
+  unsigned buffer_frames = cardlink::usb::kStreamUacFramesPerMs;
+  RtAudioErrorType rc = impl_->dac.openStream(
+      &params, nullptr, RTAUDIO_SINT16, cardlink::usb::kStreamUacRateHz,
+      &buffer_frames,
+      [](void *output, void *, unsigned nframes, double,
+         RtAudioStreamStatus status, void *user) -> int {
+        auto *self = static_cast<SampleBulkOut *>(user);
+        auto *dst = static_cast<int16_t *>(output);
+        if (self == nullptr || dst == nullptr) {
+          return 0;
+        }
+        auto &mixer = self->Mixer();
+        auto &state = *self->impl_;
+        state.render_frames.fetch_add(nframes, std::memory_order_relaxed);
+        if (status != 0u) {
+          state.xruns.fetch_add(1u, std::memory_order_relaxed);
+        }
+        mixer.ConsumeOutputSamples(
+            static_cast<double>(nframes) *
+            static_cast<double>(kSampleRateHz) /
+            static_cast<double>(cardlink::usb::kStreamUacRateHz));
+
+        for (unsigned frame = 0u; frame < nframes; ++frame) {
+          int16_t *uac = dst + frame * cardlink::usb::kStreamUacChannels;
+          std::fill(uac, uac + cardlink::usb::kStreamUacChannels, 0);
+          uac[0] = static_cast<int16_t>(cardlink::usb::kStreamTagIdle);
+          const uint8_t voice = mixer.HungriestUacWant(
+              cardlink::usb::kStreamUacBodySamples);
+          if (voice >= kSampleVoices) {
+            continue;
+          }
+          bool sof = false;
+          uint8_t session = 0u;
+          const uint16_t wave_id = mixer.LiveWave(voice);
+          const unsigned got = mixer.FillUacFrame(
+              voice, uac + 1u, cardlink::usb::kStreamUacBodySamples,
+              sof, session);
+          if (got != cardlink::usb::kStreamUacBodySamples) {
+            if (got != 0u) {
+              mixer.AbortBurst(voice, session, wave_id, got, sof);
+            }
+            std::fill(uac + 1u,
+                      uac + cardlink::usb::kStreamUacChannels, 0);
+            continue;
+          }
+          uac[0] = EncodeTag(voice, session, sof);
+          mixer.CommitBurst(voice, session, wave_id, got, sof);
+          if (sof) {
+            uint8_t order[kSampleVoices]{};
+            const unsigned voices = mixer.UrgentVoices(order);
+            double demand = 0.0;
+            double attack = 1.0e9;
+            for (unsigned i = 0u; i < voices; ++i) {
+              demand += mixer.VoiceSourceSamplesPerMs(order[i]);
+              attack = std::min(attack,
+                                mixer.VoiceAttackLeadMs(order[i]));
+            }
+            state.urgent_voices.store(voices, std::memory_order_relaxed);
+            state.urgent_demand.store(demand, std::memory_order_relaxed);
+            state.urgent_attack_ms.store(
+                attack == 1.0e9 ? 0.0 : attack,
+                std::memory_order_relaxed);
+            state.urgent_quantum_ms.store(
+                1.0 / static_cast<double>(
+                          cardlink::usb::kStreamUacFramesPerMs),
+                std::memory_order_relaxed);
+          }
+        }
+        return 0;
+      },
+      this);
+  if (rc != RTAUDIO_NO_ERROR) {
+    err = impl_->dac.getErrorText();
+    return false;
+  }
+  rc = impl_->dac.startStream();
+  if (rc != RTAUDIO_NO_ERROR) {
+    err = impl_->dac.getErrorText();
+    impl_->dac.closeStream();
+    return false;
+  }
+  return true;
+}
+
+void SampleBulkOut::Stop()
+{
+  if (!impl_) {
+    return;
+  }
+  if (impl_->dac.isStreamRunning()) {
+    impl_->dac.stopStream();
+  }
+  if (impl_->dac.isStreamOpen()) {
+    impl_->dac.closeStream();
+  }
+}
+
 bool SampleBulkOut::Running() const
 {
-  return impl_ && impl_->run.load(std::memory_order_acquire) &&
-         impl_->dac.isStreamRunning();
+  return impl_ && impl_->dac.isStreamRunning();
 }
 
 uint32_t SampleBulkOut::XrunCount() const
@@ -384,439 +212,13 @@ UrgentScheduleStats SampleBulkOut::LastUrgentSchedule() const
   return stats;
 }
 
-void SampleBulkOut::Stop()
-{
-  if (!impl_) {
-    return;
-  }
-  impl_->run.store(false, std::memory_order_release);
-  impl_->cv.notify_all();
-  if (impl_->th.joinable()) {
-    impl_->th.join();
-  }
-  if (impl_->dac.isStreamRunning()) {
-    impl_->dac.stopStream();
-  }
-  if (impl_->dac.isStreamOpen()) {
-    impl_->dac.closeStream();
-  }
-  std::lock_guard<std::mutex> lock(impl_->mu);
-  std::lock_guard<std::mutex> mixer_lock(impl_->mixer_mu);
-  for (auto pit = impl_->outstanding.rbegin();
-       pit != impl_->outstanding.rend(); ++pit) {
-    const auto &pack = *pit;
-    for (unsigned i = pack->nchunks; i > 0u; --i) {
-      const auto &chunk = pack->chunks[i - 1u];
-      if (chunk.urgent_control) {
-        mixer_->AbortUrgentBurst(chunk.voice, chunk.session, chunk.wave_id,
-                                 chunk.nsamp, chunk.sof);
-      } else {
-        mixer_->AbortBurst(chunk.voice, chunk.session, chunk.wave_id,
-                           chunk.nsamp, chunk.sof);
-      }
-    }
-  }
-  impl_->status_queue.clear();
-  impl_->refill_credit_pending = false;
-  impl_->outstanding.clear();
-  impl_->render_queue.clear();
-  impl_->render_pack.reset();
-}
-
 void SampleBulkOut::SubmitStatus(
     uint8_t mask, uint8_t best,
     const std::array<uint16_t, kSampleVoices> &free_samples,
     uint16_t last_pack_sequence)
 {
-  if (!impl_ || !impl_->run.load(std::memory_order_acquire)) {
-    return;
-  }
-  Impl::RefillStatus status{};
-  status.mask = mask;
-  status.best = best;
-  status.free_samples = free_samples;
-  status.last_pack_sequence = last_pack_sequence;
-  {
-    std::lock_guard<std::mutex> lock(impl_->mu);
-    impl_->status_queue.push_back(status);
-  }
-  impl_->cv.notify_one();
-}
-
-bool SampleBulkOut::Start(std::string &err)
-{
-  Stop();
-  if (!impl_) {
-    err = "no RtAudio";
-    return false;
-  }
-  /* CoreAudio may call Render() before startStream() returns. Establish an
-   * empty generation first so a restart can only emit zeroes until a fresh
-   * vq authorizes new PACKs; never expose queues from the previous stream. */
-  {
-    std::lock_guard<std::mutex> lock(impl_->mu);
-    impl_->status_queue.clear();
-    impl_->refill_credit_pending = false;
-    impl_->outstanding.clear();
-    impl_->render_queue.clear();
-    impl_->render_pack.reset();
-    impl_->render_pack_offset = 0u;
-    impl_->next_pack_sequence = 0u;
-  }
-  impl_->xruns.store(0u, std::memory_order_relaxed);
-  impl_->render_frames.store(0u, std::memory_order_relaxed);
-  unsigned device = 0u;
-  bool found = false;
-  std::string seen;
-  for (unsigned id : impl_->dac.getDeviceIds()) {
-    const RtAudio::DeviceInfo info = impl_->dac.getDeviceInfo(id);
-    if (!seen.empty()) {
-      seen += ", ";
-    }
-    seen += info.name + "[" + std::to_string(info.outputChannels) + "ch]";
-    if (info.outputChannels >= cardlink::usb::kStreamUacChannels &&
-        NameMatches(info.name)) {
-      device = id;
-      found = true;
-      break;
-    }
-  }
-  if (!found) {
-    err = "no 10-channel Channel Card UAC output";
-    if (!seen.empty()) {
-      err += " (seen: " + seen + ")";
-    }
-    return false;
-  }
-
-  RtAudio::StreamParameters params;
-  params.deviceId = device;
-  params.nChannels = cardlink::usb::kStreamUacChannels;
-  params.firstChannel = 0u;
-  unsigned buffer_frames = 102u;
-  RtAudioErrorType rc = impl_->dac.openStream(
-      &params, nullptr, RTAUDIO_SINT16, cardlink::usb::kStreamUacRateHz,
-      &buffer_frames,
-      &Impl::AudioCallback, impl_.get());
-  if (rc != RTAUDIO_NO_ERROR) {
-    err = impl_->dac.getErrorText();
-    return false;
-  }
-  rc = impl_->dac.startStream();
-  if (rc != RTAUDIO_NO_ERROR) {
-    err = impl_->dac.getErrorText();
-    impl_->dac.closeStream();
-    return false;
-  }
-
-  impl_->run.store(true, std::memory_order_release);
-  impl_->th = std::thread([this]() {
-    using clock = Impl::clock;
-    auto last = clock::now();
-    while (impl_->run.load(std::memory_order_acquire)) {
-      Impl::RefillStatus status{};
-      bool have_status = false;
-      std::vector<std::shared_ptr<Impl::OutstandingPack>> acked;
-      std::unique_lock<std::mutex> lock(impl_->mu);
-      impl_->cv.wait_for(lock, std::chrono::milliseconds(1), [this]() {
-        return !impl_->run.load(std::memory_order_acquire) ||
-               !impl_->status_queue.empty() || mixer_->UrgentPending();
-      });
-      if (!impl_->run.load(std::memory_order_acquire)) {
-        break;
-      }
-      if (!impl_->status_queue.empty()) {
-        status = impl_->status_queue.front();
-        impl_->status_queue.pop_front();
-        have_status = true;
-        impl_->refill_credit = status;
-        impl_->refill_credit_pending = true;
-      }
-      if (have_status && status.last_pack_sequence != 0xFFFFu) {
-        auto ack_it = std::find_if(
-            impl_->outstanding.begin(), impl_->outstanding.end(),
-            [&status](const auto &pack) {
-              return pack->sequence == status.last_pack_sequence;
-            });
-        if (ack_it != impl_->outstanding.end()) {
-          for (auto it = impl_->outstanding.begin(); it != std::next(ack_it);
-               ++it) {
-            acked.push_back(*it);
-          }
-          impl_->outstanding.erase(impl_->outstanding.begin(),
-                                   std::next(ack_it));
-          for (const auto &pack : acked) {
-            impl_->render_queue.erase(
-                std::remove(impl_->render_queue.begin(),
-                            impl_->render_queue.end(), pack),
-                impl_->render_queue.end());
-            if (impl_->render_pack != pack) {
-              pack->queued = false;
-            }
-          }
-        }
-      }
-      lock.unlock();
-      bool replaced_note = false;
-      {
-        std::lock_guard<std::mutex> mixer_lock(impl_->mixer_mu);
-        /* Apply note commands before ACK accounting. An old PACK may be
-         * transport-ACKed after its voice has already been replaced. */
-        mixer_->ConsumeOutputSamples(0.0);
-        for (const auto &pack : acked) {
-          for (unsigned i = 0u; i < pack->nchunks; ++i) {
-            const auto &chunk = pack->chunks[i];
-            if (!mixer_->BurstIsCurrent(chunk.voice, chunk.session,
-                                        chunk.wave_id)) {
-              replaced_note = true;
-            }
-            mixer_->CommitBurst(chunk.voice, chunk.session, chunk.wave_id,
-                                chunk.nsamp, chunk.sof);
-          }
-        }
-        if (have_status) {
-          mixer_->EndUrgentPrefill(status.mask);
-        }
-      }
-      lock.lock();
-
-      /* A replacement invalidates every old-note chunk. Anything already in
-       * the active callback must finish so the card can parse its CRC and
-       * sequence. Everything still waiting behind it is a replaceable suffix:
-       * rewind that sequence and rebuild it from the urgent new session. */
-      {
-        std::lock_guard<std::mutex> mixer_lock(impl_->mixer_mu);
-        mixer_->ConsumeOutputSamples(0.0);
-        bool stale_outstanding = false;
-        for (const auto &pack : impl_->outstanding) {
-          for (unsigned i = 0u; i < pack->nchunks; ++i) {
-            const auto &chunk = pack->chunks[i];
-            if (!mixer_->BurstIsCurrent(chunk.voice, chunk.session,
-                                        chunk.wave_id)) {
-              stale_outstanding = true;
-              break;
-            }
-          }
-          if (stale_outstanding) {
-            break;
-          }
-        }
-        /* A new note is more urgent than any not-yet-rendered steady refill,
-         * even when it targets a different voice. Reuse that ordered suffix
-         * so the new note's SOF BODY becomes the next sequence on the wire. */
-        if (replaced_note || stale_outstanding || mixer_->UrgentPending()) {
-          const bool replace_suffix = replaced_note || stale_outstanding;
-          const bool preempt_topup = mixer_->UrgentSofPending();
-          auto cancel_it = std::find_if(
-              impl_->outstanding.begin(), impl_->outstanding.end(),
-              [this, replace_suffix, preempt_topup](const auto &pack) {
-                const bool replaceable =
-                    !pack->rendered && impl_->render_pack != pack &&
-                    std::find(impl_->render_queue.begin(),
-                              impl_->render_queue.end(), pack) !=
-                        impl_->render_queue.end();
-                if (!replaceable || replace_suffix) {
-                  return replaceable;
-                }
-                const bool has_normal = std::any_of(
-                    pack->chunks.begin(),
-                    std::next(pack->chunks.begin(), pack->nchunks),
-                    [](const PackedChunk &chunk) {
-                      return !chunk.urgent_control;
-                    });
-                const bool has_sof = std::any_of(
-                    pack->chunks.begin(),
-                    std::next(pack->chunks.begin(), pack->nchunks),
-                    [](const PackedChunk &chunk) { return chunk.sof; });
-                /* A fresh SOF may replace queued bridge-only top-ups. Keep
-                 * an already ordered SOF and at most the active PACK. */
-                return has_normal || (preempt_topup && !has_sof);
-              });
-          if (cancel_it != impl_->outstanding.end()) {
-            impl_->next_pack_sequence = (*cancel_it)->sequence;
-            for (auto it = impl_->outstanding.end(); it != cancel_it;) {
-              --it;
-              const auto &pack = *it;
-              impl_->render_queue.erase(
-                  std::remove(impl_->render_queue.begin(),
-                              impl_->render_queue.end(), pack),
-                  impl_->render_queue.end());
-              pack->queued = false;
-              for (unsigned i = pack->nchunks; i > 0u; --i) {
-                const auto &chunk = pack->chunks[i - 1u];
-                if (chunk.urgent_control) {
-                  mixer_->AbortUrgentBurst(chunk.voice, chunk.session,
-                                           chunk.wave_id, chunk.nsamp,
-                                           chunk.sof);
-                } else {
-                  mixer_->AbortBurst(chunk.voice, chunk.session, chunk.wave_id,
-                                     chunk.nsamp, chunk.sof);
-                  impl_->refill_credit_pending = true;
-                }
-              }
-            }
-            impl_->outstanding.erase(cancel_it, impl_->outstanding.end());
-          }
-        }
-      }
-
-      /* Keep the UAC pipe full while its application ACK follows one vq
-       * behind. Every outstanding sample is subtracted from this status's
-       * exact credit below. Four later vq snapshots plus 30 ms without an ACK
-       * are strong evidence of ISO loss; that fresh vq authorizes a priority
-       * retry of the oldest missing sequence. */
-      const auto now = clock::now();
-      bool urgent = mixer_->UrgentPending();
-      const bool fresh_status = have_status;
-      if (!urgent && !have_status && impl_->refill_credit_pending) {
-        status = impl_->refill_credit;
-        have_status = true;
-      }
-      bool retried = false;
-      if (have_status && !urgent && !impl_->outstanding.empty()) {
-        const auto &pack = impl_->outstanding.front();
-        if (pack->rendered && !pack->queued) {
-          ++pack->unacked_vq;
-        }
-        if (pack->rendered && !pack->queued &&
-            pack->unacked_vq >= kRetryAfterUnackedVq &&
-            now - pack->rendered_at >= kRetryMinAge) {
-          impl_->QueueForRender(pack, true);
-          retried = true;
-          impl_->refill_credit_pending = false;
-        }
-      }
-      const bool bridge_pipeline = urgent || std::any_of(
-          impl_->outstanding.begin(), impl_->outstanding.end(),
-          [](const auto &pack) {
-            return std::any_of(
-                pack->chunks.begin(),
-                std::next(pack->chunks.begin(), pack->nchunks),
-                [](const PackedChunk &chunk) {
-                  return chunk.urgent_control;
-                });
-          });
-      /* A single fresh vq authorizes exactly one action: either the retry
-       * above or one new ordered PACK below. Bound the pipeline so a stopped
-       * endpoint cannot accumulate reservations indefinitely. Keep the wider
-       * bound until bridge PACKs are ACKed: they may already be rendered, and
-       * forcing the normal three-PACK bound here leaves the UAC queue empty. */
-      if (retried ||
-          (!bridge_pipeline &&
-           impl_->outstanding.size() >= kMaxOutstandingPacks) ||
-          (bridge_pipeline &&
-           impl_->outstanding.size() >= kMaxOutstandingWithUrgent)) {
-        lock.unlock();
-        continue;
-      }
-      if (!urgent && !have_status) {
-        lock.unlock();
-        continue;
-      }
-
-      /* Do file-cursor work and PACK construction away from the CoreAudio
-       * mutex. The real-time callback only needs that mutex for short queue
-       * operations and must never wait behind ~4800-sample allocation/copy. */
-      lock.unlock();
-      std::array<uint16_t, kSampleVoices> unreflected{};
-      for (const auto &pending : impl_->outstanding) {
-        for (unsigned voice = 0u; voice < kSampleVoices; ++voice) {
-          const unsigned total = static_cast<unsigned>(unreflected[voice]) +
-                                 pending->samples[voice];
-          unreflected[voice] = static_cast<uint16_t>(std::min(
-              total, static_cast<unsigned>(0xFFFFu)));
-        }
-      }
-      const double dt = std::chrono::duration<double>(now - last).count();
-      if (fresh_status) {
-        last = now;
-      }
-      double nframes = std::min(
-          dt * static_cast<double>(kSampleRateHz),
-          static_cast<double>(kSampleRateHz));
-      const uint16_t sequence = impl_->next_pack_sequence;
-      auto pack = std::make_shared<Impl::OutstandingPack>();
-      pack->sequence = sequence;
-      pack->wire.resize(cardlink::usb::kStreamUacWindowBytes);
-      unsigned nchunks = 0u;
-      int nbytes = 0;
-      {
-        std::lock_guard<std::mutex> mixer_lock(impl_->mixer_mu);
-        if (urgent) {
-          UrgentScheduleStats schedule{};
-          bool has_sof = false;
-          nbytes = UrgentPackFrame(
-              *mixer_, pack->wire.data(),
-              static_cast<int>(cardlink::usb::kStreamFrameMax),
-              pack->chunks.data(), nchunks, sequence, schedule, has_sof);
-          if (has_sof) {
-            impl_->urgent_voices.store(schedule.voices,
-                                       std::memory_order_relaxed);
-            impl_->urgent_demand.store(schedule.demand_samples_per_ms,
-                                       std::memory_order_relaxed);
-            impl_->urgent_attack_ms.store(schedule.remaining_attack_ms,
-                                          std::memory_order_relaxed);
-            impl_->urgent_quantum_ms.store(schedule.quantum_ms,
-                                           std::memory_order_relaxed);
-          }
-        } else {
-          /* Predict forward to the timestamp of this vq, then reconcile to
-           * the card's exact snapshot. */
-          mixer_->ConsumeOutputSamples(nframes);
-          mixer_->ApplyVoiceStatus(status.mask, status.best,
-                                   status.free_samples.data(),
-                                   unreflected.data());
-          mixer_->ConsumeOutputSamples(0.0);
-          nbytes = PackFrame(*mixer_, pack->wire.data(),
-                             static_cast<int>(cardlink::usb::kStreamFrameMax),
-                             pack->chunks.data(), nchunks, sequence);
-        }
-      }
-      if (nbytes <= 0 || nchunks == 0u) {
-        continue;
-      }
-      const uint32_t crc = cardlink::usb::StreamCrc32(
-          pack->wire.data(), static_cast<size_t>(nbytes));
-      std::memcpy(pack->wire.data() + nbytes, &crc, sizeof crc);
-      nbytes += static_cast<int>(sizeof crc);
-      impl_->next_pack_sequence =
-          cardlink::usb::NextPackSequence(impl_->next_pack_sequence);
-      pack->wire.resize(static_cast<size_t>(nbytes));
-      pack->nchunks = nchunks;
-      for (unsigned i = 0u; i < nchunks; ++i) {
-        pack->samples[pack->chunks[i].voice] =
-            static_cast<uint16_t>(pack->chunks[i].nsamp);
-      }
-      lock.lock();
-      if (!impl_->run.load(std::memory_order_acquire)) {
-        lock.unlock();
-        std::lock_guard<std::mutex> mixer_lock(impl_->mixer_mu);
-        for (unsigned i = pack->nchunks; i > 0u; --i) {
-          const auto &chunk = pack->chunks[i - 1u];
-          if (chunk.urgent_control) {
-            mixer_->AbortUrgentBurst(chunk.voice, chunk.session,
-                                     chunk.wave_id, chunk.nsamp, chunk.sof);
-          } else {
-            mixer_->AbortBurst(chunk.voice, chunk.session, chunk.wave_id,
-                               chunk.nsamp, chunk.sof);
-          }
-        }
-        break;
-      }
-      impl_->outstanding.push_back(pack);
-      /* FillUrgentBurst already chooses newest-first. Append each constructed
-       * PACK so a chord's transport sequences remain 0,1,2 on the wire;
-       * pushing every urgent PACK to the front reverses them to 2,1,0 and
-       * makes the card defer two voices until retry. The cancellation block
-       * above has already removed any replaceable normal-refill suffix. */
-      impl_->QueueForRender(pack);
-      if (!urgent) {
-        impl_->refill_credit_pending = false;
-      }
-      lock.unlock();
-    }
-  });
-  return true;
+  (void)last_pack_sequence;
+  mixer_->ApplyVoiceStatus(mask, best, free_samples.data());
 }
 
 } // namespace cardlink::audio

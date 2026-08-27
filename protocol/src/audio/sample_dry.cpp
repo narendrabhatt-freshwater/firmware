@@ -10,6 +10,12 @@
 namespace cardlink {
 namespace audio {
 
+namespace {
+constexpr unsigned kUacFrameSamples = 9u;
+/* A vq snapshot can race one 2 ms CoreAudio buffer already in flight. */
+constexpr unsigned kUacInFlightHeadroom = 1024u;
+}
+
 SampleDryMixer::SampleDryMixer()
 {
   for (auto &h : root_hz_) {
@@ -298,7 +304,9 @@ double SampleDryMixer::RemainingMs(const Voice &v) const
   if (rate <= 0.0) {
     return 0.0;
   }
-  return 1000.0 * static_cast<double>(v.vq_card_fill) / rate;
+  const unsigned projected = std::min(
+      kRingSamples, v.vq_card_fill + v.sent_this_vq);
+  return 1000.0 * static_cast<double>(projected) / rate;
 }
 
 unsigned SampleDryMixer::WantBurst(uint8_t voice) const
@@ -323,6 +331,84 @@ unsigned SampleDryMixer::WantBurst(uint8_t voice) const
     return 0;
   }
   return n;
+}
+
+unsigned SampleDryMixer::WantUacSamples(uint8_t voice) const
+{
+  if (voice >= kSampleVoices || !voices_[voice].active) {
+    return 0u;
+  }
+  const auto &v = voices_[voice];
+  if (v.urgent_pending) {
+    /* The final indivisible frame may exceed the target by at most eight
+     * samples, well inside the ring's interpolation headroom. */
+    return v.urgent_budget < kUacFrameSamples
+               ? kUacFrameSamples
+               : v.urgent_budget;
+  }
+  if (!v.vq_have || v.vq_free <= kUacInFlightHeadroom) {
+    return 0u;
+  }
+  const unsigned safe_credit = v.vq_free - kUacInFlightHeadroom;
+  if (v.sent_this_vq >= safe_credit) {
+    return 0u;
+  }
+  const unsigned n = safe_credit - v.sent_this_vq;
+  if (n < kMinBurst && RemainingMs(v) >= 1.0) {
+    return 0u;
+  }
+  return n;
+}
+
+uint8_t SampleDryMixer::HungriestUacWant(unsigned frame_samples)
+{
+  DrainCmds();
+  PullVq();
+  uint8_t urgent[kSampleVoices]{};
+  const unsigned nurgent = UrgentVoices(urgent);
+  uint8_t urgent_best = 0xFFu;
+  double least_runway_ms = 0.0;
+  double urgent_best_inc = 0.0;
+  for (unsigned i = 0u; i < nurgent; ++i) {
+    const uint8_t voice = urgent[i];
+    if (WantUacSamples(voice) < frame_samples) {
+      continue;
+    }
+    const double inc = IncOf(voices_[voice]);
+    const double rate = static_cast<double>(kSampleRateHz) * inc;
+    const double runway_ms = rate > 0.0
+                                  ? 1000.0 * voices_[voice].queued / rate
+                                  : 0.0;
+    /* Interleave simultaneous note starts by buffered playback time. Filling
+     * an entire 25 ms reservoir newest-first can leave later chord voices
+     * without even their first SOF before their attacks reach BODY. */
+    if (urgent_best == 0xFFu || runway_ms < least_runway_ms ||
+        (runway_ms == least_runway_ms && inc > urgent_best_inc)) {
+      urgent_best = voice;
+      least_runway_ms = runway_ms;
+      urgent_best_inc = inc;
+    }
+  }
+  if (urgent_best != 0xFFu) {
+    return urgent_best;
+  }
+  uint8_t best = 0xFFu;
+  double best_time = 0.0;
+  double best_inc = 0.0;
+  for (uint8_t voice = 0u; voice < kSampleVoices; ++voice) {
+    if (WantUacSamples(voice) < frame_samples) {
+      continue;
+    }
+    const double time = RemainingMs(voices_[voice]);
+    const double inc = IncOf(voices_[voice]);
+    if (best == 0xFFu || time < best_time ||
+        (time == best_time && inc > best_inc)) {
+      best = voice;
+      best_time = time;
+      best_inc = inc;
+    }
+  }
+  return best;
 }
 
 uint8_t SampleDryMixer::HungriestWant() const
@@ -483,6 +569,51 @@ unsigned SampleDryMixer::FillBurst(uint8_t voice, int16_t *dst, unsigned max_n,
     live_wave_[voice].store(0xFFFFu, std::memory_order_release);
   }
   return n;
+}
+
+unsigned SampleDryMixer::FillUacFrame(uint8_t voice, int16_t *dst,
+                                      unsigned max_n, bool &sof,
+                                      uint8_t &session)
+{
+  sof = false;
+  session = 0u;
+  if (dst == nullptr || voice >= kSampleVoices || max_n == 0u) {
+    return 0u;
+  }
+  DrainCmds();
+  PullVq();
+  auto &v = voices_[voice];
+  if (!v.active || WantUacSamples(voice) < max_n) {
+    return 0u;
+  }
+  const bool urgent = v.urgent_pending;
+  session = v.session;
+  /* Repeat SOF on every urgent frame. Frames sent before nX are harmless;
+   * the first frame accepted after authority starts the session and later
+   * repeated SOFs append to it. */
+  sof = urgent;
+  for (unsigned i = 0u; i < max_n; ++i) {
+    dst[i] = NextBody(v);
+  }
+  v.queued += static_cast<double>(max_n);
+  if (urgent) {
+    if (v.urgent_budget > max_n) {
+      v.urgent_budget -= max_n;
+    } else {
+      v.urgent_budget = 0u;
+      v.urgent_pending = false;
+      urgent_ready_.fetch_sub(1u, std::memory_order_release);
+      v.sof_pending = false;
+    }
+  } else {
+    v.sent_this_vq += max_n;
+  }
+  sent_[voice].fetch_add(max_n, std::memory_order_release);
+  if (!v.active) {
+    live_[voice].store(false, std::memory_order_release);
+    live_wave_[voice].store(0xFFFFu, std::memory_order_release);
+  }
+  return max_n;
 }
 
 bool SampleDryMixer::BurstIsCurrent(uint8_t voice, uint8_t session,
@@ -660,10 +791,9 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
         1000.0)) + 2u;
     reserve = std::min(reserve, kRingSamples);
   }
-  /* Queue a complete runway before normal exact-credit PACKs may follow.
-   * A normal one-voice PACK can take about 8 ms to reach its trailing CRC;
-   * truncating this bridge at the first post-nX vq drained a 5 ms starter
-   * before that PACK became visible. The reservation is still the hard cap. */
+  /* Queue a complete runway before normal exact-credit UAC frames follow.
+   * The reservation remains the hard cap while the direct frames bridge
+   * host callback and status timing. */
   const unsigned safe_capacity = kRingSamples - reserve;
   const unsigned prefill_target = static_cast<unsigned>(std::ceil(
       IncOf(v) * static_cast<double>(kSampleRateHz) *

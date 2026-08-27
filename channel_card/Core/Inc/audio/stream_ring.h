@@ -6,9 +6,9 @@
  * SPSC: USB writes from main, the playhead reads in I2S. A full FIFO drops
  * the write (never unread samples). An empty FIFO is an underrun.
  *
- * BODY burst: voice + session + SOF + packed int16 samples. Note-on arms the
- * replacement origin; only its matching wave/session SOF may start the body.
- * Repeated bursts append and stale/unarmed sessions never reset the FIFO.
+ * Every UAC audio frame carries a route/session tag plus nine int16 samples.
+ * Note-on arms the replacement origin; only its matching session may start
+ * the body. Repeated SOF tags for that session append normally.
  ******************************************************************************
  */
 
@@ -91,6 +91,10 @@ extern "C"
   uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
                                  uint16_t wave_id, const int16_t *samples,
                                  uint32_t nsamp);
+
+  /** Demultiplex direct tagged 10-channel UAC frames into voice rings. */
+  uint32_t StreamRing_WriteUac(const int16_t *interleaved,
+                               uint32_t nframes);
 
   /** Reserve a complete BODY burst without publishing it to the consumer.
    * @retval STREAM_RING_WRITE_OK reservation active

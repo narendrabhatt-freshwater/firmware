@@ -196,19 +196,15 @@ static int NoteBank_InterpAttackBody(uint8_t note, uint16_t wid,
 }
 
 /**
- * Two-tap linear interpolation over the body FIFO. A miss after this
- * session has published samples is fatal: LED_R and halt until reset.
- * An empty ring before the first commit is not an underrun.
+ * Two-tap linear interpolation over the body FIFO. Count every miss at the
+ * actual BODY boundary, including a late first frame, and temporarily hold
+ * the last valid sample until the producer catches up. Transport jitter must
+ * not halt the entire card.
  */
-static void NoteBank_BodyMiss(uint8_t note)
+static int32_t NoteBank_BodyMiss(uint8_t note)
 {
-  if (StreamRing_HasBody(note) != 0u)
-  {
-    /* An underrun is telemetry, never a control-plane fatal error. Keeping
-     * USB and RS485 alive lets the next independently vq-authorized refill
-     * recover the voice instead of disabling every interrupt forever. */
-    note_hold_miss++;
-  }
+  note_hold_miss++;
+  return note_hold[note];
 }
 
 static int NoteBank_InterpBody(uint8_t note, int32_t *out)
@@ -532,8 +528,7 @@ static int32_t NoteBank_Sample(uint8_t note)
   {
     if (NoteBank_InterpBody(note, &y) != 0)
     {
-      NoteBank_BodyMiss(note);
-      return note_hold[note];
+      return NoteBank_BodyMiss(note);
     }
     NoteBank_AdvanceBody(note);
     note_phase[note] = phase + (uint64_t)note_inc[note];
@@ -569,7 +564,9 @@ static int32_t NoteBank_Sample(uint8_t note)
       }
       else
       {
-        NoteBank_BodyMiss(note);
+        /* The local attack is still authoritative. BODY may arrive any time
+         * before the attack exhausts; account for a miss only at the actual
+         * BODY boundary. */
       }
     }
     note_phase[note] = phase + (uint64_t)note_inc[note];
@@ -579,12 +576,11 @@ static int32_t NoteBank_Sample(uint8_t note)
 
   if (note_body_skip[note] != 0u)
   {
-    return note_hold[note];
+    return NoteBank_BodyMiss(note);
   }
   if (NoteBank_InterpBody(note, &y) != 0)
   {
-    NoteBank_BodyMiss(note);
-    return note_hold[note];
+    return NoteBank_BodyMiss(note);
   }
   note_body_only[note] = 1u;
   NoteBank_AdvanceBody(note);
@@ -976,6 +972,10 @@ int32_t NoteBank_NextSample(void)
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
     NoteBank_DrainCmd(i);
+    if (note_next_pending[i] != 0u && note_crash_left[i] == 0u)
+    {
+      NoteBank_ActivateReplacement(i);
+    }
     if (note_active[i] != 0u)
     {
       sum += (int64_t)NoteBank_VoiceSample(i);

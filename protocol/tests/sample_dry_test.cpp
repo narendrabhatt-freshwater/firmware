@@ -76,24 +76,18 @@ void RunNoFaultCase(const std::array<double, cardlink::audio::kSampleVoices> &in
     mixer.ConsumeOutputSamples(0.0);
     mask = static_cast<uint8_t>(mask | static_cast<uint8_t>(1u << v));
   }
-  GrantEmpty(mixer, mask, 0u);
-  {
-    uint8_t order[kSampleVoices]{};
-    unsigned grants[kSampleVoices]{};
-    const unsigned nwant = mixer.WantingVoices(order);
-    const unsigned budget = cardlink::usb::PackMaxSamples(nwant);
-    Check(nwant == nvoices, "first vq must authorize every new voice");
-    Check(mixer.AllocateBursts(order, nwant, budget, grants) == budget,
-          "first vq must fill one complete UAC PACK");
-    for (unsigned i = 0; i < nwant; ++i) {
-      std::array<int16_t, kBodyBurstMax> body{};
-      bool sof = false;
-      uint8_t session = 0u;
-      ring[order[i]] = mixer.FillBurst(order[i], body.data(), grants[i], sof,
-                                       session);
-      Check(ring[order[i]] == grants[i],
-            "first vq grant must match its allocated PACK share");
-    }
+  while (mixer.UrgentPending()) {
+    const uint8_t voice = mixer.HungriestUacWant(
+        cardlink::usb::kStreamUacBodySamples);
+    Check(voice < nvoices, "urgent UAC scheduler must select a live voice");
+    std::array<int16_t, cardlink::usb::kStreamUacBodySamples> body{};
+    bool sof = false;
+    uint8_t session = 0u;
+    const unsigned got = mixer.FillUacFrame(
+        voice, body.data(), body.size(), sof, session);
+    Check(got == body.size() && sof,
+          "urgent UAC frame must carry nine tagged BODY samples");
+    ring[voice] += got;
   }
 
   for (unsigned q = 0; q < quanta; ++q) {
@@ -118,21 +112,18 @@ void RunNoFaultCase(const std::array<double, cardlink::audio::kSampleVoices> &in
     mixer.ConsumeOutputSamples(output_frames);
     mixer.ApplyVoiceStatus(mask, best, free_samples.data());
     mixer.ConsumeOutputSamples(0.0);
-    uint8_t order[kSampleVoices]{};
-    const unsigned nwant = mixer.WantingVoices(order);
-    if (nwant == 0u) {
-      continue;
-    }
-    unsigned grants[kSampleVoices]{};
-    const unsigned budget = cardlink::usb::PackMaxSamples(nwant);
-    (void)mixer.AllocateBursts(order, nwant, budget, grants);
-    for (unsigned i = 0; i < nwant; ++i) {
-      const uint8_t v = order[i];
-      std::array<int16_t, kBodyBurstMax> body{};
+    for (unsigned frame = 0u;
+         frame < cardlink::usb::kStreamUacFramesPerMs * 10u; ++frame) {
+      const uint8_t v = mixer.HungriestUacWant(
+          cardlink::usb::kStreamUacBodySamples);
+      if (v >= nvoices) {
+        continue;
+      }
+      std::array<int16_t, cardlink::usb::kStreamUacBodySamples> body{};
       bool sof = false;
-      uint8_t session = 0;
-      const unsigned got = mixer.FillBurst(v, body.data(), grants[i], sof,
-                                           session);
+      uint8_t session = 0u;
+      const unsigned got = mixer.FillUacFrame(
+          v, body.data(), body.size(), sof, session);
       Check(ring[v] + got <= kRingSamples, message);
       ring[v] += got;
     }
@@ -314,22 +305,34 @@ int main()
   mixer.Silence(1);
   mixer.ConsumeOutputSamples(0.0);
 
-  Check(cardlink::usb::PackMaxSamples(1) == kBodyBurstMax,
-        "one-voice PACK must use its full BODY burst cap");
-  Check(cardlink::usb::PackMaxSamples(3) == 5082u,
-        "three-voice PACK must use all physical wire room");
-  Check(cardlink::usb::PackMaxSamples(5) == 5074u,
-        "five-voice PACK must use all physical wire room");
-  Check(cardlink::usb::PackMaxSamples(8) == 5062u,
-        "eight-voice PACK must use all physical wire room");
-  Check(cardlink::usb::NextPackSequence(0xFFFEu) == 0u,
-        "PACK sequence must reserve 0xffff as the no-ack sentinel");
+  Check(cardlink::usb::kStreamUacBodySamples == 9u &&
+            cardlink::usb::kStreamBodySamplesPerMs == 459u,
+        "direct UAC must carry nine BODY samples per 51 kHz audio frame");
+  Check((cardlink::usb::kStreamTagIdle & cardlink::usb::kStreamTagMask) ==
+            cardlink::usb::kStreamTagBase,
+        "idle and routed frames must share the direct UAC tag namespace");
   {
-    constexpr uint8_t kCrcVector[] = {'1', '2', '3', '4', '5',
-                                      '6', '7', '8', '9'};
-    Check(cardlink::usb::StreamCrc32(kCrcVector, sizeof kCrcVector) ==
-              0xCBF43926u,
-          "PACK CRC32 must match the standard check vector");
+    SampleDryMixer chord;
+    LoadTone(chord, 0);
+    for (uint8_t voice = 0u; voice < kSampleVoices; ++voice) {
+      chord.NoteOn(voice, 0u, kDefaultBodyRootHz);
+    }
+    chord.ConsumeOutputSamples(0.0);
+    uint8_t seen = 0u;
+    for (unsigned frame = 0u; frame < kSampleVoices; ++frame) {
+      const uint8_t voice = chord.HungriestUacWant(
+          cardlink::usb::kStreamUacBodySamples);
+      std::array<int16_t, cardlink::usb::kStreamUacBodySamples> body{};
+      bool sof = false;
+      uint8_t session = 0u;
+      Check(voice < kSampleVoices &&
+                chord.FillUacFrame(voice, body.data(), body.size(), sof,
+                                   session) == body.size() && sof,
+            "each simultaneous voice must receive a direct urgent frame");
+      seen = static_cast<uint8_t>(seen | static_cast<uint8_t>(1u << voice));
+    }
+    Check(seen == 0xFFu,
+          "urgent direct frames must interleave all eight chord voices");
   }
   {
     SampleDryMixer pipelined;
@@ -344,15 +347,15 @@ int main()
       pipelined.ApplyVoiceStatus(0x01u, 0u, empty.data(), pending.data());
       pipelined.ConsumeOutputSamples(0.0);
       Check(pipelined.WantBurst(0) == grant,
-            "pipelined vq must subtract every unacknowledged PACK");
+            "pipelined vq must subtract every unacknowledged transfer");
       Check(TakeBurst(pipelined, 0) == grant,
-            "pipelined PACK must consume only its exact remaining credit");
+            "pipelined transfer must consume only its exact remaining credit");
       pending[0] = static_cast<uint16_t>(pending[0] + grant);
     }
     pipelined.ApplyVoiceStatus(0x01u, 0u, empty.data(), pending.data());
     pipelined.ConsumeOutputSamples(0.0);
     Check(pipelined.WantBurst(0) == 0u,
-          "unacknowledged PACKs must never over-reserve the physical ring");
+          "unacknowledged transfers must never over-reserve the physical ring");
   }
   {
     SampleDryMixer crash;
@@ -396,11 +399,9 @@ int main()
     const unsigned samples_per_10ms = static_cast<unsigned>(
         std::ceil(48.0 * 10.0 * static_cast<double>(kSampleVoices) *
                   pitch_ratio));
-    const unsigned wire_bytes = cardlink::usb::kStreamHdrSize +
-        kSampleVoices * cardlink::usb::kStreamBodyMetaSize +
-        2u * samples_per_10ms;
-    Check(wire_bytes <= cardlink::usb::kStreamFrameMax,
-          "eight voices at +1.33 semitones must fit one 10 ms iso window");
+    Check(samples_per_10ms <=
+              cardlink::usb::kStreamBodySamplesPerMs * 10u,
+          "eight voices at +1.33 semitones must fit direct UAC capacity");
   }
   mixer.NoteOn(0, 0, kDefaultBodyRootHz * 2.0);
   mixer.NoteOn(1, 0, kDefaultBodyRootHz * 2.0);
@@ -413,12 +414,10 @@ int main()
     uint8_t order[kSampleVoices];
     const unsigned nwant = mixer.WantingVoices(order);
     Check(nwant == 5, "five C5 notes must all want the SOF burst");
-    Check(cardlink::usb::PackMaxSamples(nwant) == 5074u,
-          "16-bit UAC PACK capacity must include its framing cost");
     unsigned grants[kSampleVoices]{};
-    const unsigned budget = cardlink::usb::PackMaxSamples(nwant);
+    const unsigned budget = cardlink::usb::kStreamBodySamplesPerMs * 10u;
     Check(mixer.AllocateBursts(order, nwant, budget, grants) == budget,
-          "fair allocator must use the available PACK payload");
+          "fair allocator must use the available sample budget");
     for (unsigned i = 0; i < nwant; ++i) {
       Check(grants[i] > 0u,
             "fair allocator must not starve a wanting voice");
@@ -437,10 +436,10 @@ int main()
     const unsigned nwant = mixer.WantingVoices(order);
     unsigned grants[kSampleVoices]{};
     unsigned by_voice[kSampleVoices]{};
-    const unsigned budget = cardlink::usb::PackMaxSamples(nwant);
+    const unsigned budget = cardlink::usb::kStreamBodySamplesPerMs * 10u;
     Check(nwant == 3, "C4+C5+C6 must all want initial BODY");
     Check(mixer.AllocateBursts(order, nwant, budget, grants) == budget,
-          "C4+C5+C6 must use the full permitted PACK");
+          "C4+C5+C6 must use the full permitted sample budget");
     for (unsigned i = 0; i < nwant; ++i) {
       by_voice[order[i]] = grants[i];
     }
@@ -448,8 +447,8 @@ int main()
                        static_cast<int>(by_voice[1])) <= 2 &&
               std::abs(static_cast<int>(2u * by_voice[1]) -
                        static_cast<int>(by_voice[2])) <= 2 &&
-              by_voice[0] + by_voice[1] + by_voice[2] == 5082u,
-          "C4+C5+C6 grants must follow their 1:2:4 consumption rates");
+              by_voice[0] + by_voice[1] + by_voice[2] == budget,
+          "C4+C5+C6 grants must follow direct-UAC consumption rates");
   }
 
   mixer.AllNotesOff();
@@ -465,17 +464,17 @@ int main()
     unsigned grants[kSampleVoices]{};
     unsigned by_voice[kSampleVoices]{};
     const unsigned nwant = mixer.WantingVoices(order);
-    const unsigned budget = cardlink::usb::PackMaxSamples(nwant);
+    const unsigned budget = cardlink::usb::kStreamBodySamplesPerMs * 10u;
     Check(nwant == 3, "three C6 voices must all be scheduled");
     Check(mixer.AllocateBursts(order, nwant, budget, grants) == budget,
           "three C6 voices must use the complete service quantum");
     for (unsigned i = 0; i < nwant; ++i) {
       by_voice[order[i]] = grants[i];
     }
-    Check(by_voice[0] == 1694u && by_voice[1] == 1694u &&
-              by_voice[2] == 1694u &&
-              by_voice[0] + by_voice[1] + by_voice[2] == 5082u,
-          "three C6 grants must fairly use the catch-up PACK");
+    Check(by_voice[0] == 1530u && by_voice[1] == 1530u &&
+              by_voice[2] == 1530u &&
+              by_voice[0] + by_voice[1] + by_voice[2] == budget,
+          "three C6 grants must fairly use ten direct-UAC milliseconds");
     for (unsigned i = 0; i < nwant; ++i) {
       const uint8_t v = order[i];
       std::array<int16_t, kBodyBurstMax> body{};
@@ -615,10 +614,10 @@ int main()
     Check(gated.NoteOnBatch(&note, 1u),
           "RS485 note transaction must enter its worker queue");
     Check(gated.Mixer().UrgentPending(),
-          "session-bound SOF must launch without waiting for nX ACK");
+          "direct UAC prefill must launch concurrently with nX");
     ack(true);
     Check(gated.Mixer().UrgentPending(),
-          "nX ACK must preserve its already launched BODY session");
+          "nX ACK must preserve its concurrent direct UAC BODY session");
     std::array<int16_t, kBodyBurstMax> tagged_body{};
     cardlink::audio::UrgentBurst tagged{};
     Check(gated_note.session < cardlink::audio::kStreamSessionMod &&

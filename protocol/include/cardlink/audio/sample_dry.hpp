@@ -1,6 +1,6 @@
 /**
  * @file sample_dry.hpp
- * @brief Host body feeder: unpitched int16 → UAC2 BODY packs.
+ * @brief Host body feeder: unpitched int16 → direct UAC2 BODY frames.
  *
  * Card owns pitch / env / filter. The host reserves one session for nX and
  * USB SOF, launches the urgent newest-first BODY job, then queues authoritative
@@ -9,10 +9,9 @@
  * at most one steady-state refill to each voice (at most kBodyBurstMax and at most the
  * safe free-space credit). Each vq reconciles predicted occupancy to the
  * the card's exact occupancy plus per-voice samples in concurrent USB OUT.
- * One PACK divides its payload by source consumption rate so a fast
- * voice cannot consume its share before the next status.
- *
- * One asynchronous packed USB OUT submission is made per granted status.
+ * Every UAC audio frame carries a voice/session tag and nine raw samples.
+ * Frames are assigned by source consumption rate so a fast voice cannot
+ * consume another voice's share before the next status.
  *
  * `queued` estimates card FIFO occupancy (attack does not consume body).
  *
@@ -144,6 +143,12 @@ public:
   /** Samples this voice can take now (0 if inactive / enough time / full). */
   unsigned WantBurst(uint8_t voice) const;
 
+  /** Direct UAC path: remaining credit available in nine-sample frames. */
+  unsigned WantUacSamples(uint8_t voice) const;
+
+  /** Direct UAC path: newest urgent or hungriest credited voice. */
+  uint8_t HungriestUacWant(unsigned frame_samples);
+
   /** Active voice with the least remaining time that still wants a burst.
    *  0xFF if none. Prefers the card's vq `best` when that voice wants data. */
   uint8_t HungriestWant() const;
@@ -152,7 +157,7 @@ public:
    *  Writes at most kSampleVoices ids into dst. Returns the count. */
   unsigned WantingVoices(uint8_t *dst) const;
 
-  /** Divide a PACK sample budget among wanting voices in proportion to
+  /** Divide a shared sample budget among wanting voices in proportion to
    *  source consumption. Each grant is bounded by WantBurst(). */
   unsigned AllocateBursts(const uint8_t *voices, unsigned nvoices,
                           unsigned budget, unsigned *grants) const;
@@ -163,6 +168,11 @@ public:
   /** Copy up to max_n body samples. Sets sof/session. */
   unsigned FillBurst(uint8_t voice, int16_t *dst, unsigned max_n, bool &sof,
                      uint8_t &session);
+
+  /** Fill one direct UAC audio frame. Urgent frames repeat SOF until the
+   * complete startup runway has been emitted. */
+  unsigned FillUacFrame(uint8_t voice, int16_t *dst, unsigned max_n,
+                        bool &sof, uint8_t &session);
 
   /** Undo FillBurst when the bulk OUT did not accept the packet. */
   void AbortBurst(uint8_t voice, uint8_t session, uint16_t wave_id,

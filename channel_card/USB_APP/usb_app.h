@@ -36,9 +36,9 @@ extern "C"
     uint32_t USB_App_RxByteCount(void);
     uint32_t USB_App_UacWindowCount(void);
     uint32_t USB_App_BadCount(void);
-    /** Breakdown: 0 header, 1 sequence, 2 structure/ring, 3 CRC, 4 UAC. */
+    /** Compatibility counters; direct transport reports routing faults in 2. */
     uint32_t USB_App_BadReasonCount(uint8_t reason);
-    /** Most recent UAC PACK fully applied to the BODY rings. */
+    /** Legacy compatibility value; direct transport returns 0xFFFF. */
     uint16_t USB_App_LastPackSequence(void);
     void USB_App_StatsClear(void);
 

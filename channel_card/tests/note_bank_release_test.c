@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 static int16_t s_old_body[3000];
+static int16_t s_new_body[3000];
 static const int16_t s_attack[] = {0, 12000, 6000, 0};
 static uint32_t s_attack_len;
 static unsigned s_filter_divisor = 1u;
@@ -112,10 +113,12 @@ static void StartOldVoice(void)
   for (i = 0u; i < 3000u; ++i)
   {
     s_old_body[i] = 12000;
+    s_new_body[i] = 9000;
   }
   s_attack_len = 0u;
   StreamRing_Init();
   NoteBank_Init();
+  NoteBank_HoldCountClear();
   Check(NoteBank_SetWaveId(0u, 0u) == 0, "assign wave");
   NoteBank_SetFreqSession(0u, 260.0, 0.125, 1u);
   (void)NoteBank_NextSample();
@@ -125,17 +128,46 @@ static void StartOldVoice(void)
   Check(NoteBank_NextSample() > 0, "old BODY must be audible");
 }
 
+static void PublishReplacement(uint8_t session)
+{
+  Check(StreamRing_WriteVoice(0u, session, 1u, 0u, s_new_body, 3000u) ==
+            3000u,
+        "publish replacement BODY");
+}
+
 int main(void)
 {
   unsigned i;
   int32_t previous;
   int32_t sample;
 
+  for (i = 0u; i < 3000u; ++i)
+  {
+    s_old_body[i] = 12000;
+    s_new_body[i] = 9000;
+  }
+  s_attack_len = sizeof s_attack / sizeof s_attack[0];
+  StreamRing_Init();
+  NoteBank_Init();
+  Check(NoteBank_SetWaveId(0u, 0u) == 0, "assign startup wave");
+  NoteBank_SetFreqSession(0u, 260.0, 0.125, 1u);
+  Check(NoteBank_NextSample() == 0,
+        "tagged startup must begin immediately at attack phase zero");
+  Check(NoteBank_NextSample() > 0 && NoteBank_NextSample() > 0,
+        "startup attack must advance while BODY is still in flight");
+  Check(NoteBank_NextSample() == 0 && NoteBank_NextSample() == 0,
+        "startup must wait silently only after attack exhausts");
+  Check(StreamRing_WriteVoice(0u, 1u, 1u, 0u, s_new_body, 100u) == 100u,
+        "publish BODY after startup attack");
+  Check(NoteBank_NextSample() > 0,
+        "startup BODY must resume when its SOF commits");
+
   StartOldVoice();
   s_attack_len = sizeof s_attack / sizeof s_attack[0];
   NoteBank_SetCrashReleaseMs(2u);
   NoteBank_SetFreqSession(0u, 260.0, 0.125, 2u);
   previous = NoteBank_NextSample();
+  PublishReplacement(2u);
   Check(previous > 0, "release must begin from the old signal");
   for (i = 1u; i < 96u; ++i)
   {
@@ -154,6 +186,7 @@ int main(void)
   NoteBank_SetCrashReleaseMs(6u);
   NoteBank_SetFreqSession(0u, 260.0, 0.125, 2u);
   previous = NoteBank_NextSample();
+  PublishReplacement(2u);
   Check(previous > 0, "6 ms release must begin from the old signal");
   for (i = 1u; i < 288u; ++i)
   {
@@ -172,9 +205,50 @@ int main(void)
   NoteBank_SetCrashReleaseMs(0u);
   NoteBank_SetFreqSession(0u, 260.0, 0.125, 2u);
   Check(NoteBank_NextSample() == 0,
-        "0 ms replacement must start at attack sample zero immediately");
+        "0 ms replacement must start at attack phase zero immediately");
   Check(NoteBank_NextSample() > 0,
-        "0 ms replacement must advance on the next output sample");
+        "replacement attack must not wait for its SOF BODY");
+  PublishReplacement(2u);
+  Check(NoteBank_NextSample() > 0,
+        "replacement attack must continue while BODY arrives");
+
+  StartOldVoice();
+  s_attack_len = sizeof s_attack / sizeof s_attack[0];
+  NoteBank_SetCrashReleaseMs(2u);
+  NoteBank_SetFreqSession(0u, 260.0, 0.125, 2u);
+  for (i = 0u; i < 96u; ++i)
+  {
+    Check(NoteBank_NextSample() > 0,
+          "old release must finish even when replacement BODY is late");
+  }
+  Check(NoteBank_NextSample() == 0,
+        "late replacement must start at attack phase zero after release");
+  Check(NoteBank_NextSample() > 0 && NoteBank_NextSample() > 0,
+        "late replacement attack must run before BODY is ready");
+  Check(NoteBank_NextSample() == 0 && NoteBank_NextSample() == 0,
+        "late BODY must produce silence only after attack exhausts");
+  PublishReplacement(2u);
+  Check(NoteBank_NextSample() > 0,
+        "late BODY must resume after its SOF commits");
+
+  s_attack_len = 0u;
+  StreamRing_Init();
+  NoteBank_Init();
+  NoteBank_HoldCountClear();
+  Check(NoteBank_SetWaveId(0u, 0u) == 0, "assign underrun-recovery wave");
+  NoteBank_SetFreqSession(0u, 260.0, 0.125, 1u);
+  Check(NoteBank_NextSample() == 0 && NoteBank_HoldCount() == 1u,
+        "BODY boundary before first commit must count as an underrun");
+  Check(StreamRing_WriteVoice(0u, 1u, 1u, 0u, s_new_body, 2u) == 2u,
+        "publish deliberately short BODY");
+  Check(NoteBank_NextSample() > 0, "short BODY must play its valid sample");
+  previous = NoteBank_NextSample();
+  Check(previous > 0 && NoteBank_HoldCount() == 2u,
+        "published BODY exhaustion must hold audio and remain recoverable");
+  Check(StreamRing_WriteVoice(0u, 1u, 0u, 0u, s_new_body, 100u) == 100u,
+        "refill BODY after recoverable underrun");
+  Check(NoteBank_NextSample() > 0,
+        "voice must resume from a refill after its BODY underrun");
 
   s_env_programmed = 1u;
   s_env_gain = 0.5f;
@@ -203,6 +277,7 @@ int main(void)
           "replacement DSP state must remain deferred during release");
     NoteBank_SetFreqSession(0u, 780.0, 0.5, 3u);
     (void)NoteBank_NextSample();
+    PublishReplacement(3u);
     Check(s_filter_reset_calls == filter_reset_before &&
               s_filter_note_on_calls == filter_note_on_before &&
               s_env_note_on_calls == env_note_on_before,

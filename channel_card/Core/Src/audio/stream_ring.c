@@ -264,40 +264,46 @@ int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
   {
     if (r->replacement_state == STREAM_REPLACEMENT_NONE)
     {
-      /* The host launches SOF before waiting for aw/nX ACK. It cannot claim
-       * the ring yet; retain its bytes until tagged nX supplies authority. */
+      /* Direct UAC keeps SOF asserted throughout urgent prefill. Once the
+       * matching session owns the ring, later SOF-tagged frames append. */
       if (session == r->session && wave_id == r->wave_id)
+      {
+        sof = 0u;
+      }
+      else
+      {
+        return STREAM_RING_WRITE_FUTURE;
+      }
+    }
+    if (sof != 0u)
+    {
+      if (wave_id != r->expected_wave_id ||
+          (r->expected_session != 0xFFu && session != r->expected_session))
       {
         return STREAM_RING_WRITE_STALE;
       }
-      return STREAM_RING_WRITE_FUTURE;
+      /* nX is authoritative already, but I2S has not selected its ring
+       * origin. The next tagged UAC frame retries one audio frame later. */
+      if (r->replacement_state == STREAM_REPLACEMENT_PENDING)
+      {
+        return STREAM_RING_WRITE_PENDING;
+      }
+      if (r->replacement_state != STREAM_REPLACEMENT_READY ||
+          wave_id != r->wave_id ||
+          (r->session != 0xFFu && session != r->session))
+      {
+        return STREAM_RING_WRITE_STALE;
+      }
+      r->session = session;
     }
-    if (wave_id != r->expected_wave_id ||
-        (r->expected_session != 0xFFu && session != r->expected_session))
-    {
-      return STREAM_RING_WRITE_STALE;
-    }
-    /* nX is authoritative already, but I2S has not selected its ring origin.
-     * Leave the UAC bytes queued and retry after that sample. */
-    if (r->replacement_state == STREAM_REPLACEMENT_PENDING)
-    {
-      return STREAM_RING_WRITE_PENDING;
-    }
-    if (r->replacement_state != STREAM_REPLACEMENT_READY ||
-        wave_id != r->wave_id ||
-        (r->session != 0xFFu && session != r->session))
-    {
-      return STREAM_RING_WRITE_STALE;
-    }
-    r->session = session;
   }
-  else if (wave_id != r->wave_id ||
-           r->replacement_state != STREAM_REPLACEMENT_NONE ||
-           session != r->session)
+  if (sof == 0u && (wave_id != r->wave_id ||
+                    r->replacement_state != STREAM_REPLACEMENT_NONE ||
+                    session != r->session))
   {
     /* A fresh vq authorized this refill, but note-off/new-note retired its
-     * session before the ISO bytes arrived. It is valid transport data that
-     * must be CRC-checked and ACKed, but it must not repopulate the ring. */
+     * session before the ISO bytes arrived. It is valid transport data, but
+     * it must not repopulate the ring. */
     return STREAM_RING_WRITE_STALE;
   }
   if (StreamRing_Filled(r) + nsamp > STREAM_RING_SAMPLES)
@@ -461,6 +467,52 @@ uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
     copied += span_n;
   }
   return StreamRing_WriteCommit(&write);
+}
+
+uint32_t StreamRing_WriteUac(const int16_t *interleaved, uint32_t nframes)
+{
+  uint32_t frame;
+  uint32_t accepted = 0u;
+  if (interleaved == NULL)
+  {
+    return 0u;
+  }
+  for (frame = 0u; frame < nframes; ++frame)
+  {
+    const int16_t *src = interleaved +
+                         frame * USB_STREAM_UAC_CHANNELS;
+    uint16_t tag = (uint16_t)src[0];
+    uint8_t voice;
+    uint8_t session;
+    uint8_t sof;
+    uint16_t wave_id;
+    StreamRing_t *r;
+    if (tag == USB_STREAM_TAG_IDLE ||
+        (tag & USB_STREAM_TAG_MASK) != USB_STREAM_TAG_BASE)
+    {
+      continue;
+    }
+    voice = (uint8_t)(tag & USB_STREAM_TAG_VOICE_MASK);
+    if (voice >= SAMPLE_VOICES)
+    {
+      continue;
+    }
+    session = (uint8_t)((tag >> USB_STREAM_TAG_SESSION_SHIFT) &
+                        USB_STREAM_TAG_SESSION_MASK);
+    sof = (tag & USB_STREAM_TAG_SOF) != 0u ? 1u : 0u;
+    r = StreamRing_At(voice);
+    wave_id = (sof != 0u &&
+               r->replacement_state != STREAM_REPLACEMENT_NONE)
+                  ? r->expected_wave_id
+                  : r->wave_id;
+    if (StreamRing_WriteVoice(voice, session, sof, wave_id, src + 1,
+                              USB_STREAM_UAC_BODY_SAMPLES) ==
+        USB_STREAM_UAC_BODY_SAMPLES)
+    {
+      accepted++;
+    }
+  }
+  return accepted;
 }
 
 int StreamRing_GetRel(uint8_t voice, uint32_t offset, int16_t *out)

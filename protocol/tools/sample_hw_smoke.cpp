@@ -238,7 +238,7 @@ int main(int argc, char **argv)
     aggregate_samples_per_ms += 48.0 * hz[v] / root_hz;
   }
   const double capacity_samples_per_ms =
-      static_cast<double>(cardlink::usb::PackMaxSamples(nvoices)) / 10.0;
+      static_cast<double>(cardlink::usb::kStreamBodySamplesPerMs);
   std::cout << "budget: demand=" << aggregate_samples_per_ms
             << " samples/ms capacity=" << capacity_samples_per_ms << '\n';
   if (aggregate_samples_per_ms > capacity_samples_per_ms) {
@@ -414,6 +414,6 @@ int main(int argc, char **argv)
               << " sof=" << final_stats.sof << '\n';
     return EXIT_FAILURE;
   }
-  std::cout << "PASS: zero host xruns, drops, holds, bad packs, and late fills\n";
+  std::cout << "PASS: zero host xruns, drops, holds, bad frames, and late fills\n";
   return EXIT_SUCCESS;
 }
