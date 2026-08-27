@@ -60,7 +60,7 @@ flowchart TB
 Attack and body are storage. The head plays to its committed length
 (≤ 512). Body is a FIFO from packed UAC2 BODY data, consumed with
 Q16.16 interpolation. `nX > 0` is always a note-on. A new BODY session
-(`SOF` + session 0–6) starts a new body FIFO; a repeated burst with
+(`SOF` + session 0–254) starts a new body FIFO; a repeated burst with
 the same session does not.
 The host packs the hungriest wanting voices into each UAC window (fair share
 of a 4762-sample 10 ms OUT budget for eight voices, weighted by source-consumption

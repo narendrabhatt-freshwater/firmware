@@ -172,11 +172,18 @@ bool Load(App &app)
       app.auto_reconnect = (std::atoi(val.c_str()) != 0);
     } else if (key == "piano_octave") {
       app.piano_octave = std::clamp(std::atoi(val.c_str()), -4, 3);
+    } else if (key == "voice_limit") {
+      app.voice_limit = std::clamp(std::atoi(val.c_str()), 1, 8);
+    } else if (key == "crash_release_ms") {
+      app.crash_release_ms = std::clamp(std::atoi(val.c_str()), 0, 50);
     } else if (key == "ui_scale") {
       app.ui_scale =
           std::clamp(std::strtof(val.c_str(), nullptr), 0.75f, 1.75f);
     }
   }
+  (void)app.bank.SetVoiceLimit(static_cast<uint8_t>(app.voice_limit));
+  app.samples.SetCrashReleaseMs(
+      static_cast<uint8_t>(app.crash_release_ms));
   return true;
 }
 
@@ -199,6 +206,8 @@ bool Save(const App &app)
   WriteKV(out, "midi_port_index", app.midi_port_index);
   WriteKV(out, "auto_reconnect", app.auto_reconnect);
   WriteKV(out, "piano_octave", app.piano_octave);
+  WriteKV(out, "voice_limit", app.voice_limit);
+  WriteKV(out, "crash_release_ms", app.crash_release_ms);
   WriteKV(out, "ui_scale", app.ui_scale);
   return true;
 }

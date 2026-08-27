@@ -147,6 +147,8 @@ struct App
   int selected_voice = 0;
   int piano_octave = 0; // offset from C4 (0 = C4–C5)
   int piano_velocity = 100;
+  int voice_limit = 8;       // playable MIDI/sample voices, 1..8
+  int crash_release_ms = 3;  // old-tail overlap when a voice is stolen
   /** Perform scope controls (design: continuous halve/double + slider). */
   float scope_time_ms = 4.f; // ms per division, 0.1–200
   float scope_volt = 1.f;    // amplitude compression, 0.1–8

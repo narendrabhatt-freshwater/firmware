@@ -39,7 +39,7 @@ constexpr unsigned kRingSamples = 12240;
 constexpr unsigned kRingHeadroom = 32;
 /** Coalesce refill credit to amortize eight per-voice BODY metas. */
 constexpr unsigned kMinBurst = 512;
-constexpr unsigned kStreamSessionMod = 7;
+constexpr unsigned kStreamSessionMod = 255;
 /** One BODY meta remains bounded; the larger ring absorbs poll/host jitter. */
 constexpr unsigned kBodyBurstMax = 4096;
 constexpr double kDefaultBodyRootHz = 261.625565;
@@ -109,10 +109,20 @@ public:
                      uint8_t &session);
 
   /** Undo FillBurst when the bulk OUT did not accept the packet. */
+  void AbortBurst(uint8_t voice, uint8_t session, uint16_t wave_id,
+                  unsigned nsamp, bool sof);
+  /** Compatibility overload for callers that only operate on current data. */
   void AbortBurst(uint8_t voice, unsigned nsamp, bool sof);
 
   /** Record successful host-to-device completion. */
+  void CommitBurst(uint8_t voice, uint8_t session, uint16_t wave_id,
+                   unsigned nsamp, bool sof);
+  /** Compatibility overload for callers that only operate on current data. */
   void CommitBurst(uint8_t voice, unsigned nsamp, bool sof);
+
+  /** True only while a queued chunk still belongs to the live note. */
+  bool BurstIsCurrent(uint8_t voice, uint8_t session,
+                      uint16_t wave_id) const;
 
   /** Legacy observation helper; note-on never waits for this completion. */
   bool WaitPrefill(uint8_t voice, unsigned timeout_ms);
@@ -132,7 +142,7 @@ private:
   struct Cmd {
     CmdKind kind = CmdKind::On;
     uint8_t voice = 0;
-    uint16_t wave_id = 0;
+    uint16_t wave_id = 0xFFFFu;
     double freq_hz = 0.0;
   };
 

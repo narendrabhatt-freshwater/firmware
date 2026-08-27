@@ -354,6 +354,42 @@ int main()
           "unacknowledged PACKs must never over-reserve the physical ring");
   }
   {
+    SampleDryMixer crash;
+    LoadTone(crash, 0);
+    crash.NoteOn(0, 0, kDefaultBodyRootHz);
+    crash.ConsumeOutputSamples(0.0);
+    GrantEmpty(crash, 0x01u, 0u);
+    std::array<int16_t, kBodyBurstMax> body{};
+    bool old_sof = false;
+    uint8_t old_session = 0u;
+    const unsigned old_n = crash.FillBurst(
+        0u, body.data(), kBodyBurstMax, old_sof, old_session);
+    Check(old_n != 0u && old_sof &&
+              crash.BurstIsCurrent(0u, old_session, 0u),
+          "first BODY chunk must belong to its original note session");
+
+    crash.NoteOn(0, 0, kDefaultBodyRootHz * 2.0);
+    crash.ConsumeOutputSamples(0.0);
+    Check(!crash.BurstIsCurrent(0u, old_session, 0u),
+          "voice replacement must immediately stale queued old BODY");
+    crash.AbortBurst(0u, old_session, 0u, old_n, old_sof);
+    crash.CommitBurst(0u, old_session, 0u, old_n, old_sof);
+    Check(crash.QueuedSamples(0u) == 0u && !crash.WaitPrefill(0u, 0u),
+          "old cancel/ACK accounting must not touch the replacement session");
+
+    GrantEmpty(crash, 0x01u, 0u);
+    bool new_sof = false;
+    uint8_t new_session = 0u;
+    const unsigned new_n = crash.FillBurst(
+        0u, body.data(), kBodyBurstMax, new_sof, new_session);
+    Check(new_n != 0u && new_sof && new_session != old_session &&
+              crash.BurstIsCurrent(0u, new_session, 0u),
+          "replacement BODY must become the urgent current session");
+    crash.CommitBurst(0u, new_session, 0u, new_n, new_sof);
+    Check(crash.WaitPrefill(0u, 0u),
+          "only the replacement session may satisfy prefill completion");
+  }
+  {
     constexpr double kSemitones = 1.33;
     const double pitch_ratio = std::pow(2.0, kSemitones / 12.0);
     const unsigned samples_per_10ms = static_cast<unsigned>(
@@ -485,6 +521,12 @@ int main()
               commands[1] == "aw 1 0" && commands[2].rfind("n0 ", 0u) == 0u &&
               commands[3].rfind("n1 ", 0u) == 0u,
           "audible chord commands must follow session setup immediately");
+    client.SetCrashReleaseMs(0u);
+    Check(client.CrashReleaseMs() == 0u && commands.back() == "crash 0",
+          "zero-ms crash release must reach the card as a hard-cut test");
+    client.SetCrashReleaseMs(255u);
+    Check(client.CrashReleaseMs() == 50u && commands.back() == "crash 50",
+          "crash release must clamp to the 50-ms test ceiling");
   }
 
   return EXIT_SUCCESS;

@@ -28,7 +28,8 @@ extern "C" {
 #define USB_STREAM_HDR_SIZE 8u
 #define USB_STREAM_BODY_META_SIZE 8u
 #define USB_STREAM_NSAMP_MAX 4096u
-#define USB_STREAM_SESSION_MOD 7u
+/* Full 8-bit sequence; 0xFF is reserved as the unarmed sentinel. */
+#define USB_STREAM_SESSION_MOD 255u
 
 /* USB carrier only: BODY data and DAC playback remain 48 kHz. */
 #define USB_STREAM_UAC_CHANNELS 10u
@@ -70,7 +71,7 @@ typedef struct USB_STREAM_PACKED {
   uint8_t sof;
   uint8_t pad;
   uint16_t nsamp;
-  uint16_t pad2;
+  uint16_t wave_id;
 } UsbStreamBodyMeta;
 
 #define USB_STREAM_MSG_MAX USB_STREAM_FRAME_MAX

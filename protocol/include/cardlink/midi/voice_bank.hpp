@@ -42,6 +42,11 @@ struct VoiceSlot
 class VoiceBank
 {
 public:
+  /** Set the playable slot count (1..8). Voices outside the new limit are
+   * released and returned as Off events so callers can silence hardware. */
+  std::vector<BankEvent> SetVoiceLimit(uint8_t voices);
+  uint8_t VoiceLimit() const { return voice_limit_; }
+
   /** Apply Note On for key. Returns one or more events (steal then on). */
   std::vector<BankEvent> NoteOn(uint8_t midi_key);
 
@@ -70,6 +75,7 @@ private:
   BankEvent MakeEvent(BankEventKind kind, uint8_t slot) const;
 
   std::array<VoiceSlot, kVoiceCount> slots_{};
+  uint8_t voice_limit_ = kVoiceCount;
   /** Slot indices oldest → newest. */
   std::vector<uint8_t> fifo_;
 };

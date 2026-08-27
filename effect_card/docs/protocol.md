@@ -134,6 +134,7 @@ and are lost on reset.
 | `aw <v> <id>`       | Assign head `<id>` to voice `<v>` 0…7                               |
 | `a`                 | Loaded count + 256-bit hex mask (bit 0 = wave 0)                    |
 | `vq`                | Active mask + hungriest + exact ring credit + USB PACK ACK            |
+| `crash [0..50]`     | Query/set steal overlap in ms; 0 = hard cut (default 3)                |
 | `usb`               | BODY counters: drop/hold/fill, RS-485 `vq`, rx/bytes/bad              |
 | `usb 0`             | Clear those counters, then same reply                                 |
 
@@ -400,11 +401,11 @@ offset  size  field
 8       …     repeated BODY meta + int16 samples:
 
   0     1     voice  0..7
-  1     1     session 0..6
+  1     1     session 0..254 (8-bit note sequence; 255 is unarmed)
   2     1     sof    1 = replace that BODY ring session; never start/restart note
   3     1     pad
   4     2     nsamp
-  6     2     pad
+  6     2     wave_id (MIDI note/sample identity, little-endian)
   8     2*nsamp  int16 LE unpitched body
 
   final 4 bytes  IEEE CRC32 of the complete header + BODY records

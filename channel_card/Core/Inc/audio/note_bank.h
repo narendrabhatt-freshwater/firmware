@@ -31,6 +31,10 @@ extern "C"
   void NoteBank_Init(void);
   void NoteBank_PanicAll(void);
 
+  /** Crash-in tail length. Values are clamped to 0..50 ms (0 = hard cut). */
+  void NoteBank_SetCrashReleaseMs(uint8_t release_ms);
+  uint8_t NoteBank_GetCrashReleaseMs(void);
+
   /**
    * @brief Note on/off. freq_hz <= 0 releases/stops.
    * freq_hz > 0 is always a note-on (restarts attack + body). Applied on

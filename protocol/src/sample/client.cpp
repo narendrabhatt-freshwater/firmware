@@ -617,5 +617,14 @@ void Client::Silence(uint8_t voice)
   mixer_.Silence(voice);
 }
 
+void Client::SetCrashReleaseMs(uint8_t release_ms)
+{
+  crash_release_ms_ = std::clamp<uint8_t>(release_ms, 0u, 50u);
+  char cmd[24];
+  std::snprintf(cmd, sizeof cmd, "crash %u",
+                static_cast<unsigned>(crash_release_ms_));
+  SendConsole(cmd);
+}
+
 } // namespace sample
 } // namespace cardlink

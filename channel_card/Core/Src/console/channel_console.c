@@ -322,6 +322,7 @@ static const SwitchDef_t switches[] = {
  *   al <id> <len>     — CDC attack-head upload (2..ATTACK_BANK_BYTES)
  *   ar <id> <Hz>      — sample root pitch (id = wave 0..255); a — loaded mask
  *   a / vq            — loaded heads per voice / hungriest + exact credit
+ *   crash [0..50]     — query/set voice-steal release overlap in milliseconds
  *   usb               — BODY counters: drop/hold/min/fill/z/sof/rx/bytes/bad
  *   usb 0             — clear those counters, then same reply
  *   en0..enf / en     — envelope: end slope[±k] … release_slope[±k]
@@ -500,7 +501,7 @@ static void Console_Help(void)
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   snprintf(b, sizeof b,
            "ok: SAMPLE n0..n7 Hz [sc] | s|p d|t a | aw v id | "
-           "al id n | ar id Hz | a | vq | interp 0|1 | usb | "
+           "al id n | ar id Hz | a | vq | crash [0..50] | usb | "
            "en0..en7 end slope[±k] ... rel[±k]|0 | ek0..ek7 k | "
            "f0..f7 Hz [q] | fk0..fk7 k | g ch dB | "
            "cpu [0|N|q N]\r\n");
@@ -1375,8 +1376,7 @@ static void Console_CmdVoiceQuery(void)
   NoteBank_VoiceQuery(&mask, &best);
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
-    free_samples[i] =
-        (uint16_t)(STREAM_RING_SAMPLES - StreamRing_FillLevel(i));
+    free_samples[i] = (uint16_t)StreamRing_FreeLevel(i);
   }
   last_pack_sequence = USB_App_LastPackSequence();
 
@@ -1673,6 +1673,29 @@ static void Console_Exec(char *line)
   if (strcmp(line, "vq") == 0)
   {
     Console_CmdVoiceQuery();
+    return;
+  }
+
+  /* ---- crash [0..50]: release overlap used when a slot is reused ---- */
+  if (strncmp(line, "crash", 5) == 0 &&
+      (line[5] == '\0' || line[5] == ' '))
+  {
+    unsigned int ms;
+    if (line[5] == '\0')
+    {
+      snprintf(b, sizeof b, "ok: crash %u ms\r\n",
+               (unsigned)NoteBank_GetCrashReleaseMs());
+      RS485_Reply(b);
+      return;
+    }
+    if (sscanf(line + 6, "%u", &ms) != 1 || ms > 50u)
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+    NoteBank_SetCrashReleaseMs((uint8_t)ms);
+    snprintf(b, sizeof b, "ok: crash %u ms\r\n", ms);
+    RS485_Reply(b);
     return;
   }
 

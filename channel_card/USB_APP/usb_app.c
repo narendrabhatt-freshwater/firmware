@@ -359,7 +359,8 @@ static void USB_App_FeedPack(const uint8_t *src, uint32_t count)
       }
       begin_result = StreamRing_WriteBegin(
           s_rx.meta.voice, s_rx.meta.session, s_rx.meta.sof,
-          s_rx.meta.nsamp, &s_rx.writes[s_rx.write_count]);
+          s_rx.meta.wave_id, s_rx.meta.nsamp,
+          &s_rx.writes[s_rx.write_count]);
       if (begin_result == STREAM_RING_WRITE_ERROR)
       {
         USB_App_FailFrame(USB_BAD_FRAME);

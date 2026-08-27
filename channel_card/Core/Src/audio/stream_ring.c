@@ -17,7 +17,12 @@ typedef struct
   volatile uint32_t rd;
   volatile uint8_t consuming;
   uint8_t session;
+  uint8_t replacement_armed;
+  uint8_t body_published;
+  uint16_t wave_id;
   uint32_t generation;
+  volatile uint32_t release_rd;
+  volatile uint32_t release_left;
   int16_t data[STREAM_RING_BASE_SAMPLES];
 } StreamRing_t;
 
@@ -54,6 +59,9 @@ static volatile uint32_t s_zero_pkts;
 /* 0xFFFFFFFF = no consume sample since last clear. */
 static volatile uint32_t s_min_fill = 0xFFFFFFFFu;
 
+static int16_t *StreamRing_DataAt(StreamRing_t *r, uint8_t voice,
+                                  uint32_t index);
+
 static uint32_t StreamRing_Filled(const StreamRing_t *r)
 {
   uint32_t wr = r->wr;
@@ -78,6 +86,11 @@ void StreamRing_Reset(uint8_t voice)
   r->rd = 0u;
   r->consuming = 0u;
   r->session = 0xFFu;
+  r->replacement_armed = 0u;
+  r->body_published = 0u;
+  r->wave_id = 0xFFFFu;
+  r->release_rd = 0u;
+  r->release_left = 0u;
 }
 
 void StreamRing_Prime(uint8_t voice)
@@ -87,6 +100,76 @@ void StreamRing_Prime(uint8_t voice)
     return;
   }
   StreamRing_At(voice)->consuming = 1u;
+}
+
+uint32_t StreamRing_BeginReplacement(uint8_t voice, uint16_t wave_id,
+                                     uint32_t release_samples)
+{
+  StreamRing_t *r;
+  uint32_t keep;
+
+  if (voice >= SAMPLE_VOICES)
+  {
+    return 0u;
+  }
+  r = StreamRing_At(voice);
+  keep = StreamRing_Filled(r);
+  if (keep > release_samples)
+  {
+    keep = release_samples;
+  }
+
+  /* Preserve [old rd, old rd + keep) for the release reader. The replacement
+   * BODY has an empty logical FIFO whose origin is immediately after it. */
+  r->generation++;
+  r->release_rd = r->rd;
+  r->release_left = keep;
+  r->rd += keep;
+  r->wr = r->rd;
+  r->session = 0xFFu;
+  r->replacement_armed = 1u;
+  r->body_published = 0u;
+  r->wave_id = wave_id;
+  r->consuming = 1u;
+  return keep;
+}
+
+int StreamRing_GetReleaseRel(uint8_t voice, uint32_t offset, int16_t *out)
+{
+  StreamRing_t *r;
+  if (voice >= SAMPLE_VOICES || out == NULL)
+  {
+    return -1;
+  }
+  r = StreamRing_At(voice);
+  if (offset >= r->release_left)
+  {
+    return -1;
+  }
+  *out = *StreamRing_DataAt(r, voice,
+                            (r->release_rd + offset) % STREAM_RING_SAMPLES);
+  return 0;
+}
+
+void StreamRing_AdvanceRelease(uint8_t voice, uint32_t n)
+{
+  StreamRing_t *r;
+  if (voice >= SAMPLE_VOICES || n == 0u)
+  {
+    return;
+  }
+  r = StreamRing_At(voice);
+  if (n > r->release_left)
+  {
+    n = r->release_left;
+  }
+  r->release_rd += n;
+  r->release_left -= n;
+}
+
+uint32_t StreamRing_ReleaseLevel(uint8_t voice)
+{
+  return (voice < SAMPLE_VOICES) ? StreamRing_At(voice)->release_left : 0u;
 }
 
 void StreamRing_Release(uint8_t voice)
@@ -114,7 +197,8 @@ static int16_t *StreamRing_DataAt(StreamRing_t *r, uint8_t voice,
 }
 
 int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
-                          uint32_t nsamp, StreamRing_Write_t *write)
+                          uint16_t wave_id, uint32_t nsamp,
+                          StreamRing_Write_t *write)
 {
   StreamRing_t *r;
 
@@ -125,15 +209,20 @@ int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
   }
   memset(write, 0, sizeof *write);
   r = StreamRing_At(voice);
+  if (wave_id != r->wave_id)
+  {
+    return STREAM_RING_WRITE_STALE;
+  }
   if (sof != 0u && session != r->session)
   {
-    /* The new producer may overwrite index zero before commit, so retire the
-     * old session now. The consumer sees an empty ring until the full BODY
-     * reservation is published. */
-    r->wr = 0u;
-    r->rd = 0u;
+    /* Only nX may arm a new session and choose its replacement origin.
+     * An old/unexpected SOF is transport-valid but cannot reset the ring. */
+    if (r->replacement_armed == 0u)
+    {
+      return STREAM_RING_WRITE_STALE;
+    }
     r->session = session;
-    r->generation++;
+    r->replacement_armed = 0u;
     s_sof_pkts++;
   }
   else if (sof == 0u && session != r->session)
@@ -143,7 +232,7 @@ int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
      * must be CRC-checked and ACKed, but it must not repopulate the ring. */
     return STREAM_RING_WRITE_STALE;
   }
-  if (StreamRing_Filled(r) + nsamp > STREAM_RING_SAMPLES)
+  if (StreamRing_Filled(r) + r->release_left + nsamp > STREAM_RING_SAMPLES)
   {
     s_drop_pkts++;
     return STREAM_RING_WRITE_ERROR;
@@ -244,6 +333,7 @@ uint32_t StreamRing_WriteCommit(StreamRing_Write_t *write)
     }
   }
   r->wr = write->start_wr + write->nsamp;
+  r->body_published = 1u;
   s_rx_pkts++;
   if (all_zero != 0u)
   {
@@ -262,7 +352,8 @@ void StreamRing_WriteAbort(StreamRing_Write_t *write)
 }
 
 uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
-                               const int16_t *samples, uint32_t nsamp)
+                               uint16_t wave_id, const int16_t *samples,
+                               uint32_t nsamp)
 {
   StreamRing_Write_t write;
   uint32_t copied = 0u;
@@ -272,7 +363,7 @@ uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
   {
     return 0u;
   }
-  if (StreamRing_WriteBegin(voice, session, sof, nsamp, &write) != 0)
+  if (StreamRing_WriteBegin(voice, session, sof, wave_id, nsamp, &write) != 0)
   {
     return 0u;
   }
@@ -349,13 +440,25 @@ uint32_t StreamRing_FillLevel(uint8_t voice)
   }
 }
 
+uint32_t StreamRing_FreeLevel(uint8_t voice)
+{
+  uint32_t used;
+  if (voice >= SAMPLE_VOICES)
+  {
+    return 0u;
+  }
+  used = StreamRing_Filled(StreamRing_At(voice)) +
+         StreamRing_At(voice)->release_left;
+  return (used < STREAM_RING_SAMPLES) ? (STREAM_RING_SAMPLES - used) : 0u;
+}
+
 uint8_t StreamRing_HasBody(uint8_t voice)
 {
   if (voice >= SAMPLE_VOICES)
   {
     return 0u;
   }
-  return (StreamRing_At(voice)->wr != 0u) ? 1u : 0u;
+  return StreamRing_At(voice)->body_published;
 }
 
 uint32_t StreamRing_MaxFill(void)

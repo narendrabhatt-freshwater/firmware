@@ -542,6 +542,8 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
   }
   if (want_card)
   {
+    /* Reassert after reconnects before any aw/nX commands for this note. */
+    samples.SetCrashReleaseMs(static_cast<uint8_t>(crash_release_ms));
     (void)EnsureSampleStream();
   }
 
@@ -1362,7 +1364,7 @@ void App::DrawStatusBar()
       }
     }
     char v[16];
-    std::snprintf(v, sizeof(v), "%d/8", active);
+    std::snprintf(v, sizeof(v), "%d/%d", active, voice_limit);
     ChipSeg segs[2];
     segs[0] = {"VOICES", kPalette.text_dim, fs};
     segs[1] = {v, active > 0 ? kPalette.accent : kPalette.text_dim, fm};
@@ -1370,6 +1372,48 @@ void App::DrawStatusBar()
                active > 0 ? kPalette.accent : kPalette.muted, active > 0, segs,
                2, false, kPalette.border, false, false);
   }
+
+  // Playable voice limit + crash-in release, kept beside VOICES for live use.
+  ImGui::SameLine(0.f, S(10.f));
+  ImGui::BeginGroup();
+  ImGui::SetCursorPosY(chip_y + S(4.f));
+  Mono("MAX", kPalette.text_dim, fs);
+  ImGui::SameLine(0.f, S(5.f));
+  ImGui::SetCursorPosY(chip_y + S(2.f));
+  ImGui::SetNextItemWidth(S(54.f));
+  int next_limit = voice_limit;
+  if (ImGui::SliderInt("##voice_limit_top", &next_limit, 1, 8, "%dV"))
+  {
+    const auto offs = bank.SetVoiceLimit(static_cast<uint8_t>(next_limit));
+    voice_limit = static_cast<int>(bank.VoiceLimit());
+    if (!offs.empty())
+    {
+      ApplyBankEvents(offs);
+    }
+    selected_voice = std::min(selected_voice, voice_limit - 1);
+    MarkSettingsDirty();
+  }
+  if (ImGui::IsItemHovered())
+  {
+    ImGui::SetTooltip("Playable voices (1–8)");
+  }
+  ImGui::SameLine(0.f, S(9.f));
+  ImGui::SetCursorPosY(chip_y + S(4.f));
+  Mono("REL", kPalette.text_dim, fs);
+  ImGui::SameLine(0.f, S(5.f));
+  ImGui::SetCursorPosY(chip_y + S(2.f));
+  ImGui::SetNextItemWidth(S(66.f));
+  if (ImGui::SliderInt("##crash_release_top", &crash_release_ms, 0, 50,
+                       "%dms"))
+  {
+    samples.SetCrashReleaseMs(static_cast<uint8_t>(crash_release_ms));
+    MarkSettingsDirty();
+  }
+  if (ImGui::IsItemHovered())
+  {
+    ImGui::SetTooltip("Voice-steal release overlap (0–50 ms; 0 = hard cut)");
+  }
+  ImGui::EndGroup();
 
   // Right cluster: GAIN · [RECOVER] · SILENCE
   {

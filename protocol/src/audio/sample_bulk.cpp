@@ -26,6 +26,8 @@ constexpr double kPackHorizonMs = 8.0;
 
 struct PackedChunk {
   uint8_t voice = 0;
+  uint8_t session = 0;
+  uint16_t wave_id = 0xFFFFu;
   unsigned nsamp = 0;
   bool sof = false;
 };
@@ -82,6 +84,9 @@ int PackFrame(SampleDryMixer &mixer, uint8_t *dst, int max,
     }
     bool sof = false;
     uint8_t session = 0u;
+    /* Capture before FillBurst: a one-shot may retire itself after producing
+     * its final valid chunk, at which point LiveWave intentionally goes idle. */
+    const uint16_t wave_id = mixer.LiveWave(voice);
     const unsigned got =
         mixer.FillBurst(voice, body.data(), give, sof, session);
     if (got == 0u) {
@@ -92,11 +97,12 @@ int PackFrame(SampleDryMixer &mixer, uint8_t *dst, int max,
     meta.session = session;
     meta.sof = sof ? 1u : 0u;
     meta.nsamp = static_cast<uint16_t>(got);
+    meta.wave_id = wave_id;
     std::memcpy(dst + used, &meta, sizeof meta);
     std::memcpy(dst + used + sizeof meta, body.data(),
                 got * sizeof(int16_t));
     used += sizeof meta + got * sizeof(int16_t);
-    chunks[nchunks++] = PackedChunk{voice, got, sof};
+    chunks[nchunks++] = PackedChunk{voice, session, wave_id, got, sof};
   }
   if (nchunks == 0u) {
     return 0;
@@ -268,7 +274,8 @@ void SampleBulkOut::Stop()
     const auto &pack = *pit;
     for (unsigned i = pack->nchunks; i > 0u; --i) {
       const auto &chunk = pack->chunks[i - 1u];
-      mixer_->AbortBurst(chunk.voice, chunk.nsamp, chunk.sof);
+      mixer_->AbortBurst(chunk.voice, chunk.session, chunk.wave_id,
+                         chunk.nsamp, chunk.sof);
     }
   }
   impl_->status_queue.clear();
@@ -405,16 +412,76 @@ bool SampleBulkOut::Start(std::string &err)
         }
       }
       lock.unlock();
-      if (!acked.empty()) {
+      bool replaced_note = false;
+      {
         std::lock_guard<std::mutex> mixer_lock(impl_->mixer_mu);
+        /* Apply note commands before ACK accounting. An old PACK may be
+         * transport-ACKed after its voice has already been replaced. */
+        mixer_->ConsumeOutputSamples(0.0);
         for (const auto &pack : acked) {
           for (unsigned i = 0u; i < pack->nchunks; ++i) {
             const auto &chunk = pack->chunks[i];
-            mixer_->CommitBurst(chunk.voice, chunk.nsamp, chunk.sof);
+            if (!mixer_->BurstIsCurrent(chunk.voice, chunk.session,
+                                        chunk.wave_id)) {
+              replaced_note = true;
+            }
+            mixer_->CommitBurst(chunk.voice, chunk.session, chunk.wave_id,
+                                chunk.nsamp, chunk.sof);
           }
         }
       }
       lock.lock();
+
+      /* A replacement invalidates every old-note chunk. Anything already in
+       * the active callback must finish so the card can parse its CRC and
+       * sequence. Everything still waiting behind it is a replaceable suffix:
+       * rewind that sequence and rebuild it from the urgent new session. */
+      {
+        std::lock_guard<std::mutex> mixer_lock(impl_->mixer_mu);
+        mixer_->ConsumeOutputSamples(0.0);
+        bool stale_outstanding = false;
+        for (const auto &pack : impl_->outstanding) {
+          for (unsigned i = 0u; i < pack->nchunks; ++i) {
+            const auto &chunk = pack->chunks[i];
+            if (!mixer_->BurstIsCurrent(chunk.voice, chunk.session,
+                                        chunk.wave_id)) {
+              stale_outstanding = true;
+              break;
+            }
+          }
+          if (stale_outstanding) {
+            break;
+          }
+        }
+        if (replaced_note || stale_outstanding) {
+          auto cancel_it = std::find_if(
+              impl_->outstanding.begin(), impl_->outstanding.end(),
+              [this](const auto &pack) {
+                return !pack->rendered && impl_->render_pack != pack &&
+                       std::find(impl_->render_queue.begin(),
+                                 impl_->render_queue.end(), pack) !=
+                           impl_->render_queue.end();
+              });
+          if (cancel_it != impl_->outstanding.end()) {
+            impl_->next_pack_sequence = (*cancel_it)->sequence;
+            for (auto it = impl_->outstanding.end(); it != cancel_it;) {
+              --it;
+              const auto &pack = *it;
+              impl_->render_queue.erase(
+                  std::remove(impl_->render_queue.begin(),
+                              impl_->render_queue.end(), pack),
+                  impl_->render_queue.end());
+              pack->queued = false;
+              for (unsigned i = pack->nchunks; i > 0u; --i) {
+                const auto &chunk = pack->chunks[i - 1u];
+                mixer_->AbortBurst(chunk.voice, chunk.session, chunk.wave_id,
+                                   chunk.nsamp, chunk.sof);
+              }
+            }
+            impl_->outstanding.erase(cancel_it, impl_->outstanding.end());
+          }
+        }
+      }
 
       /* Keep the UAC pipe full while its application ACK follows one vq
        * behind. Every outstanding sample is subtracted from this status's
@@ -503,7 +570,8 @@ bool SampleBulkOut::Start(std::string &err)
         std::lock_guard<std::mutex> mixer_lock(impl_->mixer_mu);
         for (unsigned i = pack->nchunks; i > 0u; --i) {
           const auto &chunk = pack->chunks[i - 1u];
-          mixer_->AbortBurst(chunk.voice, chunk.nsamp, chunk.sof);
+          mixer_->AbortBurst(chunk.voice, chunk.session, chunk.wave_id,
+                             chunk.nsamp, chunk.sof);
         }
         break;
       }

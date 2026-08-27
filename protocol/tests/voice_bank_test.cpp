@@ -49,5 +49,24 @@ int main()
         "note off must release the matching voice");
   Check(bank.NoteOff(42).empty(), "unknown note off must be ignored");
 
+  VoiceBank mono;
+  Check(mono.SetVoiceLimit(1).empty() && mono.VoiceLimit() == 1,
+        "voice limit must be configurable");
+  Check(mono.NoteOn(60).front().slot == 0, "mono must allocate slot zero");
+  const auto mono_steal = mono.NoteOn(64);
+  Check(mono_steal.size() == 2 &&
+            mono_steal[0].kind == BankEventKind::Steal &&
+            mono_steal[1].kind == BankEventKind::On &&
+            mono_steal[1].slot == 0,
+        "mono overflow must crash into slot zero");
+
+  VoiceBank reduced;
+  for (uint8_t key = 60; key < 64; ++key) {
+    (void)reduced.NoteOn(key);
+  }
+  const auto limit_offs = reduced.SetVoiceLimit(2);
+  Check(limit_offs.size() == 2 && reduced.ActiveCount() == 2,
+        "lowering voice limit must release out-of-range slots");
+
   return EXIT_SUCCESS;
 }

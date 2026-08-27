@@ -12,6 +12,26 @@ uint8_t VoiceBank::ActiveCount() const
   return static_cast<uint8_t>(fifo_.size());
 }
 
+std::vector<BankEvent> VoiceBank::SetVoiceLimit(uint8_t voices)
+{
+  voices = std::clamp<uint8_t>(voices, 1u, kVoiceCount);
+  std::vector<BankEvent> events;
+  if (voices < voice_limit_) {
+    for (uint8_t slot = voices; slot < kVoiceCount; ++slot) {
+      if (!slots_[slot].active) {
+        continue;
+      }
+      BankEvent off = MakeEvent(BankEventKind::Off, slot);
+      slots_[slot] = VoiceSlot{};
+      RemoveFromFifo(slot);
+      off.active_count = ActiveCount();
+      events.push_back(off);
+    }
+  }
+  voice_limit_ = voices;
+  return events;
+}
+
 BankEvent VoiceBank::MakeEvent(BankEventKind kind, uint8_t slot) const
 {
   BankEvent ev;
@@ -25,7 +45,7 @@ BankEvent VoiceBank::MakeEvent(BankEventKind kind, uint8_t slot) const
 
 std::optional<uint8_t> VoiceBank::FindSlotByKey(uint8_t midi_key) const
 {
-  for (uint8_t i = 0; i < kVoiceCount; ++i) {
+  for (uint8_t i = 0; i < voice_limit_; ++i) {
     if (slots_[i].active && slots_[i].midi_key == midi_key) {
       return i;
     }
@@ -35,7 +55,7 @@ std::optional<uint8_t> VoiceBank::FindSlotByKey(uint8_t midi_key) const
 
 std::optional<uint8_t> VoiceBank::FindFreeSlot() const
 {
-  for (uint8_t i = 0; i < kVoiceCount; ++i) {
+  for (uint8_t i = 0; i < voice_limit_; ++i) {
     if (!slots_[i].active) {
       return i;
     }
@@ -128,7 +148,7 @@ std::vector<BankEvent> VoiceBank::AllOff()
 std::vector<BankEvent> VoiceBank::SetSlotFreq(uint8_t slot, double freq_hz)
 {
   std::vector<BankEvent> events;
-  if (slot >= kVoiceCount) {
+  if (slot >= voice_limit_) {
     return events;
   }
 
@@ -163,7 +183,7 @@ std::vector<BankEvent> VoiceBank::SetAllFreq(double freq_hz)
   if (freq_hz <= 0.0) {
     return AllOff();
   }
-  for (uint8_t i = 0; i < kVoiceCount; ++i) {
+  for (uint8_t i = 0; i < voice_limit_; ++i) {
     auto more = SetSlotFreq(i, freq_hz);
     events.insert(events.end(), more.begin(), more.end());
   }

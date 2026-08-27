@@ -6,9 +6,9 @@
  * SPSC: USB writes from main, the playhead reads in I2S. A full FIFO drops
  * the write (never unread samples). An empty FIFO is an underrun.
  *
- * BODY burst: voice + session + SOF + packed int16 samples. A new session
- * starts a new body. Repeated bursts with the same session do not reset
- * the FIFO.
+ * BODY burst: voice + session + SOF + packed int16 samples. Note-on arms the
+ * replacement origin; only its matching wave/session SOF may start the body.
+ * Repeated bursts append and stale/unarmed sessions never reset the FIFO.
  ******************************************************************************
  */
 
@@ -59,6 +59,16 @@ extern "C"
    */
   void StreamRing_Prime(uint8_t voice);
 
+  /** Start a replacement session without destroying the old unread tail.
+   * New BODY data begins after up to @p release_samples reserved samples. */
+  uint32_t StreamRing_BeginReplacement(uint8_t voice, uint16_t wave_id,
+                                       uint32_t release_samples);
+
+  /** Read/consume the old tail reserved by StreamRing_BeginReplacement. */
+  int StreamRing_GetReleaseRel(uint8_t voice, uint32_t offset, int16_t *out);
+  void StreamRing_AdvanceRelease(uint8_t voice, uint32_t n);
+  uint32_t StreamRing_ReleaseLevel(uint8_t voice);
+
   /** Stop consume and empty the FIFO (note-off). */
   void StreamRing_Release(uint8_t voice);
 
@@ -67,14 +77,16 @@ extern "C"
    * @return nsamp accepted, or 0 if the whole burst would overflow / bad args.
    */
   uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
-                                 const int16_t *samples, uint32_t nsamp);
+                                 uint16_t wave_id, const int16_t *samples,
+                                 uint32_t nsamp);
 
   /** Reserve a complete BODY burst without publishing it to the consumer.
    * @retval STREAM_RING_WRITE_OK reservation active
    * @retval STREAM_RING_WRITE_STALE prior note/session already retired
    * @retval STREAM_RING_WRITE_ERROR invalid request or insufficient credit */
   int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
-                            uint32_t nsamp, StreamRing_Write_t *write);
+                            uint16_t wave_id, uint32_t nsamp,
+                            StreamRing_Write_t *write);
 
   /** Non-zero only while the note/session that owns this reservation exists. */
   uint8_t StreamRing_WriteIsCurrent(const StreamRing_Write_t *write);
@@ -104,7 +116,10 @@ extern "C"
 
   uint32_t StreamRing_FillLevel(uint8_t voice);
 
-  /** 1 if this session has committed at least one sample (wr != 0). */
+  /** Exact producer credit, including space occupied by a crash-in tail. */
+  uint32_t StreamRing_FreeLevel(uint8_t voice);
+
+  /** 1 if this session has committed at least one sample. */
   uint8_t StreamRing_HasBody(uint8_t voice);
 
   /** Highest fill among all voices (feedback / console). */
@@ -122,7 +137,7 @@ extern "C"
   /** BODY bursts accepted into a ring. */
   uint32_t StreamRing_RxCount(void);
 
-  /** Session-start (SOF + new session) resets. */
+  /** Accepted armed session starts (SOF + new session). */
   uint32_t StreamRing_SofCount(void);
 
   /** Bursts whose samples were all zero. */
