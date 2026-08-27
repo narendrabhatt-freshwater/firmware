@@ -15,6 +15,9 @@ static void Check(int ok, const char *message)
 int main(void)
 {
   StreamRing_Write_t write;
+  const int16_t old_body[] = {10, 11, 12, 13, 14, 15};
+  const int16_t new_body[] = {20, 21, 22};
+  int16_t sample;
   StreamRing_Init();
 
   Check(StreamRing_WriteBegin(0u, 7u, 1u, 42u, 16u, &write) ==
@@ -53,5 +56,31 @@ int main(void)
   StreamRing_Disarm(0u);
   Check(StreamRing_WriteIsCurrent(&write) == 0u,
         "note-off must synchronously revoke producer ownership");
+
+  StreamRing_ArmReplacement(1u, 1u, 1u);
+  (void)StreamRing_BeginReplacement(1u, 1u, 0u);
+  Check(StreamRing_WriteVoice(1u, 1u, 1u, 1u, old_body, 6u) == 6u,
+        "initial BODY must publish");
+  StreamRing_ArmReplacement(1u, 2u, 2u);
+  Check(StreamRing_BeginReplacement(1u, 2u, 4u) == 4u,
+        "replacement must retain exactly the requested old tail");
+  Check(StreamRing_ReleaseLevel(1u) == 4u &&
+            StreamRing_FillLevel(1u) == 4u,
+        "one rd must initially cover only the retained old tail");
+  Check(StreamRing_WriteVoice(1u, 2u, 1u, 2u, new_body, 3u) == 3u &&
+            StreamRing_FillLevel(1u) == 7u,
+        "new BODY must append after the old tail on the same rd/wr span");
+  Check(StreamRing_GetReleaseRel(1u, 0u, &sample) == 0 && sample == 10,
+        "release must begin at the shared rd");
+  StreamRing_AdvanceRelease(1u, 2u);
+  Check(StreamRing_ReleaseLevel(1u) == 2u &&
+            StreamRing_FillLevel(1u) == 5u &&
+            StreamRing_GetReleaseRel(1u, 0u, &sample) == 0 && sample == 12,
+        "shared rd must advance through the old tail");
+  StreamRing_AdvanceRelease(1u, 2u);
+  Check(StreamRing_ReleaseLevel(1u) == 0u &&
+            StreamRing_FillLevel(1u) == 3u &&
+            StreamRing_GetRel(1u, 0u, &sample) == 0 && sample == 20,
+        "shared rd must land on replacement BODY at release end");
   return EXIT_SUCCESS;
 }

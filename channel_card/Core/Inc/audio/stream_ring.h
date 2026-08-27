@@ -75,7 +75,8 @@ extern "C"
   uint32_t StreamRing_BeginReplacement(uint8_t voice, uint16_t wave_id,
                                        uint32_t release_samples);
 
-  /** Read/consume the old tail reserved by StreamRing_BeginReplacement. */
+  /** Read/consume the old tail at rd. Replacement BODY is already appended
+   * after it, so rd naturally reaches the new BODY origin at release end. */
   int StreamRing_GetReleaseRel(uint8_t voice, uint32_t offset, int16_t *out);
   void StreamRing_AdvanceRelease(uint8_t voice, uint32_t n);
   uint32_t StreamRing_ReleaseLevel(uint8_t voice);

@@ -23,7 +23,6 @@ typedef struct
   uint16_t wave_id;
   volatile uint16_t expected_wave_id;
   uint32_t generation;
-  volatile uint32_t release_rd;
   volatile uint32_t release_left;
   int16_t data[STREAM_RING_BASE_SAMPLES];
 } StreamRing_t;
@@ -104,7 +103,6 @@ void StreamRing_Reset(uint8_t voice)
   r->body_published = 0u;
   r->wave_id = 0xFFFFu;
   r->expected_wave_id = 0xFFFFu;
-  r->release_rd = 0u;
   r->release_left = 0u;
 }
 
@@ -173,13 +171,12 @@ uint32_t StreamRing_BeginReplacement(uint8_t voice, uint16_t wave_id,
     keep = release_samples;
   }
 
-  /* Preserve [old rd, old rd + keep) for the release reader. The replacement
-   * BODY has an empty logical FIFO whose origin is immediately after it. */
+  /* Truncate the old FIFO to its release tail and append replacement BODY
+   * after it. rd consumes the old tail without jumping; when release_left
+   * reaches zero it already points at the replacement BODY origin. */
   r->generation++;
-  r->release_rd = r->rd;
   r->release_left = keep;
-  r->rd += keep;
-  r->wr = r->rd;
+  r->wr = r->rd + keep;
   r->session = 0xFFu;
   r->replacement_state = STREAM_REPLACEMENT_READY;
   r->body_published = 0u;
@@ -201,7 +198,7 @@ int StreamRing_GetReleaseRel(uint8_t voice, uint32_t offset, int16_t *out)
     return -1;
   }
   *out = *StreamRing_DataAt(r, voice,
-                            (r->release_rd + offset) % STREAM_RING_SAMPLES);
+                            (r->rd + offset) % STREAM_RING_SAMPLES);
   return 0;
 }
 
@@ -217,7 +214,7 @@ void StreamRing_AdvanceRelease(uint8_t voice, uint32_t n)
   {
     n = r->release_left;
   }
-  r->release_rd += n;
+  r->rd += n;
   r->release_left -= n;
 }
 
@@ -303,7 +300,7 @@ int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
      * must be CRC-checked and ACKed, but it must not repopulate the ring. */
     return STREAM_RING_WRITE_STALE;
   }
-  if (StreamRing_Filled(r) + r->release_left + nsamp > STREAM_RING_SAMPLES)
+  if (StreamRing_Filled(r) + nsamp > STREAM_RING_SAMPLES)
   {
     s_drop_pkts++;
     return STREAM_RING_WRITE_ERROR;
@@ -526,8 +523,7 @@ uint32_t StreamRing_FreeLevel(uint8_t voice)
   {
     return 0u;
   }
-  used = StreamRing_Filled(StreamRing_At(voice)) +
-         StreamRing_At(voice)->release_left;
+  used = StreamRing_Filled(StreamRing_At(voice));
   return (used < STREAM_RING_SAMPLES) ? (STREAM_RING_SAMPLES - used) : 0u;
 }
 
