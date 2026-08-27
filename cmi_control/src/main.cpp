@@ -115,9 +115,12 @@ int main(int argc, char **argv)
   });
   app.samples.SetNoteGate(
       [&app](const cardlink::sample::NoteRequest &note,
+             cardlink::sample::Client::NoteGateStart start,
              cardlink::sample::Client::NoteGateDone done) {
         const auto queued = app.bus.QueueChannel(
-            [note, done = std::move(done)](cardproto::ChannelClient &ch) {
+            [note, start = std::move(start),
+             done = std::move(done)](cardproto::ChannelClient &ch) {
+              start();
               if (!(note.hz > 0.0)) {
                 auto result = ch.NoteOff(note.voice);
                 done(result.ok());
@@ -139,8 +142,8 @@ int main(int argc, char **argv)
   app.bus.SetIdleHandler([&app](uint8_t slot) {
     app.samples.Silence(slot);
   });
-  /* Session-bound SOF launches before nX; later vq replies supply exact
-   * credit and the applied PACK sequence for steady-state refills. */
+  /* The RS485 worker launches session-bound SOF immediately before nX;
+   * later vq replies supply exact credit for steady-state refills. */
   app.bus.SetVqHandler(
       [&app](uint8_t mask, uint8_t best,
              const std::array<uint16_t, cardlink::audio::kSampleVoices> &free,

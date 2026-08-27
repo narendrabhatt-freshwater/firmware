@@ -354,7 +354,7 @@ Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 
 | Interface                    | Role                                                                |
 | ---------------------------- | ------------------------------------------------------------------- |
-| **UAC2 output** (ITF0/1)     | 10-channel signed 16-bit, synchronous 51 kHz carrier; every frame carries a tag and nine raw 48 kHz BODY samples (1020 B / 1 ms). |
+| **UAC2 output** (ITF0/1)     | 10-channel signed 16-bit, synchronous 51 kHz carrier; every 1 ms packet carries one tag and 509 raw 48 kHz BODY samples (1020 B). |
 | **CDC ACM** (serial)         | Same ASCII console as RS485, plus binary attack-head upload (`al`). |
 
 The Channel device is class-compliant UAC2 so the operating system owns the
@@ -375,18 +375,19 @@ Effect Card still has CDC and a UAC2 microphone (mono, 32-bit, 96 kHz).
 
 ### BODY stream (UAC2 iso OUT, signed 16-bit)
 
-Little-endian. BODY has no per-frame ACK. Channel 0 is a compact routing tag;
-channels 1..9 are nine consecutive raw BODY samples. Sequential RS485 `vq`
+Little-endian. BODY has no per-packet ACK. The first int16 word is a compact
+routing tag; the remaining 509 words are consecutive raw BODY samples.
+Sequential RS485 `vq`
 polling supplies exact ring free space every 5 ms for steady-state refills.
-Urgent SOF frames launch concurrently with the corresponding RS485 `aw`/`nX`
+Urgent SOF packets launch concurrently with the corresponding RS485 `aw`/`nX`
 transaction and do not wait for `vq`; their conservative credit accounts for
 the configured old-note crash-release tail.
 
 ```text
 UAC carrier: 51 kHz × 10 channels × int16 = 1020000 bytes/s
 BODY/DAC:    48 kHz (pitch and playback rate are unchanged)
-frame word 0  tag = 0xA000 | session[11:4] | SOF[3] | voice[2:0]
-frame words 1..9  nine consecutive int16 LE unpitched BODY samples
+packet word 0      tag = 0xA000 | session[11:4] | SOF[3] | voice[2:0]
+packet words 1..509  509 consecutive int16 LE unpitched BODY samples
 idle tag      0xAFFF (remaining words are zero)
 session       0..254 (255 is reserved for idle/unarmed)
 ```
@@ -394,7 +395,7 @@ session       0..254 (255 is reserved for idle/unarmed)
 VID `0xCafe`, PID `0x402F`. The host opens the 10-channel UAC output through
 RtAudio/CoreAudio; CDC stays a serial port.
 
-The direct carrier supplies 459 BODY samples/ms (459 ksample/s aggregate).
+The direct carrier supplies 509 BODY samples/ms (509 ksample/s aggregate).
 Workloads above that source-consumption ceiling cannot be lossless;
 `hold` records missing playback samples while control remains alive. Each fresh
 `vq` uses exact safe ring credit up to that wire ceiling.
@@ -424,17 +425,17 @@ about 25 ms of pitch-adjusted SOF BODY, filling the ring during the attack.
 Superseded or late same-wave sessions are stale. Untagged `nX` remains available
 for interactive/legacy use. If a
 conservative 50 ms release reservation leaves no safe prefill credit, USB
-sends no tagged frame; the next `vq` supplies the first SOF BODY normally.
+sends no tagged packet; the next `vq` supplies the first SOF BODY normally.
 RS485 `nX 0` remains note-off authority. `type` `0x20` CAPTURE remains reserved.
 Urgent jobs form a newest-first priority deque with one latest job per physical
-voice (maximum depth eight). A newer note retires older tagged frames; frames
+voice (maximum depth eight). A newer note retires older tagged packets; packets
 already entering USB are rejected as stale by voice/session if superseded.
 Every refill uses exact credit up to its per-voice and wire limits.
 The controller targets one `vq` every 5 ms (200 Hz) and requests an immediate
 one after successful Channel commands; single-flight RS485 traffic can stretch
-the observed interval. The direct UAC capacity is 459 BODY samples/ms: 51
-audio frames/ms times nine samples/frame.
-If note-off or a newer note generation retires a ring while an old frame is
+the observed interval. The direct UAC capacity is 509 BODY samples/ms: one
+tag word plus 509 sample words in each 1020-byte packet.
+If note-off or a newer note generation retires a ring while an old packet is
 arriving, the card ignores that stale voice/session instead of publishing it
 into the new generation.
 

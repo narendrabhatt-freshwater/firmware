@@ -6,6 +6,7 @@
 #include <RtAudio.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 
 namespace cardlink::audio {
@@ -38,6 +39,8 @@ struct SampleBulkOut::Impl {
   std::atomic<double> urgent_demand{0.0};
   std::atomic<double> urgent_attack_ms{0.0};
   std::atomic<double> urgent_quantum_ms{0.0};
+  std::array<int16_t, cardlink::usb::kStreamUacPacketWords> packet{};
+  unsigned packet_words_used = cardlink::usb::kStreamUacPacketWords;
 };
 
 SampleBulkOut::SampleBulkOut() : impl_(std::make_unique<Impl>()) {}
@@ -77,6 +80,7 @@ bool SampleBulkOut::Start(std::string &err)
 
   impl_->xruns.store(0u, std::memory_order_relaxed);
   impl_->render_frames.store(0u, std::memory_order_relaxed);
+  impl_->packet_words_used = cardlink::usb::kStreamUacPacketWords;
   RtAudio::StreamParameters params;
   params.deviceId = device;
   params.nChannels = cardlink::usb::kStreamUacChannels;
@@ -106,51 +110,61 @@ bool SampleBulkOut::Start(std::string &err)
             static_cast<double>(kSampleRateHz) /
             static_cast<double>(cardlink::usb::kStreamUacRateHz));
 
-        for (unsigned frame = 0u; frame < nframes; ++frame) {
-          int16_t *uac = dst + frame * cardlink::usb::kStreamUacChannels;
-          std::fill(uac, uac + cardlink::usb::kStreamUacChannels, 0);
-          uac[0] = static_cast<int16_t>(cardlink::usb::kStreamTagIdle);
-          const uint8_t voice = mixer.HungriestUacWant(
-              cardlink::usb::kStreamUacBodySamples);
-          if (voice >= kSampleVoices) {
-            continue;
-          }
-          bool sof = false;
-          uint8_t session = 0u;
-          const uint16_t wave_id = mixer.LiveWave(voice);
-          const unsigned got = mixer.FillUacFrame(
-              voice, uac + 1u, cardlink::usb::kStreamUacBodySamples,
-              sof, session);
-          if (got != cardlink::usb::kStreamUacBodySamples) {
-            if (got != 0u) {
-              mixer.AbortBurst(voice, session, wave_id, got, sof);
+        const unsigned output_words =
+            nframes * cardlink::usb::kStreamUacChannels;
+        unsigned written = 0u;
+        while (written < output_words) {
+          if (state.packet_words_used ==
+              cardlink::usb::kStreamUacPacketWords) {
+            auto &packet = state.packet;
+            std::fill(packet.begin(), packet.end(), 0);
+            packet[0] = static_cast<int16_t>(cardlink::usb::kStreamTagIdle);
+            const uint8_t voice = mixer.HungriestUacWant(
+                cardlink::usb::kStreamUacBodySamples);
+            if (voice < kSampleVoices) {
+              bool sof = false;
+              uint8_t session = 0u;
+              const uint16_t wave_id = mixer.LiveWave(voice);
+              const unsigned got = mixer.FillUacFrame(
+                  voice, packet.data() + 1u,
+                  cardlink::usb::kStreamUacBodySamples, sof, session);
+              if (got == cardlink::usb::kStreamUacBodySamples) {
+                packet[0] = EncodeTag(voice, session, sof);
+                mixer.CommitBurst(voice, session, wave_id, got, sof);
+                if (sof) {
+                  uint8_t order[kSampleVoices]{};
+                  const unsigned voices = mixer.UrgentVoices(order);
+                  double demand = 0.0;
+                  double attack = 1.0e9;
+                  for (unsigned i = 0u; i < voices; ++i) {
+                    demand += mixer.VoiceSourceSamplesPerMs(order[i]);
+                    attack = std::min(
+                        attack, mixer.VoiceAttackLeadMs(order[i]));
+                  }
+                  state.urgent_voices.store(voices,
+                                             std::memory_order_relaxed);
+                  state.urgent_demand.store(demand,
+                                             std::memory_order_relaxed);
+                  state.urgent_attack_ms.store(
+                      attack == 1.0e9 ? 0.0 : attack,
+                      std::memory_order_relaxed);
+                  state.urgent_quantum_ms.store(1.0,
+                                                 std::memory_order_relaxed);
+                }
+              } else if (got != 0u) {
+                mixer.AbortBurst(voice, session, wave_id, got, sof);
+              }
             }
-            std::fill(uac + 1u,
-                      uac + cardlink::usb::kStreamUacChannels, 0);
-            continue;
+            state.packet_words_used = 0u;
           }
-          uac[0] = EncodeTag(voice, session, sof);
-          mixer.CommitBurst(voice, session, wave_id, got, sof);
-          if (sof) {
-            uint8_t order[kSampleVoices]{};
-            const unsigned voices = mixer.UrgentVoices(order);
-            double demand = 0.0;
-            double attack = 1.0e9;
-            for (unsigned i = 0u; i < voices; ++i) {
-              demand += mixer.VoiceSourceSamplesPerMs(order[i]);
-              attack = std::min(attack,
-                                mixer.VoiceAttackLeadMs(order[i]));
-            }
-            state.urgent_voices.store(voices, std::memory_order_relaxed);
-            state.urgent_demand.store(demand, std::memory_order_relaxed);
-            state.urgent_attack_ms.store(
-                attack == 1.0e9 ? 0.0 : attack,
-                std::memory_order_relaxed);
-            state.urgent_quantum_ms.store(
-                1.0 / static_cast<double>(
-                          cardlink::usb::kStreamUacFramesPerMs),
-                std::memory_order_relaxed);
-          }
+          const unsigned available = cardlink::usb::kStreamUacPacketWords -
+                                     state.packet_words_used;
+          const unsigned copy_n =
+              std::min(available, output_words - written);
+          std::copy_n(state.packet.data() + state.packet_words_used, copy_n,
+                      dst + written);
+          state.packet_words_used += copy_n;
+          written += copy_n;
         }
         return 0;
       },

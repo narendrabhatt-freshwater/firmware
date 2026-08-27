@@ -469,50 +469,42 @@ uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
   return StreamRing_WriteCommit(&write);
 }
 
-uint32_t StreamRing_WriteUac(const int16_t *interleaved, uint32_t nframes)
+uint32_t StreamRing_WriteUac(const int16_t *packet)
 {
-  uint32_t frame;
-  uint32_t accepted = 0u;
-  if (interleaved == NULL)
+  uint16_t tag;
+  uint8_t voice;
+  uint8_t session;
+  uint8_t sof;
+  uint16_t wave_id;
+  StreamRing_t *r;
+  if (packet == NULL)
   {
     return 0u;
   }
-  for (frame = 0u; frame < nframes; ++frame)
+  tag = (uint16_t)packet[0];
+  if (tag == USB_STREAM_TAG_IDLE ||
+      (tag & USB_STREAM_TAG_MASK) != USB_STREAM_TAG_BASE)
   {
-    const int16_t *src = interleaved +
-                         frame * USB_STREAM_UAC_CHANNELS;
-    uint16_t tag = (uint16_t)src[0];
-    uint8_t voice;
-    uint8_t session;
-    uint8_t sof;
-    uint16_t wave_id;
-    StreamRing_t *r;
-    if (tag == USB_STREAM_TAG_IDLE ||
-        (tag & USB_STREAM_TAG_MASK) != USB_STREAM_TAG_BASE)
-    {
-      continue;
-    }
-    voice = (uint8_t)(tag & USB_STREAM_TAG_VOICE_MASK);
-    if (voice >= SAMPLE_VOICES)
-    {
-      continue;
-    }
-    session = (uint8_t)((tag >> USB_STREAM_TAG_SESSION_SHIFT) &
-                        USB_STREAM_TAG_SESSION_MASK);
-    sof = (tag & USB_STREAM_TAG_SOF) != 0u ? 1u : 0u;
-    r = StreamRing_At(voice);
-    wave_id = (sof != 0u &&
-               r->replacement_state != STREAM_REPLACEMENT_NONE)
-                  ? r->expected_wave_id
-                  : r->wave_id;
-    if (StreamRing_WriteVoice(voice, session, sof, wave_id, src + 1,
-                              USB_STREAM_UAC_BODY_SAMPLES) ==
-        USB_STREAM_UAC_BODY_SAMPLES)
-    {
-      accepted++;
-    }
+    return 0u;
   }
-  return accepted;
+  voice = (uint8_t)(tag & USB_STREAM_TAG_VOICE_MASK);
+  if (voice >= SAMPLE_VOICES)
+  {
+    return 0u;
+  }
+  session = (uint8_t)((tag >> USB_STREAM_TAG_SESSION_SHIFT) &
+                      USB_STREAM_TAG_SESSION_MASK);
+  sof = (tag & USB_STREAM_TAG_SOF) != 0u ? 1u : 0u;
+  r = StreamRing_At(voice);
+  wave_id = (sof != 0u &&
+             r->replacement_state != STREAM_REPLACEMENT_NONE)
+                ? r->expected_wave_id
+                : r->wave_id;
+  return StreamRing_WriteVoice(voice, session, sof, wave_id, packet + 1,
+                               USB_STREAM_UAC_BODY_SAMPLES) ==
+                 USB_STREAM_UAC_BODY_SAMPLES
+             ? 1u
+             : 0u;
 }
 
 int StreamRing_GetRel(uint8_t voice, uint32_t offset, int16_t *out)

@@ -42,10 +42,13 @@ class Client {
 public:
   /** Bare Channel command, e.g. `n3 261.63` — no `c:` prefix. */
   using ConsoleFn = std::function<void(const std::string &cmd)>;
+  using NoteGateStart = std::function<void()>;
   using NoteGateDone = std::function<void(bool applied)>;
-  /** Queue one RS485 aw/nX transaction. done(false) cancels its launched SOF. */
+  /** Queue one RS485 aw/nX transaction. The worker invokes start immediately
+   * before aw/nX and done after the transaction completes. */
   using NoteGateFn =
-      std::function<bool(const NoteRequest &note, NoteGateDone done)>;
+      std::function<bool(const NoteRequest &note, NoteGateStart start,
+                         NoteGateDone done)>;
 
   void SetConsole(ConsoleFn fn);
   void SetNoteGate(NoteGateFn fn);
@@ -72,8 +75,8 @@ public:
 
   /** Reserve/launch matching USB SOF, then queue authoritative RS485 aw/nX. */
   void NoteOn(uint8_t voice, double hz, uint16_t wave_id = 0xFFFFu);
-  /** Launch newest-first BODY sessions, then queue their RS485 note starts.
-   *  The card's attack heads bridge into the first BODY samples.
+  /** Queue RS485 note starts; each worker launches its matching BODY session
+   *  immediately before aw/nX so the attack bridges into the first samples.
    *  The timeout argument remains for source/ABI compatibility and is ignored. */
   bool NoteOnBatch(const NoteRequest *notes, size_t count,
                    unsigned timeout_ms = 200u);

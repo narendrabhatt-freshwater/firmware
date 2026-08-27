@@ -22,7 +22,61 @@ static uint32_t s_rx_bytes;
 static uint32_t s_uac_windows;
 static uint8_t s_uac_packet[USB_STREAM_UAC_PACKET_BYTES]
     __attribute__((aligned(2)));
-static uint16_t s_uac_packet_got;
+static int16_t s_uac_logical[USB_STREAM_UAC_PACKET_WORDS];
+static uint16_t s_uac_logical_got;
+static uint8_t s_uac_synced;
+#define USB_PACKET_LENGTH_QUEUE 16u
+static volatile uint16_t s_uac_lengths[USB_PACKET_LENGTH_QUEUE];
+static volatile uint8_t s_uac_length_wr;
+static volatile uint8_t s_uac_length_rd;
+static volatile uint32_t s_bad_uac;
+
+static void USB_App_ResetUacAlignment(void)
+{
+  s_uac_length_rd = s_uac_length_wr;
+  s_uac_logical_got = 0u;
+  s_uac_synced = 0u;
+}
+
+static void USB_App_ConsumeUacWords(const int16_t *words, uint16_t nwords)
+{
+  uint16_t at = 0u;
+  if (s_uac_synced == 0u)
+  {
+    /* CoreAudio begins on an audio-frame boundary, but not necessarily on
+     * the endpoint's millisecond boundary. Find the existing tag once; from
+     * there the 510-word period is exact and no further scanning is needed. */
+    for (at = 0u; at < nwords; at = (uint16_t)(at + USB_STREAM_UAC_CHANNELS))
+    {
+      const uint16_t tag = (uint16_t)words[at];
+      if (tag == USB_STREAM_TAG_IDLE ||
+          (tag & USB_STREAM_TAG_MASK) == USB_STREAM_TAG_BASE)
+      {
+        s_uac_synced = 1u;
+        break;
+      }
+    }
+    if (s_uac_synced == 0u)
+      return;
+  }
+  while (at < nwords)
+  {
+    uint16_t copy_n = (uint16_t)(USB_STREAM_UAC_PACKET_WORDS -
+                                 s_uac_logical_got);
+    if (copy_n > (uint16_t)(nwords - at))
+      copy_n = (uint16_t)(nwords - at);
+    memcpy(s_uac_logical + s_uac_logical_got, words + at,
+           copy_n * sizeof(int16_t));
+    s_uac_logical_got = (uint16_t)(s_uac_logical_got + copy_n);
+    at = (uint16_t)(at + copy_n);
+    if (s_uac_logical_got == USB_STREAM_UAC_PACKET_WORDS)
+    {
+      s_rx_msg += StreamRing_WriteUac(s_uac_logical);
+      s_uac_windows++;
+      s_uac_logical_got = 0u;
+    }
+  }
+}
 
 static void USB_LowLevel_Init(void)
 {
@@ -125,38 +179,47 @@ static void CDC_Console_Poll(void)
 
 static void USB_App_DrainUac(void)
 {
-  uint32_t budget = USB_STREAM_UAC_PACKET_BYTES;
   if (!tud_audio_mounted())
   {
-    s_uac_packet_got = 0u;
+    USB_App_ResetUacAlignment();
     return;
   }
-  /* TinyUSB may expose a physical packet in several FIFO spans. Reassemble
-   * exactly 1 ms, then route its 51 frames directly. Each frame is already
-   * self-contained: one tag plus nine int16 BODY samples. */
-  while (budget != 0u && tud_audio_available() != 0u)
+  /* The ISR callback records each physical ISO OUT transfer length. Consume
+   * exactly one such transfer here so FIFO batching cannot erase the USB
+   * millisecond boundary that carries the tag. */
+  if (s_uac_length_rd != s_uac_length_wr)
   {
-    uint32_t available = tud_audio_available();
-    uint32_t want = USB_STREAM_UAC_PACKET_BYTES - s_uac_packet_got;
-    uint16_t n;
-    if (want > available)
-      want = available;
-    if (want > budget)
-      want = budget;
-    n = tud_audio_read(s_uac_packet + s_uac_packet_got, (uint16_t)want);
-    if (n == 0u)
-      break;
-    s_uac_packet_got += n;
-    budget -= n;
-    s_rx_bytes += n;
-    if (s_uac_packet_got == USB_STREAM_UAC_PACKET_BYTES)
+    const uint8_t rd = s_uac_length_rd;
+    const uint16_t packet_bytes = s_uac_lengths[rd];
+    if (tud_audio_available() < packet_bytes)
+      return;
+    if (packet_bytes == USB_STREAM_UAC_PACKET_BYTES)
     {
-      s_rx_msg += StreamRing_WriteUac(
+      const uint16_t n = tud_audio_read(s_uac_packet, packet_bytes);
+      if (n != packet_bytes)
+        return;
+      s_rx_bytes += n;
+      USB_App_ConsumeUacWords(
           (const int16_t *)(const void *)s_uac_packet,
-          USB_STREAM_UAC_FRAMES_PER_MS);
-      s_uac_windows++;
-      s_uac_packet_got = 0u;
+          USB_STREAM_UAC_PACKET_WORDS);
     }
+    else
+    {
+      uint16_t left = packet_bytes;
+      while (left != 0u)
+      {
+        uint16_t chunk = left;
+        if (chunk > sizeof s_uac_packet)
+          chunk = sizeof s_uac_packet;
+        chunk = tud_audio_read(s_uac_packet, chunk);
+        if (chunk == 0u)
+          return;
+        left = (uint16_t)(left - chunk);
+        s_rx_bytes += chunk;
+      }
+      s_bad_uac++;
+    }
+    s_uac_length_rd = (uint8_t)((rd + 1u) % USB_PACKET_LENGTH_QUEUE);
   }
 }
 
@@ -179,11 +242,10 @@ uint16_t USB_App_LastPackSequence(void) { return 0xFFFFu; }
 uint32_t USB_App_RxMsgCount(void) { return s_rx_msg; }
 uint32_t USB_App_RxByteCount(void) { return s_rx_bytes; }
 uint32_t USB_App_UacWindowCount(void) { return s_uac_windows; }
-uint32_t USB_App_BadCount(void) { return 0u; }
+uint32_t USB_App_BadCount(void) { return s_bad_uac; }
 uint32_t USB_App_BadReasonCount(uint8_t reason)
 {
-  (void)reason;
-  return 0u;
+  return reason == 4u ? s_bad_uac : 0u;
 }
 
 void USB_App_StatsClear(void)
@@ -191,6 +253,7 @@ void USB_App_StatsClear(void)
   s_rx_msg = 0u;
   s_rx_bytes = 0u;
   s_uac_windows = 0u;
+  s_bad_uac = 0u;
 }
 
 bool tud_audio_set_req_ep_cb(uint8_t rhport,
@@ -267,7 +330,7 @@ bool tud_audio_set_itf_cb(uint8_t rhport,
                           tusb_control_request_t const *request)
 {
   (void)rhport;
-  s_uac_packet_got = 0u;
+  USB_App_ResetUacAlignment();
   if ((uint8_t)tu_le16toh(request->wValue) != 0u)
     Audio_Bridge_Start();
   return true;
@@ -277,7 +340,7 @@ bool tud_audio_set_itf_close_EP_cb(uint8_t rhport,
                                    tusb_control_request_t const *request)
 {
   (void)rhport; (void)request;
-  s_uac_packet_got = 0u;
+  USB_App_ResetUacAlignment();
   Audio_Bridge_StreamStop();
   return true;
 }
@@ -286,6 +349,15 @@ bool tud_audio_rx_done_post_read_cb(uint8_t rhport, uint16_t nbytes,
                                     uint8_t func_id, uint8_t ep_out,
                                     uint8_t alt)
 {
-  (void)rhport; (void)nbytes; (void)func_id; (void)ep_out; (void)alt;
+  uint8_t next;
+  (void)rhport; (void)func_id; (void)ep_out; (void)alt;
+  next = (uint8_t)((s_uac_length_wr + 1u) % USB_PACKET_LENGTH_QUEUE);
+  if (next == s_uac_length_rd)
+  {
+    s_bad_uac++;
+    return true;
+  }
+  s_uac_lengths[s_uac_length_wr] = nbytes;
+  s_uac_length_wr = next;
   return true;
 }

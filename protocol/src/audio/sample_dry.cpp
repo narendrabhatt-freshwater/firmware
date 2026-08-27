@@ -1,4 +1,5 @@
 #include "cardlink/audio/sample_dry.hpp"
+#include "cardlink/usb/stream_proto.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -11,9 +12,10 @@ namespace cardlink {
 namespace audio {
 
 namespace {
-constexpr unsigned kUacFrameSamples = 9u;
-/* A vq snapshot can race one 2 ms CoreAudio buffer already in flight. */
-constexpr unsigned kUacInFlightHeadroom = 1024u;
+constexpr unsigned kUacPacketSamples = cardlink::usb::kStreamUacBodySamples;
+/* A vq snapshot can race the callback plus CoreAudio's queued endpoint data.
+ * Reserve eight complete millisecond packets across a voice replacement. */
+constexpr unsigned kUacInFlightHeadroom = 8u * kUacPacketSamples;
 }
 
 SampleDryMixer::SampleDryMixer()
@@ -342,8 +344,8 @@ unsigned SampleDryMixer::WantUacSamples(uint8_t voice) const
   if (v.urgent_pending) {
     /* The final indivisible frame may exceed the target by at most eight
      * samples, well inside the ring's interpolation headroom. */
-    return v.urgent_budget < kUacFrameSamples
-               ? kUacFrameSamples
+    return v.urgent_budget < kUacPacketSamples
+               ? kUacPacketSamples
                : v.urgent_budget;
   }
   if (!v.vq_have || v.vq_free <= kUacInFlightHeadroom) {
@@ -369,6 +371,7 @@ uint8_t SampleDryMixer::HungriestUacWant(unsigned frame_samples)
   uint8_t urgent_best = 0xFFu;
   double least_runway_ms = 0.0;
   double urgent_best_inc = 0.0;
+  uint32_t urgent_best_epoch = 0u;
   for (unsigned i = 0u; i < nurgent; ++i) {
     const uint8_t voice = urgent[i];
     if (WantUacSamples(voice) < frame_samples) {
@@ -383,10 +386,14 @@ uint8_t SampleDryMixer::HungriestUacWant(unsigned frame_samples)
      * an entire 25 ms reservoir newest-first can leave later chord voices
      * without even their first SOF before their attacks reach BODY. */
     if (urgent_best == 0xFFu || runway_ms < least_runway_ms ||
-        (runway_ms == least_runway_ms && inc > urgent_best_inc)) {
+        (runway_ms == least_runway_ms &&
+         (inc > urgent_best_inc ||
+          (inc == urgent_best_inc &&
+           voices_[voice].urgent_epoch < urgent_best_epoch)))) {
       urgent_best = voice;
       least_runway_ms = runway_ms;
       urgent_best_inc = inc;
+      urgent_best_epoch = voices_[voice].urgent_epoch;
     }
   }
   if (urgent_best != 0xFFu) {
@@ -597,6 +604,12 @@ unsigned SampleDryMixer::FillUacFrame(uint8_t voice, int16_t *dst,
   }
   v.queued += static_cast<double>(max_n);
   if (urgent) {
+    /* A vq snapshot can arrive while the concurrent startup runway is still
+     * being emitted. Charge those packets to that snapshot too, otherwise
+     * the first steady refill can reserve the same ring space a second time. */
+    if (v.vq_have) {
+      v.sent_this_vq += max_n;
+    }
     if (v.urgent_budget > max_n) {
       v.urgent_budget -= max_n;
     } else {
@@ -791,8 +804,8 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
         1000.0)) + 2u;
     reserve = std::min(reserve, kRingSamples);
   }
-  /* Queue a complete runway before normal exact-credit UAC frames follow.
-   * The reservation remains the hard cap while the direct frames bridge
+  /* Queue a complete runway before normal exact-credit UAC packets follow.
+   * The reservation remains the hard cap while the direct packets bridge
    * host callback and status timing. */
   const unsigned safe_capacity = kRingSamples - reserve;
   const unsigned prefill_target = static_cast<unsigned>(std::ceil(

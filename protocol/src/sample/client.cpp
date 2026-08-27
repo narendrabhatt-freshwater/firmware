@@ -590,8 +590,12 @@ bool Client::NoteOnBatch(const NoteRequest *notes, size_t count,
   size_t queued = 0u;
   for (size_t i = 0u; i < nprepared; ++i) {
     const NoteRequest note = prepared[i];
-    mixer_.NoteOnSession(note.voice, note.wave_id, note.hz, note.session);
-    if (note_gate_(note, [this, note](bool applied) {
+    if (note_gate_(note,
+        [this, note]() {
+          mixer_.NoteOnSession(note.voice, note.wave_id, note.hz,
+                               note.session);
+        },
+        [this, note](bool applied) {
           if (!applied) {
             mixer_.CancelSession(note.voice, note.session, note.wave_id);
           }
@@ -613,7 +617,7 @@ void Client::NoteOff(uint8_t voice)
     return;
   }
   const NoteRequest note{voice, 0.0, 0xFFFFu};
-  (void)note_gate_(note, [this, voice](bool applied) {
+  (void)note_gate_(note, []() {}, [this, voice](bool applied) {
     if (applied) {
       mixer_.NoteOff(voice);
     }

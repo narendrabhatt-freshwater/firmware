@@ -9,8 +9,8 @@
  * at most one steady-state refill to each voice (at most kBodyBurstMax and at most the
  * safe free-space credit). Each vq reconciles predicted occupancy to the
  * the card's exact occupancy plus per-voice samples in concurrent USB OUT.
- * Every UAC audio frame carries a voice/session tag and nine raw samples.
- * Frames are assigned by source consumption rate so a fast voice cannot
+ * Every 1 ms UAC packet carries a voice/session tag and 509 raw samples.
+ * Packets are assigned by source consumption rate so a fast voice cannot
  * consume another voice's share before the next status.
  *
  * `queued` estimates card FIFO occupancy (attack does not consume body).
@@ -143,7 +143,7 @@ public:
   /** Samples this voice can take now (0 if inactive / enough time / full). */
   unsigned WantBurst(uint8_t voice) const;
 
-  /** Direct UAC path: remaining credit available in nine-sample frames. */
+  /** Direct UAC path: remaining credit available in 1 ms packets. */
   unsigned WantUacSamples(uint8_t voice) const;
 
   /** Direct UAC path: newest urgent or hungriest credited voice. */
@@ -169,7 +169,7 @@ public:
   unsigned FillBurst(uint8_t voice, int16_t *dst, unsigned max_n, bool &sof,
                      uint8_t &session);
 
-  /** Fill one direct UAC audio frame. Urgent frames repeat SOF until the
+  /** Fill one direct UAC packet. Urgent packets repeat SOF until the
    * complete startup runway has been emitted. */
   unsigned FillUacFrame(uint8_t voice, int16_t *dst, unsigned max_n,
                         bool &sof, uint8_t &session);

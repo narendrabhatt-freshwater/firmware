@@ -86,7 +86,7 @@ void RunNoFaultCase(const std::array<double, cardlink::audio::kSampleVoices> &in
     const unsigned got = mixer.FillUacFrame(
         voice, body.data(), body.size(), sof, session);
     Check(got == body.size() && sof,
-          "urgent UAC frame must carry nine tagged BODY samples");
+          "urgent UAC packet must carry 509 tagged BODY samples");
     ring[voice] += got;
   }
 
@@ -112,8 +112,7 @@ void RunNoFaultCase(const std::array<double, cardlink::audio::kSampleVoices> &in
     mixer.ConsumeOutputSamples(output_frames);
     mixer.ApplyVoiceStatus(mask, best, free_samples.data());
     mixer.ConsumeOutputSamples(0.0);
-    for (unsigned frame = 0u;
-         frame < cardlink::usb::kStreamUacFramesPerMs * 10u; ++frame) {
+    for (unsigned packet = 0u; packet < 10u; ++packet) {
       const uint8_t v = mixer.HungriestUacWant(
           cardlink::usb::kStreamUacBodySamples);
       if (v >= nvoices) {
@@ -305,9 +304,9 @@ int main()
   mixer.Silence(1);
   mixer.ConsumeOutputSamples(0.0);
 
-  Check(cardlink::usb::kStreamUacBodySamples == 9u &&
-            cardlink::usb::kStreamBodySamplesPerMs == 459u,
-        "direct UAC must carry nine BODY samples per 51 kHz audio frame");
+  Check(cardlink::usb::kStreamUacBodySamples == 509u &&
+            cardlink::usb::kStreamBodySamplesPerMs == 509u,
+        "direct UAC must carry one tag plus 509 BODY samples per ms");
   Check((cardlink::usb::kStreamTagIdle & cardlink::usb::kStreamTagMask) ==
             cardlink::usb::kStreamTagBase,
         "idle and routed frames must share the direct UAC tag namespace");
@@ -328,11 +327,11 @@ int main()
       Check(voice < kSampleVoices &&
                 chord.FillUacFrame(voice, body.data(), body.size(), sof,
                                    session) == body.size() && sof,
-            "each simultaneous voice must receive a direct urgent frame");
+            "each simultaneous voice must receive a direct urgent packet");
       seen = static_cast<uint8_t>(seen | static_cast<uint8_t>(1u << voice));
     }
     Check(seen == 0xFFu,
-          "urgent direct frames must interleave all eight chord voices");
+          "urgent direct packets must interleave all eight chord voices");
   }
   {
     SampleDryMixer pipelined;
@@ -471,8 +470,11 @@ int main()
     for (unsigned i = 0; i < nwant; ++i) {
       by_voice[order[i]] = grants[i];
     }
-    Check(by_voice[0] == 1530u && by_voice[1] == 1530u &&
-              by_voice[2] == 1530u &&
+    const unsigned grant_min =
+        std::min({by_voice[0], by_voice[1], by_voice[2]});
+    const unsigned grant_max =
+        std::max({by_voice[0], by_voice[1], by_voice[2]});
+    Check(grant_max - grant_min <= 1u &&
               by_voice[0] + by_voice[1] + by_voice[2] == budget,
           "three C6 grants must fairly use ten direct-UAC milliseconds");
     for (unsigned i = 0; i < nwant; ++i) {
@@ -546,7 +548,9 @@ int main()
         [&commands](const std::string &cmd) { commands.push_back(cmd); });
     client.SetNoteGate(
         [&commands](const cardlink::sample::NoteRequest &note,
+                    cardlink::sample::Client::NoteGateStart start,
                     cardlink::sample::Client::NoteGateDone done) {
+          start();
           if (note.hz > 0.0) {
             commands.push_back("aw " + std::to_string(note.voice) + " " +
                                std::to_string(note.wave_id));
@@ -602,19 +606,25 @@ int main()
     cardlink::sample::Client gated;
     LoadTone(gated.Mixer(), 0);
     cardlink::sample::Client::NoteGateDone ack;
+    cardlink::sample::Client::NoteGateStart start;
     cardlink::sample::NoteRequest gated_note;
     gated.SetNoteGate(
-        [&ack, &gated_note](const cardlink::sample::NoteRequest &note,
+        [&ack, &start, &gated_note](const cardlink::sample::NoteRequest &note,
+               cardlink::sample::Client::NoteGateStart begin,
                cardlink::sample::Client::NoteGateDone done) {
           gated_note = note;
+          start = std::move(begin);
           ack = std::move(done);
           return true;
         });
     const cardlink::sample::NoteRequest note{0u, kDefaultBodyRootHz, 0u};
     Check(gated.NoteOnBatch(&note, 1u),
           "RS485 note transaction must enter its worker queue");
+    Check(!gated.Mixer().UrgentPending(),
+          "queued BODY must wait for its RS485 worker");
+    start();
     Check(gated.Mixer().UrgentPending(),
-          "direct UAC prefill must launch concurrently with nX");
+          "RS485 worker must launch direct prefill immediately before nX");
     ack(true);
     Check(gated.Mixer().UrgentPending(),
           "nX ACK must preserve its concurrent direct UAC BODY session");
@@ -632,7 +642,9 @@ int main()
     LoadTone(failed.Mixer(), 0);
     failed.SetNoteGate(
         [](const cardlink::sample::NoteRequest &,
+           cardlink::sample::Client::NoteGateStart start,
            cardlink::sample::Client::NoteGateDone done) {
+          start();
           done(false);
           return true;
         });

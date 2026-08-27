@@ -172,9 +172,12 @@ int main(int argc, char **argv)
   });
   sample.SetNoteGate(
       [&bus](const cardlink::sample::NoteRequest &note,
+             cardlink::sample::Client::NoteGateStart start,
              cardlink::sample::Client::NoteGateDone done) {
         const auto queued = bus.QueueChannel(
-            [note, done = std::move(done)](cardproto::ChannelClient &ch) {
+            [note, start = std::move(start),
+             done = std::move(done)](cardproto::ChannelClient &ch) {
+              start();
               if (!(note.hz > 0.0)) {
                 auto result = ch.NoteOff(note.voice);
                 done(result.ok());

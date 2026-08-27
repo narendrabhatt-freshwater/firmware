@@ -19,7 +19,7 @@ int main(void)
   const int16_t old_body[] = {10, 11, 12, 13, 14, 15};
   const int16_t new_body[] = {20, 21, 22};
   int16_t sample;
-  int16_t uac[USB_STREAM_UAC_CHANNELS];
+  int16_t uac[USB_STREAM_UAC_PACKET_WORDS];
   uint32_t i;
   StreamRing_Init();
 
@@ -86,24 +86,25 @@ int main(void)
             StreamRing_GetRel(1u, 0u, &sample) == 0 && sample == 20,
         "shared rd must land on replacement BODY at release end");
 
-  for (i = 1u; i < USB_STREAM_UAC_CHANNELS; ++i)
+  for (i = 1u; i < USB_STREAM_UAC_PACKET_WORDS; ++i)
     uac[i] = (int16_t)i;
   uac[0] = (int16_t)(USB_STREAM_TAG_BASE | (9u <<
       USB_STREAM_TAG_SESSION_SHIFT) | USB_STREAM_TAG_SOF | 2u);
-  Check(StreamRing_WriteUac(uac, 1u) == 0u &&
+  Check(StreamRing_WriteUac(uac) == 0u &&
             StreamRing_FillLevel(2u) == 0u,
         "direct UAC must reject a session before nX authority");
   StreamRing_ArmReplacement(2u, 77u, 9u);
   (void)StreamRing_BeginReplacement(2u, 77u, 0u);
-  Check(StreamRing_WriteUac(uac, 1u) == 1u &&
-            StreamRing_FillLevel(2u) == 9u,
-        "one tagged UAC frame must append nine raw BODY samples");
-  for (i = 1u; i < USB_STREAM_UAC_CHANNELS; ++i)
-    uac[i] = (int16_t)(i + 9u);
-  Check(StreamRing_WriteUac(uac, 1u) == 1u &&
-            StreamRing_FillLevel(2u) == 18u &&
+  Check(StreamRing_WriteUac(uac) == 1u &&
+            StreamRing_FillLevel(2u) == USB_STREAM_UAC_BODY_SAMPLES,
+        "one tagged UAC packet must append 509 raw BODY samples");
+  for (i = 1u; i < USB_STREAM_UAC_PACKET_WORDS; ++i)
+    uac[i] = (int16_t)(i + USB_STREAM_UAC_BODY_SAMPLES);
+  Check(StreamRing_WriteUac(uac) == 1u &&
+            StreamRing_FillLevel(2u) == 2u * USB_STREAM_UAC_BODY_SAMPLES &&
             StreamRing_GetRel(2u, 0u, &sample) == 0 && sample == 1 &&
-            StreamRing_GetRel(2u, 9u, &sample) == 0 && sample == 10,
+            StreamRing_GetRel(2u, USB_STREAM_UAC_BODY_SAMPLES, &sample) == 0 &&
+            sample == (int16_t)(1u + USB_STREAM_UAC_BODY_SAMPLES),
         "repeated session/SOF tags must append without resetting the ring");
   return EXIT_SUCCESS;
 }

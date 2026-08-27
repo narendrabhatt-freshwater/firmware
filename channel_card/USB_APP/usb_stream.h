@@ -1,11 +1,10 @@
 /**
  * @file usb_stream.h
- * @brief Direct BODY samples carried in each Channel Card UAC2 audio frame.
+ * @brief Direct BODY samples carried in each 1 ms Channel Card UAC2 packet.
  *
  * The USB interface is class-compliant UAC2 (10ch, int16, 51 kHz).
- * Each 10-channel int16 audio frame is one routing tag followed by nine raw
- * BODY samples. USB already supplies the frame boundary; there is no inner
- * header, length, PACK window, or CRC.
+ * Each 1 ms USB packet is one routing tag followed by 509 raw BODY samples.
+ * USB supplies the packet boundary; there is no inner header, length, or CRC.
  */
 
 #ifndef USB_STREAM_H
@@ -43,7 +42,9 @@ extern "C" {
 #define USB_STREAM_TAG_VOICE_MASK 0x0007u
 #define USB_STREAM_TAG_SESSION_SHIFT 4u
 #define USB_STREAM_TAG_SESSION_MASK 0x00FFu
-#define USB_STREAM_UAC_BODY_SAMPLES (USB_STREAM_UAC_CHANNELS - 1u)
+#define USB_STREAM_UAC_PACKET_WORDS                                 \
+  (USB_STREAM_UAC_PACKET_BYTES / USB_STREAM_UAC_SAMPLE_BYTES)
+#define USB_STREAM_UAC_BODY_SAMPLES (USB_STREAM_UAC_PACKET_WORDS - 1u)
 
 #ifdef __cplusplus
 }

@@ -57,6 +57,7 @@ unsigned ExpectedPrefill(double hz)
 
 struct PendingGate {
   NoteRequest note;
+  Client::NoteGateStart start;
   Client::NoteGateDone done;
 };
 
@@ -72,8 +73,10 @@ struct Harness {
     LoadTone(client.Mixer(), kA4);
     LoadTone(client.Mixer(), kC6);
     client.SetNoteGate(
-        [this](const NoteRequest &note, Client::NoteGateDone done) {
-          gates.push_back(PendingGate{note, std::move(done)});
+        [this](const NoteRequest &note, Client::NoteGateStart start,
+               Client::NoteGateDone done) {
+          gates.push_back(
+              PendingGate{note, std::move(start), std::move(done)});
           return true;
         });
   }
@@ -104,6 +107,7 @@ struct Harness {
     Check(!gates.empty(), "expected an RS485 gate transaction");
     PendingGate gate = std::move(gates.front());
     gates.pop_front();
+    gate.start();
     gate.done(true);
     return gate;
   }
@@ -157,8 +161,8 @@ void TestMonoSteal()
   Harness h(1u);
 
   h.Apply(h.bank.NoteOn(kC6));
-  Check(h.client.Mixer().UrgentPending(),
-        "mono C6 BODY prefill must launch concurrently with tagged nX");
+  Check(!h.client.Mixer().UrgentPending(),
+        "mono C6 BODY prefill must wait for its RS485 worker");
   const auto c6_gate = h.AckNext();
   Check(c6_gate.note.voice == 0u && c6_gate.note.wave_id == kC6,
         "mono C6 must use physical voice zero");
@@ -207,8 +211,8 @@ void TestDuoStealAndChordPriority()
   const auto c4_events = h.bank.NoteOn(kC4);
   h.Apply(c6_events);
   h.Apply(c4_events);
-  Check(h.gates.size() == 2u && h.client.Mixer().UrgentPending(),
-        "duo chord BODY prefills must launch concurrently with tagged nX");
+  Check(h.gates.size() == 2u && !h.client.Mixer().UrgentPending(),
+        "duo chord BODY prefills must wait for their RS485 workers");
 
   const auto c6_gate = h.AckNext();
   const auto c4_gate = h.AckNext();
@@ -265,8 +269,8 @@ void TestQueuedStealsDiscardSupersededBodies()
     mono.Apply(mono.bank.NoteOn(kC6));
     mono.Apply(mono.bank.NoteOn(kC4));
     mono.Apply(mono.bank.NoteOn(kA4));
-    Check(mono.gates.size() == 3u && mono.client.Mixer().UrgentPending(),
-          "rapid mono gates must retain the newest concurrent BODY prefill");
+    Check(mono.gates.size() == 3u && !mono.client.Mixer().UrgentPending(),
+          "rapid mono BODY prefills must wait for their RS485 workers");
     (void)mono.AckNext();
     (void)mono.AckNext();
     const auto mono_a4_gate = mono.AckNext();
