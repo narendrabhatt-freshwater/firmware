@@ -266,10 +266,9 @@ struct Controller::Impl
         } else {
           underrun_logged[i] = false;
         }
-        /* BODY NoteOn is posted before nX is on the wire. An in-flight
-         * vq then has no mask bit for the new slot; treating that as
-         * idle Silence()s the body stream and only the AXI attack
-         * plays. Stay armed while the host still wants a pitch. */
+        /* The BODY gate opens after nX is acknowledged, but an in-flight vq
+         * can still predate that command and omit the newly active slot.
+         * Stay armed while the host still wants a pitch. */
         if (watch_idle[i] && !active && desired_hz[i] <= 0.0) {
           watch_idle[i] = false;
           become_idle[i] = true;

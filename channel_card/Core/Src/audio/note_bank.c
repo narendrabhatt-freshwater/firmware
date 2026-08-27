@@ -332,8 +332,8 @@ static void NoteBank_StartVoice(uint8_t note, uint32_t inc)
   note_crash_left[note] = release_out;
   note_crash_ring[note] = (kept >= 2u) ? 1u : 0u;
 
-  /* nX is the sole audible start authority. The first fresh-vq PACK carries
-   * SOF and is written at the replacement origin after the reserved tail. */
+  /* nX is the sole audible start authority. Its first BODY SOF is written at
+   * the replacement origin after the reserved old tail. */
   NoteBank_ClearPlayhead(note);
   note_inc[note] = inc;
   note_inc_tgt[note] = inc;
@@ -844,10 +844,8 @@ void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out)
     uint32_t inc;
     uint32_t t;
 
-    /* nX posts the audible start to the I2S path. Expose its requested gate
-     * immediately so the first vq after the command can authorize BODY
-     * during the attack instead of losing a full request round trip. This
-     * does not delay or start playback; NoteBank_DrainCmd still owns that. */
+    /* nX posts the audible start to I2S. Expose its requested gate
+     * immediately to lifecycle polling while that command is pending. */
     if (NoteBank_IsActive(i) == 0u && note_gate_requested[i] == 0u)
     {
       continue;

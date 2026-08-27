@@ -15,6 +15,7 @@ constexpr uint8_t kStreamTypePack = 0x03;
 constexpr unsigned kStreamHdrSize = 8;
 constexpr unsigned kStreamBodyMetaSize = 8;
 constexpr unsigned kStreamNsampMax = 4096;
+constexpr uint8_t kStreamBodyFlagSof = 0x01u;
 /** Full 8-bit session sequence; 0xFF remains the card's unarmed sentinel. */
 constexpr unsigned kStreamSessionMod = 255;
 
@@ -81,8 +82,8 @@ struct StreamHdr {
 struct StreamBodyMeta {
   uint8_t voice;
   uint8_t session;
-  uint8_t sof;
-  uint8_t pad;
+  uint8_t flags;
+  uint8_t reserved;
   uint16_t nsamp;
   uint16_t wave_id;
 };

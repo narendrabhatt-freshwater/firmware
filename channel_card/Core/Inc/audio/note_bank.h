@@ -65,8 +65,6 @@ extern "C"
   /** Active mask and hungriest voice (0xFF if none). */
   void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out);
 
-  /** New BODY session: same as note-on (FIFO was wiped). */
-
 #ifdef __cplusplus
 }
 #endif

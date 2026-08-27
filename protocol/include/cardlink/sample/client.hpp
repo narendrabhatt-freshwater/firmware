@@ -41,8 +41,13 @@ class Client {
 public:
   /** Bare Channel command, e.g. `n3 261.63` — no `c:` prefix. */
   using ConsoleFn = std::function<void(const std::string &cmd)>;
+  using NoteGateDone = std::function<void(bool applied)>;
+  /** Queue one RS485 aw/nX transaction. done(true) runs only after card ACK. */
+  using NoteGateFn =
+      std::function<bool(const NoteRequest &note, NoteGateDone done)>;
 
   void SetConsole(ConsoleFn fn);
+  void SetNoteGate(NoteGateFn fn);
   void SetCdcPath(const std::string &path);
   const std::string &CdcPath() const { return cdc_path_; }
 
@@ -64,10 +69,10 @@ public:
 
   bool SetRootHz(uint16_t wave_id, double hz, std::string &err);
 
-  /** Start one note immediately; its first vq-authorized BODY refill is async. */
+  /** Queue RS485 aw/nX; its ACK releases an urgent first BODY job. */
   void NoteOn(uint8_t voice, double hz, uint16_t wave_id = 0xFFFFu);
-  /** Prepare BODY sessions, then issue the audible `nX` chord immediately.
-   *  First SOF refills run concurrently and the card's attack heads bridge them.
+  /** Queue RS485 note starts; each ACK releases its newest-first BODY session.
+   *  The card's attack heads bridge into the first BODY samples.
    *  The timeout argument remains for source/ABI compatibility and is ignored. */
   bool NoteOnBatch(const NoteRequest *notes, size_t count,
                    unsigned timeout_ms = 200u);
@@ -91,6 +96,7 @@ private:
   void SetLabel(uint16_t wave_id);
 
   ConsoleFn console_;
+  NoteGateFn note_gate_;
   std::string cdc_path_;
   cardlink::SerialPort cdc_port_;
   int cdc_refs_ = 0;

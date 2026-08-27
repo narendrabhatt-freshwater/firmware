@@ -351,6 +351,7 @@ static void USB_App_FeedPack(const uint8_t *src, uint32_t count)
       s_rx.sample_bytes_left = (uint32_t)s_rx.meta.nsamp * 2u;
       if (s_rx.write_count >= 8u || s_rx.meta.voice >= 8u ||
           (s_rx.voice_mask & (uint8_t)(1u << s_rx.meta.voice)) != 0u ||
+          (s_rx.meta.flags & (uint8_t)~USB_STREAM_BODY_FLAG_SOF) != 0u ||
           s_rx.meta.nsamp == 0u || s_rx.meta.nsamp > USB_STREAM_NSAMP_MAX ||
           s_rx.sample_bytes_left > s_rx.payload_left)
       {
@@ -358,7 +359,8 @@ static void USB_App_FeedPack(const uint8_t *src, uint32_t count)
         return;
       }
       begin_result = StreamRing_WriteBegin(
-          s_rx.meta.voice, s_rx.meta.session, s_rx.meta.sof,
+          s_rx.meta.voice, s_rx.meta.session,
+          (s_rx.meta.flags & USB_STREAM_BODY_FLAG_SOF) != 0u,
           s_rx.meta.wave_id, s_rx.meta.nsamp,
           &s_rx.writes[s_rx.write_count]);
       if (begin_result == STREAM_RING_WRITE_ERROR)

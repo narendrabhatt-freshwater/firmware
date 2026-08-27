@@ -213,17 +213,15 @@ int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
   {
     return STREAM_RING_WRITE_STALE;
   }
-  if (sof != 0u && session != r->session)
+  if (sof != 0u)
   {
-    /* Only nX may arm a new session and choose its replacement origin.
-     * An old/unexpected SOF is transport-valid but cannot reset the ring. */
-    if (r->replacement_armed == 0u)
+    /* nX chose the replacement origin; its first SOF selects the session. */
+    if (r->replacement_armed == 0u ||
+        (r->session != 0xFFu && session != r->session))
     {
       return STREAM_RING_WRITE_STALE;
     }
     r->session = session;
-    r->replacement_armed = 0u;
-    s_sof_pkts++;
   }
   else if (sof == 0u && session != r->session)
   {
@@ -242,6 +240,7 @@ int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
   write->generation = r->generation;
   write->voice = voice;
   write->session = session;
+  write->sof = sof != 0u ? 1u : 0u;
   write->active = 1u;
   return STREAM_RING_WRITE_OK;
 }
@@ -333,6 +332,11 @@ uint32_t StreamRing_WriteCommit(StreamRing_Write_t *write)
     }
   }
   r->wr = write->start_wr + write->nsamp;
+  if (write->sof != 0u)
+  {
+    r->replacement_armed = 0u;
+    s_sof_pkts++;
+  }
   r->body_published = 1u;
   s_rx_pkts++;
   if (all_zero != 0u)

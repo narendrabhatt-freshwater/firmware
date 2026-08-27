@@ -63,12 +63,13 @@ Q16.16 interpolation. `nX > 0` is always a note-on. A new BODY session
 (`SOF` + session 0–6) starts a new body FIFO; a repeated burst with
 the same session does not.
 The host packs the hungriest wanting voices into each UAC window (fair share
-of a 4762-sample 10 ms OUT budget for eight voices, weighted by source-consumption
-rate). Each PACK is capped at eight milliseconds of predicted source demand.
-Every fresh RS485 `vq` exact free-space grant permits one bounded packed
-refill; otherwise the host waits for the next reply. There is no refill before
-permission: `nX` starts the attack immediately and the next `vq` permits the
-first SOF PACK.
+of a 5062-sample 10 ms OUT budget for eight voices, weighted by source-consumption
+rate). RS485 `aw` then `nX <Hz>` assigns the wave and starts pitch/attack. Only
+after their ACK does the host create the session and put about 15 ms of
+pitch-adjusted SOF BODY at the top of the USB queue, without consulting `vq`.
+Every fresh RS485 `vq` exact free-space grant permits one later bounded refill.
+Unsent refill suffixes yield to a new urgent note; already transmitted records
+are rejected as stale when their voice/session has been replaced.
 Iso OUT has no NAK. A primed BODY underrun increments `hold` but never disables
 USB, RS485, or audio; a later authorized refill can recover. A full ring drops
 the whole chunk; the producer never overwrites unread FIFO samples.

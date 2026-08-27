@@ -382,7 +382,10 @@ transfer. The 1020-byte UAC packets form one continuous byte stream;
 there is no per-packet envelope or reserved channel. A PACK plus its CRC may
 occupy up to 10200 bytes (10 ms of maximum-rate UAC wire time).
 Sequential RS485 `vq` polling supplies exact free space and the last applied
-PACK sequence every 5 ms. Each voice remains bounded by exact credit.
+PACK sequence every 5 ms for steady-state refills. The first SOF BODY is
+released immediately after the corresponding RS485 `aw`/`nX` ACK and does not
+wait for `vq`; its conservative credit accounts for the configured old-note
+crash-release tail.
 
 ```text
 UAC carrier: 51 kHz × 10 channels × int16 = 1020000 bytes/s
@@ -402,8 +405,8 @@ offset  size  field
 
   0     1     voice  0..7
   1     1     session 0..254 (8-bit note sequence; 255 is unarmed)
-  2     1     sof    1 = replace that BODY ring session; never start/restart note
-  3     1     pad
+  2     1     flags  bit 0 SOF
+  3     1     reserved (0)
   4     2     nsamp
   6     2     wave_id (MIDI note/sample identity, little-endian)
   8     2*nsamp  int16 LE unpitched body
@@ -418,11 +421,12 @@ After framing, an eight-voice PACK holds 5062 int16 BODY samples per 10 ms
 (506.2 ksample/s aggregate). Workloads above that single-PACK source-consumption
 ceiling cannot be lossless on this 51 kHz, 10-channel, 16-bit Full-Speed carrier;
 `hold` then records the missing playback samples while control remains alive.
-With the 8 ms prediction horizon, repeated eight-voice framing gives a
-continuous theoretical ceiling of about 505.25 ksample/s; hardware smoke has
-passed 500 ksample/s with zero hold, drop, bad PACKs, late replies, or xruns.
-RS485 `vq` every 5 ms is the sole refill authority as well as the
-lifecycle monitor; the UAC OUT stream carries BODY PACKs only.
+Each fresh `vq` uses all exact safe ring credit up to that wire ceiling; there
+is no shorter prediction horizon that can under-fill a high-pitch voice.
+Hardware smoke has passed 500 ksample/s with zero hold, drop, bad PACKs, late
+replies, or xruns.
+RS485 `vq` every 5 ms is the steady-state refill authority and lifecycle
+monitor. UAC OUT carries BODY data only.
 
 ```text
 RS485 vq reply, fixed 26-byte binary frame
@@ -438,20 +442,30 @@ offset  size  field
 25      1     terminator = 0a
 ```
 
-RS485 `vq` is both refill permission and an exact PACK-order snapshot. One
-fresh reply permits at most one new packed USB OUT refill, or one retry of the
-same unacknowledged PACK, bounded for each included voice. Its sequence
-prevents a racing completed OUT from being subtracted twice. There is no
-ungranted SOF prefill: `nX` starts the attack immediately, and the first BODY
-PACK waits for the next `vq`. `type` `0x20` CAPTURE remains reserved.
+RS485 `vq` is both steady-refill permission and an exact PACK-order snapshot.
+One fresh reply permits at most one new refill PACK, or one retry of the same
+unacknowledged PACK, bounded for each included voice. Its sequence prevents a
+racing completed OUT from being subtracted twice. RS485 `nX <Hz>` remains the
+sole audible note-on and pitch authority. After `aw` and `nX` ACK, the host
+creates the new per-voice session and places about 15 ms of pitch-adjusted SOF
+BODY at the top of the USB work queue without waiting for `vq`. If a
+conservative 50 ms release reservation leaves no safe prefill credit, USB
+sends no control record; the next `vq` supplies the first SOF BODY normally.
+RS485 `nX 0` remains note-off authority. `type` `0x20` CAPTURE remains reserved.
 Up to three ordered PACKs may await acknowledgement so the UAC pipe does
 not idle while the next `vq` observes the previous PACK. All their per-voice
 samples are subtracted from every newer exact-credit snapshot; this is
-pipelining, not permission reuse—each PACK still consumes its own fresh `vq`.
-The host caps each new PACK at eight milliseconds of predicted aggregate
-source consumption (and the exact credit, whichever is smaller). This keeps
-the request cadence ahead of playback while preserving the 4762-sample
-physical maximum for catch-up.
+pipelining, not permission reuse—each steady refill still consumes its own
+fresh `vq`. Urgent jobs form a newest-first priority deque with one latest job
+per physical voice (maximum depth eight). A new
+note cancels and reuses any not-yet-rendered ordered PACK suffix; bytes already
+entering USB finish and are rejected as stale by voice/session if superseded.
+Every refill uses all exact credit up to its per-voice and wire limits.
+The controller targets one `vq` every 5 ms (200 Hz) and requests an immediate
+one after successful Channel commands; single-flight RS485 traffic can stretch
+the observed interval. Raw UAC capacity is 510 int16 samples/ms. After the
+PACK header, CRC, and per-voice metadata, usable capacity is 509.0 samples/ms
+for one voice, 508.2 for three, and 506.2 for eight.
 If note-off or a newer note generation retires a ring while one of those
 authorized PACKs is still arriving, the card consumes and CRC-checks the old
 PACK and advances its ACK sequence, but does not publish its samples into the
@@ -529,8 +543,9 @@ Notes:
    dominates, not the transfer.
 2. While waiting for the completion line, keep reading the CDC RX path —
    do not discard pending replies.
-3. Upload only loads AXI RAM (lost on reset). To hear it: `ar <id> <rootHz>`,
-   `aw <voice> <id>`, then `nX <Hz>` — and stream sustain as BODY bursts.
+3. Upload only loads AXI RAM (lost on reset). Set `ar <id> <rootHz>`; the host
+   app starts it with RS485 `aw <voice> <id>` then `nX <Hz>`. Their ACK releases
+   the first USB BODY job; later sustain uses vq-authorized BODY refills.
 
 ---
 

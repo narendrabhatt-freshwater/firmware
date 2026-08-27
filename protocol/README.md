@@ -35,8 +35,23 @@ stream errors:
 protocol/build/cardlink_sample_hw_smoke c6x3c5 12 <body.raw> <rs485-port> <cdc-port>
 ```
 
+Voice-limit, stealing, and mixed-chord cases use the same arguments:
+
+```bash
+protocol/build/cardlink_sample_hw_smoke mono_steal 12 <body.raw> <rs485-port> <cdc-port>
+protocol/build/cardlink_sample_hw_smoke duo_steal 12 <body.raw> <rs485-port> <cdc-port>
+protocol/build/cardlink_sample_hw_smoke c6c4a4 12 <body.raw> <rs485-port> <cdc-port>
+```
+
+`mono_steal` plays C6 → C4 → A4 through physical voice 0. `duo_steal`
+builds C6+C4, then adds A4 and verifies the FIFO steal path on voice 0.
+
 It prints the requested source-sample rate and the exact framed UAC capacity;
-an over-budget case is labelled before playback.
+an over-budget case is labelled before playback. The raw carrier is 510
+samples/ms; framed BODY capacity is 509.0 for one voice, 508.2 for three, and
+506.2 for eight. The smoke executable validates startup and steady-state
+counters separately and exits unsuccessfully if either records a hold, drop,
+bad/late packet, or host callback xrun.
 
 Build-tree consumers use:
 

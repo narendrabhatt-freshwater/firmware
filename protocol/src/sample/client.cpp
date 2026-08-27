@@ -167,6 +167,11 @@ void Client::SetConsole(ConsoleFn fn)
   console_ = std::move(fn);
 }
 
+void Client::SetNoteGate(NoteGateFn fn)
+{
+  note_gate_ = std::move(fn);
+}
+
 void Client::SetCdcPath(const std::string &path)
 {
   if (path == cdc_path_) {
@@ -534,8 +539,8 @@ void Client::NoteOn(uint8_t voice, double hz, uint16_t wave_id)
 bool Client::NoteOnBatch(const NoteRequest *notes, size_t count,
                          unsigned legacy_timeout_ms)
 {
-  /* Kept in the ABI for existing callers. Note-on does not wait for BODY:
-   * the card's attack head bridges to the first vq-authorized UAC PACK. */
+  /* Kept in the ABI for existing callers. The card starts on the RS485 nX;
+   * its ACK releases the first pitch-adjusted BODY PACK asynchronously. */
   (void)legacy_timeout_ms;
   if (notes == nullptr || count == 0u || count > cardlink::audio::kSampleVoices) {
     return false;
@@ -572,27 +577,28 @@ bool Client::NoteOnBatch(const NoteRequest *notes, size_t count,
     if (!mixer_.HasBody(wave)) {
       continue;
     }
-    char aw[32];
-    std::snprintf(aw, sizeof aw, "aw %u %u",
-                  static_cast<unsigned>(note.voice),
-                  static_cast<unsigned>(wave));
-    SendConsole(aw);
-    mixer_.NoteOn(note.voice, wave, note.hz);
     prepared[nprepared++] = NoteRequest{note.voice, note.hz, wave};
   }
   if (nprepared == 0u) {
     return false;
   }
 
-  /* Start the chord immediately. The card plays its attack heads while the
-   * BODY thread waits for the next vq, then sends one permitted UAC PACK. */
-  for (size_t i = 0u; i < nprepared; ++i) {
-    char cmd[48];
-    std::snprintf(cmd, sizeof cmd, "n%u %.6g",
-                  static_cast<unsigned>(prepared[i].voice), prepared[i].hz);
-    SendConsole(cmd);
+  if (!note_gate_) {
+    return false;
   }
-  return true;
+  size_t queued = 0u;
+  for (size_t i = 0u; i < nprepared; ++i) {
+    const NoteRequest note = prepared[i];
+    if (note_gate_(note, [this, note](bool applied) {
+          if (applied) {
+            /* Each nX ACK releases its own urgent starter immediately. */
+            mixer_.NoteOn(note.voice, note.wave_id, note.hz);
+          }
+        })) {
+      ++queued;
+    }
+  }
+  return queued == nprepared;
 }
 
 void Client::NoteOff(uint8_t voice)
@@ -600,16 +606,22 @@ void Client::NoteOff(uint8_t voice)
   if (voice >= cardlink::audio::kSampleVoices) {
     return;
   }
-  char cmd[24];
-  std::snprintf(cmd, sizeof cmd, "n%u 0", static_cast<unsigned>(voice));
-  SendConsole(cmd);
-  mixer_.NoteOff(voice);
+  if (!note_gate_) {
+    return;
+  }
+  const NoteRequest note{voice, 0.0, 0xFFFFu};
+  (void)note_gate_(note, [this, voice](bool applied) {
+    if (applied) {
+      mixer_.NoteOff(voice);
+    }
+  });
 }
 
 void Client::AllNotesOff()
 {
-  mixer_.AllNotesOff();
-  SendConsole("n 0");
+  for (uint8_t voice = 0u; voice < cardlink::audio::kSampleVoices; ++voice) {
+    NoteOff(voice);
+  }
 }
 
 void Client::Silence(uint8_t voice)
@@ -620,6 +632,7 @@ void Client::Silence(uint8_t voice)
 void Client::SetCrashReleaseMs(uint8_t release_ms)
 {
   crash_release_ms_ = std::clamp<uint8_t>(release_ms, 0u, 50u);
+  mixer_.SetCrashReleaseMs(crash_release_ms_);
   char cmd[24];
   std::snprintf(cmd, sizeof cmd, "crash %u",
                 static_cast<unsigned>(crash_release_ms_));

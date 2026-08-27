@@ -9,6 +9,13 @@
 
 namespace cardlink::audio {
 
+struct UrgentScheduleStats {
+  unsigned voices = 0u;
+  double demand_samples_per_ms = 0.0;
+  double remaining_attack_ms = 0.0;
+  double quantum_ms = 0.0;
+};
+
 /** Packed BODY over the class-compliant 10ch int16 UAC2 output. */
 class SampleBulkOut {
 public:
@@ -28,6 +35,8 @@ public:
   uint32_t XrunCount() const;
   /** Audio frames requested by CoreAudio in the current stream generation. */
   uint64_t RenderFrameCount() const;
+  /** Most recent first-SOF urgent scheduling decision. */
+  UrgentScheduleStats LastUrgentSchedule() const;
 
   /** Feed one authoritative RS-485 vq snapshot to the refill scheduler. */
   void SubmitStatus(uint8_t mask, uint8_t best,

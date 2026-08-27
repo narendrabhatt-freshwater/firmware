@@ -3,8 +3,9 @@
  * @brief Packed BODY protocol carried inside the Channel Card UAC2 stream.
  *
  * The USB interface is class-compliant UAC2 (10ch, int16, 51 kHz).
- * Its bytes are a private request/serve transport, not audible PCM. Every
- * logical PACK is produced from one fresh RS-485 vq permission. PACK CRC32
+ * Its bytes are a private request/serve transport, not audible PCM.
+ * First-BODY PACKs are released after the RS485 nX ACK without waiting for
+ * vq; later refill PACKs do wait for vq. PACK CRC32
  * validation makes a missed isochronous packet abort unpublished ring
  * reservations instead of creating a hole in the sample stream.
  */
@@ -28,6 +29,7 @@ extern "C" {
 #define USB_STREAM_HDR_SIZE 8u
 #define USB_STREAM_BODY_META_SIZE 8u
 #define USB_STREAM_NSAMP_MAX 4096u
+#define USB_STREAM_BODY_FLAG_SOF 0x01u
 /* Full 8-bit sequence; 0xFF is reserved as the unarmed sentinel. */
 #define USB_STREAM_SESSION_MOD 255u
 
@@ -68,8 +70,8 @@ typedef struct USB_STREAM_PACKED {
 typedef struct USB_STREAM_PACKED {
   uint8_t voice;
   uint8_t session;
-  uint8_t sof;
-  uint8_t pad;
+  uint8_t flags;
+  uint8_t reserved;
   uint16_t nsamp;
   uint16_t wave_id;
 } UsbStreamBodyMeta;

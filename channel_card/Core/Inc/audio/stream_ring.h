@@ -43,6 +43,7 @@ extern "C"
     uint32_t generation;
     uint8_t voice;
     uint8_t session;
+    uint8_t sof;
     uint8_t active;
   } StreamRing_Write_t;
 

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <utility>
 #include <vector>
 
 namespace
@@ -490,6 +491,39 @@ int main()
 
   {
     std::array<double, kSampleVoices> inc{};
+    constexpr double kA4Ratio = 440.0 / kDefaultBodyRootHz;
+    inc[0] = 4.0;
+    RunNoFaultCase(inc, 1u, 1000u,
+                   "one-voice C6 must run 10 s without hold/drop");
+    inc[0] = 1.0;
+    RunNoFaultCase(inc, 1u, 1000u,
+                   "one-voice C4 must run 10 s without hold/drop");
+    inc[0] = kA4Ratio;
+    RunNoFaultCase(inc, 1u, 1000u,
+                   "one-voice A4 must run 10 s without hold/drop");
+
+    inc.fill(0.0);
+    inc[0] = 4.0;
+    inc[1] = 1.0;
+    RunNoFaultCase(inc, 2u, 1000u,
+                   "two-voice C6+C4 must run 10 s without hold/drop");
+    inc[0] = 4.0;
+    inc[1] = kA4Ratio;
+    RunNoFaultCase(inc, 2u, 1000u,
+                   "two-voice C6+A4 must run 10 s without hold/drop");
+    inc[0] = 1.0;
+    inc[1] = kA4Ratio;
+    RunNoFaultCase(inc, 2u, 1000u,
+                   "two-voice C4+A4 must run 10 s without hold/drop");
+
+    inc.fill(0.0);
+    inc[0] = 4.0;
+    inc[1] = 1.0;
+    inc[2] = kA4Ratio;
+    RunNoFaultCase(inc, 3u, 1000u,
+                   "C6+C4+A4 chord must run 10 s without hold/drop");
+
+    inc.fill(0.0);
     inc[0] = 2.0;
     inc[1] = 2.0;
     inc[2] = 2.0;
@@ -511,6 +545,19 @@ int main()
     std::vector<std::string> commands;
     client.SetConsole(
         [&commands](const std::string &cmd) { commands.push_back(cmd); });
+    client.SetNoteGate(
+        [&commands](const cardlink::sample::NoteRequest &note,
+                    cardlink::sample::Client::NoteGateDone done) {
+          if (note.hz > 0.0) {
+            commands.push_back("aw " + std::to_string(note.voice) + " " +
+                               std::to_string(note.wave_id));
+            commands.push_back("n" + std::to_string(note.voice) + " on");
+          } else {
+            commands.push_back("n" + std::to_string(note.voice) + " 0");
+          }
+          done(true);
+          return true;
+        });
     const std::array<cardlink::sample::NoteRequest, 2> chord{{
         {0u, 261.625565, 0u},
         {1u, 329.627557, 0u},
@@ -518,15 +565,77 @@ int main()
     Check(client.NoteOnBatch(chord.data(), chord.size(), 0u),
           "chord must start without waiting for BODY completion");
     Check(commands.size() == 4u && commands[0] == "aw 0 0" &&
-              commands[1] == "aw 1 0" && commands[2].rfind("n0 ", 0u) == 0u &&
-              commands[3].rfind("n1 ", 0u) == 0u,
-          "audible chord commands must follow session setup immediately");
+              commands[1] == "n0 on" && commands[2] == "aw 1 0" &&
+              commands[3] == "n1 on",
+          "RS485 aw/nX ACK must precede each BODY session");
+    std::array<int16_t, kBodyBurstMax> urgent_body{};
+    cardlink::audio::UrgentBurst first{};
+    Check(client.Mixer().FillUrgentBurst(urgent_body.data(),
+                                         urgent_body.size(), first) &&
+              first.voice == 1u && first.nsamp != 0u,
+          "shortest pitch-adjusted attack must meet its SOF deadline first");
+    unsigned sof_count = first.sof ? 1u : 0u;
+    bool saw_voice0 = false;
+    unsigned burst_count = 1u;
+    while (client.Mixer().UrgentPending()) {
+      cardlink::audio::UrgentBurst chunk{};
+      Check(++burst_count < 256u &&
+                client.Mixer().FillUrgentBurst(
+                    urgent_body.data(), urgent_body.size(), chunk),
+            "chunked chord prefill must make progress");
+      sof_count += chunk.sof ? 1u : 0u;
+      saw_voice0 = saw_voice0 || chunk.voice == 0u;
+    }
+    Check(sof_count == 2u && saw_voice0,
+          "both chord sessions need exactly one SOF plus deadline top-ups");
+    client.NoteOff(0u);
+    Check(commands.back() == "n0 0" && !client.Mixer().UrgentPending(),
+          "RS485 nX 0 must remain the note-off authority");
     client.SetCrashReleaseMs(0u);
     Check(client.CrashReleaseMs() == 0u && commands.back() == "crash 0",
           "zero-ms crash release must reach the card as a hard-cut test");
     client.SetCrashReleaseMs(255u);
     Check(client.CrashReleaseMs() == 50u && commands.back() == "crash 50",
           "crash release must clamp to the 50-ms test ceiling");
+  }
+
+  {
+    cardlink::sample::Client gated;
+    LoadTone(gated.Mixer(), 0);
+    cardlink::sample::Client::NoteGateDone ack;
+    gated.SetNoteGate(
+        [&ack](const cardlink::sample::NoteRequest &,
+               cardlink::sample::Client::NoteGateDone done) {
+          ack = std::move(done);
+          return true;
+        });
+    const cardlink::sample::NoteRequest note{0u, kDefaultBodyRootHz, 0u};
+    Check(gated.NoteOnBatch(&note, 1u),
+          "RS485 note transaction must enter its worker queue");
+    Check(!gated.Mixer().UrgentPending(),
+          "USB BODY must remain blocked before the nX ACK");
+    ack(true);
+    Check(gated.Mixer().UrgentPending(),
+          "the nX ACK must release the urgent BODY session");
+  }
+
+  {
+    SampleDryMixer urgent;
+    LoadTone(urgent, 0);
+    urgent.SetCrashReleaseMs(50u);
+    const uint8_t old_session =
+        urgent.NoteOn(0u, 0u, kDefaultBodyRootHz * 16.0);
+    std::array<int16_t, kBodyBurstMax> body{};
+    cardlink::audio::UrgentBurst old_note{};
+    Check(urgent.FillUrgentBurst(body.data(), body.size(), old_note) &&
+              old_note.session == old_session,
+          "note-on must assign its session synchronously");
+    const uint8_t new_session =
+        urgent.NoteOn(0u, 0u, kDefaultBodyRootHz);
+    cardlink::audio::UrgentBurst replacement{};
+    Check(!urgent.FillUrgentBurst(body.data(), body.size(), replacement) &&
+              new_session != old_session && !urgent.UrgentPending(),
+          "zero safe prefill credit must wait for vq without a USB control record");
   }
 
   return EXIT_SUCCESS;

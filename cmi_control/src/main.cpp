@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(__APPLE__)
@@ -112,11 +113,34 @@ int main(int argc, char **argv)
   app.samples.SetConsole([&app](const std::string &cmd) {
     (void)app.bus.QueueExec(cardproto::Target::Channel, cmd);
   });
+  app.samples.SetNoteGate(
+      [&app](const cardlink::sample::NoteRequest &note,
+             cardlink::sample::Client::NoteGateDone done) {
+        const auto queued = app.bus.QueueChannel(
+            [note, done = std::move(done)](cardproto::ChannelClient &ch) {
+              if (!(note.hz > 0.0)) {
+                auto result = ch.NoteOff(note.voice);
+                done(result.ok());
+                return result;
+              }
+              char aw[32];
+              std::snprintf(aw, sizeof aw, "aw %u %u",
+                            static_cast<unsigned>(note.voice),
+                            static_cast<unsigned>(note.wave_id));
+              auto result = ch.Exec(aw);
+              if (result.ok()) {
+                result = ch.SetNote(note.voice, note.hz);
+              }
+              done(result.ok());
+              return result;
+            });
+        return queued == BusQueueResult::Ok;
+      });
   app.bus.SetIdleHandler([&app](uint8_t slot) {
     app.samples.Silence(slot);
   });
-  /* RS-485 is the sole BODY refill authority. UAC2 carries packed signed
-   * int16 BODY OUT; vq provides exact credit and the applied PACK sequence. */
+  /* RS485 nX ACK releases the first urgent BODY job. Later vq replies supply
+   * exact credit and the applied PACK sequence for steady-state refills. */
   app.bus.SetVqHandler(
       [&app](uint8_t mask, uint8_t best,
              const std::array<uint16_t, cardlink::audio::kSampleVoices> &free,

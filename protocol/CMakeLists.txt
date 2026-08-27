@@ -167,6 +167,12 @@ if(BUILD_TESTING)
   target_link_libraries(cardlink_sample_dry_tests PRIVATE cardlink::cardlink)
   add_test(NAME cardlink.sample_dry COMMAND cardlink_sample_dry_tests)
 
+  add_executable(cardlink_sample_voice_mode_tests
+    tests/sample_voice_mode_test.cpp)
+  target_link_libraries(cardlink_sample_voice_mode_tests PRIVATE cardlink::cardlink)
+  add_test(NAME cardlink.sample_voice_modes
+    COMMAND cardlink_sample_voice_mode_tests)
+
   add_test(
     NAME cardlink.public_api_contract
     COMMAND ${CMAKE_COMMAND}

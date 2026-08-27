@@ -542,7 +542,7 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
   }
   if (want_card)
   {
-    /* Reassert after reconnects before any aw/nX commands for this note. */
+    /* Reassert after reconnects before an urgent USB note can replace a slot. */
     samples.SetCrashReleaseMs(static_cast<uint8_t>(crash_release_ms));
     (void)EnsureSampleStream();
   }
@@ -558,6 +558,15 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
       if (!samples.NoteOnBatch(pending.data(), npending))
       {
         log.Push("err: sample chord has no loaded BODY");
+      }
+      else
+      {
+        /* USB applied the audible note; keep RS485 idle/release tracking in
+         * sync without sending a duplicate nX gate-on. */
+        for (size_t i = 0u; i < npending; ++i)
+        {
+          bus.AcknowledgeSlotHz(pending[i].voice, pending[i].hz);
+        }
       }
       pending_voice.fill(false);
       npending = 0u;
@@ -581,6 +590,7 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
           flush_card_notes();
         }
         samples.NoteOff(ev.slot);
+        bus.AcknowledgeSlotHz(ev.slot, 0.0);
         break;
       case cardlink::midi::BankEventKind::On:
       case cardlink::midi::BankEventKind::Retrig:
@@ -623,12 +633,9 @@ void App::ApplyLocalBankEvents(
 void App::AllNotesOff()
 {
   const auto evs = bank.AllOff();
-  ApplyBankEvents(evs);
+  ApplyLocalBankEvents(evs);
   samples.AllNotesOff();
-  if (bus.IsOpen())
-  {
-    bus.RequestSilence();
-  }
+  bus.AcknowledgeAllHz(0.0);
 }
 
 void App::HandleKeyboardPiano()

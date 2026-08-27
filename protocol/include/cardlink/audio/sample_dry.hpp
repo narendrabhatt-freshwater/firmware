@@ -2,8 +2,10 @@
  * @file sample_dry.hpp
  * @brief Host body feeder: unpitched int16 → UAC2 BODY packs.
  *
- * Card owns pitch / env / filter. Every fresh RS-485 `vq` grants
- * at most one refill to each voice (at most kBodyBurstMax and at most the
+ * Card owns pitch / env / filter. After RS485 acknowledges nX, the host creates
+ * an urgent, newest-first SOF BODY job without waiting for `vq`. Every later
+ * RS-485 `vq` grants
+ * at most one steady-state refill to each voice (at most kBodyBurstMax and at most the
  * safe free-space credit). Each vq reconciles predicted occupancy to the
  * the card's exact occupancy plus per-voice samples in concurrent USB OUT.
  * One PACK divides its payload by source consumption rate so a fast
@@ -42,7 +44,20 @@ constexpr unsigned kMinBurst = 512;
 constexpr unsigned kStreamSessionMod = 255;
 /** One BODY meta remains bounded; the larger ring absorbs poll/host jitter. */
 constexpr unsigned kBodyBurstMax = 4096;
+/** Covers one 5 ms vq period plus observed USB/worker scheduling spikes. */
+constexpr unsigned kUrgentPrefillMs = 15;
+/** Upper bound for one fair shared startup horizon. */
+constexpr double kUrgentQuantumMaxMs = 5.0;
+constexpr unsigned kUrgentQueueVoices = kSampleVoices;
 constexpr double kDefaultBodyRootHz = 261.625565;
+
+struct UrgentBurst {
+  uint8_t voice = 0u;
+  uint8_t session = 0u;
+  uint16_t wave_id = 0xFFFFu;
+  unsigned nsamp = 0u;
+  bool sof = false;
+};
 
 class SampleDryMixer {
 public:
@@ -69,8 +84,38 @@ public:
   void SetBodyOneshot(uint16_t wave_id, bool oneshot);
   bool BodyOneshot(uint16_t wave_id) const;
 
-  /** New session. Its first BODY refill waits for a fresh `vq`. */
-  void NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz);
+  /** Queue a new urgent note session. Returns its synchronous session id. */
+  uint8_t NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz,
+                 double attack_elapsed_ms = 0.0);
+
+  /** Configure the conservative old-tail reservation used by urgent prefill. */
+  void SetCrashReleaseMs(uint8_t release_ms);
+
+  /** True while a note command or newest-first urgent prefill is pending. */
+  bool UrgentPending() const;
+
+  /** Pop the newest live note and render its vq-independent prefill.
+   * Each call renders at most one urgent quantum. */
+  bool FillUrgentBurst(int16_t *dst, unsigned max_n, UrgentBurst &info);
+
+  /** Snapshot pending urgent voices, newest first. Writes at most 8 ids. */
+  unsigned UrgentVoices(uint8_t *dst);
+  /** True while any pending urgent voice still needs its first SOF. */
+  bool UrgentSofPending() const;
+  /** Retire bridge mode for voices confirmed active by a fresh vq. */
+  void EndUrgentPrefill(uint8_t active_mask);
+
+  /** Render one urgent quantum for a specific pending voice. */
+  bool FillUrgentBurstForVoice(uint8_t voice, int16_t *dst, unsigned max_n,
+                               double quantum_ms, UrgentBurst &info);
+
+  /** Current source consumption and attack-to-BODY lead for scheduling. */
+  double VoiceSourceSamplesPerMs(uint8_t voice) const;
+  double VoiceAttackLeadMs(uint8_t voice) const;
+
+  /** Restore a canceled, not-yet-rendered urgent SOF BODY job. */
+  void AbortUrgentBurst(uint8_t voice, uint8_t session, uint16_t wave_id,
+                        unsigned nsamp, bool sof);
 
   /** Key-up: card releases. Body stream continues until Silence. */
   void NoteOff(uint8_t voice);
@@ -101,7 +146,7 @@ public:
   unsigned AllocateBursts(const uint8_t *voices, unsigned nvoices,
                           unsigned budget, unsigned *grants) const;
 
-  /** Aggregate source samples predicted for active voices over interval_ms. */
+  /** Aggregate source demand helper used by diagnostics/tests. */
   unsigned SourceDemandSamples(double interval_ms) const;
 
   /** Copy up to max_n body samples. Sets sof/session. */
@@ -144,22 +189,29 @@ private:
     uint8_t voice = 0;
     uint16_t wave_id = 0xFFFFu;
     double freq_hz = 0.0;
+    double attack_elapsed_ms = 0.0;
+    uint8_t session = 0u;
+    uint32_t epoch = 0u;
   };
 
   struct Voice {
     bool active = false;
     bool sof_pending = false;
+    bool urgent_pending = false;
     uint8_t session = 0;
     uint16_t wave_id = 0;
     double freq_hz = 0.0;
     double cursor = 0.0;
     double phase = 0.0;
     double queued = 0.0;
+    double attack_elapsed_ms = 0.0;
     unsigned attack_len = 0;
     uint32_t vq_seen = 0;
     unsigned vq_free = 0;
     unsigned vq_card_fill = 0;
     unsigned sent_this_vq = 0;
+    unsigned urgent_budget = 0u;
+    uint32_t urgent_epoch = 0u;
     bool vq_have = false;
   };
 
@@ -183,6 +235,7 @@ private:
   std::array<Voice, kSampleVoices> voices_{};
   std::array<std::atomic<unsigned>, kSampleVoices> sent_{};
   std::array<std::atomic<unsigned>, kSampleVoices> committed_{};
+  std::array<std::atomic<uint8_t>, kSampleVoices> next_session_{};
   std::array<std::atomic<bool>, kSampleVoices> live_{};
   std::array<std::atomic<uint16_t>, kSampleVoices> live_wave_{};
   std::atomic<uint32_t> vq_seq_{1};
@@ -192,6 +245,9 @@ private:
   std::array<std::atomic<uint16_t>, kSampleVoices> vq_fill_max_{};
   std::array<std::atomic<uint16_t>, kSampleVoices> vq_free_{};
   std::array<std::atomic<uint16_t>, kSampleVoices> vq_unreflected_{};
+  std::atomic<uint32_t> note_epoch_{0u};
+  std::atomic<unsigned> urgent_ready_{0u};
+  std::atomic<uint8_t> crash_release_ms_{3u};
 
   std::array<std::vector<int16_t>, 256> bodies_{};
   std::array<std::atomic<double>, 256> root_hz_{};
