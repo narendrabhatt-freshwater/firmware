@@ -17,28 +17,37 @@ typedef struct
   volatile uint32_t rd;
   volatile uint8_t consuming;
   uint8_t session;
-  uint8_t replacement_armed;
+  volatile uint8_t replacement_state;
+  volatile uint8_t expected_session;
   uint8_t body_published;
   uint16_t wave_id;
+  volatile uint16_t expected_wave_id;
   uint32_t generation;
   volatile uint32_t release_rd;
   volatile uint32_t release_left;
   int16_t data[STREAM_RING_BASE_SAMPLES];
 } StreamRing_t;
 
+#if defined(__APPLE__)
+#define STREAM_RING_SECTION(name) __attribute__((aligned(32)))
+#else
+#define STREAM_RING_SECTION(name) \
+  __attribute__((aligned(32), section(name)))
+#endif
+
 /* Use all three CPU SRAM domains for genuine per-voice jitter storage. These
  * buffers are single-core CPU data (USB main loop + I2S ISR), never DMA, so
  * no cache-maintenance boundary is introduced. */
 static StreamRing_t s_rings_dtcm[5];
 static StreamRing_t s_rings_d2[2]
-    __attribute__((aligned(32), section(".ring_d2")));
+    STREAM_RING_SECTION(".ring_d2");
 static StreamRing_t s_rings_d3[1]
-    __attribute__((aligned(32), section(".ring_d3")));
+    STREAM_RING_SECTION(".ring_d3");
 /* The H725's otherwise-unused 64 KiB ITCM is CPU-accessible zero-wait-state
  * RAM. One extension bank per voice increases real jitter tolerance without
  * delaying playback or changing the 48 kHz int16 stream. */
 static int16_t s_ring_tail[SAMPLE_VOICES][STREAM_RING_TAIL_SAMPLES]
-    __attribute__((aligned(32), section(".ring_itcm")));
+    STREAM_RING_SECTION(".ring_itcm");
 
 static StreamRing_t *StreamRing_At(uint8_t voice)
 {
@@ -58,6 +67,10 @@ static volatile uint32_t s_sof_pkts;
 static volatile uint32_t s_zero_pkts;
 /* 0xFFFFFFFF = no consume sample since last clear. */
 static volatile uint32_t s_min_fill = 0xFFFFFFFFu;
+
+#define STREAM_REPLACEMENT_NONE 0u
+#define STREAM_REPLACEMENT_PENDING 1u
+#define STREAM_REPLACEMENT_READY 2u
 
 static int16_t *StreamRing_DataAt(StreamRing_t *r, uint8_t voice,
                                   uint32_t index);
@@ -86,9 +99,11 @@ void StreamRing_Reset(uint8_t voice)
   r->rd = 0u;
   r->consuming = 0u;
   r->session = 0xFFu;
-  r->replacement_armed = 0u;
+  r->replacement_state = STREAM_REPLACEMENT_NONE;
+  r->expected_session = 0xFFu;
   r->body_published = 0u;
   r->wave_id = 0xFFFFu;
+  r->expected_wave_id = 0xFFFFu;
   r->release_rd = 0u;
   r->release_left = 0u;
 }
@@ -102,6 +117,37 @@ void StreamRing_Prime(uint8_t voice)
   StreamRing_At(voice)->consuming = 1u;
 }
 
+void StreamRing_ArmReplacement(uint8_t voice, uint16_t wave_id,
+                               uint8_t session)
+{
+  StreamRing_t *r;
+  if (voice >= SAMPLE_VOICES)
+  {
+    return;
+  }
+  r = StreamRing_At(voice);
+  /* Retire any USB reservation for the previous note immediately. The audio
+   * reader may keep consuming that ring until the I2S command is applied. */
+  r->generation++;
+  r->expected_wave_id = wave_id;
+  r->expected_session = session;
+  r->replacement_state = STREAM_REPLACEMENT_PENDING;
+}
+
+void StreamRing_Disarm(uint8_t voice)
+{
+  StreamRing_t *r;
+  if (voice >= SAMPLE_VOICES)
+  {
+    return;
+  }
+  r = StreamRing_At(voice);
+  r->generation++;
+  r->replacement_state = STREAM_REPLACEMENT_NONE;
+  r->expected_session = 0xFFu;
+  r->expected_wave_id = 0xFFFFu;
+}
+
 uint32_t StreamRing_BeginReplacement(uint8_t voice, uint16_t wave_id,
                                      uint32_t release_samples)
 {
@@ -113,6 +159,14 @@ uint32_t StreamRing_BeginReplacement(uint8_t voice, uint16_t wave_id,
     return 0u;
   }
   r = StreamRing_At(voice);
+  /* Legacy callers do not arm in the command path. Preserve their wildcard
+   * SOF behavior while session-tagged nX keeps its exact binding. */
+  if (r->replacement_state != STREAM_REPLACEMENT_PENDING ||
+      r->expected_wave_id != wave_id)
+  {
+    r->expected_wave_id = wave_id;
+    r->expected_session = 0xFFu;
+  }
   keep = StreamRing_Filled(r);
   if (keep > release_samples)
   {
@@ -127,7 +181,7 @@ uint32_t StreamRing_BeginReplacement(uint8_t voice, uint16_t wave_id,
   r->rd += keep;
   r->wr = r->rd;
   r->session = 0xFFu;
-  r->replacement_armed = 1u;
+  r->replacement_state = STREAM_REPLACEMENT_READY;
   r->body_published = 0u;
   r->wave_id = wave_id;
   r->consuming = 1u;
@@ -209,21 +263,40 @@ int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
   }
   memset(write, 0, sizeof *write);
   r = StreamRing_At(voice);
-  if (wave_id != r->wave_id)
-  {
-    return STREAM_RING_WRITE_STALE;
-  }
   if (sof != 0u)
   {
-    /* nX chose the replacement origin; its first SOF selects the session. */
-    if (r->replacement_armed == 0u ||
+    if (r->replacement_state == STREAM_REPLACEMENT_NONE)
+    {
+      /* The host launches SOF before waiting for aw/nX ACK. It cannot claim
+       * the ring yet; retain its bytes until tagged nX supplies authority. */
+      if (session == r->session && wave_id == r->wave_id)
+      {
+        return STREAM_RING_WRITE_STALE;
+      }
+      return STREAM_RING_WRITE_FUTURE;
+    }
+    if (wave_id != r->expected_wave_id ||
+        (r->expected_session != 0xFFu && session != r->expected_session))
+    {
+      return STREAM_RING_WRITE_STALE;
+    }
+    /* nX is authoritative already, but I2S has not selected its ring origin.
+     * Leave the UAC bytes queued and retry after that sample. */
+    if (r->replacement_state == STREAM_REPLACEMENT_PENDING)
+    {
+      return STREAM_RING_WRITE_PENDING;
+    }
+    if (r->replacement_state != STREAM_REPLACEMENT_READY ||
+        wave_id != r->wave_id ||
         (r->session != 0xFFu && session != r->session))
     {
       return STREAM_RING_WRITE_STALE;
     }
     r->session = session;
   }
-  else if (sof == 0u && session != r->session)
+  else if (wave_id != r->wave_id ||
+           r->replacement_state != STREAM_REPLACEMENT_NONE ||
+           session != r->session)
   {
     /* A fresh vq authorized this refill, but note-off/new-note retired its
      * session before the ISO bytes arrived. It is valid transport data that
@@ -334,7 +407,9 @@ uint32_t StreamRing_WriteCommit(StreamRing_Write_t *write)
   r->wr = write->start_wr + write->nsamp;
   if (write->sof != 0u)
   {
-    r->replacement_armed = 0u;
+    r->replacement_state = STREAM_REPLACEMENT_NONE;
+    r->expected_session = 0xFFu;
+    r->expected_wave_id = 0xFFFFu;
     s_sof_pkts++;
   }
   r->body_published = 1u;

@@ -61,6 +61,17 @@ namespace cardproto
     return cmd;
   }
 
+  std::string FormatSetStreamNote(uint8_t slot, double hz, uint8_t session,
+                                  double scale)
+  {
+    char cmd[64];
+    const char hex = NoteSlotHex(slot);
+    const double wire_scale = scale < 0.0 ? 0.125 : scale;
+    std::snprintf(cmd, sizeof(cmd), "n%c %.9f %.9f @%u", hex, hz,
+                  wire_scale, static_cast<unsigned>(session));
+    return cmd;
+  }
+
   std::string FormatSetAllNotes(double hz, double scale)
   {
     char cmd[48];
@@ -95,6 +106,21 @@ namespace cardproto
   }
 
   Result ChannelClient::NoteOff(uint8_t slot) { return SetNote(slot, 0.0); }
+
+  Result ChannelClient::SetStreamNote(uint8_t slot, double hz,
+                                      uint8_t session, double scale)
+  {
+    if (!ValidSlot(slot) || !(hz >= 20.0 && hz < 20000.0) ||
+        session >= 255u)
+    {
+      return Result::LocalErr("range", "stream note slot/hz/session");
+    }
+    if (scale >= 0.0 && !ValidScale(scale))
+    {
+      return Result::LocalErr("range", "scale");
+    }
+    return Send(FormatSetStreamNote(slot, hz, session, scale));
+  }
 
   Result ChannelClient::SetAllNotes(double hz, double scale)
   {

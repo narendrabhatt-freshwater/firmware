@@ -35,6 +35,7 @@ struct NoteRequest {
   uint8_t voice = 0u;
   double hz = 0.0;
   uint16_t wave_id = 0xFFFFu;
+  uint8_t session = 0xFFu;
 };
 
 class Client {
@@ -42,7 +43,7 @@ public:
   /** Bare Channel command, e.g. `n3 261.63` — no `c:` prefix. */
   using ConsoleFn = std::function<void(const std::string &cmd)>;
   using NoteGateDone = std::function<void(bool applied)>;
-  /** Queue one RS485 aw/nX transaction. done(true) runs only after card ACK. */
+  /** Queue one RS485 aw/nX transaction. done(false) cancels its launched SOF. */
   using NoteGateFn =
       std::function<bool(const NoteRequest &note, NoteGateDone done)>;
 
@@ -69,9 +70,9 @@ public:
 
   bool SetRootHz(uint16_t wave_id, double hz, std::string &err);
 
-  /** Queue RS485 aw/nX; its ACK releases an urgent first BODY job. */
+  /** Reserve/launch matching USB SOF, then queue authoritative RS485 aw/nX. */
   void NoteOn(uint8_t voice, double hz, uint16_t wave_id = 0xFFFFu);
-  /** Queue RS485 note starts; each ACK releases its newest-first BODY session.
+  /** Launch newest-first BODY sessions, then queue their RS485 note starts.
    *  The card's attack heads bridge into the first BODY samples.
    *  The timeout argument remains for source/ABI compatibility and is ignored. */
   bool NoteOnBatch(const NoteRequest *notes, size_t count,
@@ -80,7 +81,7 @@ public:
   void AllNotesOff();
   void Silence(uint8_t voice);
 
-  /** Configure the card's 0..50 ms release overlap (0 = hard cut). */
+  /** Configure 0..50 ms release before a stolen slot retriggers. */
   void SetCrashReleaseMs(uint8_t release_ms);
   uint8_t CrashReleaseMs() const { return crash_release_ms_; }
 

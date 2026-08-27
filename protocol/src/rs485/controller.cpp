@@ -259,7 +259,11 @@ struct Controller::Impl
             LogHandler handler =
                 poll_log_handler ? poll_log_handler : log_handler;
             if (handler) {
-              handler("warn: ring underrun voice " + std::to_string(i));
+              /* vq exposes ring occupancy, not DAC holds. The attack head
+               * can legitimately cover a drained BODY ring during handoff;
+               * only the card's USB hold counter is an underrun signal. */
+              handler("info: BODY ring drained voice " +
+                      std::to_string(i));
             }
             underrun_logged[i] = true;
           }

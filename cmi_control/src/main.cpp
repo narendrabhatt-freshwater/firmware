@@ -129,7 +129,7 @@ int main(int argc, char **argv)
                             static_cast<unsigned>(note.wave_id));
               auto result = ch.Exec(aw);
               if (result.ok()) {
-                result = ch.SetNote(note.voice, note.hz);
+                result = ch.SetStreamNote(note.voice, note.hz, note.session);
               }
               done(result.ok());
               return result;
@@ -139,8 +139,8 @@ int main(int argc, char **argv)
   app.bus.SetIdleHandler([&app](uint8_t slot) {
     app.samples.Silence(slot);
   });
-  /* RS485 nX ACK releases the first urgent BODY job. Later vq replies supply
-   * exact credit and the applied PACK sequence for steady-state refills. */
+  /* Session-bound SOF launches before nX; later vq replies supply exact
+   * credit and the applied PACK sequence for steady-state refills. */
   app.bus.SetVqHandler(
       [&app](uint8_t mask, uint8_t best,
              const std::array<uint16_t, cardlink::audio::kSampleVoices> &free,

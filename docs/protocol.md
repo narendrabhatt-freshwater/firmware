@@ -108,6 +108,7 @@ trim to 0 dB (`g 1 0`). Frequency changes do not touch gain or bypass.
 | ---------------------- | --------------------------------------------------------------------------------- |
 | `n0`                   | Session defaults only (bypass on, `g 1 0`). Does not start a tone.                |
 | `n0`…`n7 <Hz> [scale]` | Set that slot. Hz in **[20, 20000)**. Scale in **[0, 1]**; if omitted, **0.125**. |
+| `n0`…`n7 <Hz> <scale> @<session>` | Streamed note-on; bind BODY session 0…254 before ACK. |
 | `n0`…`n7 0`            | Turn that slot off (Hz ≤ 0).                                                      |
 | `n <Hz> [scale]`       | Same rules for all 8 slots.                                                       |
 | `n 0`                  | Silence all 8.                                                                    |
@@ -134,7 +135,7 @@ and are lost on reset.
 | `aw <v> <id>`       | Assign head `<id>` to voice `<v>` 0…7                               |
 | `a`                 | Loaded count + 256-bit hex mask (bit 0 = wave 0)                    |
 | `vq`                | Active mask + hungriest + exact ring credit + USB PACK ACK            |
-| `crash [0..50]`     | Query/set steal overlap in ms; 0 = hard cut (default 3)                |
+| `crash [0..50]`     | Release before stolen-slot retrigger, ms; 0 = hard cut (default 3)      |
 | `usb`               | BODY counters: drop/hold/fill, RS-485 `vq`, rx/bytes/bad              |
 | `usb 0`             | Clear those counters, then same reply                                 |
 
@@ -383,9 +384,10 @@ there is no per-packet envelope or reserved channel. A PACK plus its CRC may
 occupy up to 10200 bytes (10 ms of maximum-rate UAC wire time).
 Sequential RS485 `vq` polling supplies exact free space and the last applied
 PACK sequence every 5 ms for steady-state refills. The first SOF BODY is
-released immediately after the corresponding RS485 `aw`/`nX` ACK and does not
-wait for `vq`; its conservative credit accounts for the configured old-note
-crash-release tail.
+launched before the corresponding RS485 `aw`/`nX` transaction and does not wait
+for `vq`; its conservative credit accounts for the configured old-note
+crash-release tail. If it arrives first, the card retains it for up to 20 ms
+while tagged `nX` supplies authority and selects the I2S replacement origin.
 
 ```text
 UAC carrier: 51 kHz × 10 channels × int16 = 1020000 bytes/s
@@ -446,9 +448,13 @@ RS485 `vq` is both steady-refill permission and an exact PACK-order snapshot.
 One fresh reply permits at most one new refill PACK, or one retry of the same
 unacknowledged PACK, bounded for each included voice. Its sequence prevents a
 racing completed OUT from being subtracted twice. RS485 `nX <Hz>` remains the
-sole audible note-on and pitch authority. After `aw` and `nX` ACK, the host
-creates the new per-voice session and places about 15 ms of pitch-adjusted SOF
-BODY at the top of the USB work queue without waiting for `vq`. If a
+sole audible note-on and pitch authority. For streamed playback, the host first
+reserves a session, launches about 25 ms of pitch-adjusted SOF BODY, and queues
+`aw` plus `nX <Hz> <scale> @<session>` immediately without waiting for USB. The
+card retains an early matching SOF until `nX` binds that exact
+voice/wave/session and the next I2S refill selects the replacement ring origin.
+Superseded or late same-wave sessions are stale. Untagged `nX` remains available
+for interactive/legacy use. If a
 conservative 50 ms release reservation leaves no safe prefill credit, USB
 sends no control record; the next `vq` supplies the first SOF BODY normally.
 RS485 `nX 0` remains note-off authority. `type` `0x20` CAPTURE remains reserved.
@@ -544,8 +550,9 @@ Notes:
 2. While waiting for the completion line, keep reading the CDC RX path —
    do not discard pending replies.
 3. Upload only loads AXI RAM (lost on reset). Set `ar <id> <rootHz>`; the host
-   app starts it with RS485 `aw <voice> <id>` then `nX <Hz>`. Their ACK releases
-   the first USB BODY job; later sustain uses vq-authorized BODY refills.
+   app starts it with RS485 `aw <voice> <id>` then session-bound
+   `nX <Hz> <scale> @<session>` immediately after launching its USB BODY job;
+   later sustain uses vq-authorized BODY refills.
 
 ---
 

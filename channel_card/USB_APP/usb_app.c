@@ -34,6 +34,9 @@ enum
 };
 static uint32_t s_bad_reason[USB_BAD_REASON_COUNT];
 static uint8_t s_uac_packet[USB_STREAM_UAC_PACKET_BYTES];
+static uint16_t s_uac_pending_offset;
+static uint16_t s_uac_pending_bytes;
+#define USB_STREAM_FUTURE_WAIT_MS 20u
 
 static void USB_LowLevel_Init(void)
 {
@@ -160,6 +163,8 @@ static struct
   uint32_t crc;
   uint8_t crc_bytes[USB_STREAM_CRC_BYTES];
   uint8_t crc_got;
+  uint8_t future_waiting;
+  uint32_t future_since_ms;
 } s_rx;
 
 static struct
@@ -221,6 +226,43 @@ static uint32_t USB_App_Crc32Update(uint32_t crc, const uint8_t *src,
   return crc;
 }
 
+static int USB_App_BeginMetaWrite(void)
+{
+  int begin_result = StreamRing_WriteBegin(
+      s_rx.meta.voice, s_rx.meta.session,
+      (s_rx.meta.flags & USB_STREAM_BODY_FLAG_SOF) != 0u,
+      s_rx.meta.wave_id, s_rx.meta.nsamp,
+      &s_rx.writes[s_rx.write_count]);
+  if (begin_result == STREAM_RING_WRITE_FUTURE)
+  {
+    uint32_t now = HAL_GetTick();
+    if (s_rx.future_waiting == 0u)
+    {
+      s_rx.future_waiting = 1u;
+      s_rx.future_since_ms = now;
+    }
+    if ((uint32_t)(now - s_rx.future_since_ms) <
+        USB_STREAM_FUTURE_WAIT_MS)
+      return 0;
+    begin_result = STREAM_RING_WRITE_STALE;
+  }
+  if (begin_result == STREAM_RING_WRITE_PENDING)
+    return 0;
+  if (begin_result == STREAM_RING_WRITE_ERROR)
+  {
+    USB_App_FailFrame(USB_BAD_FRAME);
+    return -1;
+  }
+  s_rx.current_write = s_rx.write_count;
+  s_rx.future_waiting = 0u;
+  if (begin_result == STREAM_RING_WRITE_STALE)
+    s_rx.stale_write_mask |= (uint8_t)(1u << s_rx.write_count);
+  s_rx.write_count++;
+  s_rx.voice_mask |= (uint8_t)(1u << s_rx.meta.voice);
+  s_rx.state = USB_RX_SAMPLES;
+  return 1;
+}
+
 static int USB_App_FinishFrame(void)
 {
   uint8_t i;
@@ -268,8 +310,9 @@ static int USB_App_FinishFrame(void)
   return 0;
 }
 
-static void USB_App_FeedPack(const uint8_t *src, uint32_t count)
+static uint32_t USB_App_FeedPack(const uint8_t *src, uint32_t count)
 {
+  const uint32_t initial = count;
   while (count != 0u)
   {
     uint32_t n;
@@ -335,7 +378,6 @@ static void USB_App_FeedPack(const uint8_t *src, uint32_t count)
     if (s_rx.state == USB_RX_META)
     {
       uint8_t *dst = (uint8_t *)(void *)&s_rx.meta;
-      int begin_result;
       n = USB_STREAM_BODY_META_SIZE - s_rx.meta_got;
       if (n > count)
         n = count;
@@ -356,24 +398,15 @@ static void USB_App_FeedPack(const uint8_t *src, uint32_t count)
           s_rx.sample_bytes_left > s_rx.payload_left)
       {
         USB_App_FailFrame(USB_BAD_FRAME);
-        return;
+        return initial;
       }
-      begin_result = StreamRing_WriteBegin(
-          s_rx.meta.voice, s_rx.meta.session,
-          (s_rx.meta.flags & USB_STREAM_BODY_FLAG_SOF) != 0u,
-          s_rx.meta.wave_id, s_rx.meta.nsamp,
-          &s_rx.writes[s_rx.write_count]);
-      if (begin_result == STREAM_RING_WRITE_ERROR)
       {
-        USB_App_FailFrame(USB_BAD_FRAME);
-        return;
+        int begin_result = USB_App_BeginMetaWrite();
+        if (begin_result < 0)
+          return initial;
+        if (begin_result == 0)
+          return initial - count;
       }
-      s_rx.current_write = s_rx.write_count;
-      if (begin_result == STREAM_RING_WRITE_STALE)
-        s_rx.stale_write_mask |= (uint8_t)(1u << s_rx.write_count);
-      s_rx.write_count++;
-      s_rx.voice_mask |= (uint8_t)(1u << s_rx.meta.voice);
-      s_rx.state = USB_RX_SAMPLES;
       continue;
     }
     if (s_rx.state == USB_RX_SAMPLES)
@@ -395,7 +428,7 @@ static void USB_App_FeedPack(const uint8_t *src, uint32_t count)
         if (span == NULL || span_samples == 0u)
         {
           USB_App_FailFrame(USB_BAD_FRAME);
-          return;
+          return initial;
         }
         n = span_samples * 2u;
         if (n > s_rx.sample_bytes_left)
@@ -405,14 +438,14 @@ static void USB_App_FeedPack(const uint8_t *src, uint32_t count)
         n &= ~1u;
       }
       if (n == 0u)
-        return;
+        return initial;
       if (span != NULL)
       {
         memcpy(span, src, n);
         if (StreamRing_WriteAdvance(write, n / 2u) != 0)
         {
           USB_App_FailFrame(USB_BAD_FRAME);
-          return;
+          return initial;
         }
       }
       s_rx.crc = USB_App_Crc32Update(s_rx.crc, src, n);
@@ -432,7 +465,7 @@ static void USB_App_FeedPack(const uint8_t *src, uint32_t count)
       if (s_rx.payload_left < USB_STREAM_BODY_META_SIZE)
       {
         USB_App_FailFrame(USB_BAD_FRAME);
-        return;
+        return initial;
       }
       memset(&s_rx.meta, 0, sizeof s_rx.meta);
       s_rx.meta_got = 0u;
@@ -460,6 +493,7 @@ static void USB_App_FeedPack(const uint8_t *src, uint32_t count)
       (void)USB_App_FinishFrame();
     }
   }
+  return initial;
 }
 
 static void USB_App_DrainUac(void)
@@ -467,6 +501,8 @@ static void USB_App_DrainUac(void)
   uint32_t budget = USB_STREAM_UAC_PACKET_BYTES;
   if (!tud_audio_mounted())
   {
+    s_uac_pending_offset = 0u;
+    s_uac_pending_bytes = 0u;
     USB_App_AbortTransport();
     return;
   }
@@ -474,6 +510,16 @@ static void USB_App_DrainUac(void)
    * this on both sides of ChannelConsole_Poll(), so sustained UAC input
    * cannot monopolize the loop and starve the vq request that authorized it.
    * The 32 ms TinyUSB FIFO absorbs short console/TX service intervals. */
+  if (s_uac_pending_bytes != 0u)
+  {
+    uint32_t used = USB_App_FeedPack(
+        s_uac_packet + s_uac_pending_offset, s_uac_pending_bytes);
+    s_uac_pending_offset += (uint16_t)used;
+    s_uac_pending_bytes -= (uint16_t)used;
+    if (s_uac_pending_bytes != 0u)
+      return;
+    s_uac_pending_offset = 0u;
+  }
   while (budget >= USB_STREAM_UAC_AUDIO_FRAME_BYTES &&
          (uint32_t)tud_audio_available() >= USB_STREAM_UAC_AUDIO_FRAME_BYTES)
   {
@@ -499,7 +545,15 @@ static void USB_App_DrainUac(void)
       s_uac_audio_frames -= USB_STREAM_UAC_FRAMES_PER_MS;
       s_uac_windows++;
     }
-    USB_App_FeedPack(s_uac_packet, n);
+    {
+      uint32_t used = USB_App_FeedPack(s_uac_packet, n);
+      if (used < n)
+      {
+        s_uac_pending_offset = (uint16_t)used;
+        s_uac_pending_bytes = (uint16_t)(n - used);
+        return;
+      }
+    }
   }
 }
 
@@ -611,6 +665,8 @@ bool tud_audio_set_itf_cb(uint8_t rhport,
                           tusb_control_request_t const *request)
 {
   (void)rhport;
+  s_uac_pending_offset = 0u;
+  s_uac_pending_bytes = 0u;
   USB_App_AbortTransport();
   s_uac_audio_frames = 0u;
   if ((uint8_t)tu_le16toh(request->wValue) != 0u)
@@ -625,6 +681,8 @@ bool tud_audio_set_itf_close_EP_cb(uint8_t rhport,
                                    tusb_control_request_t const *request)
 {
   (void)rhport; (void)request;
+  s_uac_pending_offset = 0u;
+  s_uac_pending_bytes = 0u;
   USB_App_AbortTransport();
   s_uac_audio_frames = 0u;
   Audio_Bridge_StreamStop();

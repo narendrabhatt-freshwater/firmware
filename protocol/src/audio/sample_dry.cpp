@@ -595,6 +595,21 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
     return;
   }
   auto &v = voices_[c.voice];
+  if (c.kind == CmdKind::Cancel) {
+    if (v.active && v.session == c.session && v.wave_id == c.wave_id) {
+      if (v.urgent_pending) {
+        urgent_ready_.fetch_sub(1u, std::memory_order_relaxed);
+      }
+      const uint8_t session = v.session;
+      v = Voice{};
+      v.session = session;
+      sent_[c.voice].store(0, std::memory_order_release);
+      committed_[c.voice].store(0, std::memory_order_release);
+      live_[c.voice].store(false, std::memory_order_release);
+      live_wave_[c.voice].store(0xFFFFu, std::memory_order_release);
+    }
+    return;
+  }
   if (c.kind == CmdKind::Pitch) {
     if (v.active) {
       v.freq_hz = c.freq_hz;
@@ -645,10 +660,15 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
         1000.0)) + 2u;
     reserve = std::min(reserve, kRingSamples);
   }
-  /* Until the first post-nX vq, the new ring is known empty except for host
-   * reservations. Bridge against its full safe capacity; vq will replace
-   * this provisional authority with exact credit. */
-  v.urgent_budget = kRingSamples - reserve;
+  /* Queue a complete runway before normal exact-credit PACKs may follow.
+   * A normal one-voice PACK can take about 8 ms to reach its trailing CRC;
+   * truncating this bridge at the first post-nX vq drained a 5 ms starter
+   * before that PACK became visible. The reservation is still the hard cap. */
+  const unsigned safe_capacity = kRingSamples - reserve;
+  const unsigned prefill_target = static_cast<unsigned>(std::ceil(
+      IncOf(v) * static_cast<double>(kSampleRateHz) *
+      static_cast<double>(kUrgentPrefillMs) / 1000.0));
+  v.urgent_budget = std::min(safe_capacity, prefill_target);
   v.urgent_epoch = c.epoch;
   urgent_ready_.fetch_add(1u, std::memory_order_release);
   v.vq_seen = vq_seq_.load(std::memory_order_acquire);
@@ -672,7 +692,29 @@ void SampleDryMixer::DrainCmds()
 uint8_t SampleDryMixer::NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz,
                                double attack_elapsed_ms)
 {
+  const uint8_t session = ReserveSession(voice);
+  return NoteOnSession(voice, wave_id, freq_hz, session, attack_elapsed_ms);
+}
+
+uint8_t SampleDryMixer::ReserveSession(uint8_t voice)
+{
+  if (voice >= kSampleVoices) {
+    return 0xFFu;
+  }
+  uint8_t session = next_session_[voice].load(std::memory_order_relaxed);
+  session = static_cast<uint8_t>((session + 1u) % kStreamSessionMod);
+  next_session_[voice].store(session, std::memory_order_release);
+  return session;
+}
+
+uint8_t SampleDryMixer::NoteOnSession(uint8_t voice, uint16_t wave_id,
+                                      double freq_hz, uint8_t session,
+                                      double attack_elapsed_ms)
+{
   if (voice >= kSampleVoices || wave_id >= bodies_.size()) {
+    return 0xFFu;
+  }
+  if (session >= kStreamSessionMod) {
     return 0xFFu;
   }
   /* Mark in-use before the BODY thread drains the command so SetBody
@@ -685,13 +727,24 @@ uint8_t SampleDryMixer::NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz,
   c.wave_id = wave_id;
   c.freq_hz = freq_hz;
   c.attack_elapsed_ms = attack_elapsed_ms;
-  uint8_t session = next_session_[voice].load(std::memory_order_relaxed);
-  session = static_cast<uint8_t>((session + 1u) % kStreamSessionMod);
-  next_session_[voice].store(session, std::memory_order_release);
   c.session = session;
   c.epoch = note_epoch_.fetch_add(1u, std::memory_order_relaxed) + 1u;
   Post(c);
   return session;
+}
+
+void SampleDryMixer::CancelSession(uint8_t voice, uint8_t session,
+                                   uint16_t wave_id)
+{
+  if (voice >= kSampleVoices || session >= kStreamSessionMod) {
+    return;
+  }
+  Cmd c;
+  c.kind = CmdKind::Cancel;
+  c.voice = voice;
+  c.session = session;
+  c.wave_id = wave_id;
+  Post(c);
 }
 
 void SampleDryMixer::SetCrashReleaseMs(uint8_t release_ms)
@@ -758,16 +811,10 @@ bool SampleDryMixer::UrgentSofPending() const
 
 void SampleDryMixer::EndUrgentPrefill(uint8_t active_mask)
 {
+  (void)active_mask;
+  /* A vq can arrive after nX but before the complete bridge is queued. It
+   * reconciles later refills; it must not truncate the ordered 15 ms runway. */
   DrainCmds();
-  for (uint8_t i = 0u; i < kSampleVoices; ++i) {
-    auto &v = voices_[i];
-    if ((active_mask & static_cast<uint8_t>(1u << i)) != 0u &&
-        v.urgent_pending) {
-      v.urgent_pending = false;
-      v.urgent_budget = 0u;
-      urgent_ready_.fetch_sub(1u, std::memory_order_release);
-    }
-  }
 }
 
 bool SampleDryMixer::FillUrgentBurstForVoice(uint8_t voice, int16_t *dst,

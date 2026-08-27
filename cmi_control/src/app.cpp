@@ -1418,7 +1418,8 @@ void App::DrawStatusBar()
   }
   if (ImGui::IsItemHovered())
   {
-    ImGui::SetTooltip("Voice-steal release overlap (0–50 ms; 0 = hard cut)");
+    ImGui::SetTooltip(
+        "Release before stolen-slot retrigger (0–50 ms; 0 = hard cut)");
   }
   ImGui::EndGroup();
 

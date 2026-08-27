@@ -19,6 +19,7 @@
 #include "note_filter.h"
 #include "uart5_rx.h"
 #include "usb_app.h"
+#include "usb_stream.h"
 #include "attack_bank.h"
 #include "attack_upload.h"
 #include "stream_ring.h"
@@ -371,8 +372,9 @@ static uint8_t Console_ParseNoteSlot(char hex_digit)
 /** Production MIDI scale when the host omits [scale] (byte-minimal nX Hz). */
 #define NOTE_DEFAULT_SCALE 0.125
 
-/** Apply nX <Hz> [scale]. Compact ACK: ok / err:<code>. */
-static void Console_SetNoteFreq(uint8_t note, double hz, double scale)
+/** Apply nX <Hz> [scale] [@session]. Compact ACK: ok / err:<code>. */
+static void Console_SetNoteFreq(uint8_t note, double hz, double scale,
+                                uint16_t session)
 {
   if (hz <= 0.0)
   {
@@ -393,7 +395,14 @@ static void Console_SetNoteFreq(uint8_t note, double hz, double scale)
     return;
   }
 
-  NoteBank_SetFreq(note, hz, scale);
+  if (session < USB_STREAM_SESSION_MOD)
+  {
+    NoteBank_SetFreqSession(note, hz, scale, (uint8_t)session);
+  }
+  else
+  {
+    NoteBank_SetFreq(note, hz, scale);
+  }
   RS485_Reply("ok\r\n");
 }
 
@@ -1466,6 +1475,7 @@ static void Console_CmdNoteSlot(char *line)
 {
   double hz;
   double scale;
+  unsigned int session;
   uint8_t note;
   int nscan;
 
@@ -1502,18 +1512,31 @@ static void Console_CmdNoteSlot(char *line)
     return;
   }
 
-  nscan = sscanf(line + 3, "%lf %lf", &hz, &scale);
-  if (nscan == 1)
+  nscan = sscanf(line + 3, "%lf %lf @%u", &hz, &scale, &session);
+  if (nscan == 3)
+  {
+    if (session >= USB_STREAM_SESSION_MOD)
+    {
+      RS485_Reply("err:range\r\n");
+      return;
+    }
+  }
+  else if (nscan == 1)
   {
     scale = NOTE_DEFAULT_SCALE; /* production MIDI default */
+    session = USB_STREAM_SESSION_MOD;
   }
-  else if (nscan != 2)
+  else if (nscan == 2)
+  {
+    session = USB_STREAM_SESSION_MOD;
+  }
+  else
   {
     RS485_Reply("err:syntax\r\n");
     return;
   }
 
-  Console_SetNoteFreq(note, hz, scale);
+  Console_SetNoteFreq(note, hz, scale, (uint16_t)session);
 }
 
 /** aw <voice> <id> — assign AXI head 0..255 to voice 0..7. */

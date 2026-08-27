@@ -14,7 +14,6 @@
 #include "note_bank.h"
 
 #include "attack_bank.h"
-#include "main.h"
 #include "note_envelope.h"
 #include "note_filter.h"
 #include "stream_ring.h"
@@ -543,6 +542,14 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
   int32_t gain_q15;
   int32_t amp;
 
+  /* A stolen voice releases to silence before the replacement playhead moves.
+   * nX is already authoritative and its BODY may prefill concurrently, but
+   * the new attack must begin at phase zero after the configured release. */
+  if (note_crash_left[note] != 0u)
+  {
+    return NoteBank_CrashSample(note);
+  }
+
   NoteBank_SlewInc(note);
   s = NoteBank_Sample(note);
   s = NoteFilter_Process(note, s);
@@ -683,7 +690,8 @@ uint8_t NoteBank_GetCrashReleaseMs(void)
   return note_crash_release_ms;
 }
 
-void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
+static void NoteBank_SetFreqBound(uint8_t note, double freq_hz, double scale,
+                                  uint8_t session)
 {
   uint32_t inc;
 
@@ -694,6 +702,7 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
 
   if (freq_hz <= 0.0)
   {
+    StreamRing_Disarm(note);
     note_gate_requested[note] = 0u;
     note_freq_hz[note] = 0.0;
     note_cmd[note] = (NoteEnv_IsProgrammed(note) != 0u) ? NOTE_CMD_REL
@@ -726,8 +735,24 @@ void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
   note_inc_tgt[note] = inc;
   NoteFilter_OnNoteFreq(note, freq_hz);
   note_gate_requested[note] = 1u;
+  StreamRing_ArmReplacement(note, note_wave_id[note], session);
   /* Every nX > 0 is a gate-on. Pitch slew is not this command. */
   NoteBank_PostOn(note, inc, (float)freq_hz);
+}
+
+void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale)
+{
+  NoteBank_SetFreqBound(note, freq_hz, scale, 0xFFu);
+}
+
+void NoteBank_SetFreqSession(uint8_t note, double freq_hz, double scale,
+                             uint8_t session)
+{
+  if (session == 0xFFu)
+  {
+    return;
+  }
+  NoteBank_SetFreqBound(note, freq_hz, scale, session);
 }
 
 double NoteBank_GetFreq(uint8_t note)

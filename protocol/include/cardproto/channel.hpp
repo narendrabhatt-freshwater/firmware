@@ -86,6 +86,11 @@ public:
    */
   Result SetNote(uint8_t slot, double hz, double scale = -1.0);
 
+  /** Authoritative streamed note-on. Wire `nX Hz scale @session`; the tag
+   * binds the following USB BODY SOF to this exact gate generation. */
+  Result SetStreamNote(uint8_t slot, double hz, uint8_t session,
+                       double scale = -1.0);
+
   /**
    * @brief Turn one note slot off.
    * @param[in] slot Voice index in `[0, 7]`.
@@ -309,6 +314,10 @@ private:
  * @return Command string, e.g. `"n0 261.625565"`.
  */
 std::string FormatSetNote(uint8_t slot, double hz, double scale = -1.0);
+
+/** Format a session-bound streamed note-on (`nX Hz scale @session`). */
+std::string FormatSetStreamNote(uint8_t slot, double hz, uint8_t session,
+                                double scale = -1.0);
 
 /**
  * @param[in] hz    Frequency or `0` for silence-all.

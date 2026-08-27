@@ -4,8 +4,8 @@
  *
  * The USB interface is class-compliant UAC2 (10ch, int16, 51 kHz).
  * Its bytes are a private request/serve transport, not audible PCM.
- * First-BODY PACKs are released after the RS485 nX ACK without waiting for
- * vq; later refill PACKs do wait for vq. PACK CRC32
+ * First-BODY PACKs are launched before the RS485 aw/nX transaction and wait
+ * on-card for tagged nX authority; later refill PACKs do wait for vq. PACK CRC32
  * validation makes a missed isochronous packet abort unpublished ring
  * reservations instead of creating a hole in the sample stream.
  */

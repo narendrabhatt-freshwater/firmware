@@ -64,9 +64,11 @@ Q16.16 interpolation. `nX > 0` is always a note-on. A new BODY session
 the same session does not.
 The host packs the hungriest wanting voices into each UAC window (fair share
 of a 5062-sample 10 ms OUT budget for eight voices, weighted by source-consumption
-rate). RS485 `aw` then `nX <Hz>` assigns the wave and starts pitch/attack. Only
-after their ACK does the host create the session and put about 15 ms of
-pitch-adjusted SOF BODY at the top of the USB queue, without consulting `vq`.
+rate). The host reserves the BODY session, launches about 25 ms of SOF BODY,
+then immediately queues RS485 `aw` and `nX <Hz> <scale> @<session>` without
+waiting for USB. Tagged `nX` binds the wave/session and starts pitch/attack. An
+early matching SOF waits on-card for I2S to select its ring origin, while a
+superseded session is rejected as stale.
 Every fresh RS485 `vq` exact free-space grant permits one later bounded refill.
 Unsent refill suffixes yield to a new urgent note; already transmitted records
 are rejected as stale when their voice/session has been replaced.

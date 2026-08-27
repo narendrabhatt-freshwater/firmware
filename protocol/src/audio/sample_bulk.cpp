@@ -532,7 +532,6 @@ bool SampleBulkOut::Start(std::string &err)
         impl_->refill_credit = status;
         impl_->refill_credit_pending = true;
       }
-
       if (have_status && status.last_pack_sequence != 0xFFFFu) {
         auto ack_it = std::find_if(
             impl_->outstanding.begin(), impl_->outstanding.end(),
@@ -687,12 +686,25 @@ bool SampleBulkOut::Start(std::string &err)
           impl_->refill_credit_pending = false;
         }
       }
+      const bool bridge_pipeline = urgent || std::any_of(
+          impl_->outstanding.begin(), impl_->outstanding.end(),
+          [](const auto &pack) {
+            return std::any_of(
+                pack->chunks.begin(),
+                std::next(pack->chunks.begin(), pack->nchunks),
+                [](const PackedChunk &chunk) {
+                  return chunk.urgent_control;
+                });
+          });
       /* A single fresh vq authorizes exactly one action: either the retry
        * above or one new ordered PACK below. Bound the pipeline so a stopped
-       * endpoint cannot accumulate reservations indefinitely. */
+       * endpoint cannot accumulate reservations indefinitely. Keep the wider
+       * bound until bridge PACKs are ACKed: they may already be rendered, and
+       * forcing the normal three-PACK bound here leaves the UAC queue empty. */
       if (retried ||
-          (!urgent && impl_->outstanding.size() >= kMaxOutstandingPacks) ||
-          (urgent &&
+          (!bridge_pipeline &&
+           impl_->outstanding.size() >= kMaxOutstandingPacks) ||
+          (bridge_pipeline &&
            impl_->outstanding.size() >= kMaxOutstandingWithUrgent)) {
         lock.unlock();
         continue;

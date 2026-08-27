@@ -2,8 +2,9 @@
  * @file sample_dry.hpp
  * @brief Host body feeder: unpitched int16 → UAC2 BODY packs.
  *
- * Card owns pitch / env / filter. After RS485 acknowledges nX, the host creates
- * an urgent, newest-first SOF BODY job without waiting for `vq`. Every later
+ * Card owns pitch / env / filter. The host reserves one session for nX and
+ * USB SOF, launches the urgent newest-first BODY job, then queues authoritative
+ * nX without waiting for USB or `vq`. Every later
  * RS-485 `vq` grants
  * at most one steady-state refill to each voice (at most kBodyBurstMax and at most the
  * safe free-space credit). Each vq reconciles predicted occupancy to the
@@ -45,7 +46,7 @@ constexpr unsigned kStreamSessionMod = 255;
 /** One BODY meta remains bounded; the larger ring absorbs poll/host jitter. */
 constexpr unsigned kBodyBurstMax = 4096;
 /** Covers one 5 ms vq period plus observed USB/worker scheduling spikes. */
-constexpr unsigned kUrgentPrefillMs = 15;
+constexpr unsigned kUrgentPrefillMs = 25;
 /** Upper bound for one fair shared startup horizon. */
 constexpr double kUrgentQuantumMaxMs = 5.0;
 constexpr unsigned kUrgentQueueVoices = kSampleVoices;
@@ -88,6 +89,16 @@ public:
   uint8_t NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz,
                  double attack_elapsed_ms = 0.0);
 
+  /** Allocate the identity that must be carried by both nX and USB SOF. */
+  uint8_t ReserveSession(uint8_t voice);
+
+  /** Queue a note using a session already bound into authoritative nX. */
+  uint8_t NoteOnSession(uint8_t voice, uint16_t wave_id, double freq_hz,
+                        uint8_t session, double attack_elapsed_ms = 0.0);
+
+  /** Cancel a pre-authority session without touching a newer replacement. */
+  void CancelSession(uint8_t voice, uint8_t session, uint16_t wave_id);
+
   /** Configure the conservative old-tail reservation used by urgent prefill. */
   void SetCrashReleaseMs(uint8_t release_ms);
 
@@ -102,7 +113,7 @@ public:
   unsigned UrgentVoices(uint8_t *dst);
   /** True while any pending urgent voice still needs its first SOF. */
   bool UrgentSofPending() const;
-  /** Retire bridge mode for voices confirmed active by a fresh vq. */
+  /** Reconcile a fresh vq without truncating the ordered startup runway. */
   void EndUrgentPrefill(uint8_t active_mask);
 
   /** Render one urgent quantum for a specific pending voice. */
@@ -182,7 +193,7 @@ public:
   unsigned QueuedSamples(uint8_t voice) const;
 
 private:
-  enum class CmdKind : uint8_t { On, Pitch, Silence, AllOff };
+  enum class CmdKind : uint8_t { On, Pitch, Silence, Cancel, AllOff };
 
   struct Cmd {
     CmdKind kind = CmdKind::On;

@@ -185,7 +185,7 @@ int main(int argc, char **argv)
                   " " + std::to_string(static_cast<unsigned>(note.wave_id));
               auto result = ch.Exec(aw);
               if (result.ok()) {
-                result = ch.SetNote(note.voice, note.hz);
+                result = ch.SetStreamNote(note.voice, note.hz, note.session);
               }
               done(result.ok());
               return result;

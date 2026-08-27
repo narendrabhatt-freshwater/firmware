@@ -25,6 +25,9 @@ int main()
         "note formatting changed");
   Check(cardproto::FormatSetNote(7, 0.0) == "n7 0",
         "note-off formatting changed");
+  Check(cardproto::FormatSetStreamNote(3, 440.0, 17u) ==
+            "n3 440.000000000 0.125000000 @17",
+        "session-bound note formatting changed");
   Check(cardproto::FormatSetAllNotes(440.0, 0.125) ==
             "n 440.000000000 0.125000000",
         "all-note formatting changed");

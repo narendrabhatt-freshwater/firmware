@@ -157,8 +157,8 @@ void TestMonoSteal()
   Harness h(1u);
 
   h.Apply(h.bank.NoteOn(kC6));
-  Check(!h.client.Mixer().UrgentPending(),
-        "mono C6 BODY must wait for nX ACK");
+  Check(h.client.Mixer().UrgentPending(),
+        "mono C6 BODY must launch ahead of tagged nX");
   const auto c6_gate = h.AckNext();
   Check(c6_gate.note.voice == 0u && c6_gate.note.wave_id == kC6,
         "mono C6 must use physical voice zero");
@@ -207,8 +207,8 @@ void TestDuoStealAndChordPriority()
   const auto c4_events = h.bank.NoteOn(kC4);
   h.Apply(c6_events);
   h.Apply(c4_events);
-  Check(h.gates.size() == 2u && !h.client.Mixer().UrgentPending(),
-        "duo chord BODY jobs must both wait behind their nX ACKs");
+  Check(h.gates.size() == 2u && h.client.Mixer().UrgentPending(),
+        "duo chord BODY jobs must launch without delaying tagged nX");
 
   const auto c6_gate = h.AckNext();
   const auto c4_gate = h.AckNext();
@@ -265,8 +265,8 @@ void TestQueuedStealsDiscardSupersededBodies()
     mono.Apply(mono.bank.NoteOn(kC6));
     mono.Apply(mono.bank.NoteOn(kC4));
     mono.Apply(mono.bank.NoteOn(kA4));
-    Check(mono.gates.size() == 3u && !mono.client.Mixer().UrgentPending(),
-          "rapid mono gates must remain behind RS485 ACKs");
+    Check(mono.gates.size() == 3u && mono.client.Mixer().UrgentPending(),
+          "rapid mono gates must retain the newest pre-authority BODY");
     (void)mono.AckNext();
     (void)mono.AckNext();
     const auto mono_a4_gate = mono.AckNext();

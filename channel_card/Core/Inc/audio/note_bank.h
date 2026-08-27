@@ -42,6 +42,11 @@ extern "C"
    */
   void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale);
 
+  /** Streamed note-on variant. The session is bound to nX before its ACK so
+   * only the matching USB SOF can claim the replacement ring. */
+  void NoteBank_SetFreqSession(uint8_t note, double freq_hz, double scale,
+                               uint8_t session);
+
   double NoteBank_GetFreq(uint8_t note);
   double NoteBank_GetScale(uint8_t note);
 

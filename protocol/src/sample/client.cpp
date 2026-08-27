@@ -539,8 +539,8 @@ void Client::NoteOn(uint8_t voice, double hz, uint16_t wave_id)
 bool Client::NoteOnBatch(const NoteRequest *notes, size_t count,
                          unsigned legacy_timeout_ms)
 {
-  /* Kept in the ABI for existing callers. The card starts on the RS485 nX;
-   * its ACK releases the first pitch-adjusted BODY PACK asynchronously. */
+  /* Kept in the ABI for existing callers. BODY may reach the card first, but
+   * tagged RS485 nX remains its immediate and sole audible authority. */
   (void)legacy_timeout_ms;
   if (notes == nullptr || count == 0u || count > cardlink::audio::kSampleVoices) {
     return false;
@@ -577,7 +577,8 @@ bool Client::NoteOnBatch(const NoteRequest *notes, size_t count,
     if (!mixer_.HasBody(wave)) {
       continue;
     }
-    prepared[nprepared++] = NoteRequest{note.voice, note.hz, wave};
+    prepared[nprepared++] = NoteRequest{
+        note.voice, note.hz, wave, mixer_.ReserveSession(note.voice)};
   }
   if (nprepared == 0u) {
     return false;
@@ -589,13 +590,17 @@ bool Client::NoteOnBatch(const NoteRequest *notes, size_t count,
   size_t queued = 0u;
   for (size_t i = 0u; i < nprepared; ++i) {
     const NoteRequest note = prepared[i];
+    /* Launch the session-bound SOF before waiting for aw/nX. The card retains
+     * it as future data until tagged nX becomes the audible authority. */
+    mixer_.NoteOnSession(note.voice, note.wave_id, note.hz, note.session);
     if (note_gate_(note, [this, note](bool applied) {
-          if (applied) {
-            /* Each nX ACK releases its own urgent starter immediately. */
-            mixer_.NoteOn(note.voice, note.wave_id, note.hz);
+          if (!applied) {
+            mixer_.CancelSession(note.voice, note.session, note.wave_id);
           }
         })) {
       ++queued;
+    } else {
+      mixer_.CancelSession(note.voice, note.session, note.wave_id);
     }
   }
   return queued == nprepared;

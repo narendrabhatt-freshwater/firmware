@@ -49,6 +49,8 @@ extern "C"
 
 #define STREAM_RING_WRITE_OK 0
 #define STREAM_RING_WRITE_STALE 1
+#define STREAM_RING_WRITE_PENDING 2
+#define STREAM_RING_WRITE_FUTURE 3
 #define STREAM_RING_WRITE_ERROR (-1)
 
   void StreamRing_Init(void);
@@ -59,6 +61,14 @@ extern "C"
    * @brief Arm consumption of the current ring session.
    */
   void StreamRing_Prime(uint8_t voice);
+
+  /** Bind the next nX replacement to its authoritative BODY identity before
+   * the command is ACKed. session 0xFF keeps legacy untagged nX behavior. */
+  void StreamRing_ArmReplacement(uint8_t voice, uint16_t wave_id,
+                                 uint8_t session);
+
+  /** Retire pending/current producer ownership immediately on note-off. */
+  void StreamRing_Disarm(uint8_t voice);
 
   /** Start a replacement session without destroying the old unread tail.
    * New BODY data begins after up to @p release_samples reserved samples. */
@@ -84,6 +94,8 @@ extern "C"
   /** Reserve a complete BODY burst without publishing it to the consumer.
    * @retval STREAM_RING_WRITE_OK reservation active
    * @retval STREAM_RING_WRITE_STALE prior note/session already retired
+   * @retval STREAM_RING_WRITE_PENDING matching nX awaits I2S application
+   * @retval STREAM_RING_WRITE_FUTURE SOF arrived before its tagged nX
    * @retval STREAM_RING_WRITE_ERROR invalid request or insufficient credit */
   int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
                             uint16_t wave_id, uint32_t nsamp,

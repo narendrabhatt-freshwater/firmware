@@ -603,20 +603,72 @@ int main()
     cardlink::sample::Client gated;
     LoadTone(gated.Mixer(), 0);
     cardlink::sample::Client::NoteGateDone ack;
+    cardlink::sample::NoteRequest gated_note;
     gated.SetNoteGate(
-        [&ack](const cardlink::sample::NoteRequest &,
+        [&ack, &gated_note](const cardlink::sample::NoteRequest &note,
                cardlink::sample::Client::NoteGateDone done) {
+          gated_note = note;
           ack = std::move(done);
           return true;
         });
     const cardlink::sample::NoteRequest note{0u, kDefaultBodyRootHz, 0u};
     Check(gated.NoteOnBatch(&note, 1u),
           "RS485 note transaction must enter its worker queue");
-    Check(!gated.Mixer().UrgentPending(),
-          "USB BODY must remain blocked before the nX ACK");
+    Check(gated.Mixer().UrgentPending(),
+          "session-bound SOF must launch without waiting for nX ACK");
     ack(true);
     Check(gated.Mixer().UrgentPending(),
-          "the nX ACK must release the urgent BODY session");
+          "nX ACK must preserve its already launched BODY session");
+    std::array<int16_t, kBodyBurstMax> tagged_body{};
+    cardlink::audio::UrgentBurst tagged{};
+    Check(gated_note.session < cardlink::audio::kStreamSessionMod &&
+              gated.Mixer().FillUrgentBurst(tagged_body.data(),
+                                             tagged_body.size(), tagged) &&
+              tagged.session == gated_note.session,
+          "nX and its first USB SOF must carry the same reserved session");
+  }
+
+  {
+    cardlink::sample::Client failed;
+    LoadTone(failed.Mixer(), 0);
+    failed.SetNoteGate(
+        [](const cardlink::sample::NoteRequest &,
+           cardlink::sample::Client::NoteGateDone done) {
+          done(false);
+          return true;
+        });
+    const cardlink::sample::NoteRequest note{0u, kDefaultBodyRootHz, 0u};
+    Check(failed.NoteOnBatch(&note, 1u),
+          "failed authoritative command must still complete its queued job");
+    std::array<int16_t, kBodyBurstMax> body{};
+    cardlink::audio::UrgentBurst canceled{};
+    Check(!failed.Mixer().FillUrgentBurst(body.data(), body.size(), canceled) &&
+              !failed.Mixer().UrgentPending(),
+          "failed nX must cancel only its pre-authority BODY session");
+  }
+
+  {
+    SampleDryMixer bridge;
+    LoadTone(bridge, 0);
+    bridge.NoteOn(0u, 0u, kDefaultBodyRootHz);
+    std::array<int16_t, kBodyBurstMax> body{};
+    cardlink::audio::UrgentBurst chunk{};
+    Check(bridge.FillUrgentBurst(body.data(), 64u, chunk) &&
+              chunk.nsamp == 64u && bridge.UrgentPending(),
+          "startup bridge must begin with bounded SOF data");
+    bridge.EndUrgentPrefill(0x01u);
+    Check(bridge.UrgentPending(),
+          "first post-nX vq must not truncate the startup runway");
+    unsigned total = chunk.nsamp;
+    while (bridge.UrgentPending()) {
+      Check(bridge.FillUrgentBurst(body.data(), body.size(), chunk),
+            "startup bridge must self-complete");
+      total += chunk.nsamp;
+    }
+    Check(total == static_cast<unsigned>(
+                       cardlink::audio::kSampleRateHz *
+                       cardlink::audio::kUrgentPrefillMs / 1000u),
+          "startup bridge must queue the full 15 ms horizon");
   }
 
   {
