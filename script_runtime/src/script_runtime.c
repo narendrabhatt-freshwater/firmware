@@ -206,28 +206,42 @@ bool script_runtime_enqueue_control(ScriptRuntime *r, uint32_t generation,
     return enqueue(r, &e);
 }
 
-bool script_runtime_enqueue_gate(ScriptRuntime *r, uint32_t generation,
-                                 uint32_t sequence, uint8_t voice, bool state,
-                                 uint32_t apply_tick)
+static bool enqueue_note_event(ScriptRuntime *r, uint32_t generation,
+                               uint32_t sequence, uint8_t note,
+                               uint32_t apply_tick, ScriptEventType type)
 {
-    ScriptEvent e = {generation, sequence, apply_tick, 0,
-                     SCRIPT_EVENT_GATE, voice, state ? 1.0f : 0.0f};
-    return voice < SCRIPT_MAX_VOICES && enqueue(r, &e);
+    ScriptEvent e = {generation, sequence, apply_tick, 0, type, note, 0.0f};
+    return note < SCRIPT_MAX_NOTE_SLOTS && enqueue(r, &e);
 }
 
-bool script_runtime_enqueue_trigger(ScriptRuntime *r, uint32_t generation,
-                                    uint32_t sequence, uint8_t voice,
+bool script_runtime_enqueue_note_on(ScriptRuntime *r, uint32_t generation,
+                                    uint32_t sequence, uint8_t note,
                                     uint32_t apply_tick)
 {
-    ScriptEvent e = {generation, sequence, apply_tick, 0,
-                     SCRIPT_EVENT_TRIGGER, voice, 1.0f};
-    return voice < SCRIPT_MAX_VOICES && enqueue(r, &e);
+    return enqueue_note_event(r, generation, sequence, note, apply_tick,
+                              SCRIPT_EVENT_NOTE_ON);
+}
+
+bool script_runtime_enqueue_note_off(ScriptRuntime *r, uint32_t generation,
+                                     uint32_t sequence, uint8_t note,
+                                     uint32_t apply_tick)
+{
+    return enqueue_note_event(r, generation, sequence, note, apply_tick,
+                              SCRIPT_EVENT_NOTE_OFF);
+}
+
+bool script_runtime_enqueue_note_restart(ScriptRuntime *r, uint32_t generation,
+                                         uint32_t sequence, uint8_t note,
+                                         uint32_t apply_tick)
+{
+    return enqueue_note_event(r, generation, sequence, note, apply_tick,
+                              SCRIPT_EVENT_NOTE_RESTART);
 }
 
 static void apply_events(ScriptRuntime *r)
 {
     uint8_t dst = 0;
-    memset(r->triggers, 0, sizeof(r->triggers));
+    memset(r->note_started, 0, sizeof(r->note_started));
     for (uint8_t i = 0; i < r->event_count; ++i) {
         ScriptEvent *e = &r->events[i];
         if (e->apply_tick > r->tick_index) {
@@ -247,10 +261,13 @@ static void apply_events(ScriptRuntime *r)
                 c->current = target;
                 c->step = 0.0f;
             }
-        } else if (e->type == SCRIPT_EVENT_GATE) {
-            r->gates[e->id] = e->value != 0.0f;
+        } else if (e->type == SCRIPT_EVENT_NOTE_ON) {
+            r->note_on[e->id] = 1;
+            r->note_started[e->id] = 1;
+        } else if (e->type == SCRIPT_EVENT_NOTE_OFF) {
+            r->note_on[e->id] = 0;
         } else {
-            r->triggers[e->id] = 1;
+            r->note_started[e->id] = 1;
         }
         ++r->metrics.queue_applied;
     }
@@ -297,8 +314,8 @@ bool script_runtime_tick(ScriptRuntime *r)
         return false;
     }
     required = (uint16_t)((1u << r->output_count) - 1u);
-    for (uint8_t voice = 0; voice < SCRIPT_MAX_VOICES; ++voice) {
-        if (r->written_mask[voice] != required) {
+    for (uint8_t note = 0; note < SCRIPT_MAX_NOTE_SLOTS; ++note) {
+        if (r->written_mask[note] != required) {
             set_fault(r, SCRIPT_FAULT_MISSING_OUTPUT);
             return false;
         }
@@ -307,7 +324,7 @@ bool script_runtime_tick(ScriptRuntime *r)
     r->staging_buffer ^= 1u;
     ++r->metrics.output_sequence;
     ++r->metrics.ticks_completed;
-    r->metrics.outputs_generated += SCRIPT_MAX_VOICES * r->output_count;
+    r->metrics.outputs_generated += SCRIPT_MAX_NOTE_SLOTS * r->output_count;
     ++r->tick_index;
     return true;
 }
@@ -351,20 +368,20 @@ float script_runtime_control_get(const ScriptRuntime *r, uint8_t id)
     return id < r->control_count ? r->control_snapshot[id] : 0.0f;
 }
 
-bool script_runtime_gate_get(const ScriptRuntime *r, uint8_t voice)
+bool script_runtime_note_is_on(const ScriptRuntime *r, uint8_t note)
 {
-    return voice < SCRIPT_MAX_VOICES && r->gates[voice];
+    return note < SCRIPT_MAX_NOTE_SLOTS && r->note_on[note];
 }
 
-bool script_runtime_trigger_get(const ScriptRuntime *r, uint8_t voice)
+bool script_runtime_note_started(const ScriptRuntime *r, uint8_t note)
 {
-    return voice < SCRIPT_MAX_VOICES && r->triggers[voice];
+    return note < SCRIPT_MAX_NOTE_SLOTS && r->note_started[note];
 }
 
-bool script_runtime_output_set(ScriptRuntime *r, uint8_t voice, uint8_t parameter,
+bool script_runtime_output_set(ScriptRuntime *r, uint8_t note, uint8_t output,
                                float value)
 {
-    if (voice >= SCRIPT_MAX_VOICES || parameter >= r->output_count) {
+    if (note >= SCRIPT_MAX_NOTE_SLOTS || output >= r->output_count) {
         r->fault = SCRIPT_FAULT_BAD_NATIVE_ARGUMENT;
         return false;
     }
@@ -374,8 +391,8 @@ bool script_runtime_output_set(ScriptRuntime *r, uint8_t voice, uint8_t paramete
     }
     if (value < -1.0f) { value = -1.0f; ++r->metrics.clamps; }
     if (value > 1.0f) { value = 1.0f; ++r->metrics.clamps; }
-    r->outputs[r->staging_buffer][voice][parameter] = value;
-    r->written_mask[voice] |= (uint16_t)(1u << parameter);
+    r->outputs[r->staging_buffer][note][output] = value;
+    r->written_mask[note] |= (uint16_t)(1u << output);
     return true;
 }
 

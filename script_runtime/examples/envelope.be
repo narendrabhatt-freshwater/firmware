@@ -10,11 +10,11 @@ level5 = 0.0
 level6 = 0.0
 level7 = 0.0
 
-def advance(voice, level)
-    if trigger_get(voice)
+def advance(note, level)
+    if note_started(note)
         level = 0.0
     end
-    if gate_get(voice)
+    if note_is_on(note)
         level += 1.0 / control_get(attack)
         if level > 1.0 level = 1.0 end
     else
@@ -24,10 +24,10 @@ def advance(voice, level)
     return level
 end
 
-def emit(voice, level)
-    output_set(voice, 0, level)
-    output_set(voice, 1, level * level)
-    output_set(voice, 2, 1.0 - level)
+def emit(note, level)
+    output_set(note, 0, level)
+    output_set(note, 1, level * level)
+    output_set(note, 2, 1.0 - level)
 end
 
 def tick()

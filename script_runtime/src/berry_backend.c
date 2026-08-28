@@ -261,31 +261,31 @@ static int native_control_get(bvm *vm)
     be_return(vm);
 }
 
-static int native_gate_get(bvm *vm)
+static int native_note_is_on(bvm *vm)
 {
     require_count(vm, 1);
-    bint voice = checked_int(vm, 1, 0, SCRIPT_MAX_VOICES - 1);
-    be_pushbool(vm, script_runtime_gate_get(active_backend->runtime,
-                                             (uint8_t)voice));
+    bint note = checked_int(vm, 1, 0, SCRIPT_MAX_NOTE_SLOTS - 1);
+    be_pushbool(vm, script_runtime_note_is_on(active_backend->runtime,
+                                               (uint8_t)note));
     be_return(vm);
 }
 
-static int native_trigger_get(bvm *vm)
+static int native_note_started(bvm *vm)
 {
     require_count(vm, 1);
-    bint voice = checked_int(vm, 1, 0, SCRIPT_MAX_VOICES - 1);
-    be_pushbool(vm, script_runtime_trigger_get(active_backend->runtime,
-                                                (uint8_t)voice));
+    bint note = checked_int(vm, 1, 0, SCRIPT_MAX_NOTE_SLOTS - 1);
+    be_pushbool(vm, script_runtime_note_started(active_backend->runtime,
+                                                 (uint8_t)note));
     be_return(vm);
 }
 
 static int native_output_set(bvm *vm)
 {
     require_count(vm, 3);
-    bint voice = checked_int(vm, 1, 0, SCRIPT_MAX_VOICES - 1);
-    bint parameter = checked_int(vm, 2, 0, SCRIPT_MAX_OUTPUTS - 1);
+    bint note = checked_int(vm, 1, 0, SCRIPT_MAX_NOTE_SLOTS - 1);
+    bint output = checked_int(vm, 2, 0, SCRIPT_MAX_OUTPUTS - 1);
     if (!script_runtime_output_set(active_backend->runtime,
-            (uint8_t)voice, (uint8_t)parameter, checked_number(vm, 3))) {
+            (uint8_t)note, (uint8_t)output, checked_number(vm, 3))) {
         be_raise(vm, "value_error", "invalid output");
     }
     be_pushnil(vm); be_return(vm);
@@ -356,8 +356,8 @@ static ScriptBackendResult backend_load(void *context, ScriptRuntime *runtime,
     be_regfunc((bvm *)b->vm, "configure_outputs", native_configure_outputs);
     be_regfunc((bvm *)b->vm, "define_control", native_define_control);
     be_regfunc((bvm *)b->vm, "control_get", native_control_get);
-    be_regfunc((bvm *)b->vm, "gate_get", native_gate_get);
-    be_regfunc((bvm *)b->vm, "trigger_get", native_trigger_get);
+    be_regfunc((bvm *)b->vm, "note_is_on", native_note_is_on);
+    be_regfunc((bvm *)b->vm, "note_started", native_note_started);
     be_regfunc((bvm *)b->vm, "output_set", native_output_set);
     be_regfunc((bvm *)b->vm, "tick_index", native_tick_index);
     load_result = be_loadmode((bvm *)b->vm, "@fwsc-memory", 0);

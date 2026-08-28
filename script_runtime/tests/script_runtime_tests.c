@@ -12,8 +12,8 @@ typedef struct {
     bool omit_output;
     bool nan_output;
     bool clamp_output;
-    bool observed_gate;
-    bool observed_trigger;
+    bool observed_note_on;
+    bool observed_note_started;
 } MockBackend;
 
 static uint8_t *mock_begin(void *context, size_t capacity)
@@ -37,15 +37,15 @@ static ScriptBackendResult mock_load(void *context, ScriptRuntime *runtime,
 static ScriptBackendResult mock_tick(void *context)
 {
     MockBackend *mock = (MockBackend *)context;
-    mock->observed_gate = script_runtime_gate_get(mock->runtime, 3);
-    mock->observed_trigger = script_runtime_trigger_get(mock->runtime, 4);
-    for (uint8_t voice = 0; voice < SCRIPT_MAX_VOICES; ++voice) {
+    mock->observed_note_on = script_runtime_note_is_on(mock->runtime, 3);
+    mock->observed_note_started = script_runtime_note_started(mock->runtime, 3);
+    for (uint8_t note = 0; note < SCRIPT_MAX_NOTE_SLOTS; ++note) {
         for (uint8_t output = 0; output < 3; ++output) {
-            if (mock->omit_output && voice == 7 && output == 2) continue;
+            if (mock->omit_output && note == 7 && output == 2) continue;
             float value = script_runtime_control_get(mock->runtime, 0);
-            if (mock->nan_output && voice == 0 && output == 0) value = NAN;
+            if (mock->nan_output && note == 0 && output == 0) value = NAN;
             if (mock->clamp_output) value = 2.0f;
-            script_runtime_output_set(mock->runtime, voice, output, value);
+            script_runtime_output_set(mock->runtime, note, output, value);
         }
     }
     return SCRIPT_BACKEND_OK;
@@ -134,7 +134,7 @@ static void test_queue_policy(void)
     assert(runtime.metrics.stale_sequence == 1);
 }
 
-static void test_gate_and_trigger_lifetime(void)
+static void test_note_event_lifetime(void)
 {
     MockBackend mock = {0};
     ScriptBackend backend = backend_for(&mock);
@@ -143,12 +143,19 @@ static void test_gate_and_trigger_lifetime(void)
     size_t size = make_container(container);
     script_runtime_init(&runtime, &backend);
     upload_one_byte_chunks(&runtime, container, size);
-    assert(script_runtime_enqueue_gate(&runtime, runtime.generation, 1, 3, true, 0));
-    assert(script_runtime_enqueue_trigger(&runtime, runtime.generation, 2, 4, 0));
+    assert(script_runtime_enqueue_note_on(&runtime, runtime.generation, 1, 3, 0));
     assert(script_runtime_tick(&runtime));
-    assert(mock.observed_gate && mock.observed_trigger);
+    assert(mock.observed_note_on && mock.observed_note_started);
     assert(script_runtime_tick(&runtime));
-    assert(mock.observed_gate && !mock.observed_trigger);
+    assert(mock.observed_note_on && !mock.observed_note_started);
+    assert(script_runtime_enqueue_note_restart(&runtime, runtime.generation,
+                                               2, 3, runtime.tick_index));
+    assert(script_runtime_tick(&runtime));
+    assert(mock.observed_note_on && mock.observed_note_started);
+    assert(script_runtime_enqueue_note_off(&runtime, runtime.generation,
+                                           3, 3, runtime.tick_index));
+    assert(script_runtime_tick(&runtime));
+    assert(!mock.observed_note_on && !mock.observed_note_started);
 }
 
 static void test_maximum_upload_with_varied_chunks(void)
@@ -215,7 +222,7 @@ static void test_output_clamping(void)
     mock.clamp_output = true;
     assert(script_runtime_tick(&runtime));
     assert(script_runtime_outputs(&runtime)[7][2] == 1.0f);
-    assert(runtime.metrics.clamps == SCRIPT_MAX_VOICES * 3u);
+    assert(runtime.metrics.clamps == SCRIPT_MAX_NOTE_SLOTS * 3u);
 }
 
 static void expect_header_rejected(ScriptRuntime *runtime, const uint8_t *container)
@@ -242,7 +249,7 @@ static void test_bad_containers(void)
     assert(!runtime.program_active);
     assert(script_runtime_outputs(&runtime)[0][0] == 0.0f);
     make_container(container);
-    container[8] = 2;
+    put_u16(container + 8, 1u);
     assert(script_runtime_upload_begin(&runtime));
     assert(!script_runtime_upload_feed(&runtime, container, size));
     assert(!runtime.program_active);
@@ -279,7 +286,8 @@ static void test_bad_containers(void)
     expect_header_rejected(&runtime, container);
     make_container(container); container[7] = 0;
     expect_header_rejected(&runtime, container);
-    make_container(container); container[8] = 2;
+    make_container(container);
+    put_u16(container + 8, SCRIPT_RUNTIME_ABI_VERSION + 1u);
     expect_header_rejected(&runtime, container);
     make_container(container); container[10] = 19;
     expect_header_rejected(&runtime, container);
@@ -317,7 +325,7 @@ int main(void)
 {
     test_upload_tick_and_ramp();
     test_queue_policy();
-    test_gate_and_trigger_lifetime();
+    test_note_event_lifetime();
     test_maximum_upload_with_varied_chunks();
     test_faults_are_neutral();
     test_output_clamping();

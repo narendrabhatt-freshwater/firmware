@@ -8,11 +8,11 @@ def tick()
     phase = phase - int(phase)
     var triangle = phase < 0.5 ? phase * 4.0 - 1.0 : 3.0 - phase * 4.0
     var value = triangle * control_get(depth) + control_get(offset)
-    var voice = 0
-    while voice < 8
-        output_set(voice, 0, value)
-        output_set(voice, 1, -value)
-        output_set(voice, 2, value * 0.5)
-        voice += 1
+    var note = 0
+    while note < 8
+        output_set(note, 0, value)
+        output_set(note, 1, -value)
+        output_set(note, 2, value * 0.5)
+        note += 1
     end
 end

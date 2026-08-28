@@ -1,7 +1,5 @@
-0 gate 0 1
-0 trigger 0
-100 gate 1 1
-100 trigger 1
-300 trigger 0
-600 gate 0 0
-700 gate 1 0
+0 note_on 0
+100 note_on 1
+300 note_restart 0
+600 note_off 0
+700 note_off 1

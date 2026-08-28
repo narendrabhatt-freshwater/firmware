@@ -13,11 +13,11 @@ def tick()
     var triangle = phase < 0.5 ? phase * 4.0 - 1.0 : 3.0 - phase * 4.0
     var blend = control_get(shape)
     var value = (sine * (1.0 - blend) + triangle * blend) * control_get(depth) + control_get(offset)
-    var voice = 0
-    while voice < 8
-        output_set(voice, 0, value)
-        output_set(voice, 1, sine * control_get(depth))
-        output_set(voice, 2, triangle * control_get(depth))
-        voice += 1
+    var note = 0
+    while note < 8
+        output_set(note, 0, value)
+        output_set(note, 1, sine * control_get(depth))
+        output_set(note, 2, triangle * control_get(depth))
+        note += 1
     end
 end

@@ -52,8 +52,8 @@ int main(int argc, char **argv)
     be_regfunc(vm, "configure_outputs", compile_only_native);
     be_regfunc(vm, "define_control", compile_only_native);
     be_regfunc(vm, "control_get", compile_only_native);
-    be_regfunc(vm, "gate_get", compile_only_native);
-    be_regfunc(vm, "trigger_get", compile_only_native);
+    be_regfunc(vm, "note_is_on", compile_only_native);
+    be_regfunc(vm, "note_started", compile_only_native);
     be_regfunc(vm, "output_set", compile_only_native);
     be_regfunc(vm, "tick_index", compile_only_native);
     result = be_loadmode(vm, input, 0);

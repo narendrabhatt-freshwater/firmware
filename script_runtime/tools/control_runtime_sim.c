@@ -11,7 +11,7 @@
 typedef struct {
     uint32_t tick;
     uint32_t order;
-    char kind[9];
+    char kind[16];
     char name[24];
     float value;
     uint16_t ramp;
@@ -39,12 +39,12 @@ static uint64_t now_ns(void)
 }
 
 static uint64_t hash_outputs(uint64_t hash,
-        const float outputs[SCRIPT_MAX_VOICES][SCRIPT_MAX_OUTPUTS], uint8_t count)
+        const float outputs[SCRIPT_MAX_NOTE_SLOTS][SCRIPT_MAX_OUTPUTS], uint8_t count)
 {
-    for (uint8_t v = 0; v < SCRIPT_MAX_VOICES; ++v) {
-        for (uint8_t p = 0; p < count; ++p) {
+    for (uint8_t note = 0; note < SCRIPT_MAX_NOTE_SLOTS; ++note) {
+        for (uint8_t output = 0; output < count; ++output) {
             uint32_t bits;
-            memcpy(&bits, &outputs[v][p], sizeof(bits));
+            memcpy(&bits, &outputs[note][output], sizeof(bits));
             for (unsigned i = 0; i < 4; ++i) {
                 hash ^= (uint8_t)(bits >> (i * 8));
                 hash *= UINT64_C(1099511628211);
@@ -71,11 +71,16 @@ static int load_events(const char *path, InputEvent **events, size_t *count)
         char extra;
         int fields;
         if (line[0] == '#' || line[0] == '\n') continue;
-        fields = sscanf(line, "%u %8s %23s %f %hu %c", &e.tick, e.kind, e.name,
+        fields = sscanf(line, "%u %15s %23s %f %hu %c", &e.tick, e.kind, e.name,
                         &e.value, &e.ramp, &extra);
         if ((strcmp(e.kind, "control") == 0 && (fields < 4 || fields > 5)) ||
-            (strcmp(e.kind, "gate") == 0 && fields != 4) ||
-            (strcmp(e.kind, "trigger") == 0 && fields != 3)) {
+            (strcmp(e.kind, "note_on") == 0 && fields != 3) ||
+            (strcmp(e.kind, "note_off") == 0 && fields != 3) ||
+            (strcmp(e.kind, "note_restart") == 0 && fields != 3) ||
+            (strcmp(e.kind, "control") != 0 &&
+             strcmp(e.kind, "note_on") != 0 &&
+             strcmp(e.kind, "note_off") != 0 &&
+             strcmp(e.kind, "note_restart") != 0)) {
             fclose(file); return -2;
         }
         if (*count == capacity) {
@@ -139,7 +144,7 @@ int main(int argc, char **argv)
     if (csv_path) {
         csv = fopen(csv_path, "w");
         if (!csv) { fprintf(stderr, "control_runtime_sim: %s\n", strerror(errno)); return 2; }
-        fputs("tick,voice,parameter,value\n", csv);
+        fputs("tick,note,output,value\n", csv);
     }
     durations = (uint64_t *)calloc(ticks, sizeof(*durations));
     if (!durations) return 2;
@@ -160,10 +165,18 @@ int main(int argc, char **argv)
                     fprintf(stderr, "control_runtime_sim: rejected event at tick %u\n", tick); return 1;
                 }
             } else {
-                uint8_t voice = (uint8_t)strtoul(e->name, NULL, 10);
-                bool ok = strcmp(e->kind, "gate") == 0
-                    ? script_runtime_enqueue_gate(&runtime, runtime.generation, sequence++, voice, e->value != 0, tick)
-                    : script_runtime_enqueue_trigger(&runtime, runtime.generation, sequence++, voice, tick);
+                uint8_t note = (uint8_t)strtoul(e->name, NULL, 10);
+                bool ok;
+                if (strcmp(e->kind, "note_on") == 0) {
+                    ok = script_runtime_enqueue_note_on(&runtime, runtime.generation,
+                                                        sequence++, note, tick);
+                } else if (strcmp(e->kind, "note_off") == 0) {
+                    ok = script_runtime_enqueue_note_off(&runtime, runtime.generation,
+                                                         sequence++, note, tick);
+                } else {
+                    ok = script_runtime_enqueue_note_restart(&runtime,
+                            runtime.generation, sequence++, note, tick);
+                }
                 if (!ok) { fprintf(stderr, "control_runtime_sim: rejected event at tick %u\n", tick); return 1; }
             }
         }
@@ -176,9 +189,10 @@ int main(int argc, char **argv)
         if (durations[tick] > UINT64_C(1000000)) ++host_overruns;
         const float (*out)[SCRIPT_MAX_OUTPUTS] = script_runtime_outputs(&runtime);
         hash = hash_outputs(hash, out, runtime.output_count);
-        if (csv) for (uint8_t v = 0; v < SCRIPT_MAX_VOICES; ++v)
-            for (uint8_t p = 0; p < runtime.output_count; ++p)
-                fprintf(csv, "%u,%u,%u,%.9g\n", tick, v, p, out[v][p]);
+        if (csv) for (uint8_t note = 0; note < SCRIPT_MAX_NOTE_SLOTS; ++note)
+            for (uint8_t output = 0; output < runtime.output_count; ++output)
+                fprintf(csv, "%u,%u,%u,%.9g\n", tick, note, output,
+                        out[note][output]);
         if (realtime && durations[tick] < UINT64_C(1000000)) {
             struct timespec delay = {0, (long)(UINT64_C(1000000) - durations[tick])};
             nanosleep(&delay, NULL);

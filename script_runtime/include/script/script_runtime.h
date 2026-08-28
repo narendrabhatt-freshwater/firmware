@@ -6,14 +6,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define SCRIPT_MAX_VOICES 8u
+#define SCRIPT_MAX_NOTE_SLOTS 8u
 #define SCRIPT_MAX_OUTPUTS 10u
 #define SCRIPT_MAX_CONTROLS 32u
 #define SCRIPT_EVENT_CAPACITY 32u
 #define SCRIPT_MAX_PAYLOAD 4096u
 #define SCRIPT_CONTROL_NAME_MAX 20u
 #define SCRIPT_FWSC_HEADER_SIZE 20u
-#define SCRIPT_RUNTIME_ABI_VERSION 1u
+#define SCRIPT_RUNTIME_ABI_VERSION 2u
 #define SCRIPT_RUNTIME_ID_BERRY 1u
 #define SCRIPT_CONFIG_FLOAT32_INT32 0x03u
 
@@ -34,8 +34,9 @@ typedef enum {
 
 typedef enum {
     SCRIPT_EVENT_CONTROL = 0,
-    SCRIPT_EVENT_GATE,
-    SCRIPT_EVENT_TRIGGER
+    SCRIPT_EVENT_NOTE_ON,
+    SCRIPT_EVENT_NOTE_OFF,
+    SCRIPT_EVENT_NOTE_RESTART
 } ScriptEventType;
 
 typedef struct {
@@ -79,10 +80,10 @@ typedef struct ScriptRuntime {
     ScriptControl controls[SCRIPT_MAX_CONTROLS];
     ScriptEvent events[SCRIPT_EVENT_CAPACITY];
     float control_snapshot[SCRIPT_MAX_CONTROLS];
-    float outputs[2][SCRIPT_MAX_VOICES][SCRIPT_MAX_OUTPUTS];
-    uint16_t written_mask[SCRIPT_MAX_VOICES];
-    uint8_t gates[SCRIPT_MAX_VOICES];
-    uint8_t triggers[SCRIPT_MAX_VOICES];
+    float outputs[2][SCRIPT_MAX_NOTE_SLOTS][SCRIPT_MAX_OUTPUTS];
+    uint16_t written_mask[SCRIPT_MAX_NOTE_SLOTS];
+    uint8_t note_on[SCRIPT_MAX_NOTE_SLOTS];
+    uint8_t note_started[SCRIPT_MAX_NOTE_SLOTS];
     uint8_t control_count;
     uint8_t output_count;
     uint8_t event_count;
@@ -115,12 +116,16 @@ bool script_runtime_enqueue_control(ScriptRuntime *runtime, uint32_t generation,
                                     uint32_t sequence, uint8_t control_id,
                                     float value, uint32_t apply_tick,
                                     uint16_t ramp_ticks);
-bool script_runtime_enqueue_gate(ScriptRuntime *runtime, uint32_t generation,
-                                 uint32_t sequence, uint8_t voice, bool state,
-                                 uint32_t apply_tick);
-bool script_runtime_enqueue_trigger(ScriptRuntime *runtime, uint32_t generation,
-                                    uint32_t sequence, uint8_t voice,
+bool script_runtime_enqueue_note_on(ScriptRuntime *runtime, uint32_t generation,
+                                    uint32_t sequence, uint8_t note,
                                     uint32_t apply_tick);
+bool script_runtime_enqueue_note_off(ScriptRuntime *runtime, uint32_t generation,
+                                     uint32_t sequence, uint8_t note,
+                                     uint32_t apply_tick);
+bool script_runtime_enqueue_note_restart(ScriptRuntime *runtime,
+                                         uint32_t generation,
+                                         uint32_t sequence, uint8_t note,
+                                         uint32_t apply_tick);
 bool script_runtime_tick(ScriptRuntime *runtime);
 
 int script_runtime_configure_outputs(ScriptRuntime *runtime, uint8_t count);
@@ -128,10 +133,10 @@ int script_runtime_define_control(ScriptRuntime *runtime, const char *name,
                                   float minimum, float maximum, float default_value,
                                   uint16_t slew_ms);
 float script_runtime_control_get(const ScriptRuntime *runtime, uint8_t id);
-bool script_runtime_gate_get(const ScriptRuntime *runtime, uint8_t voice);
-bool script_runtime_trigger_get(const ScriptRuntime *runtime, uint8_t voice);
-bool script_runtime_output_set(ScriptRuntime *runtime, uint8_t voice,
-                               uint8_t parameter, float value);
+bool script_runtime_note_is_on(const ScriptRuntime *runtime, uint8_t note);
+bool script_runtime_note_started(const ScriptRuntime *runtime, uint8_t note);
+bool script_runtime_output_set(ScriptRuntime *runtime, uint8_t note,
+                               uint8_t output, float value);
 uint32_t script_runtime_tick_index(const ScriptRuntime *runtime);
 const float (*script_runtime_outputs(const ScriptRuntime *runtime))[SCRIPT_MAX_OUTPUTS];
 int script_runtime_find_control(const ScriptRuntime *runtime, const char *name);
