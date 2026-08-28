@@ -1,0 +1,66 @@
+function(verify_case NAME EXPECTED_OUTPUTS)
+    set(SOURCE "${SOURCE_DIR}/${NAME}.be")
+    set(CONTAINER "${OUTPUT_DIR}/${NAME}_million.fwsc")
+    execute_process(
+        COMMAND "${COMPILER}" "${SOURCE}" -o "${CONTAINER}"
+        RESULT_VARIABLE COMPILE_RESULT OUTPUT_VARIABLE COMPILE_OUT ERROR_VARIABLE COMPILE_ERR)
+    if(NOT COMPILE_RESULT EQUAL 0)
+        message(FATAL_ERROR "failed to compile ${NAME}: ${COMPILE_OUT}${COMPILE_ERR}")
+    endif()
+
+    set(HASHES)
+    foreach(RUN RANGE 1 2)
+        set(SIM_ARGS "${CONTAINER}" --ticks 1000000)
+        if(ARGC GREATER 2)
+            list(APPEND SIM_ARGS --events "${SOURCE_DIR}/${ARGV2}")
+        endif()
+        execute_process(
+            COMMAND "${SIMULATOR}" ${SIM_ARGS}
+            RESULT_VARIABLE SIM_RESULT OUTPUT_VARIABLE SIM_OUT ERROR_VARIABLE SIM_ERR)
+        if(NOT SIM_RESULT EQUAL 0)
+            message(FATAL_ERROR "million-tick ${NAME} run failed: ${SIM_OUT}${SIM_ERR}")
+        endif()
+        foreach(REQUIRED
+                "\"ticks_completed\":1000000"
+                "\"outputs_generated\":${EXPECTED_OUTPUTS}"
+                "\"alloc_tick\":0"
+                "\"realloc_tick\":0"
+                "\"gc_tick\":0"
+                "\"faults\":0")
+            if(NOT SIM_OUT MATCHES "${REQUIRED}")
+                message(FATAL_ERROR "${NAME} run lacks ${REQUIRED}: ${SIM_OUT}")
+            endif()
+        endforeach()
+        string(REGEX MATCH "\"output_hash\":\"([0-9a-f]+)\"" HASH_MATCH "${SIM_OUT}")
+        if(NOT HASH_MATCH)
+            message(FATAL_ERROR "${NAME} output hash missing: ${SIM_OUT}")
+        endif()
+        list(APPEND HASHES "${CMAKE_MATCH_1}")
+        string(REGEX MATCH "\"arena_peak\":([0-9]+)" ARENA_MATCH "${SIM_OUT}")
+        set(ARENA_PEAK "${CMAKE_MATCH_1}")
+        if(NOT ARENA_MATCH OR ARENA_PEAK GREATER 12288)
+            message(FATAL_ERROR "${NAME} representative arena peak is invalid: ${SIM_OUT}")
+        endif()
+        string(REGEX MATCH "\"supporting_state_bytes\":([0-9]+)" STATE_MATCH "${SIM_OUT}")
+        set(STATE_BYTES "${CMAKE_MATCH_1}")
+        if(NOT STATE_MATCH OR STATE_BYTES GREATER 4096)
+            message(FATAL_ERROR "${NAME} supporting state exceeds 4 KiB: ${SIM_OUT}")
+        endif()
+        string(REGEX MATCH "\"subsystem_state_bytes\":([0-9]+)" TOTAL_MATCH "${SIM_OUT}")
+        set(TOTAL_BYTES "${CMAKE_MATCH_1}")
+        if(NOT TOTAL_MATCH OR TOTAL_BYTES GREATER 20480)
+            message(FATAL_ERROR "${NAME} subsystem state exceeds 20 KiB: ${SIM_OUT}")
+        endif()
+    endforeach()
+    list(GET HASHES 0 HASH_A)
+    list(GET HASHES 1 HASH_B)
+    if(NOT HASH_A STREQUAL HASH_B)
+        message(FATAL_ERROR "${NAME} hashes differ: ${HASH_A} vs ${HASH_B}")
+    endif()
+    message(STATUS "${NAME}: hash ${HASH_A}, ${EXPECTED_OUTPUTS} outputs")
+endfunction()
+
+verify_case(baseline_8x3 24000000)
+verify_case(maximum_8x10 80000000)
+verify_case(lfo 24000000 live.events)
+verify_case(envelope 24000000 envelope.events)
