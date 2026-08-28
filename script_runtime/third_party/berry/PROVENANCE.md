@@ -7,6 +7,5 @@
 
 This is a pruned source snapshot. Upstream tests, examples, CI metadata, and the
 nested Git repository are omitted. Runtime behaviour is selected by the
-project-owned configuration and port files under
-`channel_card/Core/{Inc,Src}/script` and the host-compiler configuration under
-`channel_card/tests/script_runtime/config/host`.
+project-owned configuration and port files under `script_runtime/{include,src}`
+and the host-compiler configuration under `script_runtime/config/host`.
