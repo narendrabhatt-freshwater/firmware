@@ -17,6 +17,50 @@ consumers may continue to link `cardproto::cardproto`, which aliases the same
 target. The normative wire contract is
 [`docs/protocol.md`](../docs/protocol.md).
 
+## Editable crash sequence
+
+The `protocol` executable can play a hand-edited timing sequence through one
+Channel Card voice:
+
+```bash
+protocol/build/protocol --crash protocol/examples/crash.txt
+```
+
+Compact options mirror the protocol-oriented workflow: `--g 6` sets output
+attenuation (the Channel Card gain command is `g`), `--r 1` runs one pass,
+`--s FILE` uses one sample file, and `--d DIR` selects a sample bank.
+
+The runner automatically finds the Channel Card CDC and the working RS485
+adapter, locates the repository's `cmi_control/waves` bank, uploads the attack
+heads required by the sequence, loads their BODY samples and roots, and opens
+the Channel Card UAC BODY stream. `C4` selects wave `w60_*`, `D4` selects
+`w62_*`, and so on. No sample path is required. To use one file for every note,
+pass `--sample sound.wav`; `--samples DIR` remains available for a complete
+`wN_*.raw` bank.
+
+Check parsing and note-to-wave mapping without opening hardware with
+`--dry-run`. `--repeat 1` runs one pass regardless of the file's `repeat`
+instruction. Ctrl-C always sends all notes off before closing the bus.
+
+```text
+c4 200 2
+en 1.0 100 0.7 10 20
+d4 200
+en 1.0 50 0.5 5 10
+w 500
+repeat
+```
+
+`c4 200 2` plays C4 for 200 ms, configures the card's real 2 ms voice-steal
+ramp, and leaves C4 active for the following note to replace. Omitting the last
+value sends note-off after the hold. `w 500` is the only synthetic delay: it
+waits 500 ms.
+An `en ...` line belongs to the note directly above it; the runner applies it
+to that note's voice immediately before note-on. It accepts the firmware's full
+envelope grammar, including up to 10 segments. Other normal Channel Card
+commands pass through unchanged. A bare `repeat` loops until Ctrl-C;
+`repeat N` runs exactly N passes.
+
 ## Build and consume
 
 ```bash

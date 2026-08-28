@@ -3,6 +3,7 @@ project(cardlink VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(FetchContent)
 include(GNUInstallDirs)
@@ -77,6 +78,7 @@ add_library(cardlink STATIC
   src/midi/pitch.cpp
   src/midi/voice_bank.cpp
   src/midi/midi_input.cpp
+  src/sequence/crash_sequence.cpp
   src/sample/client.cpp
 )
 
@@ -149,6 +151,9 @@ target_link_libraries(cardlink_sample_hw_smoke PRIVATE cardlink::cardlink)
 add_executable(cardlink_uac_restart_smoke tools/uac_restart_smoke.cpp)
 target_link_libraries(cardlink_uac_restart_smoke PRIVATE cardlink::cardlink)
 
+add_executable(protocol tools/protocol.cpp)
+target_link_libraries(protocol PRIVATE cardlink::cardlink)
+
 include(CTest)
 if(BUILD_TESTING)
   add_executable(cardlink_voice_bank_tests tests/voice_bank_test.cpp)
@@ -172,6 +177,10 @@ if(BUILD_TESTING)
   target_link_libraries(cardlink_sample_voice_mode_tests PRIVATE cardlink::cardlink)
   add_test(NAME cardlink.sample_voice_modes
     COMMAND cardlink_sample_voice_mode_tests)
+
+  add_executable(cardlink_crash_sequence_tests tests/crash_sequence_test.cpp)
+  target_link_libraries(cardlink_crash_sequence_tests PRIVATE cardlink::cardlink)
+  add_test(NAME cardlink.crash_sequence COMMAND cardlink_crash_sequence_tests)
 
   add_test(
     NAME cardlink.public_api_contract

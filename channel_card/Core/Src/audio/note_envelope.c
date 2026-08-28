@@ -159,11 +159,17 @@ int NoteEnv_SetSegments(uint8_t voice, const NoteEnv_Segment_t *segs, uint8_t n)
   /* Release always targets silence. */
   v->segs[release_idx].end_amp = 0.0f;
   v->n_segs = n;
-  v->state = NOTE_ENV_IDLE;
-  v->seg_idx = 0u;
-  v->amp = 0.0f;
-  v->target = 0.0f;
-  v->step = 0.0f;
+  /* Programming the envelope for an incoming stolen note must not mute the
+   * currently audible note. NoteEnv_NoteOn arms the new program when the
+   * card activates the replacement after its real crash-release ramp. */
+  if (v->state == NOTE_ENV_IDLE)
+  {
+    v->state = NOTE_ENV_HOLD;
+    v->seg_idx = 0u;
+    v->amp = 1.0f;
+    v->target = 1.0f;
+    v->step = 0.0f;
+  }
   return 0;
 }
 
