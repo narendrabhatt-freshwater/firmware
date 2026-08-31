@@ -694,18 +694,17 @@ void SampleDryMixer::CommitBurst(uint8_t voice, unsigned nsamp, bool sof)
               nsamp, sof);
 }
 
-void SampleDryMixer::Post(const Cmd &c)
+bool SampleDryMixer::Post(const Cmd &c)
 {
-  for (;;) {
-    const uint32_t w = cmd_wr_.load(std::memory_order_relaxed);
-    const uint32_t r = cmd_rd_.load(std::memory_order_acquire);
-    if ((w - r) < kCmdCap) {
-      cmds_[w % kCmdCap] = c;
-      cmd_wr_.store(w + 1u, std::memory_order_release);
-      return;
-    }
-    std::this_thread::yield();
+  std::lock_guard<std::mutex> lock(cmd_post_mutex_);
+  const uint32_t w = cmd_wr_.load(std::memory_order_relaxed);
+  const uint32_t r = cmd_rd_.load(std::memory_order_acquire);
+  if ((w - r) >= kCmdCap) {
+    return false;
   }
+  cmds_[w % kCmdCap] = c;
+  cmd_wr_.store(w + 1u, std::memory_order_release);
+  return true;
 }
 
 void SampleDryMixer::ApplyCmd(const Cmd &c)
@@ -851,7 +850,11 @@ uint8_t SampleDryMixer::NoteOnSession(uint8_t voice, uint16_t wave_id,
   c.attack_elapsed_ms = attack_elapsed_ms;
   c.session = session;
   c.epoch = note_epoch_.fetch_add(1u, std::memory_order_relaxed) + 1u;
-  Post(c);
+  if (!Post(c)) {
+    live_[voice].store(false, std::memory_order_release);
+    live_wave_[voice].store(0xFFFFu, std::memory_order_release);
+    return 0xFFu;
+  }
   return session;
 }
 
@@ -866,7 +869,7 @@ void SampleDryMixer::CancelSession(uint8_t voice, uint8_t session,
   c.voice = voice;
   c.session = session;
   c.wave_id = wave_id;
-  Post(c);
+  (void)Post(c);
 }
 
 void SampleDryMixer::SetCrashReleaseMs(uint8_t release_ms)
@@ -1062,14 +1065,19 @@ void SampleDryMixer::Silence(uint8_t voice)
   Cmd c;
   c.kind = CmdKind::Silence;
   c.voice = voice;
-  Post(c);
+  (void)Post(c);
 }
 
 void SampleDryMixer::AllNotesOff()
 {
   Cmd c;
   c.kind = CmdKind::AllOff;
-  Post(c);
+  (void)Post(c);
+}
+
+void SampleDryMixer::DrainPendingCommands()
+{
+  DrainCmds();
 }
 
 bool SampleDryMixer::AnyActive() const

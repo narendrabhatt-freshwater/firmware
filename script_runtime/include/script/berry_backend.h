@@ -29,6 +29,7 @@ typedef struct {
   int (*start_note)(void *, uint8_t);
   int (*note_end)(void *, uint8_t);
   void (*silence_voice)(void *, uint8_t, FwVmFault);
+  int (*set_led)(void *, uint8_t, float, float, float, float);
 } ScriptBerryNativeOps;
 
 typedef union {

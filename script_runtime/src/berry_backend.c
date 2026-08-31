@@ -196,6 +196,15 @@ static int native_noarg(bvm *vm,int (*fn)(void *,uint8_t),const char *message) {
 static int native_hold(bvm *vm){return native_noarg(vm,s_runtime->ops.hold,"hold failed");}
 static int native_start_note(bvm *vm){return native_noarg(vm,s_runtime->ops.start_note,"start note failed");}
 static int native_note_end(bvm *vm){return native_noarg(vm,s_runtime->ops.note_end,"note end failed");}
+static int native_led(bvm *vm) {
+  float red,green,blue,brightness;require_handler(vm);require_count(vm,4);
+  red=checked_float(vm,1);green=checked_float(vm,2);blue=checked_float(vm,3);brightness=checked_float(vm,4);
+  if(red<0.0f||red>1.0f||green<0.0f||green>1.0f||blue<0.0f||blue>1.0f||brightness<0.0f||brightness>1.0f)
+    native_error(vm,FW_VM_FAULT_BAD_HOST_ARGUMENT,"led values must be between zero and one");
+  if(!s_runtime->ops.set_led||s_runtime->ops.set_led(s_runtime->ops.context,s_runtime->current_voice,red,green,blue,brightness)!=0)
+    native_error(vm,FW_VM_FAULT_HOST_CALL,"led failed");
+  be_pushnil(vm);be_return(vm);
+}
 
 static void observation_hook(bvm *vm,int event,...) {
   ScriptBerryRuntime *r=s_runtime;(void)vm;if(!r)return;
@@ -223,6 +232,7 @@ static int create_vm(ScriptBerryRuntime *r) {
   be_regfunc(vm,"input",native_input);be_regfunc(vm,"state_get",native_state_get);be_regfunc(vm,"state_set",native_state_set);
   be_regfunc(vm,"set_amplitude",native_set_amplitude);be_regfunc(vm,"ramp",native_ramp);be_regfunc(vm,"hold",native_hold);
   be_regfunc(vm,"start_note",native_start_note);be_regfunc(vm,"note_end",native_note_end);
+  be_regfunc(vm,"led",native_led);
   be_regfunc(vm,"keymap_get",native_keymap_get);be_regfunc(vm,"pow",native_pow);
   register_int(vm,"INPUT_NOTE_ID",FW_VM_CHANNEL_INPUT_NOTE_ID);register_int(vm,"INPUT_FREQUENCY",FW_VM_CHANNEL_INPUT_FREQUENCY);
   register_int(vm,"INPUT_GAIN",FW_VM_CHANNEL_INPUT_GAIN);register_int(vm,"INPUT_GATE",FW_VM_CHANNEL_INPUT_GATE);
@@ -235,7 +245,7 @@ static int create_vm(ScriptBerryRuntime *r) {
   clear_handler_globals(vm);
   be_newlist(vm);for(i=0u;i<FW_SCRIPT_CHANNEL_VOICE_COUNT;++i){be_pushnil(vm);be_data_push(vm,-2);be_pop(vm,1);}be_setglobal(vm,"_fw_programs");be_pop(vm,1);
   /* Intern all native exception text before handlers become allocation-free. */
-  { static const char *const text[]={"value_error","invalid argument count","integer required","integer out of range","number required","finite number required","handler context required","input failed","set amplitude failed","pow result must be finite","ramp failed","hold failed","start note failed","note end failed"};
+  { static const char *const text[]={"value_error","invalid argument count","integer required","integer out of range","number required","finite number required","handler context required","input failed","set amplitude failed","pow result must be finite","ramp failed","hold failed","start note failed","note end failed","led values must be between zero and one","led failed"};
     for(i=0u;i<sizeof(text)/sizeof(text[0]);++i){be_pushstring(vm,text[i]);be_pop(vm,1);} }
   be_gc_collect(vm);r->phase=PHASE_IDLE;r->shared_valid=1u;r->active_mask=0u;update_memory(r);return 0;
 }

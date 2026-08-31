@@ -427,6 +427,22 @@ bool App::EnsureSampleStream()
   return true;
 }
 
+void App::SetSourceMode(SourceMode mode)
+{
+  if (source_mode == mode)
+  {
+    return;
+  }
+  AllNotesOff();
+  source_mode = mode;
+  if (source_mode == SourceMode::Wave && sample_bulk)
+  {
+    sample_bulk->Stop();
+    log.Push("ok: WAVE mode — BODY stream stopped");
+  }
+  MarkSettingsDirty();
+}
+
 bool App::EnsureAudio()
 {
   if (audio_open)
@@ -540,7 +556,7 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
   {
     EnsureAudio();
   }
-  if (want_card)
+  if (want_card && source_mode == SourceMode::Sample)
   {
     (void)EnsureSampleStream();
   }
@@ -581,6 +597,28 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
     }
     if (want_card && ev.slot < cardlink::audio::kSampleVoices)
     {
+      if (source_mode == SourceMode::Wave)
+      {
+        BusQueueResult queued = BusQueueResult::Closed;
+        if (ev.kind == cardlink::midi::BankEventKind::Off)
+        {
+          queued = bus.QueueChannel([slot = ev.slot](cardproto::ChannelClient &ch) {
+            return ch.NoteOff(slot);
+          });
+          if (queued == BusQueueResult::Ok) bus.AcknowledgeSlotOff(ev.slot);
+        }
+        else if (ev.kind == cardlink::midi::BankEventKind::On ||
+                 ev.kind == cardlink::midi::BankEventKind::Retrig)
+        {
+          queued = bus.QueueChannel(
+              [slot = ev.slot, key = ev.midi_key](cardproto::ChannelClient &ch) {
+                return ch.NoteOn(slot, key);
+              });
+          if (queued == BusQueueResult::Ok)
+            bus.AcknowledgeSlotKey(ev.slot, ev.midi_key);
+        }
+        continue;
+      }
       switch (ev.kind)
       {
       case cardlink::midi::BankEventKind::Off:
@@ -1022,6 +1060,8 @@ void App::DrawSidebar()
     const bool hovered = ImGui::IsItemHovered();
     if (ImGui::IsItemClicked())
     {
+      if (n.v == GuiView::Tone) SetSourceMode(SourceMode::Wave);
+      if (n.v == GuiView::Sample) SetSourceMode(SourceMode::Sample);
       view = n.v;
       MarkSettingsDirty();
     }
@@ -2260,32 +2300,45 @@ void App::DrawPerform()
       ImGui::SetCursorPosX(S(12.f));
       if (fw::ui::ChipBtn("\u2192 Tone", false, BtnKind::Neutral))
       {
+        SetSourceMode(SourceMode::Wave);
         view = GuiView::Tone;
         MarkSettingsDirty();
       }
       ImGui::SameLine(0.f, S(6.f));
       if (fw::ui::ChipBtn("\u2192 Sample", false, BtnKind::Neutral))
       {
+        SetSourceMode(SourceMode::Sample);
         view = GuiView::Sample;
         MarkSettingsDirty();
       }
 
-      double c4_units = 0.0;
-      double samp_ms = 0.0;
-      SumUsbBodyLoad(bank, samples.Mixer(), c4_units, samp_ms);
       ImGui::SetCursorPosX(S(12.f));
       ImGui::Dummy(ImVec2(1.f, S(6.f)));
       ImGui::SetCursorPosX(S(12.f));
-      Mono("USB BODY", kPalette.text_dim, fs);
-      char load[48];
-      std::snprintf(load, sizeof(load), "%.0f samples/ms", samp_ms);
-      ImGui::SetCursorPosX(S(12.f));
-      Mono(load, kPalette.accent, fm);
-      char units[48];
-      std::snprintf(units, sizeof(units), "%.2f\u00D7 C4 source rate",
-                    c4_units);
-      ImGui::SetCursorPosX(S(12.f));
-      Mono(units, kPalette.text_dim, fs);
+      if (source_mode == SourceMode::Sample)
+      {
+        double c4_units = 0.0;
+        double samp_ms = 0.0;
+        SumUsbBodyLoad(bank, samples.Mixer(), c4_units, samp_ms);
+        Mono("USB BODY", kPalette.text_dim, fs);
+        char load[48];
+        std::snprintf(load, sizeof(load), "%.0f samples/ms", samp_ms);
+        ImGui::SetCursorPosX(S(12.f));
+        Mono(load, kPalette.accent, fm);
+        char units[48];
+        std::snprintf(units, sizeof(units), "%.2f\u00D7 C4 source rate",
+                      c4_units);
+        ImGui::SetCursorPosX(S(12.f));
+        Mono(units, kPalette.text_dim, fs);
+      }
+      else
+      {
+        Mono("CARD WAVE", kPalette.text_dim, fs);
+        ImGui::SetCursorPosX(S(12.f));
+        Mono("generated on card", kPalette.accent, fm);
+        ImGui::SetCursorPosX(S(12.f));
+        Mono("no UAC / BODY stream", kPalette.text_dim, fs);
+      }
     }
   }
   ImGui::EndChild();
@@ -2507,10 +2560,9 @@ void App::DrawPerform()
 void App::DrawTone()
 {
   ImFont *fs = fw::theme::g_fonts.mono_small;
-  ImFont *fm = fw::theme::g_fonts.mono;
   const bool offline = !bus.IsOpen() || bus.BusFault();
 
-  // SAMPLE path label (no mode switch — this branch is SAMPLE-only)
+  // Explicit source mode: card-generated waves need no USB BODY transport.
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kPalette.bg_alt);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(16.f), 0.f));
   ImGui::BeginChild("mode_bar", ImVec2(0, S(40.f)), ImGuiChildFlags_None);
@@ -2523,10 +2575,20 @@ void App::DrawTone()
                 fw::theme::U32(kPalette.border));
     const float mid_y = S(10.f);
     ImGui::SetCursorPos(ImVec2(S(16.f), mid_y + S(2.f)));
-    Mono("PATH", kPalette.text_dim, fs);
+    Mono("SOURCE", kPalette.text_dim, fs);
     ImGui::SameLine(0.f, S(12.f));
-    ImGui::SetCursorPosY(mid_y);
-    Mono("SAMPLE", kPalette.accent, fm);
+    ImGui::SetCursorPosY(mid_y - S(1.f));
+    (void)fw::ui::ChipBtn("WAVE", true, BtnKind::Primary);
+    ImGui::SameLine(0.f, S(6.f));
+    if (fw::ui::ChipBtn("SAMPLE", false, BtnKind::Neutral))
+    {
+      SetSourceMode(SourceMode::Sample);
+      view = GuiView::Sample;
+      MarkSettingsDirty();
+    }
+    ImGui::SameLine(0.f, S(12.f));
+    ImGui::SetCursorPosY(mid_y + S(3.f));
+    Mono("generated on card · no UAC/BODY", kPalette.muted, fs);
     if (offline)
     {
       ImGui::SameLine(0.f, S(18.f));
@@ -3102,11 +3164,13 @@ void App::Draw()
     }
     if (ImGui::IsKeyPressed(ImGuiKey_2))
     {
+      SetSourceMode(SourceMode::Wave);
       view = GuiView::Tone;
       MarkSettingsDirty();
     }
     if (ImGui::IsKeyPressed(ImGuiKey_3))
     {
+      SetSourceMode(SourceMode::Sample);
       view = GuiView::Sample;
       MarkSettingsDirty();
     }

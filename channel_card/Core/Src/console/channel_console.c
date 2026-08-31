@@ -13,6 +13,7 @@
 #include "main.h"
 #include "usart.h"
 #include "cs4304.h"
+#include "channel_led.h"
 #include "audio_bridge.h"
 #include "note_bank.h"
 #include "note_envelope.h"
@@ -1494,40 +1495,41 @@ static void Console_Poll(void)
   }
 }
 
-/** Non-blocking 5-LED chaser (150 ms per step) so the console stays snappy.
- * Skipped while cpuload probe owns LED_Y. */
+/** Non-blocking fixed red/yellow chaser (150 ms per step).
+ * The RGB package is exclusively VM-controlled. */
 static void LED_Task(void)
 {
-  static const GPIO_TypeDef *ports[5] = {LED_R_GPIO_Port, LED_Y_GPIO_Port,
-                                         RGB_R_GPIO_Port, RGB_G_GPIO_Port,
-                                         RGB_B_GPIO_Port};
-  static const uint16_t pins[5] = {LED_R_Pin, LED_Y_Pin, RGB_R_Pin, RGB_G_Pin,
-                                   RGB_B_Pin};
+  static GPIO_TypeDef *const ports[2] = {LED_R_GPIO_Port, LED_Y_GPIO_Port};
+  static const uint16_t pins[2] = {LED_R_Pin, LED_Y_Pin};
   static uint32_t t_next = 0;
   static uint8_t step = 0;
 
-  if (Audio_CpuLoad_IsActive() || !led_show_on)
+  ChannelLed_Task();
+  if (Audio_CpuLoad_IsActive())
   {
-    if (!Audio_CpuLoad_IsActive())
+    HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_RESET);
+    return;
+  }
+  if (!led_show_on)
+  {
+    for (uint8_t i = 0; i < 2; i++)
     {
-      for (uint8_t i = 0; i < 5; i++)
-      {
-        HAL_GPIO_WritePin((GPIO_TypeDef *)ports[i], pins[i], GPIO_PIN_RESET);
-      }
+      HAL_GPIO_WritePin(ports[i], pins[i], GPIO_PIN_RESET);
     }
     return;
   }
   if (HAL_GetTick() >= t_next)
   {
     t_next = HAL_GetTick() + 150;
-    HAL_GPIO_WritePin((GPIO_TypeDef *)ports[step], pins[step], GPIO_PIN_RESET);
-    step = (step + 1) % 5;
-    HAL_GPIO_WritePin((GPIO_TypeDef *)ports[step], pins[step], GPIO_PIN_SET);
+    HAL_GPIO_WritePin(ports[step], pins[step], GPIO_PIN_RESET);
+    step = (step + 1) % 2;
+    HAL_GPIO_WritePin(ports[step], pins[step], GPIO_PIN_SET);
   }
 }
 
 void ChannelConsole_Init(void)
 {
+  ChannelLed_Init();
   RS485_BusRelease();
   Uart5Rx_Init();
 

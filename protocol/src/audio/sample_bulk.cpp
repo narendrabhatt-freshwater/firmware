@@ -35,6 +35,7 @@ struct SampleBulkOut::Impl {
   RtAudio dac;
   std::atomic<uint32_t> xruns{0u};
   std::atomic<uint64_t> render_frames{0u};
+  std::atomic<bool> running{false};
   std::atomic<unsigned> urgent_voices{0u};
   std::atomic<double> urgent_demand{0.0};
   std::atomic<double> urgent_attack_ms{0.0};
@@ -80,6 +81,7 @@ bool SampleBulkOut::Start(std::string &err)
 
   impl_->xruns.store(0u, std::memory_order_relaxed);
   impl_->render_frames.store(0u, std::memory_order_relaxed);
+  mixer_->DrainPendingCommands();
   impl_->packet_words_used = cardlink::usb::kStreamUacPacketWords;
   RtAudio::StreamParameters params;
   params.deviceId = device;
@@ -179,6 +181,7 @@ bool SampleBulkOut::Start(std::string &err)
     impl_->dac.closeStream();
     return false;
   }
+  impl_->running.store(true, std::memory_order_release);
   return true;
 }
 
@@ -187,17 +190,19 @@ void SampleBulkOut::Stop()
   if (!impl_) {
     return;
   }
+  impl_->running.store(false, std::memory_order_release);
   if (impl_->dac.isStreamRunning()) {
     impl_->dac.stopStream();
   }
   if (impl_->dac.isStreamOpen()) {
     impl_->dac.closeStream();
   }
+  mixer_->DrainPendingCommands();
 }
 
 bool SampleBulkOut::Running() const
 {
-  return impl_ && impl_->dac.isStreamRunning();
+  return impl_ && impl_->running.load(std::memory_order_acquire);
 }
 
 uint32_t SampleBulkOut::XrunCount() const
@@ -232,6 +237,9 @@ void SampleBulkOut::SubmitStatus(
     uint16_t last_pack_sequence)
 {
   (void)last_pack_sequence;
+  if (!Running()) {
+    return;
+  }
   mixer_->ApplyVoiceStatus(mask, best, free_samples.data());
 }
 

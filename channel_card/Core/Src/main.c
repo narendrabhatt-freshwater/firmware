@@ -131,14 +131,12 @@ int main(void)
    * Kept inside USER CODE so CubeMX regeneration preserves it. */
   USB_App_Init();
 
-  /* --- Power-on LED startup sequence: flash all 5 LEDs one by one --- */
+  /* --- Power-on status sequence: flash fixed red/yellow LEDs only.
+   * The RGB package is reserved for VM scripts and stays off at boot. --- */
   {
-    const GPIO_TypeDef *led_ports[] = {LED_R_GPIO_Port, LED_Y_GPIO_Port,
-                                       RGB_R_GPIO_Port, RGB_G_GPIO_Port,
-                                       RGB_B_GPIO_Port};
-    const uint16_t led_pins[] = {LED_R_Pin, LED_Y_Pin, RGB_R_Pin, RGB_G_Pin,
-                                 RGB_B_Pin};
-    const uint8_t num_leds = 5;
+    const GPIO_TypeDef *led_ports[] = {LED_R_GPIO_Port, LED_Y_GPIO_Port};
+    const uint16_t led_pins[] = {LED_R_Pin, LED_Y_Pin};
+    const uint8_t num_leds = 2;
 
     for (uint8_t i = 0; i < num_leds; i++)
     {

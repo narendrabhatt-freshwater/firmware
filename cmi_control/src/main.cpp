@@ -140,7 +140,9 @@ int main(int argc, char **argv)
         return queued == BusQueueResult::Ok;
       });
   app.bus.SetIdleHandler([&app](uint8_t slot) {
-    app.samples.Silence(slot);
+    if (app.sample_bulk && app.sample_bulk->Running()) {
+      app.samples.Silence(slot);
+    }
   });
   /* The RS485 worker launches session-bound SOF immediately before nX;
    * later vq replies supply exact credit for steady-state refills. */
@@ -148,9 +150,13 @@ int main(int argc, char **argv)
       [&app](uint8_t mask, uint8_t best,
              const std::array<uint16_t, cardlink::audio::kSampleVoices> &free,
              uint16_t last_pack_sequence) {
-        app.sample_bulk->SubmitStatus(mask, best, free, last_pack_sequence);
+        if (app.sample_bulk && app.sample_bulk->Running()) {
+          app.sample_bulk->SubmitStatus(mask, best, free, last_pack_sequence);
+        }
       });
   fw::settings::Load(app);
+  if (app.view == GuiView::Tone) app.source_mode = SourceMode::Wave;
+  if (app.view == GuiView::Sample) app.source_mode = SourceMode::Sample;
   app.samples.SetCdcPath(app.attack_cdc_path);
 
   // Effective UI scale = persisted user zoom × monitor content scale
@@ -230,11 +236,13 @@ int main(int argc, char **argv)
 
   fw::settings::Save(app);
   app.AllNotesOff();
+  app.DisconnectMidi();
+  /* Keep the BODY consumer alive until the bus worker can no longer enqueue
+   * vq/idle mixer commands. Otherwise Close() can wait on a saturated queue. */
+  app.DisconnectBus();
   if (app.sample_bulk) {
     app.sample_bulk->Stop();
   }
-  app.DisconnectMidi();
-  app.DisconnectBus();
   app.ShutdownAudio();
   g_app = nullptr;
 

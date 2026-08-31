@@ -150,6 +150,18 @@ int main()
   using cardlink::audio::kRingSamples;
   using cardlink::audio::kSampleVoices;
 
+  {
+    SampleDryMixer stopped;
+    for (unsigned i = 0; i < 4u * 32u; ++i) {
+      stopped.Silence(static_cast<uint8_t>(i % kSampleVoices));
+    }
+    stopped.DrainPendingCommands();
+    stopped.AllNotesOff();
+    stopped.DrainPendingCommands();
+    Check(!stopped.AnyActive(),
+          "a stopped BODY consumer must not deadlock on a full command queue");
+  }
+
   SampleDryMixer mixer;
   LoadTone(mixer, 0);
 

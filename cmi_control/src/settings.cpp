@@ -157,6 +157,9 @@ bool Load(App &app)
     } else if (key == "out_mode") {
       app.out_mode =
           static_cast<OutMode>(std::clamp(std::atoi(val.c_str()), 0, 2));
+    } else if (key == "source_mode") {
+      app.source_mode =
+          static_cast<SourceMode>(std::clamp(std::atoi(val.c_str()), 0, 1));
     } else if (key == "baud") {
       const uint32_t saved = static_cast<uint32_t>(std::atoi(val.c_str()));
       app.baud = (saved == 460800u || saved == 960000u) ? 921600u : saved;
@@ -196,6 +199,7 @@ bool Save(const App &app)
   WriteKV(out, "log_collapsed", app.log_collapsed);
   WriteKV(out, "gain_db", app.gain_db);
   WriteKV(out, "out_mode", static_cast<int>(app.out_mode));
+  WriteKV(out, "source_mode", static_cast<int>(app.source_mode));
   WriteKV(out, "baud", static_cast<int>(app.baud));
   WriteKV(out, "serial_path", std::string(app.serial_path_buf));
   WriteKV(out, "attack_cdc_path", std::string(app.attack_cdc_path));

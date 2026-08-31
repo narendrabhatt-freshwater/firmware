@@ -56,6 +56,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Hand-written app modules live under Core/Src/<domain>/ — CubeMX
     # sources stay flat in Core/Src. Never add these to cmake/stm32cubemx/.
     Core/Src/drivers/cs4304.c
+    Core/Src/drivers/channel_led.c
     Core/Src/audio/note_bank.c
     Core/Src/audio/note_envelope.c
     Core/Src/audio/attack_bank.c

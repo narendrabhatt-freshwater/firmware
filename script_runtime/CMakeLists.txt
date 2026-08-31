@@ -87,6 +87,21 @@ add_custom_target(shared_berry_program DEPENDS
   "${CMAKE_CURRENT_BINARY_DIR}/fault_runaway_event.fwsc"
   "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.fwsc")
 add_dependencies(shared_berry_runtime_test shared_berry_program)
+
+add_executable(led_berry_runtime_test tests/led_runtime_test.c)
+target_link_libraries(led_berry_runtime_test PRIVATE script_runtime::berry)
+target_compile_options(led_berry_runtime_test PRIVATE
+    -Wall -Wextra -Werror -pedantic -UNDEBUG)
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/led_event.fwsc"
+  COMMAND fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/led_event.be"
+          -o "${CMAKE_CURRENT_BINARY_DIR}/led_event.fwsc"
+  DEPENDS fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/led_event.be")
+add_custom_target(led_berry_program DEPENDS
+    "${CMAKE_CURRENT_BINARY_DIR}/led_event.fwsc")
+add_dependencies(led_berry_runtime_test led_berry_program)
+add_test(NAME shared_berry.led
+  COMMAND led_berry_runtime_test
+    "${CMAKE_CURRENT_BINARY_DIR}/led_event.fwsc")
 endif()
 
 option(SCRIPT_RUNTIME_ARM_FOOTPRINT "Build an ARM object/map footprint probe" OFF)

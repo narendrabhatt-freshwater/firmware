@@ -25,6 +25,9 @@ int main()
         "note formatting changed");
   Check(cardproto::FormatNoteOn(7, 0u) == "n7 on 0",
         "lowest-key formatting changed");
+  Check(cardproto::FormatNoteOff(0) == "n0 off" &&
+            cardproto::FormatNoteOff(7) == "n7 off",
+        "note-off formatting changed");
   Check(cardproto::FormatStreamNoteOn(3, 69u, 17u) ==
             "n3 on 69 @17",
         "session-bound note formatting changed");

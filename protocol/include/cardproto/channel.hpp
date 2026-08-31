@@ -225,6 +225,9 @@ private:
  */
 std::string FormatNoteOn(uint8_t slot, uint8_t key);
 
+/** Format a note-off (`nX off`). */
+std::string FormatNoteOff(uint8_t slot);
+
 /** Format a session-bound streamed note-on (`nX Hz scale @session`). */
 std::string FormatStreamNoteOn(uint8_t slot, uint8_t key, uint8_t session);
 

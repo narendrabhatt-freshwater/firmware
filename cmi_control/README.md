@@ -60,6 +60,11 @@ the operation intentionally silences any playing notes.
 The UI follows a phosphor-terminal design language (green-on-dark,
 scanline accents).
 
+The Tone and Sample pages are the two Channel source modes. **Wave** generates
+sine/pulse/triangle/saw directly on the card and never starts UAC/BODY.
+**Sample** uses attack CDC plus UAC BODY; the GUI opens BODY automatically on
+the first card note, so there is no separate Start BODY step.
+
 ## Shell
 
 - Left 56 px icon rail: view switcher, Recover (on fault), shortcuts

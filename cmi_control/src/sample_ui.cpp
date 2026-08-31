@@ -487,6 +487,38 @@ void DrawSamplePage(App &app)
   const bool dialog_busy = app.file_dialog.Busy();
   const bool load_busy = app.sample_load.busy.load();
 
+  // Source selector. Only SAMPLE exposes CDC/UAC transport controls.
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, kPalette.bg_alt);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(16.f), 0.f));
+  ImGui::BeginChild("sample_mode_bar", ImVec2(0, S(40.f)),
+                    ImGuiChildFlags_None);
+  {
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const ImVec2 wp = ImGui::GetWindowPos();
+    const ImVec2 wsz = ImGui::GetWindowSize();
+    dl->AddLine(ImVec2(wp.x, wp.y + wsz.y - 1.f),
+                ImVec2(wp.x + wsz.x, wp.y + wsz.y - 1.f),
+                fw::theme::U32(kPalette.border));
+    const float mid_y = S(9.f);
+    ImGui::SetCursorPos(ImVec2(S(16.f), mid_y + S(3.f)));
+    MonoText("SOURCE", kPalette.text_dim, fs);
+    ImGui::SameLine(0.f, S(12.f));
+    ImGui::SetCursorPosY(mid_y);
+    if (fw::ui::ChipBtn("WAVE", false, BtnKind::Neutral)) {
+      app.SetSourceMode(SourceMode::Wave);
+      app.view = GuiView::Tone;
+      app.MarkSettingsDirty();
+    }
+    ImGui::SameLine(0.f, S(6.f));
+    (void)fw::ui::ChipBtn("SAMPLE", true, BtnKind::Primary);
+    ImGui::SameLine(0.f, S(12.f));
+    ImGui::SetCursorPosY(mid_y + S(4.f));
+    MonoText("attack CDC + UAC BODY", kPalette.muted, fs);
+  }
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+
   // ── Top bar: CDC + BODY
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kPalette.bg_alt);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(16.f), 0.f));
@@ -554,26 +586,14 @@ void DrawSamplePage(App &app)
     fw::ui::StatusDot(3.f, stream_on ? kPalette.accent : kPalette.muted, stream_on);
     ImGui::SameLine(0.f, S(8.f));
     ImGui::SetCursorPosY(mid_y + S(5.f));
-    MonoText(stream_on ? "BODY ON" : "BODY OFF",
+    MonoText(stream_on ? "BODY ACTIVE" : "BODY AUTO",
              stream_on ? kPalette.accent : kPalette.text_dim, fs);
-
-    ImGui::SameLine(0.f, S(12.f));
-    ImGui::SetCursorPosY(mid_y);
-    if (!stream_on) {
-      if (fw::ui::Btn("Start BODY", ImVec2(0, S(22.f)), BtnKind::Primary)) {
-        if (!app.EnsureSampleStream()) {
-          /* EnsureSampleStream already logs. */
-        } else {
-          app.PushToastOk("BODY stream open");
-        }
-      }
-    } else if (fw::ui::Btn("Stop BODY", ImVec2(0, S(22.f)), BtnKind::Neutral)) {
-      app.sample_bulk->Stop();
-    }
 
     ImGui::SameLine(0.f, S(10.f));
     ImGui::SetCursorPosY(mid_y + S(5.f));
-    MonoText("51 kHz UAC · 48 kHz BODY", kPalette.muted, fs);
+    MonoText(stream_on ? "51 kHz UAC · 48 kHz BODY"
+                       : "starts automatically with the first card note",
+             kPalette.muted, fs);
   }
   ImGui::EndChild();
   ImGui::PopStyleVar();
@@ -657,7 +677,8 @@ void DrawSamplePage(App &app)
     if (!bus_ok) {
       MonoText("RS485 offline", kPalette.warning, fs);
     } else if (!stream_on) {
-      MonoText("start BODY for sustain", kPalette.muted, fs);
+      MonoText("BODY starts automatically when a note plays", kPalette.muted,
+               fs);
     } else {
       MonoText("card owns env · filter · mix", kPalette.muted, fs);
     }

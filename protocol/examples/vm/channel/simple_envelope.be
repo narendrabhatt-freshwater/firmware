@@ -3,6 +3,10 @@
 
 def on_note_on(key)
     state stage
+    var color = (keymap_get(key) - 36) / 48.0
+    if color < 0 color = 0 end
+    if color > 1 color = 1 end
+    led(color, 1 - color, 0, 0.8)
     start_note()      # Immediately make the received note active.
     set_amplitude(0)  # Restart its envelope from silence.
     stage = 1         # Enter attack.

@@ -15,6 +15,7 @@
 
 #include "attack_bank.h"
 #include "channel_vm.h"
+#include "channel_led.h"
 #include "note_envelope.h"
 #include "note_filter.h"
 #include "stream_ring.h"
@@ -813,6 +814,12 @@ static int NoteBank_VmEnd(void *context, uint8_t note)
 { (void)context; NoteBank_HardOff(note); return 0; }
 static void NoteBank_VmSilence(void *context, uint8_t note, FwVmFault fault)
 { (void)context; (void)fault; NoteBank_HardOff(note); }
+static int NoteBank_VmLed(void *context, uint8_t note, float red, float green,
+                          float blue, float brightness)
+{
+  (void)context; (void)note;
+  return ChannelLed_Set(red, green, blue, brightness);
+}
 
 static int NoteBank_VmDispatch(FwVmChannelHandler handler, uint8_t note)
 {
@@ -884,6 +891,7 @@ void NoteBank_Init(void)
   vm_ops.start_note = NoteBank_VmStartNote;
   vm_ops.note_end = NoteBank_VmEnd;
   vm_ops.silence_voice = NoteBank_VmSilence;
+  vm_ops.set_led = NoteBank_VmLed;
 #if defined(__arm__) || defined(__thumb__)
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
   DWT->CYCCNT = 0u;

@@ -28,6 +28,7 @@ ramp(target, slope)
 hold()
 start_note()
 note_end()
+led(red, green, blue, brightness)
 keymap_get(key)
 pow(base, exponent)
 ```
@@ -39,6 +40,10 @@ constants are `INPUT_NOTE_ID`, `INPUT_FREQUENCY`, `INPUT_GAIN`, `INPUT_GATE`,
 `INPUT_MAPPED_KEY`, `INPUT_PENDING_KEY`, and `INPUT_PENDING_MAPPED_KEY`.
 Scripts implement pitch-dependent envelope policy themselves with allocation-free
 `pow()` and a two-argument `ramp()`.
+
+`led()` controls the Channel Card's RGB package. All four arguments are
+normalized from `0.0` to `1.0`; brightness scales the selected color. The most
+recent call from any voice owns the card-wide LED until reset.
 
 Persistent per-voice state can use names instead of numeric slots. Declare a
 name exactly once inside any handler with `state name` or initialize it at that

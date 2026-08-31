@@ -53,6 +53,11 @@ namespace cardproto
     return cmd;
   }
 
+  std::string FormatNoteOff(uint8_t slot)
+  {
+    return std::string("n") + NoteSlotHex(slot) + " off";
+  }
+
   Result ChannelClient::NoteDefaults() { return Send("n0"); }
 
   Result ChannelClient::NoteOn(uint8_t slot, uint8_t key)
@@ -64,7 +69,7 @@ namespace cardproto
     return Send(FormatNoteOn(slot, key));
   }
 
-  Result ChannelClient::NoteOff(uint8_t slot) { return ValidSlot(slot)?Send("n"+std::to_string(slot)+" off"):Result::LocalErr("range","note slot"); }
+  Result ChannelClient::NoteOff(uint8_t slot) { return ValidSlot(slot)?Send(FormatNoteOff(slot)):Result::LocalErr("range","note slot"); }
 
   Result ChannelClient::StreamNoteOn(uint8_t slot, uint8_t key,
                                      uint8_t session)

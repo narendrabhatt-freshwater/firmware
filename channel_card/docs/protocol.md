@@ -491,7 +491,11 @@ and configure the identity-default key map with `keymap_set` or `keymap_fill`.
 Without it, tuning defaults to C4 = 261.625565 Hz. Runtime scripts
 can inspect raw/mapped current and pending keys, read live `INPUT_AMPLITUDE`, and
 calculate pitch-dependent slopes with allocation-free `pow()`. `ramp()` accepts
-only `ramp(target, slope)`.
+only `ramp(target, slope)`. `led(red, green, blue, brightness)` flashes the
+configurable RGB LED for 100 ms; calling it again retriggers the flash. It
+controls the card's RGB package; all four arguments are normalized to
+`0.0..1.0`, and the most recent call from any voice owns the card-wide flash.
+The separate red and yellow LEDs remain reserved for status and CPU diagnostics.
 
 ---
 

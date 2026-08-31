@@ -42,6 +42,12 @@ enum class OutMode : int
   Both = 2,
 };
 
+enum class SourceMode : int
+{
+  Wave = 0,   /**< Card-generated sine/pulse/triangle/saw; no UAC BODY. */
+  Sample = 1, /**< Attack over CDC plus sample BODY over UAC. */
+};
+
 /** Native picker target for the SAMPLE page. */
 enum class SampleFilePick : int8_t
 {
@@ -141,6 +147,7 @@ struct App
   uint32_t baud = 921600;
   int gain_db = 6;
   OutMode out_mode = OutMode::Card;
+  SourceMode source_mode = SourceMode::Wave;
   GuiView view = GuiView::Perform;
 
   char raw_cmd[256] = {};
@@ -241,6 +248,7 @@ struct App
   void RequestConnectBus();
   void HandleKeyboardPiano();
   void MarkSettingsDirty();
+  void SetSourceMode(SourceMode mode);
   void PushToastOk(const std::string &msg);
   void PushToastErr(const std::string &msg);
   void NotifyEnqueue(bool ok, const char *what);

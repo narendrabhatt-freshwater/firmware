@@ -60,7 +60,7 @@ int NativePow(bvm *vm){
 void GlobalInt(bvm *vm,const char *name,bint value){be_pushint(vm,value);be_setglobal(vm,name);be_pop(vm,1);}
 void GlobalNil(bvm *vm,const char *name){be_pushnil(vm);be_setglobal(vm,name);be_pop(vm,1);}
 void RegisterAbi(bvm *vm){
-  const char *functions[]={"input","state_get","state_set","set_amplitude","ramp","hold","start_note","note_end"};
+  const char *functions[]={"input","state_get","state_set","set_amplitude","ramp","hold","start_note","note_end","led"};
   for(const char *name:functions)be_regfunc(vm,name,Stub);
   be_regfunc(vm,"keymap_set",KeymapSet);be_regfunc(vm,"keymap_fill",KeymapFill);
   be_regfunc(vm,"keymap_get",KeymapGet);be_regfunc(vm,"tuning_set",TuningSet);be_regfunc(vm,"pow",NativePow);
@@ -132,7 +132,12 @@ CompileResult BerryCompiler::CompileChannel(const std::string &source) const {
   if(!SourceIsIsolated(lowered))return Error("only ABI5 Channel handlers are allowed at top level");
   InitMetadata metadata;for(unsigned key=0;key<FW_SCRIPT_CHANNEL_KEY_COUNT;++key)metadata.keymap[key]=static_cast<uint8_t>(key);
   bvm *vm=be_vm_new();if(!vm)return Error("could not create Berry compiler VM");RegisterAbi(vm);
-  if(be_loadbuffer(vm,"channel.be",lowered.data(),lowered.size())!=BE_OK){be_vm_delete(vm);return Error("Berry syntax or ABI error");}
+  if(be_loadbuffer(vm,"channel.be",lowered.data(),lowered.size())!=BE_OK){
+    const char *detail=be_tostring(vm,-1);
+    const std::string message=detail?std::string("Berry syntax or ABI error: ")+detail:
+                                     "Berry syntax or ABI error";
+    be_vm_delete(vm);return Error(message);
+  }
   const auto stamp=std::chrono::high_resolution_clock::now().time_since_epoch().count();
   const std::string temp="/tmp/fwsc-"+std::to_string(stamp)+".bytecode";
   if(be_savecode(vm,temp.c_str())!=BE_OK){be_vm_delete(vm);return Error("could not serialize Berry bytecode");}

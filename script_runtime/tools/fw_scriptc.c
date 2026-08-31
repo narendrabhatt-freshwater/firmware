@@ -209,6 +209,7 @@ int main(int argc, char **argv)
     be_regfunc(vm, "hold", compile_only_native);
     be_regfunc(vm, "start_note", compile_only_native);
     be_regfunc(vm, "note_end", compile_only_native);
+    be_regfunc(vm, "led", compile_only_native);
     be_regfunc(vm, "keymap_set", keymap_set_native);
     be_regfunc(vm, "keymap_fill", keymap_fill_native);
     be_regfunc(vm, "keymap_get", keymap_get_native);

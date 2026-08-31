@@ -1,5 +1,6 @@
 #include "cardlink/vm/uploader.hpp"
 
+#include "cardproto/channel.hpp"
 #include "freshwater/vm.h"
 #include "freshwater/vm_channel.h"
 
@@ -38,12 +39,10 @@ bool Wait(cardlink::SerialPort &port, const std::string &wanted,
 
 bool SendNoteOff(cardlink::SerialPort &port, uint8_t voice)
 {
-  char command[16];
-  std::snprintf(command, sizeof command, "c:n%u 0\r",
-                static_cast<unsigned>(voice));
+  const std::string command = "c:" + cardproto::FormatNoteOff(voice) + "\r";
   port.FlushInput();
-  if (!port.Write(reinterpret_cast<const uint8_t *>(command),
-                  std::strlen(command))) return false;
+  if (!port.Write(reinterpret_cast<const uint8_t *>(command.data()),
+                  command.size())) return false;
   port.DrainOutput();
   const auto deadline = std::chrono::steady_clock::now() +
                         std::chrono::milliseconds(1000);

@@ -15,7 +15,8 @@
  *
  * `queued` estimates card FIFO occupancy (attack does not consume body).
  *
- * UI note changes reach the BODY thread through an SPSC command queue.
+ * UI and bus-worker note changes reach the BODY thread through a bounded
+ * producer-serialized command queue. The audio consumer remains lock-free.
  */
 
 #ifndef CARDLINK_AUDIO_SAMPLE_DRY_HPP
@@ -24,6 +25,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -132,6 +134,10 @@ public:
   void Silence(uint8_t voice);
   void AllNotesOff();
 
+  /** Apply queued control commands while the UAC callback is stopped.
+   *  There must be no other command consumer while this runs. */
+  void DrainPendingCommands();
+
   bool AnyActive() const;
 
   /** Wave id the BODY thread is streaming for this voice, or 0xFFFF if idle. */
@@ -234,7 +240,7 @@ private:
 
   static constexpr unsigned kCmdCap = 32;
 
-  void Post(const Cmd &c);
+  bool Post(const Cmd &c);
   void DrainCmds();
   void ApplyCmd(const Cmd &c);
   int16_t NextBody(Voice &v);
@@ -246,6 +252,7 @@ private:
   bool WaveInUse(uint16_t wave_id) const;
 
   std::array<Cmd, kCmdCap> cmds_{};
+  std::mutex cmd_post_mutex_;
   std::atomic<uint32_t> cmd_wr_{0};
   std::atomic<uint32_t> cmd_rd_{0};
 
