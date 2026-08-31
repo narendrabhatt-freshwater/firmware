@@ -89,7 +89,13 @@ target_compile_definitions(cmi_control PRIVATE
   CMI_VM_EXAMPLE_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/vm_scripts"
 )
 
-set(CMI_VM_EXAMPLE_NAMES simple_envelope current_envelope gate pluck)
+set(CMI_VM_EXAMPLE_NAMES
+  simple_envelope
+  simple_crash_envelope
+  pitch_tracked_envelope
+  current_envelope
+  gate
+  pluck)
 set(CMI_VM_EXAMPLE_OUTPUTS)
 foreach(CMI_VM_EXAMPLE IN LISTS CMI_VM_EXAMPLE_NAMES)
   set(CMI_VM_EXAMPLE_OUTPUT

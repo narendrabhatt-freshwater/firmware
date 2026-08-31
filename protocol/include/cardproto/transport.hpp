@@ -26,7 +26,7 @@ namespace cardproto {
  * - Wait for one reply line ending `\r\n`, then return ParseReplyBody.
  *
  * SendBlind uses the same TX framing but does not wait for a reply. It is
- * only for stuck-bus recovery (e.g. blind `"n 0"`).
+ * only for stuck-bus recovery (e.g. blind `"n off"`).
  */
 class IConsoleTransport {
 public:

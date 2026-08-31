@@ -33,14 +33,15 @@ struct Slot {
 
 struct NoteRequest {
   uint8_t voice = 0u;
-  double hz = 0.0;
+  uint8_t key = 0u;
   uint16_t wave_id = 0xFFFFu;
   uint8_t session = 0xFFu;
+  bool note_on = true;
 };
 
 class Client {
 public:
-  /** Bare Channel command, e.g. `n3 261.63` — no `c:` prefix. */
+  /** Bare Channel command, e.g. `n3 on 60` — no `c:` prefix. */
   using ConsoleFn = std::function<void(const std::string &cmd)>;
   using NoteGateStart = std::function<void()>;
   using NoteGateDone = std::function<void(bool applied)>;
@@ -74,7 +75,7 @@ public:
   bool SetRootHz(uint16_t wave_id, double hz, std::string &err);
 
   /** Reserve/launch matching USB SOF, then queue authoritative RS485 aw/nX. */
-  void NoteOn(uint8_t voice, double hz, uint16_t wave_id = 0xFFFFu);
+  void NoteOn(uint8_t voice, uint8_t key, uint16_t wave_id = 0xFFFFu);
   /** Queue RS485 note starts; each worker launches its matching BODY session
    *  immediately before aw/nX so the attack bridges into the first samples.
    *  The timeout argument remains for source/ABI compatibility and is ignored. */

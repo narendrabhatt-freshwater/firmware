@@ -24,7 +24,6 @@ struct BankEvent
   BankEventKind kind = BankEventKind::Off;
   uint8_t slot = 0;
   uint8_t midi_key = 0;
-  double freq_hz = 0.0;
   uint8_t active_count = 0;
 };
 
@@ -32,7 +31,6 @@ struct VoiceSlot
 {
   bool active = false;
   uint8_t midi_key = 0;
-  double freq_hz = 0.0;
 };
 
 /**
@@ -60,10 +58,11 @@ public:
    * Force one slot from console `nX <hz>` (hz≤0 clears). Updates FIFO and
    * nearest-MIDI label for Perform; does not allocate by key.
    */
-  std::vector<BankEvent> SetSlotFreq(uint8_t slot, double freq_hz);
+  std::vector<BankEvent> SetSlotKey(uint8_t slot, uint8_t midi_key);
+  std::vector<BankEvent> ClearSlot(uint8_t slot);
 
-  /** Force all kVoiceCount slots (`n <hz>` / `n 0`). */
-  std::vector<BankEvent> SetAllFreq(double freq_hz);
+  /** Force all kVoiceCount slots to one raw key, or clear them. */
+  std::vector<BankEvent> SetAllKey(uint8_t midi_key);
 
   uint8_t ActiveCount() const;
   const std::array<VoiceSlot, kVoiceCount>& Slots() const { return slots_; }

@@ -47,12 +47,12 @@ void LoadTone(SampleDryMixer &mixer, uint16_t wave_id)
   mixer.SetBodyRootHz(wave_id, cardlink::audio::kDefaultBodyRootHz);
 }
 
-unsigned ExpectedPrefill(double hz)
+unsigned ExpectedPrefill()
 {
-  return static_cast<unsigned>(std::ceil(
-      hz / cardlink::audio::kDefaultBodyRootHz *
-      static_cast<double>(cardlink::audio::kSampleRateHz) *
-      static_cast<double>(cardlink::audio::kUrgentPrefillMs) / 1000.0));
+  /* A replacement reserves the worst-case 16x card-side crash-fade tail.
+   * BODY itself remains sequential and pitch-neutral. */
+  return cardlink::audio::kRingSamples -
+         (16u * 48u * 3u + 2u);
 }
 
 struct PendingGate {
@@ -90,7 +90,7 @@ struct Harness {
         client.NoteOff(event.slot);
       } else if (event.kind == BankEventKind::On ||
                  event.kind == BankEventKind::Retrig) {
-        notes[count++] = NoteRequest{event.slot, event.freq_hz,
+        notes[count++] = NoteRequest{event.slot, event.midi_key,
                                      event.midi_key};
       }
       /* Steal only describes the retired key. Its following On is the one
@@ -133,7 +133,7 @@ struct Harness {
 };
 
 uint8_t CheckComplete(const std::vector<UrgentBurst> &bursts, uint8_t voice,
-                      uint16_t wave_id, double hz, const char *message)
+                      uint16_t wave_id, const char *message)
 {
   unsigned total = 0u;
   unsigned sof_count = 0u;
@@ -150,7 +150,7 @@ uint8_t CheckComplete(const std::vector<UrgentBurst> &bursts, uint8_t voice,
     sof_count += burst.sof ? 1u : 0u;
   }
   Check(session != 0xFFu && sof_count == 1u &&
-            total >= ExpectedPrefill(hz) &&
+            total >= ExpectedPrefill() &&
             total <= cardlink::audio::kRingSamples,
         message);
   return session;
@@ -168,7 +168,7 @@ void TestMonoSteal()
         "mono C6 must use physical voice zero");
   const auto c6_bursts = h.DrainUrgent();
   const uint8_t c6_session = CheckComplete(
-      c6_bursts, 0u, kC6, c6_gate.note.hz,
+      c6_bursts, 0u, kC6,
       "mono C6 chunks must build one complete urgent reservoir");
 
   const auto c4_events = h.bank.NoteOn(kC4);
@@ -181,7 +181,7 @@ void TestMonoSteal()
   const auto c4_gate = h.AckNext();
   const auto c4_bursts = h.DrainUrgent();
   const uint8_t c4_session = CheckComplete(
-      c4_bursts, 0u, kC4, c4_gate.note.hz,
+      c4_bursts, 0u, kC4,
       "mono C4 replacement must get a complete chunked prefill");
   Check(!h.client.Mixer().BurstIsCurrent(0u, c6_session, kC6),
         "mono steal must stale the old C6 BODY session");
@@ -197,7 +197,7 @@ void TestMonoSteal()
   const auto a4_gate = h.AckNext();
   const auto a4_bursts = h.DrainUrgent();
   const uint8_t a4_session = CheckComplete(
-      a4_bursts, 0u, kA4, a4_gate.note.hz,
+      a4_bursts, 0u, kA4,
       "mono A4 must receive a complete chunked prefill");
   Check(a4_session != c4_session && h.bank.ActiveCount() == 1u &&
             h.bank.Slots()[0].midi_key == kA4,
@@ -234,10 +234,10 @@ void TestDuoStealAndChordPriority()
   auto remaining = h.DrainUrgent();
   chord_bursts.insert(chord_bursts.end(), remaining.begin(), remaining.end());
   const uint8_t c6_session = CheckComplete(
-      chord_bursts, 0u, kC6, c6_gate.note.hz,
+      chord_bursts, 0u, kC6,
       "duo C6 chunks must complete without starvation");
   const uint8_t c4_session = CheckComplete(
-      chord_bursts, 1u, kC4, c4_gate.note.hz,
+      chord_bursts, 1u, kC4,
       "duo C4 chunks must complete without starvation");
   const auto a4_events = h.bank.NoteOn(kA4);
   Check(a4_events.size() == 2u &&
@@ -252,7 +252,7 @@ void TestDuoStealAndChordPriority()
         "duo A4 restart must target stolen voice zero");
   const auto a4_bursts = h.DrainUrgent();
   const uint8_t a4_session = CheckComplete(
-      a4_bursts, 0u, kA4, a4_gate.note.hz,
+      a4_bursts, 0u, kA4,
       "duo A4 replacement chunks must complete");
   Check(a4_session != c6_session &&
             h.client.Mixer().BurstIsCurrent(1u, c4_session, kC4) &&
@@ -275,7 +275,7 @@ void TestQueuedStealsDiscardSupersededBodies()
     (void)mono.AckNext();
     const auto mono_a4_gate = mono.AckNext();
     const auto only = mono.DrainUrgent();
-    CheckComplete(only, 0u, kA4, mono_a4_gate.note.hz,
+    CheckComplete(only, 0u, kA4,
                   "rapid mono must retain only A4 chunks");
     Check(!mono.client.Mixer().UrgentPending(),
           "rapid mono steals must discard queued C6/C4 BODY and keep A4");
@@ -290,9 +290,9 @@ void TestQueuedStealsDiscardSupersededBodies()
     const auto duo_c4_gate = duo.AckNext();
     const auto duo_a4_gate = duo.AckNext();
     const auto bursts = duo.DrainUrgent();
-    CheckComplete(bursts, 0u, kA4, duo_a4_gate.note.hz,
+    CheckComplete(bursts, 0u, kA4,
                   "rapid duo A4 chunks must replace stolen C6");
-    CheckComplete(bursts, 1u, kC4, duo_c4_gate.note.hz,
+    CheckComplete(bursts, 1u, kC4,
                   "rapid duo must retain C4 chunks");
     Check(!duo.client.Mixer().UrgentPending(),
           "rapid duo steal must queue A4 above C4 and discard stolen C6 BODY");

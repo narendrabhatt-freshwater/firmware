@@ -63,7 +63,7 @@ extern "C"
   void StreamRing_Prime(uint8_t voice);
 
   /** Bind the next nX replacement to its authoritative BODY identity before
-   * the command is ACKed. session 0xFF keeps legacy untagged nX behavior. */
+   * the command is ACKed. session 0xFF keeps untagged nX behavior. */
   void StreamRing_ArmReplacement(uint8_t voice, uint16_t wave_id,
                                  uint8_t session);
 

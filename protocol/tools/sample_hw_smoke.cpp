@@ -1,5 +1,6 @@
 #include "cardlink/audio/sample_bulk.hpp"
 #include "cardlink/midi/voice_bank.hpp"
+#include "cardlink/midi/pitch.hpp"
 #include "cardlink/rs485/controller.hpp"
 #include "cardlink/sample/client.hpp"
 #include "cardlink/usb/stream_proto.hpp"
@@ -178,7 +179,7 @@ int main(int argc, char **argv)
             [note, start = std::move(start),
              done = std::move(done)](cardproto::ChannelClient &ch) {
               start();
-              if (!(note.hz > 0.0)) {
+              if (!note.note_on) {
                 auto result = ch.NoteOff(note.voice);
                 done(result.ok());
                 return result;
@@ -188,7 +189,7 @@ int main(int argc, char **argv)
                   " " + std::to_string(static_cast<unsigned>(note.wave_id));
               auto result = ch.Exec(aw);
               if (result.ok()) {
-                result = ch.SetStreamNote(note.voice, note.hz, note.session);
+                result = ch.StreamNoteOn(note.voice, note.key, note.session);
               }
               done(result.ok());
               return result;
@@ -264,9 +265,9 @@ int main(int argc, char **argv)
         sample.NoteOff(event.slot);
       } else if (event.kind == cardlink::midi::BankEventKind::On ||
                  event.kind == cardlink::midi::BankEventKind::Retrig) {
-        /* This smoke tool loads one wave at id 0; pitch still comes from nX. */
+        /* This smoke tool loads one wave at id 0; pitch comes from the raw key. */
         pending[count++] =
-            cardlink::sample::NoteRequest{event.slot, event.freq_hz, 0u};
+            cardlink::sample::NoteRequest{event.slot, event.midi_key, 0u, 0xFFu, true};
       }
     }
     return count == 0u || sample.NoteOnBatch(pending.data(), count);
@@ -288,7 +289,8 @@ int main(int argc, char **argv)
     std::array<cardlink::sample::NoteRequest,
                cardlink::audio::kSampleVoices> notes{};
     for (uint8_t v = 0u; v < nvoices; ++v) {
-      notes[v] = cardlink::sample::NoteRequest{v, hz[v], 0u};
+      notes[v] = cardlink::sample::NoteRequest{
+          v, cardlink::midi::HzToNearestMidi(hz[v]), 0u, 0xFFu, true};
     }
     if (!sample.NoteOnBatch(notes.data(), nvoices)) {
       std::cerr << "cannot start chord: no loaded BODY\n";

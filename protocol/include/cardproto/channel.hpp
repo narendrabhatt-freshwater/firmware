@@ -72,43 +72,23 @@ public:
    */
   Result NoteDefaults();
 
-  /**
-   * @brief Set one note slot frequency (and optional amplitude scale).
-   *
-   * Prefer fractional Hz — integer rounding detunes equal-temperament
-   * octaves (e.g. C4→262 / C5→523 instead of 261.63 / 523.25).
-   *
-   * @param[in] slot  Voice index in `[0, 7]`.
-   * @param[in] hz    Frequency Hz in `[20, 20000)`, or `0` to turn the slot off.
-   * @param[in] scale Amplitude scale in `[0, 1]`, or `-1` to omit (card default
-   *                  0.125).
-   * @return LocalErr on bad args; otherwise wire `nX …` exchange result.
-   */
-  Result SetNote(uint8_t slot, double hz, double scale = -1.0);
+  /** Raw MIDI-key note-on. Wire `nX on key`. */
+  Result NoteOn(uint8_t slot, uint8_t key);
 
   /** Authoritative streamed note-on. Wire `nX Hz scale @session`; the tag
    * binds the following USB BODY SOF to this exact gate generation. */
-  Result SetStreamNote(uint8_t slot, double hz, uint8_t session,
-                       double scale = -1.0);
+  Result StreamNoteOn(uint8_t slot, uint8_t key, uint8_t session);
 
   /**
    * @brief Turn one note slot off.
    * @param[in] slot Voice index in `[0, 7]`.
-   * @return Equivalent to SetNote(@p slot, 0). Wire `nX 0`.
+   * @return Note-off result. Wire `nX off`.
    */
   Result NoteOff(uint8_t slot);
 
   /**
-   * @brief Set all 8 note slots to the same Hz / scale.
-   * @param[in] hz    Frequency Hz in `[20, 20000)`, or `0` for silence.
-   * @param[in] scale Amplitude scale in `[0, 1]`, or `-1` to omit.
-   * @return LocalErr on bad args; otherwise wire `n …` exchange result.
-   */
-  Result SetAllNotes(double hz, double scale = -1.0);
-
-  /**
    * @brief Silence all 8 note slots.
-   * @return Exchange result for wire `n 0`.
+   * @return Exchange result for wire `n off`.
    */
   Result AllNotesOff();
 
@@ -240,18 +220,10 @@ private:
  * @param[in] scale Scale, or `< 0` to omit from the wire string.
  * @return Command string, e.g. `"n0 261.625565"`.
  */
-std::string FormatSetNote(uint8_t slot, double hz, double scale = -1.0);
+std::string FormatNoteOn(uint8_t slot, uint8_t key);
 
 /** Format a session-bound streamed note-on (`nX Hz scale @session`). */
-std::string FormatSetStreamNote(uint8_t slot, double hz, uint8_t session,
-                                double scale = -1.0);
-
-/**
- * @param[in] hz    Frequency or `0` for silence-all.
- * @param[in] scale Scale, or `< 0` to omit.
- * @return Command string for wire `n …`.
- */
-std::string FormatSetAllNotes(double hz, double scale = -1.0);
+std::string FormatStreamNoteOn(uint8_t slot, uint8_t key, uint8_t session);
 
 /**
  * @param[in] duty Pulse duty.

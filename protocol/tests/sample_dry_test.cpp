@@ -72,7 +72,7 @@ void RunNoFaultCase(const std::array<double, cardlink::audio::kSampleVoices> &in
   const double output_frames = 48.0 * kStatusPeriodMs;
 
   for (uint8_t v = 0; v < nvoices; ++v) {
-    mixer.NoteOn(v, 0, body_root_hz * inc[v]);
+    mixer.NoteOn(v, 0);
     mixer.ConsumeOutputSamples(0.0);
     mask = static_cast<uint8_t>(mask | static_cast<uint8_t>(1u << v));
   }
@@ -99,9 +99,15 @@ void RunNoFaultCase(const std::array<double, cardlink::audio::kSampleVoices> &in
       phase[v] += inc[v] * output_frames;
       const unsigned consume = static_cast<unsigned>(std::floor(phase[v]));
       phase[v] -= static_cast<double>(consume);
-      Check(ring[v] >= consume, message);
+      if (ring[v] < consume) {
+        std::cerr << message << " (underflow q=" << q << " voice="
+                  << static_cast<unsigned>(v) << " ring=" << ring[v]
+                  << " consume=" << consume << ")\n";
+        std::exit(EXIT_FAILURE);
+      }
       ring[v] -= consume;
-      free_samples[v] = static_cast<uint16_t>(kRingSamples - ring[v]);
+      free_samples[v] = static_cast<uint16_t>(
+          ring[v] < kRingSamples ? kRingSamples - ring[v] : 0u);
       const double ms = static_cast<double>(ring[v]) / inc[v];
       if (best == 0xFFu || ms < best_ms) {
         best = v;
@@ -123,7 +129,12 @@ void RunNoFaultCase(const std::array<double, cardlink::audio::kSampleVoices> &in
       uint8_t session = 0u;
       const unsigned got = mixer.FillUacFrame(
           v, body.data(), body.size(), sof, session);
-      Check(ring[v] + got <= kRingSamples, message);
+      if (ring[v] + got > kRingSamples + kRingHeadroom) {
+        std::cerr << message << " (overflow q=" << q << " voice="
+                  << static_cast<unsigned>(v) << " ring=" << ring[v]
+                  << " got=" << got << ")\n";
+        std::exit(EXIT_FAILURE);
+      }
       ring[v] += got;
     }
   }
@@ -142,7 +153,7 @@ int main()
   SampleDryMixer mixer;
   LoadTone(mixer, 0);
 
-  mixer.NoteOn(0, 0, kDefaultBodyRootHz);
+  mixer.NoteOn(0, 0);
   mixer.ConsumeOutputSamples(0.0);
   Check(mixer.WantBurst(0) == 0,
         "a new session must not refill before vq permission");
@@ -222,7 +233,7 @@ int main()
         "exact fill 4 must immediately request a maximum rebuild burst");
   mixer.Silence(0);
   mixer.ConsumeOutputSamples(0.0);
-  mixer.NoteOn(0, 0, kDefaultBodyRootHz);
+  mixer.NoteOn(0, 0);
   mixer.ConsumeOutputSamples(0.0);
   GrantEmpty(mixer, 0x01, 0);
   Check(TakeBurst(mixer, 0) == kBodyBurstMax, "SOF after exact-credit test");
@@ -267,7 +278,7 @@ int main()
   mixer.Silence(0);
   mixer.ConsumeOutputSamples(0.0);
 
-  mixer.NoteOn(0, 0, kDefaultBodyRootHz * 0.5);
+  mixer.NoteOn(0, 0);
   mixer.ConsumeOutputSamples(0.0);
   GrantEmpty(mixer, 0x01, 0);
   Check(TakeBurst(mixer, 0) == kBodyBurstMax,
@@ -286,8 +297,8 @@ int main()
   mixer.Silence(0);
   mixer.ConsumeOutputSamples(0.0);
 
-  mixer.NoteOn(0, 0, kDefaultBodyRootHz);
-  mixer.NoteOn(1, 0, kDefaultBodyRootHz);
+  mixer.NoteOn(0, 0);
+  mixer.NoteOn(1, 0);
   mixer.ConsumeOutputSamples(0.0);
   Check(mixer.HungriestWant() == 0xFF,
         "two new notes must both wait for vq permission");
@@ -314,7 +325,7 @@ int main()
     SampleDryMixer chord;
     LoadTone(chord, 0);
     for (uint8_t voice = 0u; voice < kSampleVoices; ++voice) {
-      chord.NoteOn(voice, 0u, kDefaultBodyRootHz);
+      chord.NoteOn(voice, 0u);
     }
     chord.ConsumeOutputSamples(0.0);
     uint8_t seen = 0u;
@@ -336,7 +347,7 @@ int main()
   {
     SampleDryMixer pipelined;
     LoadTone(pipelined, 0);
-    pipelined.NoteOn(0, 0, kDefaultBodyRootHz);
+    pipelined.NoteOn(0, 0);
     pipelined.ConsumeOutputSamples(0.0);
     std::array<uint16_t, kSampleVoices> empty{};
     empty.fill(static_cast<uint16_t>(kRingSamples));
@@ -359,7 +370,7 @@ int main()
   {
     SampleDryMixer crash;
     LoadTone(crash, 0);
-    crash.NoteOn(0, 0, kDefaultBodyRootHz);
+    crash.NoteOn(0, 0);
     crash.ConsumeOutputSamples(0.0);
     GrantEmpty(crash, 0x01u, 0u);
     std::array<int16_t, kBodyBurstMax> body{};
@@ -371,7 +382,7 @@ int main()
               crash.BurstIsCurrent(0u, old_session, 0u),
           "first BODY chunk must belong to its original note session");
 
-    crash.NoteOn(0, 0, kDefaultBodyRootHz * 2.0);
+    crash.NoteOn(0, 0);
     crash.ConsumeOutputSamples(0.0);
     Check(!crash.BurstIsCurrent(0u, old_session, 0u),
           "voice replacement must immediately stale queued old BODY");
@@ -402,11 +413,11 @@ int main()
               cardlink::usb::kStreamBodySamplesPerMs * 10u,
           "eight voices at +1.33 semitones must fit direct UAC capacity");
   }
-  mixer.NoteOn(0, 0, kDefaultBodyRootHz * 2.0);
-  mixer.NoteOn(1, 0, kDefaultBodyRootHz * 2.0);
-  mixer.NoteOn(2, 0, kDefaultBodyRootHz * 2.0);
-  mixer.NoteOn(3, 0, kDefaultBodyRootHz * 2.0);
-  mixer.NoteOn(4, 0, kDefaultBodyRootHz * 2.0);
+  mixer.NoteOn(0, 0);
+  mixer.NoteOn(1, 0);
+  mixer.NoteOn(2, 0);
+  mixer.NoteOn(3, 0);
+  mixer.NoteOn(4, 0);
   mixer.ConsumeOutputSamples(0.0);
   GrantEmpty(mixer, 0x1F, 0);
   {
@@ -425,9 +436,9 @@ int main()
 
   mixer.AllNotesOff();
   mixer.ConsumeOutputSamples(0.0);
-  mixer.NoteOn(0, 0, kDefaultBodyRootHz);
-  mixer.NoteOn(1, 0, kDefaultBodyRootHz * 2.0);
-  mixer.NoteOn(2, 0, kDefaultBodyRootHz * 4.0);
+  mixer.NoteOn(0, 0);
+  mixer.NoteOn(1, 0);
+  mixer.NoteOn(2, 0);
   mixer.ConsumeOutputSamples(0.0);
   GrantEmpty(mixer, 0x07, 2);
   {
@@ -442,20 +453,20 @@ int main()
     for (unsigned i = 0; i < nwant; ++i) {
       by_voice[order[i]] = grants[i];
     }
-    Check(std::abs(static_cast<int>(2u * by_voice[0]) -
-                       static_cast<int>(by_voice[1])) <= 2 &&
-              std::abs(static_cast<int>(2u * by_voice[1]) -
-                       static_cast<int>(by_voice[2])) <= 2 &&
+    Check(std::abs(static_cast<int>(by_voice[0]) -
+                       static_cast<int>(by_voice[1])) <= 1 &&
+              std::abs(static_cast<int>(by_voice[1]) -
+                       static_cast<int>(by_voice[2])) <= 1 &&
               by_voice[0] + by_voice[1] + by_voice[2] == budget,
-          "C4+C5+C6 grants must follow direct-UAC consumption rates");
+          "pitch-neutral BODY grants must be shared equally");
   }
 
   mixer.AllNotesOff();
   mixer.ConsumeOutputSamples(0.0);
   mixer.SetBodyRootHz(0, kDefaultBodyRootHz * 2.0);
-  mixer.NoteOn(0, 0, kDefaultBodyRootHz * 4.0);
-  mixer.NoteOn(1, 0, kDefaultBodyRootHz * 4.0);
-  mixer.NoteOn(2, 0, kDefaultBodyRootHz * 4.0);
+  mixer.NoteOn(0, 0);
+  mixer.NoteOn(1, 0);
+  mixer.NoteOn(2, 0);
   mixer.ConsumeOutputSamples(0.0);
   GrantEmpty(mixer, 0x07, 0);
   {
@@ -551,25 +562,26 @@ int main()
                     cardlink::sample::Client::NoteGateStart start,
                     cardlink::sample::Client::NoteGateDone done) {
           start();
-          if (note.hz > 0.0) {
+          if (note.note_on) {
             commands.push_back("aw " + std::to_string(note.voice) + " " +
                                std::to_string(note.wave_id));
-            commands.push_back("n" + std::to_string(note.voice) + " on");
+            commands.push_back("n" + std::to_string(note.voice) + " on " +
+                               std::to_string(note.key));
           } else {
-            commands.push_back("n" + std::to_string(note.voice) + " 0");
+            commands.push_back("n" + std::to_string(note.voice) + " off");
           }
           done(true);
           return true;
         });
     const std::array<cardlink::sample::NoteRequest, 2> chord{{
-        {0u, 261.625565, 0u},
-        {1u, 329.627557, 0u},
+        {0u, 60u, 0u},
+        {1u, 64u, 0u},
     }};
     Check(client.NoteOnBatch(chord.data(), chord.size(), 0u),
           "chord must start without waiting for BODY completion");
     Check(commands.size() == 4u && commands[0] == "aw 0 0" &&
-              commands[1] == "n0 on" && commands[2] == "aw 1 0" &&
-              commands[3] == "n1 on",
+              commands[1] == "n0 on 60" && commands[2] == "aw 1 0" &&
+              commands[3] == "n1 on 64",
           "RS485 aw/nX ACK must precede each BODY session");
     std::array<int16_t, kBodyBurstMax> urgent_body{};
     cardlink::audio::UrgentBurst first{};
@@ -592,8 +604,8 @@ int main()
     Check(sof_count == 2u && saw_voice0,
           "both chord sessions need exactly one SOF plus deadline top-ups");
     client.NoteOff(0u);
-    Check(commands.back() == "n0 0" && !client.Mixer().UrgentPending(),
-          "RS485 nX 0 must remain the note-off authority");
+    Check(commands.back() == "n0 off" && !client.Mixer().UrgentPending(),
+          "RS485 nX off must remain the note-off authority");
     client.SetCrashReleaseMs(0u);
     Check(client.CrashReleaseMs() == 0u && commands.back() == "crash 0",
           "zero-ms crash release must reach the card as a hard-cut test");
@@ -617,7 +629,7 @@ int main()
           ack = std::move(done);
           return true;
         });
-    const cardlink::sample::NoteRequest note{0u, kDefaultBodyRootHz, 0u};
+    const cardlink::sample::NoteRequest note{0u, 60u, 0u};
     Check(gated.NoteOnBatch(&note, 1u),
           "RS485 note transaction must enter its worker queue");
     Check(!gated.Mixer().UrgentPending(),
@@ -648,7 +660,7 @@ int main()
           done(false);
           return true;
         });
-    const cardlink::sample::NoteRequest note{0u, kDefaultBodyRootHz, 0u};
+    const cardlink::sample::NoteRequest note{0u, 60u, 0u};
     Check(failed.NoteOnBatch(&note, 1u),
           "failed authoritative command must still complete its queued job");
     std::array<int16_t, kBodyBurstMax> body{};
@@ -661,7 +673,7 @@ int main()
   {
     SampleDryMixer bridge;
     LoadTone(bridge, 0);
-    bridge.NoteOn(0u, 0u, kDefaultBodyRootHz);
+    bridge.NoteOn(0u, 0u);
     std::array<int16_t, kBodyBurstMax> body{};
     cardlink::audio::UrgentBurst chunk{};
     Check(bridge.FillUrgentBurst(body.data(), 64u, chunk) &&
@@ -676,10 +688,8 @@ int main()
             "startup bridge must self-complete");
       total += chunk.nsamp;
     }
-    Check(total == static_cast<unsigned>(
-                       cardlink::audio::kSampleRateHz *
-                       cardlink::audio::kUrgentPrefillMs / 1000u),
-          "startup bridge must queue the full 15 ms horizon");
+    Check(total == cardlink::audio::kRingSamples,
+          "startup bridge must fill the pitch-neutral safe runway");
   }
 
   {
@@ -687,14 +697,14 @@ int main()
     LoadTone(urgent, 0);
     urgent.SetCrashReleaseMs(50u);
     const uint8_t old_session =
-        urgent.NoteOn(0u, 0u, kDefaultBodyRootHz * 16.0);
+        urgent.NoteOn(0u, 0u);
     std::array<int16_t, kBodyBurstMax> body{};
     cardlink::audio::UrgentBurst old_note{};
     Check(urgent.FillUrgentBurst(body.data(), body.size(), old_note) &&
               old_note.session == old_session,
           "note-on must assign its session synchronously");
     const uint8_t new_session =
-        urgent.NoteOn(0u, 0u, kDefaultBodyRootHz);
+        urgent.NoteOn(0u, 0u);
     cardlink::audio::UrgentBurst replacement{};
     Check(!urgent.FillUrgentBurst(body.data(), body.size(), replacement) &&
               new_session != old_session && !urgent.UrgentPending(),

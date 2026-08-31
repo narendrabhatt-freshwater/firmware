@@ -10,13 +10,6 @@ namespace cardproto
 
     bool ValidSlot(uint8_t slot) { return slot <= 7u; }
 
-    bool ValidHzOrOff(double hz)
-    {
-      return hz == 0.0 || (hz >= 20.0 && hz < 20000.0);
-    }
-
-    bool ValidScale(double scale) { return scale >= 0.0 && scale <= 1.0; }
-
   } // namespace
 
   ChannelClient::ChannelClient(IConsoleTransport &transport) : tx_(transport) {}
@@ -42,100 +35,48 @@ namespace cardproto
     return static_cast<char>('a' + (slot - 10u));
   }
 
-  std::string FormatSetNote(uint8_t slot, double hz, double scale)
+  std::string FormatNoteOn(uint8_t slot, uint8_t key)
   {
     char cmd[48];
     const char hex = NoteSlotHex(slot);
-    if (hz == 0.0)
-    {
-      std::snprintf(cmd, sizeof(cmd), "n%c 0", hex);
-    }
-    else if (scale < 0.0)
-    {
-      std::snprintf(cmd, sizeof(cmd), "n%c %.9f", hex, hz);
-    }
-    else
-    {
-      std::snprintf(cmd, sizeof(cmd), "n%c %.9f %.9f", hex, hz, scale);
-    }
+    std::snprintf(cmd, sizeof(cmd), "n%c on %u", hex,
+                  static_cast<unsigned>(key));
     return cmd;
   }
 
-  std::string FormatSetStreamNote(uint8_t slot, double hz, uint8_t session,
-                                  double scale)
+  std::string FormatStreamNoteOn(uint8_t slot, uint8_t key, uint8_t session)
   {
     char cmd[64];
     const char hex = NoteSlotHex(slot);
-    const double wire_scale = scale < 0.0 ? 0.125 : scale;
-    std::snprintf(cmd, sizeof(cmd), "n%c %.9f %.9f @%u", hex, hz,
-                  wire_scale, static_cast<unsigned>(session));
-    return cmd;
-  }
-
-  std::string FormatSetAllNotes(double hz, double scale)
-  {
-    char cmd[48];
-    if (hz == 0.0)
-    {
-      std::snprintf(cmd, sizeof(cmd), "n 0");
-    }
-    else if (scale < 0.0)
-    {
-      std::snprintf(cmd, sizeof(cmd), "n %.9f", hz);
-    }
-    else
-    {
-      std::snprintf(cmd, sizeof(cmd), "n %.9f %.9f", hz, scale);
-    }
+    std::snprintf(cmd, sizeof(cmd), "n%c on %u @%u", hex,
+                  static_cast<unsigned>(key), static_cast<unsigned>(session));
     return cmd;
   }
 
   Result ChannelClient::NoteDefaults() { return Send("n0"); }
 
-  Result ChannelClient::SetNote(uint8_t slot, double hz, double scale)
+  Result ChannelClient::NoteOn(uint8_t slot, uint8_t key)
   {
-    if (!ValidSlot(slot) || !ValidHzOrOff(hz))
+    if (!ValidSlot(slot) || key >= 128u)
     {
-      return Result::LocalErr("range", "note slot/hz");
+      return Result::LocalErr("range", "note slot/key");
     }
-    if (scale >= 0.0 && !ValidScale(scale))
-    {
-      return Result::LocalErr("range", "scale");
-    }
-    return Send(FormatSetNote(slot, hz, scale));
+    return Send(FormatNoteOn(slot, key));
   }
 
-  Result ChannelClient::NoteOff(uint8_t slot) { return SetNote(slot, 0.0); }
+  Result ChannelClient::NoteOff(uint8_t slot) { return ValidSlot(slot)?Send("n"+std::to_string(slot)+" off"):Result::LocalErr("range","note slot"); }
 
-  Result ChannelClient::SetStreamNote(uint8_t slot, double hz,
-                                      uint8_t session, double scale)
+  Result ChannelClient::StreamNoteOn(uint8_t slot, uint8_t key,
+                                     uint8_t session)
   {
-    if (!ValidSlot(slot) || !(hz >= 20.0 && hz < 20000.0) ||
-        session >= 255u)
+    if (!ValidSlot(slot) || key >= 128u || session >= 255u)
     {
-      return Result::LocalErr("range", "stream note slot/hz/session");
+      return Result::LocalErr("range", "stream note slot/key/session");
     }
-    if (scale >= 0.0 && !ValidScale(scale))
-    {
-      return Result::LocalErr("range", "scale");
-    }
-    return Send(FormatSetStreamNote(slot, hz, session, scale));
+    return Send(FormatStreamNoteOn(slot, key, session));
   }
 
-  Result ChannelClient::SetAllNotes(double hz, double scale)
-  {
-    if (!ValidHzOrOff(hz))
-    {
-      return Result::LocalErr("range", "hz");
-    }
-    if (scale >= 0.0 && !ValidScale(scale))
-    {
-      return Result::LocalErr("range", "scale");
-    }
-    return Send(FormatSetAllNotes(hz, scale));
-  }
-
-  Result ChannelClient::AllNotesOff() { return Send("n 0"); }
+  Result ChannelClient::AllNotesOff() { return Send("n off"); }
 
   Result ChannelClient::QueryVoiceStatus() { return Send("vq"); }
 

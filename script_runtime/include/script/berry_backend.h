@@ -7,9 +7,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Eight-program/reload peak 15,928 B + 4 KiB upload scratch + 20% headroom,
+/* ABI5 eight-program/reload peak 17,120 B + 4 KiB upload scratch + 20% headroom,
  * rounded to 1 KiB by the qualification probe. */
-#define SCRIPT_BERRY_ARENA_SIZE (23u * 1024u)
+#define SCRIPT_BERRY_ARENA_SIZE (25u * 1024u)
 #define SCRIPT_BERRY_UPLOAD_SIZE FW_SCRIPT_MAX_PAYLOAD
 #define SCRIPT_BERRY_HEAP_SIZE (SCRIPT_BERRY_ARENA_SIZE-SCRIPT_BERRY_UPLOAD_SIZE)
 /* Largest sanctioned handler path measured 36 instructions. Add 25%, then
@@ -33,7 +33,7 @@ typedef struct {
 
 typedef union {
   long double alignment;
-  uint8_t bytes[SCRIPT_BERRY_ARENA_SIZE];
+  uint8_t bytes[SCRIPT_BERRY_HEAP_SIZE];
 } ScriptBerryArena;
 
 typedef struct ScriptBerryRuntime {
@@ -41,6 +41,7 @@ typedef struct ScriptBerryRuntime {
   void *vm;
   ScriptBerryNativeOps ops;
   float state[FW_SCRIPT_CHANNEL_VOICE_COUNT][FW_SCRIPT_CHANNEL_STATE_VALUES];
+  float tuning_scale[FW_SCRIPT_CHANNEL_VOICE_COUNT];
   FwVmMetrics voice_metrics[FW_SCRIPT_CHANNEL_VOICE_COUNT];
   FwVmFault voice_fault[FW_SCRIPT_CHANNEL_VOICE_COUNT];
   FwVmMemoryMetrics memory;
@@ -73,6 +74,8 @@ void script_berry_stop(ScriptBerryRuntime *, uint8_t voice);
 void script_berry_stop_all(ScriptBerryRuntime *);
 uint8_t script_berry_is_active(const ScriptBerryRuntime *, uint8_t voice);
 uint8_t script_berry_active_mask(const ScriptBerryRuntime *);
+uint8_t script_berry_map_key(const ScriptBerryRuntime *, uint8_t voice, uint8_t key);
+float script_berry_tuning_scale(const ScriptBerryRuntime *, uint8_t voice);
 FwVmFault script_berry_fault(const ScriptBerryRuntime *, uint8_t voice);
 const FwVmMetrics *script_berry_voice_metrics(const ScriptBerryRuntime *, uint8_t);
 const FwVmMemoryMetrics *script_berry_memory_metrics(ScriptBerryRuntime *);

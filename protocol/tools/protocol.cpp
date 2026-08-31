@@ -434,8 +434,8 @@ int main(int argc, char **argv)
     for (const auto &step : sequence.steps) {
       using cardlink::sequence::CrashStepKind;
       if (step.kind == CrashStepKind::Note) {
-        std::printf("  line %u: %-4s %.3f Hz, wave w%u, %ums", step.line,
-                    step.label.c_str(), step.hz,
+        std::printf("  line %u: %-4s key %u, wave w%u, %ums", step.line,
+                    step.label.c_str(), static_cast<unsigned>(step.key),
                     static_cast<unsigned>(step.wave_id), step.duration_ms);
         if (step.release) {
           std::printf(" then %ums voice steal", step.release_ms);
@@ -531,7 +531,7 @@ int main(int argc, char **argv)
             [note, start = std::move(start), done = std::move(done),
              &note_gate](cardproto::ChannelClient &channel) {
               start();
-              if (!(note.hz > 0.0)) {
+              if (!note.note_on) {
                 auto result = channel.NoteOff(note.voice);
                 done(result.ok());
                 note_gate.Complete(result.ok());
@@ -542,7 +542,7 @@ int main(int argc, char **argv)
                   " " + std::to_string(static_cast<unsigned>(note.wave_id));
               auto result = channel.Exec(assign);
               if (result.ok()) {
-                result = channel.SetStreamNote(note.voice, note.hz, note.session);
+                result = channel.StreamNoteOn(note.voice, note.key, note.session);
               }
               done(result.ok());
               note_gate.Complete(result.ok());
@@ -631,7 +631,7 @@ int main(int argc, char **argv)
         if (step.release) {
           samples.SetCrashReleaseMs(static_cast<uint8_t>(step.release_ms));
         }
-        samples.NoteOn(static_cast<uint8_t>(slot), step.hz, step.wave_id);
+        samples.NoteOn(static_cast<uint8_t>(slot), step.key, step.wave_id);
         if (!note_gate.Wait() || !SleepMs(step.duration_ms)) {
           okay = g_stop.load();
           break;

@@ -19,7 +19,7 @@ struct CrashStep
 {
   CrashStepKind kind = CrashStepKind::Delay;
   unsigned line = 0;
-  double hz = 0.0;
+  uint8_t key = 0u;
   uint16_t wave_id = 0;
   uint32_t duration_ms = 0;
   bool release = false;

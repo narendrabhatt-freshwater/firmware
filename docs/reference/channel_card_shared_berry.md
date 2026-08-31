@@ -4,15 +4,17 @@ Measured on 31 August 2026 with the event-driven envelope program:
 
 | Measurement | Result |
 | --- | ---: |
-| Eight independently loaded program objects | 15,112 B allocator peak |
-| Atomic replacement peak | 15,928 B |
+| Eight independently loaded program objects | 16,272 B allocator peak |
+| Atomic replacement peak | 17,120 B |
 | Upload scratch | 4,096 B |
-| Formula result (peak + 20% + scratch, 1 KiB rounded) | 23,552 B |
-| Final `ScriptBerryRuntime` linker section | 24,576 B |
-| Berry ARM relocatable contribution probe | 63,259 B |
-| Complete ARM firmware flash (`text + data`) | 163,324 B |
-| AXI SRAM used / capacity | 324,824 / 327,680 B |
-| AXI SRAM remaining | 2,856 B |
+| Formula result (peak + 20% + scratch, 1 KiB rounded) | 25,600 B |
+| Final `ScriptBerryRuntime` linker section | 22,560 B |
+| DTCM upload scratch + eight key maps | 5,120 B |
+| Berry ARM relocatable contribution probe | 63,909 B |
+| Complete ARM firmware flash | 164,368 B |
+| AXI SRAM used / capacity | 322,808 / 327,680 B |
+| AXI SRAM remaining | 4,872 B |
+| DTCM used / capacity | 118,888 / 131,072 B |
 
 The final linker map retains a 2 KiB AXI guard. `.attack_bank` remains 262,144
 bytes. The BODY configuration remains three banks of 4,080 samples per voice:
@@ -25,13 +27,15 @@ counts remained zero and the active-output hash was stable. Native-argument
 and non-finite input errors were voice-local; handler allocation and watchdog
 runaway invalidated the shared VM and silenced every program as designed.
 
-The compiler accepts only the three top-level handler definitions. Imports,
-classes, and script globals are rejected, and the temporary handler globals
-are cleared after the closures are captured in that voice's rooted object.
+The compiler requires `on_note_on(key)`, `on_note_off(has_pending)`, and
+`on_ramp_end()` and accepts optional `on_init()` at top level. When omitted it
+embeds standard C4 tuning and the identity 128-byte map. Imports, classes,
+and script globals are rejected, and the temporary handler globals are cleared
+after the closures are captured in that voice's rooted object.
 The linker retains the existing 16 KiB native stack reserve.
 
-All sanctioned envelope transition paths measured at most 36 Berry
-instructions. The handler limit is 64 instructions: 36 plus 25%, rounded up
+All sanctioned envelope transition paths measured at most 33 Berry
+instructions. The handler limit is 64 instructions: 33 plus headroom, rounded up
 to the 32-instruction watchdog quantum. The eight-handler boundary limit is
 512 instructions, alongside the 55,000-cycle aggregate ceiling.
 

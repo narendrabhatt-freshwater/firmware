@@ -55,10 +55,11 @@ struct UiMirrorPatch
   bool has_fx_usb_adc_ch = false;
   int fx_usb_adc_ch = 1;
 
-  /** Console note bank: slot -1 = all 16 (`n <hz>` / `n 0`). */
+  /** Console note bank: slot -1 means all-off. */
   bool has_note = false;
   int note_slot = -1;
-  double note_hz = 0.0;
+  bool note_on = false;
+  uint8_t note_key = 0u;
 
   bool Any() const;
 };

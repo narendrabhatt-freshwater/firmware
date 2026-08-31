@@ -35,7 +35,7 @@ public:
   BusController(const BusController &) = delete;
   BusController &operator=(const BusController &) = delete;
 
-  /** Open adapter + bootstrap (ec 0, n0, g, n 0). Logs to log. */
+  /** Open adapter + bootstrap (ec 0, n0, g, n off). Logs to log. */
   bool Open(const std::string &path,
             uint32_t baud,
             uint32_t atten_db,
@@ -57,7 +57,7 @@ public:
   /** Publish desired Hz from VoiceBank (offs before ons in worker). */
   void PublishBank(const cardlink::midi::VoiceBank &bank);
 
-  /** Queue Silence (n 0). */
+  /** Queue Silence (n off). */
   void RequestSilence();
 
   /**
@@ -98,8 +98,8 @@ public:
    * Align worker desired/sent Hz with a note already applied on the card
    * (console mirror) so a later PublishBank does not fight or drop it.
    */
-  void AcknowledgeSlotHz(uint8_t slot, double hz);
-  void AcknowledgeAllHz(double hz);
+  void AcknowledgeSlotKey(uint8_t slot, uint8_t key);
+  void AcknowledgeSlotOff(uint8_t slot);
 
 private:
   struct Impl;

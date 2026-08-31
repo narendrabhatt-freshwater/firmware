@@ -85,15 +85,15 @@ public:
   bool BodyOneshot(uint16_t wave_id) const;
 
   /** Queue a new urgent note session. Returns its synchronous session id. */
-  uint8_t NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz,
+  uint8_t NoteOn(uint8_t voice, uint16_t wave_id,
                  double attack_elapsed_ms = 0.0);
 
   /** Allocate the identity that must be carried by both nX and USB SOF. */
   uint8_t ReserveSession(uint8_t voice);
 
   /** Queue a note using a session already bound into authoritative nX. */
-  uint8_t NoteOnSession(uint8_t voice, uint16_t wave_id, double freq_hz,
-                        uint8_t session, double attack_elapsed_ms = 0.0);
+  uint8_t NoteOnSession(uint8_t voice, uint16_t wave_id, uint8_t session,
+                        double attack_elapsed_ms = 0.0);
 
   /** Cancel a pre-authority session without touching a newer replacement. */
   void CancelSession(uint8_t voice, uint8_t session, uint16_t wave_id);
@@ -198,18 +198,15 @@ public:
                         const uint16_t *free_samples,
                         const uint16_t *unreflected = nullptr);
 
-  void SetPitchHz(uint8_t voice, double freq_hz);
-
   unsigned QueuedSamples(uint8_t voice) const;
 
 private:
-  enum class CmdKind : uint8_t { On, Pitch, Silence, Cancel, AllOff };
+  enum class CmdKind : uint8_t { On, Silence, Cancel, AllOff };
 
   struct Cmd {
     CmdKind kind = CmdKind::On;
     uint8_t voice = 0;
     uint16_t wave_id = 0xFFFFu;
-    double freq_hz = 0.0;
     double attack_elapsed_ms = 0.0;
     uint8_t session = 0u;
     uint32_t epoch = 0u;
@@ -221,7 +218,6 @@ private:
     bool urgent_pending = false;
     uint8_t session = 0;
     uint16_t wave_id = 0;
-    double freq_hz = 0.0;
     double cursor = 0.0;
     double phase = 0.0;
     double queued = 0.0;

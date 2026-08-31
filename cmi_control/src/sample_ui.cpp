@@ -39,8 +39,8 @@ namespace {
 
 constexpr int kVoices = 8;
 
-const double kChordHz[kVoices] = {
-    261.63, 329.63, 392.00, 523.25, 659.25, 783.99, 1046.50, 1318.51,
+const uint8_t kChordKeys[kVoices] = {
+    60u, 64u, 67u, 72u, 76u, 79u, 84u, 88u,
 };
 
 void MonoText(const char *text, const ImVec4 &col, ImFont *font)
@@ -363,10 +363,10 @@ void DrainPending(App &app)
   ApplyWaveFile(app, voice, pending.substr(c1 + 1));
 }
 
-void NoteOn(App &app, int voice, double hz)
+void NoteOn(App &app, int voice, uint8_t key)
 {
   (void)app.EnsureSampleStream();
-  app.samples.NoteOn(static_cast<uint8_t>(voice), hz);
+  app.samples.NoteOn(static_cast<uint8_t>(voice), key);
 }
 
 void NoteOff(App &app, int voice)
@@ -456,7 +456,7 @@ void DrawVoiceCard(App &app, int voice, float card_w, float card_h)
       !load_busy && slot != nullptr && (slot->head_on_card || slot->body_ready);
   ImGui::BeginDisabled(!can_play);
   if (fw::ui::ChipBtn("Play", false, BtnKind::Primary)) {
-    NoteOn(app, voice, 440.0);
+    NoteOn(app, voice, 69u);
   }
   ImGui::SameLine(0.f, S(4.f));
   if (fw::ui::ChipBtn("Off", false, BtnKind::Neutral)) {
@@ -640,7 +640,7 @@ void DrawSamplePage(App &app)
       std::array<cardlink::sample::NoteRequest, kVoices> notes{};
       for (int v = 0; v < kVoices; ++v) {
         notes[static_cast<size_t>(v)] = cardlink::sample::NoteRequest{
-            static_cast<uint8_t>(v), kChordHz[v], 0xFFFFu};
+            static_cast<uint8_t>(v), kChordKeys[v], 0xFFFFu, 0xFFu, true};
       }
       (void)app.EnsureSampleStream();
       (void)app.samples.NoteOnBatch(notes.data(), notes.size());

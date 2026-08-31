@@ -191,12 +191,12 @@ std::vector<UiMirrorPatch> BusController::DrainUiMirror()
   return patches;
 }
 
-void BusController::AcknowledgeSlotHz(uint8_t slot, double hz)
+void BusController::AcknowledgeSlotKey(uint8_t slot, uint8_t key)
 {
-  impl_->controller.AcknowledgeSlotHz(slot, hz);
+  impl_->controller.AcknowledgeSlotKey(slot, key);
 }
 
-void BusController::AcknowledgeAllHz(double hz)
+void BusController::AcknowledgeSlotOff(uint8_t slot)
 {
-  impl_->controller.AcknowledgeAllHz(hz);
+  impl_->controller.AcknowledgeSlotOff(slot);
 }

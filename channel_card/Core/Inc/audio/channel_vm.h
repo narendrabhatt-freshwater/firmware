@@ -24,6 +24,8 @@ void ChannelVm_Stop(uint8_t voice);
 void ChannelVm_StopAll(void);
 uint8_t ChannelVm_IsActive(uint8_t voice);
 uint8_t ChannelVm_ActiveMask(void);
+uint8_t ChannelVm_MapKey(uint8_t voice, uint8_t key);
+float ChannelVm_TuningScale(uint8_t voice);
 FwVmFault ChannelVm_Fault(uint8_t voice);
 const FwVmMetrics *ChannelVm_Metrics(uint8_t voice);
 const FwVmMemoryMetrics *ChannelVm_MemoryMetrics(void);

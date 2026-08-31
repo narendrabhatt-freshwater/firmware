@@ -7,6 +7,7 @@
 
 typedef struct {
   float input[FW_SCRIPT_CHANNEL_VOICE_COUNT][FW_VM_CHANNEL_INPUT_COUNT];
+  float last_slope[FW_SCRIPT_CHANNEL_VOICE_COUNT];
   uint32_t ramps, holds, activations, endings, silences, output_hash;
 } Mock;
 
@@ -15,7 +16,7 @@ static void hash_float(Mock *m,float value){uint32_t bits;memcpy(&bits,&value,si
 
 static int read_input(void *c,uint8_t v,FwVmChannelInput i,float *out){Mock*m=c;*out=m->input[v][i];return 0;}
 static int set_amplitude(void *c,uint8_t v,float x){Mock*m=c;hash_u32(m,0x10u|v);hash_float(m,x);m->input[v][FW_VM_CHANNEL_INPUT_AMPLITUDE]=x;return 0;}
-static int ramp(void *c,uint8_t v,float target,float slope){Mock*m=c;hash_u32(m,0x20u|v);hash_float(m,target);hash_float(m,slope);++m->ramps;return 0;}
+static int ramp(void *c,uint8_t v,float target,float slope){Mock*m=c;hash_u32(m,0x20u|v);hash_float(m,target);hash_float(m,slope);m->last_slope[v]=slope;++m->ramps;return 0;}
 static int hold(void *c,uint8_t v){Mock*m=c;hash_u32(m,0x30u|v);++m->holds;return 0;}
 static int activate(void *c,uint8_t v){Mock*m=c;hash_u32(m,0x40u|v);m->input[v][FW_VM_CHANNEL_INPUT_ACTIVE]=1.0f;m->input[v][FW_VM_CHANNEL_INPUT_HAS_PENDING]=0.0f;++m->activations;return 0;}
 static int note_end(void *c,uint8_t v){Mock*m=c;hash_u32(m,0x50u|v);m->input[v][FW_VM_CHANNEL_INPUT_ACTIVE]=0.0f;++m->endings;return 0;}
@@ -32,10 +33,19 @@ static void fault_matrix(const char *normal_path,const char *bad_path,const char
   const char *paths[4]={bad_path,nonfinite_path,allocation_path,runaway_path};
   for(unsigned test=0u;test<4u;++test){ScriptBerryRuntime r;Mock m={0};ScriptBerryNativeOps o={&m,read_input,set_amplitude,ramp,hold,activate,note_end,silence};size_t normal_size,fault_size;int dispatch;uint8_t *normal=read_file(normal_path,&normal_size),*fault=read_file(paths[test],&fault_size);if(test==1u)m.input[0][FW_VM_CHANNEL_INPUT_FREQUENCY]=INFINITY;script_berry_init(&r,&o);upload(&r,1u,normal,normal_size);upload(&r,0u,fault,fault_size);script_berry_boundary_begin(&r);dispatch=script_berry_dispatch(&r,FW_VM_CHANNEL_HANDLER_NOTE_ON,0u);if(dispatch==0)fprintf(stderr,"fault case %u unexpectedly succeeded\n",test);assert(dispatch!=0);if(test<2u){assert(r.shared_valid&&script_berry_is_active(&r,1u)&&!script_berry_is_active(&r,0u));}else{assert(!r.shared_valid&&script_berry_active_mask(&r)==0u);}free(normal);free(fault);}
 }
+static void pitch_tracking(const char *path){
+  ScriptBerryRuntime runtime;Mock mock={0};ScriptBerryNativeOps ops={&mock,read_input,set_amplitude,ramp,hold,activate,note_end,silence};
+  uint8_t *program;size_t size;program=read_file(path,&size);script_berry_init(&runtime,&ops);upload(&runtime,0u,program,size);
+  mock.input[0][FW_VM_CHANNEL_INPUT_PENDING_KEY]=72.0f;
+  script_berry_boundary_begin(&runtime);assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_ON,0u)==0);
+  assert(fabsf(mock.last_slope[0]-40.0f)<0.0001f);
+  assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_OFF,0u)==0);
+  assert(fabsf(mock.last_slope[0]-1.0f)<0.0001f);free(program);
+}
 int main(int argc,char **argv){
   ScriptBerryRuntime runtime;Mock mock={.output_hash=UINT32_C(2166136261)};ScriptBerryNativeOps ops={&mock,read_input,set_amplitude,ramp,hold,activate,note_end,silence};
   const FwVmMemoryMetrics *mem;uint8_t *program;size_t size;uint32_t i;
-  assert(argc==6);program=read_file(argv[1],&size);script_berry_init(&runtime,&ops);assert(runtime.shared_valid);
+  assert(argc==7);program=read_file(argv[1],&size);script_berry_init(&runtime,&ops);assert(runtime.shared_valid);
   for(i=0;i<FW_SCRIPT_CHANNEL_VOICE_COUNT;++i){mock.input[i][FW_VM_CHANNEL_INPUT_CRASH_RELEASE]=3.0f;upload(&runtime,(uint8_t)i,program,size);}
   assert(script_berry_active_mask(&runtime)==0xffu);mem=script_berry_memory_metrics(&runtime);
   printf("eight_program_peak=%u current=%u largest_free=%u\n",mem->arena_peak,mem->arena_current,mem->arena_largest_free);
@@ -66,5 +76,5 @@ int main(int argc,char **argv){
     (unsigned)(((mem->arena_peak+SCRIPT_BERRY_UPLOAD_SIZE+
       (mem->arena_peak/5u>2048u?mem->arena_peak/5u:2048u)+1023u)/1024u)*1024u));
   assert(mock.output_hash==UINT32_C(0xbdd0dfcd));
-  free(program);fault_matrix(argv[1],argv[2],argv[3],argv[4],argv[5]);puts("fault_matrix_ok");return 0;
+  free(program);fault_matrix(argv[1],argv[2],argv[3],argv[4],argv[5]);pitch_tracking(argv[6]);puts("fault_matrix_ok");return 0;
 }

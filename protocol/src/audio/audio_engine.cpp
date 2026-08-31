@@ -1,4 +1,5 @@
 #include "cardlink/audio/audio_engine.hpp"
+#include "cardlink/midi/pitch.hpp"
 
 #include <RtAudio.h>
 
@@ -105,7 +106,8 @@ void AudioEngine::Stop()
   running_ = false;
 }
 
-void AudioEngine::ApplyBankEvent(const midi::BankEvent& event)
+void AudioEngine::ApplyBankEvent(const midi::BankEvent& event,
+                                 double resolved_hz)
 {
   std::lock_guard<std::mutex> lock(voices_mu_);
   VoiceAudioState& v = voices_[event.slot];
@@ -113,12 +115,12 @@ void AudioEngine::ApplyBankEvent(const midi::BankEvent& event)
   switch (event.kind) {
   case midi::BankEventKind::On:
     v.active = true;
-    v.freq_hz = event.freq_hz;
+    v.freq_hz = resolved_hz > 0.0 ? resolved_hz : midi::MidiNoteToHz(event.midi_key);
     v.retrigger = true;
     break;
   case midi::BankEventKind::Retrig:
     v.active = true;
-    v.freq_hz = event.freq_hz;
+    v.freq_hz = resolved_hz > 0.0 ? resolved_hz : midi::MidiNoteToHz(event.midi_key);
     v.retrigger = true;
     break;
   case midi::BankEventKind::Steal:

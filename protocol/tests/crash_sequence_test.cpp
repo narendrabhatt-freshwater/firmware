@@ -30,12 +30,12 @@ int main()
   Check(sequence.steps.size() == 3, "wrong step count");
   Check(sequence.repeat_count == 3 && !sequence.repeat_forever,
         "wrong repeat count");
-  Check(std::fabs(sequence.steps[0].hz - 261.625565) < 0.001 &&
+  Check(sequence.steps[0].key == 60u &&
             sequence.steps[0].wave_id == 60 && sequence.steps[0].release &&
             sequence.steps[0].duration_ms == 200 &&
             sequence.steps[0].release_ms == 2,
         "wrong C4 note");
-  Check(std::fabs(sequence.steps[1].hz - 293.664768) < 0.001 &&
+  Check(sequence.steps[1].key == 62u &&
             sequence.steps[1].wave_id == 62 && !sequence.steps[1].release,
         "wrong D4 note");
   Check(sequence.steps[2].duration_ms == 500, "wrong wait");

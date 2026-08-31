@@ -1,3 +1,3 @@
-def on_note_on() state_get(99) end
-def on_note_off() end
+def on_note_on(key) ramp(1, 2, 3) end
+def on_note_off(has_pending) end
 def on_ramp_end() end

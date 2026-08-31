@@ -113,7 +113,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 # --specs=nano.specs (cmake/gcc-arm-none-eabi.cmake) strips floating-point
 # scanf/printf conversions out of newlib-nano by default to save flash.
 # The console parses fractional values with sscanf(..., "%lf", ...)
-# (note frequencies 'nX <Hz>' and filter cutoffs) and
+# (note keys `nX on <key>` and filter cutoffs) and
 # formats replies with %.1f/%.2f. Without these, sscanf("%lf") always
 # returns 0 -> every such command answers "err:" for valid input.
 # Force-link the float variants instead of dropping nano.specs entirely

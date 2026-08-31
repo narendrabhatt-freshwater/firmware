@@ -54,7 +54,7 @@ void MirrorChannel(const std::string &cmd, const cardproto::Result &result,
 {
   (void)result;
 
-  /* Bare n0 = session defaults (gain + bypass). n0 <hz> is a note set. */
+  /* Bare n0 = session defaults (gain + bypass). */
   if (cmd == "n0") {
     p.has_gain_db = true;
     p.gain_db = 0;
@@ -63,20 +63,12 @@ void MirrorChannel(const std::string &cmd, const cardproto::Result &result,
     return;
   }
 
-  /* n <hz>|0 — all SAMPLE voices */
-  if (cmd.size() >= 2 && cmd[0] == 'n' && cmd[1] == ' ') {
-    double hz = 0.0;
-    if (std::sscanf(cmd.c_str() + 2, "%lf", &hz) == 1) {
-      if (hz == 0.0 || (hz >= 20.0 && hz < 20000.0)) {
-        p.has_note = true;
-        p.note_slot = -1;
-        p.note_hz = hz;
-      }
-    }
+  if (cmd == "n off") {
+    p.has_note = true;p.note_slot = -1;p.note_on = false;
     return;
   }
 
-  /* n0..n7 <hz> [scale] — single SAMPLE voice */
+  /* n0..n7 on <key> [@session] / off — single SAMPLE voice */
   if (cmd.size() >= 2 && cmd[0] == 'n') {
     int slot = -1;
     if (cmd[1] >= '0' && cmd[1] <= '9') {
@@ -89,13 +81,15 @@ void MirrorChannel(const std::string &cmd, const cardproto::Result &result,
         /* bare n1..n7 = syntax err on card; ignore */
         return;
       }
-      double hz = 0.0;
-      if (std::sscanf(cmd.c_str() + 3, "%lf", &hz) == 1) {
-        if (hz == 0.0 || (hz >= 20.0 && hz < 20000.0)) {
-          p.has_note = true;
-          p.note_slot = slot;
-          p.note_hz = hz;
-        }
+      unsigned key = 0, session = 0;
+      int consumed = 0;
+      if (cmd.substr(3) == "off") {
+        p.has_note=true;p.note_slot=slot;p.note_on=false;
+      } else if ((std::sscanf(cmd.c_str()+3,"on %u @%u%n",&key,&session,&consumed)==2&&
+                  cmd.c_str()[3+consumed]=='\0'&&session<255u&&key<128u) ||
+                 (std::sscanf(cmd.c_str()+3,"on %u%n",&key,&consumed)==1&&
+                  cmd.c_str()[3+consumed]=='\0'&&key<128u)) {
+        p.has_note=true;p.note_slot=slot;p.note_on=true;p.note_key=(uint8_t)key;
       }
       return;
     }

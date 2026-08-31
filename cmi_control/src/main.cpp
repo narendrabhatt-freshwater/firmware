@@ -121,7 +121,7 @@ int main(int argc, char **argv)
             [note, start = std::move(start),
              done = std::move(done)](cardproto::ChannelClient &ch) {
               start();
-              if (!(note.hz > 0.0)) {
+              if (!note.note_on) {
                 auto result = ch.NoteOff(note.voice);
                 done(result.ok());
                 return result;
@@ -132,7 +132,7 @@ int main(int argc, char **argv)
                             static_cast<unsigned>(note.wave_id));
               auto result = ch.Exec(aw);
               if (result.ok()) {
-                result = ch.SetStreamNote(note.voice, note.hz, note.session);
+                result = ch.StreamNoteOn(note.voice, note.key, note.session);
               }
               done(result.ok());
               return result;

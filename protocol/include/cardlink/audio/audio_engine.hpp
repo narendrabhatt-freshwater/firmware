@@ -38,7 +38,7 @@ public:
   void Stop();
 
   /** Apply a bank event to the audio voice table (on/off/steal/retrig). */
-  void ApplyBankEvent(const midi::BankEvent& event);
+  void ApplyBankEvent(const midi::BankEvent& event, double resolved_hz = 0.0);
 
   unsigned SampleRate() const { return sample_rate_; }
   std::string DeviceName() const { return device_name_; }

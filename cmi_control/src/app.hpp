@@ -13,6 +13,7 @@
 #include "cardlink/midi/midi_input.hpp"
 #include "cardlink/midi/pitch.hpp"
 #include "cardlink/midi/voice_bank.hpp"
+#include "cardlink/vm/compiler.hpp"
 
 #include <array>
 #include <atomic>
@@ -83,6 +84,7 @@ struct VmLoadJob
   std::string result;
   bool ok = false;
   bool ready = false;
+  cardlink::vm::ChannelProgramMetadata metadata;
 
   VmLoadJob() = default;
   VmLoadJob(const VmLoadJob &) = delete;
@@ -168,6 +170,12 @@ struct App
   int filter_voice = 0; // n0..n7 chip selection on the Filter panel
   bool env_apply_all = false;
   int selected_voice = 0;
+  cardlink::vm::ChannelProgramMetadata channel_program_metadata = [] {
+    cardlink::vm::ChannelProgramMetadata metadata;
+    for (unsigned key = 0; key < metadata.keymap.size(); ++key)
+      metadata.keymap[key] = static_cast<uint8_t>(key);
+    return metadata;
+  }();
   int vm_script_index = 0;
   int piano_octave = 0; // offset from C4 (0 = C4–C5)
   int piano_velocity = 100;

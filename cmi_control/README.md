@@ -81,10 +81,12 @@ scanline accents).
 | `A`–`K`, `W E T Y U` | Piano (Perform)         |
 | `Z` / `X`            | Octave down / up        |
 
-Envelope programs match firmware: odd token lists, `slope±k` glued (e.g. `10+1`, `2.0-0.5`), 2–10 segments including release.
+Channel envelope programs receive the physical MIDI key and use two-argument
+`ramp(target, slope)`. A script can calculate pitch-dependent slopes with
+allocation-free `pow()` and inspect raw/mapped current or pending keys.
 
-**Preview scope** is an illustrative local sine mix, not a bit-exact Channel
-DSP or DAC probe.
+**Preview scope** applies the uploaded FWSC key map and tuning reference to its
+illustrative sine mix; it is not a bit-exact Channel DSP or DAC probe.
 
 ## Output modes
 

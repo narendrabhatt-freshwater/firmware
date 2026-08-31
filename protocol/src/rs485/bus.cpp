@@ -151,8 +151,8 @@ void Bus::ForceClearBus()
     return;
   }
   port_.FlushInput();
-  (void)transport_->SendBlind(cardproto::Target::Channel, "n 0");
-  (void)transport_->SendBlind(cardproto::Target::Channel, "n 0");
+  (void)transport_->SendBlind(cardproto::Target::Channel, "n off");
+  (void)transport_->SendBlind(cardproto::Target::Channel, "n off");
   port_.FlushInput();
 }
 

@@ -1,48 +1,54 @@
-# Event-driven Channel envelope. State 0: attack=1, hold=2, release=3, crash=4.
-def on_note_on()
-    if input(INPUT_ACTIVE)
-        if state_get(0) == 4 return end
-        state_set(0, 4)
-        var amplitude = input(INPUT_AMPLITUDE)
+# Event-driven attack and release envelope with retrigger protection.
+# stage: 1=attack, 2=holding, 3=release, 4=crash release
+
+def on_note_on(key)
+    state stage
+    var active = input(INPUT_ACTIVE)
+    var amplitude = input(INPUT_AMPLITUDE)
+    if active
+        if stage == 4 return end                    # A crash fade is already running.
+        stage = 4                                  # Fade out the active note first.
         if amplitude <= 0
-            start_note()
-            set_amplitude(0)
-            state_set(0, 1)
-            ramp(1, 20)
+            start_note()       # The old note is already silent; switch now.
+            set_amplitude(0)  # Restart the envelope from silence.
+            stage = 1         # Enter attack.
+            ramp(1, 20)       # 0.0 -> 1.0 at slope 20 (50 ms).
             return
         end
-        # This program owns a fixed 3 ms crash fade.
-        ramp(0, amplitude / 0.003)
+        ramp(0, amplitude / 0.003)  # Give the old note a fixed 3 ms fade.
         return
     end
-    start_note()
-    set_amplitude(0)
-    state_set(0, 1)
-    ramp(1, 20)
+
+    start_note()       # No active note: begin immediately.
+    set_amplitude(0)  # Restart the envelope from silence.
+    stage = 1         # Enter attack.
+    ramp(1, 20)       # 0.0 -> 1.0 at slope 20 (50 ms).
 end
 
-def on_note_off()
-    if input(INPUT_HAS_PENDING)
-        note_end()
+def on_note_off(has_pending)
+    if has_pending
+        note_end()  # A queued note owns the next transition.
         return
     end
-    state_set(0, 3)
-    ramp(0, 4)
+
+    stage = 3   # Enter release.
+    ramp(0, 4)  # Current amplitude -> 0.0 at slope 4.
 end
 
 def on_ramp_end()
-    var stage = state_get(0)
     if stage == 4
-        start_note()
-        set_amplitude(0)
-        state_set(0, 1)
-        ramp(1, 20)
+        start_note()       # The crash fade finished; activate the new note.
+        set_amplitude(0)  # Restart its envelope from silence.
+        stage = 1         # Enter attack.
+        ramp(1, 20)       # 0.0 -> 1.0 at slope 20 (50 ms).
         return
     end
+
     if stage == 3
-        note_end()
+        note_end()  # Release finished; retire the voice.
         return
     end
-    state_set(0, 2)
-    hold()
+
+    stage = 2  # Attack finished; hold at full amplitude.
+    hold()     # Stay here until note-off.
 end

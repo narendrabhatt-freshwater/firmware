@@ -106,19 +106,18 @@ trim to 0 dB (`g 1 0`). Frequency changes do not touch gain or bypass.
 | Command                | Meaning                                                                           |
 | ---------------------- | --------------------------------------------------------------------------------- |
 | `n0`                   | Session defaults only (bypass on, `g 1 0`). Does not start a tone.                |
-| `n0`…`n7 <Hz> [scale]` | Set that slot. Hz in **[20, 20000)**. Scale in **[0, 1]**; if omitted, **0.125**. |
-| `n0`…`n7 <Hz> <scale> @<session>` | Streamed note-on; bind BODY session 0…254 before ACK. |
-| `n0`…`n7 0`            | Turn that slot off (Hz ≤ 0).                                                      |
-| `n <Hz> [scale]`       | Same rules for all 8 slots.                                                       |
-| `n 0`                  | Silence all 8.                                                                    |
+| `n0`…`n7 on <key>`       | Start physical MIDI key 0…127; FWSC maps and tunes it.                           |
+| `n0`…`n7 on <key> @<session>` | Streamed note-on; bind BODY session 0…254 before ACK.                    |
+| `n0`…`n7 off`            | Turn that slot off.                                                            |
+| `n off`                | Silence all 8.                                                                  |
 
-Bare `n1`…`n7` (no Hz) is a syntax error. Only bare `n0` is the session
+Bare `n1`…`n7` is a syntax error. Only bare `n0` is the session
 shortcut.
 
 Success reply for sets: `ok`.
 
-Fractional Hz is intentional (e.g. `261.625565` for C4). Do not round
-to integers if you care about equal temperament.
+The host preserves raw key identity. Frequency is resolved on-card from the
+program's embedded key map and tuning reference using the fixed 12-TET table.
 
 ### Sample bank (256 AXI attack heads)
 
@@ -244,7 +243,7 @@ c:n0 523.25
 c:aw 0 0
 c:a
 c:vq
-c:n 0
+c:n off
 ```
 
 ---
@@ -365,15 +364,15 @@ offset  size  field
 
 RS485 `vq` supplies an exact free-space snapshot for steady refills. The host
 subtracts direct UAC samples rendered concurrently with that snapshot so it
-cannot over-reserve the physical ring. RS485 `nX <Hz>` remains the sole audible
-note-on and pitch authority. For streamed playback, the host reserves a
-session and launches `aw` plus `nX <Hz> <scale> @<session>` concurrently with
-about 25 ms of pitch-adjusted SOF BODY, filling the ring during the attack.
+cannot over-reserve the physical ring. RS485 `nX on <key>` remains the sole
+audible note-on authority; the Channel Card owns pitch. For streamed playback,
+the host reserves a session and launches `aw` plus
+`nX on <key> @<session>` concurrently with sequential, pitch-neutral SOF BODY.
 Superseded or late same-wave sessions are stale. Untagged `nX` remains available
 for interactive/legacy use. If a
 conservative 50 ms release reservation leaves no safe prefill credit, USB
 sends no tagged packet; the next `vq` supplies the first SOF BODY normally.
-RS485 `nX 0` remains note-off authority. `type` `0x20` CAPTURE remains reserved.
+RS485 `nX off` remains note-off authority. `type` `0x20` CAPTURE remains reserved.
 Urgent jobs form a newest-first priority deque with one latest job per physical
 voice (maximum depth eight). A newer note retires older tagged packets; packets
 already entering USB are rejected as stale by voice/session if superseded.
@@ -460,7 +459,7 @@ Notes:
    do not discard pending replies.
 3. Upload only loads AXI RAM (lost on reset). Set `ar <id> <rootHz>`; the host
    app starts it with RS485 `aw <voice> <id>` then session-bound
-   `nX <Hz> <scale> @<session>` immediately after launching its USB BODY job;
+   `nX on <key> @<session>` immediately after launching its USB BODY job;
    later sustain uses vq-authorized BODY refills.
 
 ### VM program upload (`vmload`)
@@ -470,7 +469,7 @@ uploaded, note commands return `err:no-program` and the note bank stays silent.
 
 `vmload <voice> <nbytes>` is CDC-only and uses the same line-to-binary
 transition as `al`. Each voice 0..7 owns an independent program. The payload is
-one Berry ABI3 `FWSC` container, up to 4116 bytes (20-byte container header
+one Berry ABI5 `FWSC` container, up to 4116 bytes (20-byte container header
 plus at most 4096 payload bytes). The card writes
 `ok:ready`, receives exactly `nbytes`, validates target/version, CRC, bytecode,
 runtime/configuration, handlers, host calls, and CRC, then replies
@@ -486,14 +485,22 @@ remain voice-local; allocation, GC, watchdog, or uncertain interpreter state
 invalidates the shared VM and silences all voices. Programs are lost on reset.
 `vm mem` reports arena current/peak/free and allocation/GC diagnostics.
 
+ABI5 requires `on_note_on(key)`, `on_note_off(has_pending)`, and
+`on_ramp_end()`. Optional compile-time `on_init()` may call `tuning_set` once
+and configure the identity-default key map with `keymap_set` or `keymap_fill`.
+Without it, tuning defaults to C4 = 261.625565 Hz. Runtime scripts
+can inspect raw/mapped current and pending keys, read live `INPUT_AMPLITUDE`, and
+calculate pitch-dependent slopes with allocation-free `pow()`. `ramp()` accepts
+only `ramp(target, slope)`.
+
 ---
 
-## 5. Half-duplex and pitch text
+## 5. Half-duplex and key text
 
 On RS485, send one command, wait for the tagged reply, then send the
 next. Do not pile commands while an ACK is still due.
 
 Prefer `e:ec 0` unless you are deliberately testing echo.
 
-For pitch, send the real frequency as text (`261.625565`), not a rounded
-integer, if you care about octaves lining up.
+For notes, send an integer MIDI key from 0 through 127. Do not resolve it to Hz
+on the host.

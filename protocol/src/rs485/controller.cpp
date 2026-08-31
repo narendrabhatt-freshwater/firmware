@@ -26,28 +26,6 @@ constexpr auto kWorkerIdleWait = std::chrono::milliseconds(10);
 constexpr auto kVqPeriod = std::chrono::milliseconds(5);
 constexpr int kVqMissLimit = 16;
 
-double ClampNoteHz(double hz)
-{
-  if (hz <= 0.0) {
-    return 0.0;
-  }
-  if (hz < 20.0) {
-    return 20.0;
-  }
-  if (hz > 19999.0) {
-    return 19999.0;
-  }
-  return hz;
-}
-
-bool HzEqual(double a, double b)
-{
-  if (a <= 0.0 && b <= 0.0) {
-    return true;
-  }
-  return a == b;
-}
-
 void LogResult(const Controller::LogHandler &push,
                cardproto::Target target,
                const cardproto::Result &result)
@@ -106,8 +84,8 @@ struct Controller::Impl
   Bus bus;
   mutable std::mutex mutex;
   std::condition_variable cv;
-  std::array<double, cardlink::midi::kVoiceCount> desired_hz{};
-  std::array<double, cardlink::midi::kVoiceCount> sent_hz{};
+  std::array<int16_t, cardlink::midi::kVoiceCount> desired_key{};
+  std::array<int16_t, cardlink::midi::kVoiceCount> sent_key{};
   std::array<bool, kVqVoices> watch_idle{};
   std::array<bool, kVqVoices> ring_primed{};
   std::array<bool, kVqVoices> underrun_logged{};
@@ -131,7 +109,7 @@ struct Controller::Impl
   bool WorkPendingLocked() const
   {
     for (uint8_t i = 0; i < cardlink::midi::kVoiceCount; ++i) {
-      if (!HzEqual(desired_hz[i], sent_hz[i])) {
+      if (desired_key[i] != sent_key[i]) {
         return true;
       }
     }
@@ -160,13 +138,13 @@ struct Controller::Impl
             now >= last_vq + kVqPeriod);
   }
 
-  void MarkNoteSentLocked(uint8_t slot, double hz)
+  void MarkNoteSentLocked(uint8_t slot, int16_t key)
   {
-    sent_hz[slot] = hz;
+    sent_key[slot] = key;
     if (slot < kVqVoices) {
       /* Note-on and note-off both watch until vq reports card-side idle. */
       watch_idle[slot] = true;
-      if (hz > 0.0) {
+      if (key >= 0) {
         ring_primed[slot] = false;
       }
       underrun_logged[slot] = false;
@@ -273,7 +251,7 @@ struct Controller::Impl
         /* The BODY gate opens after nX is acknowledged, but an in-flight vq
          * can still predate that command and omit the newly active slot.
          * Stay armed while the host still wants a pitch. */
-        if (watch_idle[i] && !active && desired_hz[i] <= 0.0) {
+        if (watch_idle[i] && !active && desired_key[i] < 0) {
           watch_idle[i] = false;
           become_idle[i] = true;
         }
@@ -423,8 +401,8 @@ struct Controller::Impl
       const auto result = bus.Channel().AllNotesOff();
       {
         std::lock_guard<std::mutex> lock(mutex);
-        sent_hz.fill(0.0);
-        desired_hz.fill(0.0);
+        sent_key.fill(-1);
+        desired_key.fill(-1);
         ClearWatchLocked();
       }
       Log(result.ok() ? "ok: silence" : "err: silence");
@@ -437,8 +415,8 @@ struct Controller::Impl
       }
       {
         std::lock_guard<std::mutex> lock(mutex);
-        desired_hz.fill(0.0);
-        sent_hz.fill(0.0);
+        desired_key.fill(-1);
+        sent_key.fill(-1);
         ClearWatchLocked();
       }
       halted.store(false);
@@ -455,7 +433,7 @@ struct Controller::Impl
       Job job;
       bool have_job = false;
       uint8_t note_slot = 0;
-      double note_hz = 0.0;
+      int16_t note_key = -1;
       bool have_note = false;
       bool do_vq = false;
 
@@ -497,18 +475,18 @@ struct Controller::Impl
           have_job = true;
         } else if (!halted.load()) {
           for (uint8_t i = 0; i < cardlink::midi::kVoiceCount; ++i) {
-            if (desired_hz[i] <= 0.0 && sent_hz[i] > 0.0) {
+            if (desired_key[i] < 0 && sent_key[i] >= 0) {
               note_slot = i;
-              note_hz = 0.0;
+              note_key = -1;
               have_note = true;
               break;
             }
           }
           if (!have_note) {
             for (uint8_t i = 0; i < cardlink::midi::kVoiceCount; ++i) {
-              if (!HzEqual(desired_hz[i], sent_hz[i])) {
+              if (desired_key[i] != sent_key[i]) {
                 note_slot = i;
-                note_hz = desired_hz[i];
+                note_key = desired_key[i];
                 have_note = true;
                 break;
               }
@@ -526,12 +504,12 @@ struct Controller::Impl
         continue;
       }
       if (have_note) {
-        const auto result = note_hz <= 0.0
+        const auto result = note_key < 0
                                 ? bus.Channel().NoteOff(note_slot)
-                                : bus.Channel().SetNote(note_slot, note_hz);
+                                : bus.Channel().NoteOn(note_slot, static_cast<uint8_t>(note_key));
         if (result.ok()) {
           std::lock_guard<std::mutex> lock(mutex);
-          MarkNoteSentLocked(note_slot, note_hz);
+          MarkNoteSentLocked(note_slot, note_key);
           vq_now = true;
         } else {
           MarkFault("*** RS485 fault on n" +
@@ -541,8 +519,8 @@ struct Controller::Impl
             bus.ForceClearBus();
           }
           std::lock_guard<std::mutex> lock(mutex);
-          desired_hz.fill(0.0);
-          sent_hz.fill(0.0);
+          desired_key.fill(-1);
+          sent_key.fill(-1);
           ClearWatchLocked();
         }
         continue;
@@ -617,8 +595,8 @@ bool Controller::Open(const std::string &path, uint32_t baud,
   impl_->halted.store(false);
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    impl_->desired_hz.fill(0.0);
-    impl_->sent_hz.fill(0.0);
+    impl_->desired_key.fill(-1);
+    impl_->sent_key.fill(-1);
     impl_->ClearWatchLocked();
     impl_->last_vq = {};
     impl_->vq_now = false;
@@ -705,10 +683,7 @@ void Controller::PublishBank(const cardlink::midi::VoiceBank &bank)
     std::lock_guard<std::mutex> lock(impl_->mutex);
     const auto &slots = bank.Slots();
     for (uint8_t i = 0; i < cardlink::midi::kVoiceCount; ++i) {
-      impl_->desired_hz[i] =
-          slots[i].active && slots[i].freq_hz > 0.0
-              ? ClampNoteHz(slots[i].freq_hz)
-              : 0.0;
+      impl_->desired_key[i] = slots[i].active ? slots[i].midi_key : -1;
     }
     Impl::Job job;
     job.kind = Impl::JobKind::Notes;
@@ -724,7 +699,7 @@ void Controller::RequestSilence()
   }
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    impl_->desired_hz.fill(0.0);
+    impl_->desired_key.fill(-1);
     impl_->ClearWatchLocked();
     Impl::Job job;
     job.kind = Impl::JobKind::Silence;
@@ -750,18 +725,28 @@ void Controller::RequestRecover()
 QueueResult Controller::QueueExec(cardproto::Target target, std::string command)
 {
   /* nX must last-win. Queueing every tap/release on RS485 delivers a stale
-   * nX 0 after the hold's BODY session has already started. */
+   * nX off after the hold's BODY session has already started. */
   if (target == cardproto::Target::Channel) {
     const char *text = command.c_str();
     if (command.size() >= 2 && text[0] == 'c' && text[1] == ':') {
       text += 2;
     }
-    unsigned slot = 0;
-    double hz = 0.0;
+    unsigned slot = 0, key = 0, session = 0;
+    int consumed = 0;
+    int16_t value = -2;
     if (text[0] == 'n' && text[1] != '\0' &&
-        std::isdigit(static_cast<unsigned char>(text[1])) &&
-        std::sscanf(text, "n%u %lf", &slot, &hz) == 2 &&
-        slot < cardlink::midi::kVoiceCount) {
+        std::isdigit(static_cast<unsigned char>(text[1]))) {
+      if (std::sscanf(text, "n%u on %u @%u%n", &slot, &key, &session,
+                      &consumed) == 3 && text[consumed] == '\0' &&
+          key < 128u && session < 255u)
+        value = static_cast<int16_t>(key);
+      else if (std::sscanf(text, "n%u on %u%n", &slot, &key, &consumed) == 2 &&
+               text[consumed] == '\0' && key < 128u)
+        value = static_cast<int16_t>(key);
+      else if (std::sscanf(text, "n%u off%n", &slot, &consumed) == 1 &&
+               text[consumed] == '\0') value = -1;
+    }
+    if (value >= -1 && slot < cardlink::midi::kVoiceCount) {
       if (impl_->connecting.load()) {
         return QueueResult::Connecting;
       }
@@ -771,14 +756,13 @@ QueueResult Controller::QueueExec(cardproto::Target target, std::string command)
       if (impl_->halted.load()) {
         return QueueResult::Halted;
       }
-      const double value = ClampNoteHz(hz);
       {
         std::lock_guard<std::mutex> lock(impl_->mutex);
-        impl_->desired_hz[slot] = value;
+        impl_->desired_key[slot] = value;
         /* Arm the idle watch after the card ACKs nX (MarkNoteSentLocked).
          * Arming here races an in-flight vq and drops the BODY stream. */
         impl_->underrun_logged[slot] = false;
-        if (value > 0.0) {
+        if (value >= 0) {
           impl_->ring_primed[slot] = false;
         }
       }
@@ -828,32 +812,25 @@ QueueResult Controller::QueueGain(uint8_t atten_db)
   return impl_->Enqueue(std::move(job));
 }
 
-void Controller::AcknowledgeSlotHz(uint8_t slot, double hz)
+void Controller::AcknowledgeSlotKey(uint8_t slot, uint8_t key)
 {
   if (slot >= cardlink::midi::kVoiceCount) {
     return;
   }
-  const double value = ClampNoteHz(hz);
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  impl_->desired_hz[slot] = value;
-  impl_->sent_hz[slot] = value;
+  impl_->desired_key[slot] = key;
+  impl_->sent_key[slot] = key;
   impl_->watch_idle[slot] = true;
   impl_->ring_primed[slot] = false;
   impl_->underrun_logged[slot] = false;
 }
 
-void Controller::AcknowledgeAllHz(double hz)
+void Controller::AcknowledgeSlotOff(uint8_t slot)
 {
-  const double value = ClampNoteHz(hz);
+  if (slot >= cardlink::midi::kVoiceCount) return;
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  impl_->desired_hz.fill(value);
-  impl_->sent_hz.fill(value);
-  /* Every acknowledged voice watches until the card reports it idle. */
-  for (uint8_t i = 0; i < kVqVoices; ++i) {
-    impl_->watch_idle[i] = true;
-    impl_->ring_primed[i] = false;
-    impl_->underrun_logged[i] = false;
-  }
+  impl_->desired_key[slot] = -1;impl_->sent_key[slot] = -1;
+  impl_->watch_idle[slot] = true;impl_->ring_primed[slot] = false;impl_->underrun_logged[slot] = false;
 }
 
 void Controller::SetLogHandler(LogHandler handler)

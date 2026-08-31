@@ -154,7 +154,7 @@ not a reshaped waveform — verify with the **amplitude ratio**.
 ### 5.1 Procedure
 
 ```text
-n 0
+n off
 n0
 g 1 0
 n0 1000

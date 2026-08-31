@@ -10,6 +10,10 @@ Initial hardware-test programs:
 
 - `simple_envelope.be` — immediate note start, attack, decay, sustain, and
   release, with no crash fade.
+- `simple_crash_envelope.be` — the simple envelope plus a fixed 2 ms retrigger
+  fade.
+- `pitch_tracked_envelope.be` — independent pitch-rate tracking on attack,
+  decay, and release segments.
 - `current_envelope.be` — the normal attack/hold/release policy.
 - `gate.be` — immediate full-level gate with a short release.
 - `pluck.be` — fast attack followed by an automatic decay.

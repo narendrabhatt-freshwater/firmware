@@ -41,6 +41,8 @@ struct VmExample
 
 constexpr VmExample kExamples[] = {
     {"Simple envelope", "simple_envelope", "Immediate start with no crash fade."},
+    {"Simple + 2 ms crash", "simple_crash_envelope", "Simple ADSR with a fixed retrigger fade."},
+    {"Pitch-tracked envelope", "pitch_tracked_envelope", "Independent pitch tracking per segment."},
     {"Envelope", "current_envelope", "Attack, hold, release, and safe retrigger."},
     {"Gate", "gate", "Immediate full level with a short click-free release."},
     {"Pluck", "pluck", "Fast attack followed by an automatic decay."},
@@ -136,17 +138,22 @@ void FinishVmLoad(App &app)
   VmLoadJob &job = app.vm_load;
   std::string result;
   bool ok = false;
+  cardlink::vm::ChannelProgramMetadata metadata;
   {
     std::lock_guard<std::mutex> lock(job.mu);
     if (!job.ready) return;
     result = std::move(job.result);
     ok = job.ok;
+    metadata = job.metadata;
     job.ready = false;
   }
   if (job.worker.joinable()) job.worker.join();
   if (result.empty()) return;
   app.log.Push(result);
-  if (ok) app.PushToastOk(result);
+  if (ok) {
+    app.channel_program_metadata = metadata;
+    app.PushToastOk(result);
+  }
   else app.PushToastErr(result);
 }
 
@@ -175,6 +182,9 @@ void StartVmLoad(App &app, const VmExample &example)
     std::string result;
     bool rebuilt = false;
     bool ok = LoadOrCompile(example, program, rebuilt, result);
+    cardlink::vm::ChannelProgramMetadata metadata;
+    if (ok) ok = cardlink::vm::ParseChannelProgramMetadata(
+        program.data(), program.size(), metadata, result);
     if (ok) {
       set_status(rebuilt ? "compiled" : "cached FWSC");
       job.progress.store(0.08f);
@@ -209,6 +219,7 @@ void StartVmLoad(App &app, const VmExample &example)
     {
       std::lock_guard<std::mutex> lock(job.mu);
       job.ok = ok;
+      if (ok) job.metadata = metadata;
       job.result = std::move(result);
       job.status = ok ? "done" : "failed";
       job.ready = true;

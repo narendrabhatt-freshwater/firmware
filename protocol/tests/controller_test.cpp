@@ -73,9 +73,9 @@ int main()
   controller.SetIdleHandler([](uint8_t) {});
   controller.SetVqHandler(
       [](uint8_t, uint8_t, const std::array<uint16_t, 8> &, uint16_t) {});
-  controller.AcknowledgeSlotHz(0, 440.0);
-  controller.AcknowledgeSlotHz(255, 440.0);
-  controller.AcknowledgeAllHz(0.0);
+  controller.AcknowledgeSlotKey(0, 69u);
+  controller.AcknowledgeSlotKey(255, 69u);
+  controller.AcknowledgeSlotOff(0);
   controller.RequestSilence();
   controller.RequestRecover();
   controller.Close();

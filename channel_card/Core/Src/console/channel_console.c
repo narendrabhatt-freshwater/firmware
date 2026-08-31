@@ -319,11 +319,11 @@ static const SwitchDef_t switches[] = {
  *
  *   h / help / ?      — command list
  *   n0                — session defaults: bypass ON + g 1 0
- *   n0..n7 <Hz> [sc]  — note freq; optional scale 0.0..1.0 (default 0.125)
- *   n <Hz> [sc]       — all 8 voices (n 0 = silence)
+ *   n0..n7 on <key> [@session] / off — raw MIDI-key gate
+ *   n off             — release all 8 voices
  *   s / p <d> / t <a> — global note-bank shape (sine / pulse duty / tri asym)
  *   al <id> <len>     — CDC attack-head upload (2..ATTACK_BANK_BYTES)
- *   vmload <v> <len>  — CDC Berry ABI3 upload; vm [v|mem] — status
+ *   vmload <v> <len>  — CDC Berry ABI5 upload; vm [v|mem] — status
  *   ar <id> <Hz>      — sample root pitch (id = wave 0..255); a — loaded mask
  *   a / vq            — loaded heads per voice / hungriest + exact credit
  *   crash [0..50]     — query/set voice-steal release overlap in milliseconds
@@ -345,7 +345,7 @@ static void Console_SetBypassOn(void)
 }
 
 /** Defaults for bare n0 / boot: dry path + CH1 DAC trim 0 dB (`g 1 0`).
- * Frequency changes (`nX <Hz>`) do not touch gain or bypass. */
+ * Key changes (`nX on <key>`) do not touch gain or bypass. */
 static void Console_ApplySessionDefaults(void)
 {
   Console_SetBypassOn();
@@ -369,21 +369,10 @@ static uint8_t Console_ParseNoteSlot(char hex_digit)
   return 0xFFu;
 }
 
-/** Production MIDI scale when the host omits [scale] (byte-minimal nX Hz). */
-#define NOTE_DEFAULT_SCALE 0.125
-
-/** Apply nX <Hz> [scale] [@session]. Compact ACK: ok / err:<code>. */
-static void Console_SetNoteFreq(uint8_t note, double hz, double scale,
-                                uint16_t session)
+/** Apply nX on <key> [@session]. Compact ACK: ok / err:<code>. */
+static void Console_NoteOn(uint8_t note, uint8_t key, uint16_t session)
 {
-  /* Silence must remain available before any RAM-only VM program is loaded. */
-  if (hz <= 0.0)
-  {
-    NoteBank_SetFreq(note, 0.0, 0.0);
-    RS485_Reply("ok\r\n");
-    return;
-  }
-  if (hz > 0.0 && NoteBank_VmUploadIsBusy() != 0u)
+  if (NoteBank_VmUploadIsBusy() != 0u)
   {
     RS485_Reply("err:vm-busy\r\n");
     return;
@@ -394,46 +383,29 @@ static void Console_SetNoteFreq(uint8_t note, double hz, double scale,
     return;
   }
 
-  if (hz < 20.0 || hz >= 20000.0)
-  {
-    RS485_Reply("err:range\r\n");
-    return;
-  }
-
-  if (scale < 0.0 || scale > 1.0)
-  {
-    RS485_Reply("err:range\r\n");
-    return;
-  }
-
   if (session < USB_STREAM_SESSION_MOD)
   {
-    NoteBank_SetFreqSession(note, hz, scale, (uint8_t)session);
+    NoteBank_NoteOnSession(note, key, (uint8_t)session);
   }
   else
   {
-    NoteBank_SetFreq(note, hz, scale);
+    NoteBank_NoteOn(note, key);
   }
   RS485_Reply("ok\r\n");
 }
 
 /** Deterministic N-voice load: fixed freqs; equal scale so sum ≈ 1.0 FS. */
-#define CPULOAD_BASE_HZ 220.0
-#define CPULOAD_STEP_HZ 40.0
-
 static void Console_CpuLoad_DisableVoices(void)
 {
   for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
   {
-    NoteBank_SetFreq(i, 0.0, 0.0);
+    NoteBank_NoteOff(i);
   }
 }
 
 /** Enable the first `count` voices (1..16). Others off. */
 static void Console_CpuLoad_EnableVoices(uint8_t count)
 {
-  double scale;
-
   if (count < 1u)
   {
     count = 1u;
@@ -443,12 +415,10 @@ static void Console_CpuLoad_EnableVoices(uint8_t count)
     count = (uint8_t)NOTE_BANK_VOICES;
   }
 
-  scale = 1.0 / (double)count;
   Console_CpuLoad_DisableVoices();
   for (uint8_t i = 0; i < count; i++)
   {
-    NoteBank_SetFreq(i, CPULOAD_BASE_HZ + (CPULOAD_STEP_HZ * (double)i),
-                     scale);
+    NoteBank_NoteOn(i, (uint8_t)(57u + i));
   }
 }
 
@@ -920,69 +890,19 @@ static void Console_CmdVoiceQuery(void)
   }
 }
 
-/** n <Hz> [scale]: all voices (n 0 = silence). */
+/** n off: release all voices. */
 static void Console_CmdNoteAll(char *line)
 {
-  const char *rest = line + 1;
-  double hz;
-  double scale;
-  int nscan;
-
-  while (*rest == ' ')
-  {
-    rest++;
-  }
-  if (*rest == '\0')
-  {
-    RS485_Reply("err:syntax\r\n");
-    return;
-  }
-
-  nscan = sscanf(rest, "%lf %lf", &hz, &scale);
-  if (nscan == 1)
-  {
-    scale = NOTE_DEFAULT_SCALE;
-  }
-  else if (nscan != 2)
-  {
-    RS485_Reply("err:syntax\r\n");
-    return;
-  }
-
-  if (hz <= 0.0)
-  {
-    Console_CpuLoad_DisableVoices();
-    RS485_Reply("ok\r\n");
-    return;
-  }
-  if (NoteBank_VmActiveMask() != 0xffu)
-  {
-    RS485_Reply("err:no-program\r\n");
-    return;
-  }
-  if (NoteBank_VmUploadIsBusy() != 0u)
-  {
-    RS485_Reply("err:vm-busy\r\n");
-    return;
-  }
-  if (hz < 20.0 || hz >= 20000.0 || scale < 0.0 || scale > 1.0)
-  {
-    RS485_Reply("err:range\r\n");
-    return;
-  }
-  for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
-  {
-    NoteBank_SetFreq(i, hz, scale);
-  }
-  RS485_Reply("ok\r\n");
+  if (strcmp(line, "n off") != 0) { RS485_Reply("err:syntax\r\n"); return; }
+  Console_CpuLoad_DisableVoices();RS485_Reply("ok\r\n");
 }
 
 /** n0..n7: note bank on CH1 (also answers unknown; slots 8..f err:range). */
 static void Console_CmdNoteSlot(char *line)
 {
-  double hz;
-  double scale;
+  unsigned int key;
   unsigned int session;
+  char extra;
   uint8_t note;
   int nscan;
 
@@ -1019,31 +939,24 @@ static void Console_CmdNoteSlot(char *line)
     return;
   }
 
-  nscan = sscanf(line + 3, "%lf %lf @%u", &hz, &scale, &session);
-  if (nscan == 3)
+  if (strcmp(line + 3, "off") == 0)
   {
-    if (session >= USB_STREAM_SESSION_MOD)
-    {
-      RS485_Reply("err:range\r\n");
-      return;
-    }
+    NoteBank_NoteOff(note);RS485_Reply("ok\r\n");return;
   }
-  else if (nscan == 1)
+  nscan = sscanf(line + 3, "on %u @%u %c", &key, &session, &extra);
+  if (nscan == 2)
   {
-    scale = NOTE_DEFAULT_SCALE; /* production MIDI default */
-    session = USB_STREAM_SESSION_MOD;
-  }
-  else if (nscan == 2)
-  {
-    session = USB_STREAM_SESSION_MOD;
+    if (key >= FW_SCRIPT_CHANNEL_KEY_COUNT || session >= USB_STREAM_SESSION_MOD)
+    { RS485_Reply("err:range\r\n"); return; }
   }
   else
   {
-    RS485_Reply("err:syntax\r\n");
-    return;
+    nscan = sscanf(line + 3, "on %u %c", &key, &extra);
+    if (nscan != 1) { RS485_Reply("err:syntax\r\n"); return; }
+    if (key >= FW_SCRIPT_CHANNEL_KEY_COUNT) { RS485_Reply("err:range\r\n"); return; }
+    session = USB_STREAM_SESSION_MOD;
   }
-
-  Console_SetNoteFreq(note, hz, scale, (uint16_t)session);
+  Console_NoteOn(note, (uint8_t)key, (uint16_t)session);
 }
 
 /** aw <voice> <id> — assign AXI head 0..255 to voice 0..7. */
@@ -1115,7 +1028,7 @@ static void Console_CmdAttackLoad(char *line)
   RS485_Reply("ok:ready\r\n");
 }
 
-/** vmload <voice> <nbytes> — receive one Channel ABI3 FWSC container over CDC. */
+/** vmload <voice> <nbytes> — receive one Channel ABI5 FWSC container over CDC. */
 static void Console_CmdVmLoad(char *line)
 {
   unsigned int voice;
@@ -1443,7 +1356,7 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- n <Hz> [scale]: all voices (n 0 = silence). n0..n7 below. ---- */
+  /* ---- n off: silence all voices. n0..n7 below. ---- */
   if (line[0] == 'n' && (line[1] == '\0' || line[1] == ' '))
   {
     Console_CmdNoteAll(line);

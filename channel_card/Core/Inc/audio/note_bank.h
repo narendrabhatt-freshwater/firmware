@@ -37,21 +37,17 @@ extern "C"
   void NoteBank_SetCrashReleaseMs(uint8_t release_ms);
   uint8_t NoteBank_GetCrashReleaseMs(void);
 
-  /**
-   * @brief Note on/off. freq_hz <= 0 releases/stops.
-   * freq_hz > 0 is always a note-on (restarts attack + body). Applied on
-   * the next I2S sample. Voice uses the assigned wave_id (`aw`).
-   */
-  /** Returns -2 when this voice has no active VM program. */
-  int NoteBank_SetFreq(uint8_t note, double freq_hz, double scale);
+  /** Raw MIDI-key note-on. The per-voice script map and tuning select pitch. */
+  int NoteBank_NoteOn(uint8_t note, uint8_t key);
 
   /** Streamed note-on variant. The session is bound to nX before its ACK so
    * only the matching USB SOF can claim the replacement ring. */
-  int NoteBank_SetFreqSession(uint8_t note, double freq_hz, double scale,
-                              uint8_t session);
+  int NoteBank_NoteOnSession(uint8_t note, uint8_t key, uint8_t session);
+  int NoteBank_NoteOff(uint8_t note);
 
+  uint8_t NoteBank_GetKey(uint8_t note);
+  uint8_t NoteBank_GetMappedKey(uint8_t note);
   double NoteBank_GetFreq(uint8_t note);
-  double NoteBank_GetScale(uint8_t note);
 
   /** Assign AXI head 0..255 to voice 0..7. Applied on the next note-on. */
   int NoteBank_SetWaveId(uint8_t note, uint16_t wave_id);

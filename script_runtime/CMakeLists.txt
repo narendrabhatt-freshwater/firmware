@@ -63,7 +63,8 @@ add_test(NAME shared_berry.runtime
     "${CMAKE_CURRENT_BINARY_DIR}/fault_bad_argument_event.fwsc"
     "${CMAKE_CURRENT_BINARY_DIR}/fault_nonfinite_event.fwsc"
     "${CMAKE_CURRENT_BINARY_DIR}/fault_allocation_event.fwsc"
-    "${CMAKE_CURRENT_BINARY_DIR}/fault_runaway_event.fwsc")
+    "${CMAKE_CURRENT_BINARY_DIR}/fault_runaway_event.fwsc"
+    "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.fwsc")
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.fwsc"
   COMMAND fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/channel_envelope.be"
           -o "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.fwsc"
@@ -74,12 +75,17 @@ foreach(FAULT_PROGRAM fault_bad_argument_event fault_nonfinite_event fault_alloc
             -o "${CMAKE_CURRENT_BINARY_DIR}/${FAULT_PROGRAM}.fwsc"
     DEPENDS fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/${FAULT_PROGRAM}.be")
 endforeach()
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.fwsc"
+  COMMAND fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/pitch_tracking_event.be"
+          -o "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.fwsc"
+  DEPENDS fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/pitch_tracking_event.be")
 add_custom_target(shared_berry_program DEPENDS
   "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.fwsc"
   "${CMAKE_CURRENT_BINARY_DIR}/fault_bad_argument_event.fwsc"
   "${CMAKE_CURRENT_BINARY_DIR}/fault_nonfinite_event.fwsc"
   "${CMAKE_CURRENT_BINARY_DIR}/fault_allocation_event.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/fault_runaway_event.fwsc")
+  "${CMAKE_CURRENT_BINARY_DIR}/fault_runaway_event.fwsc"
+  "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.fwsc")
 add_dependencies(shared_berry_runtime_test shared_berry_program)
 endif()
 

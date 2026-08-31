@@ -193,8 +193,8 @@ bool ParseCrashSequence(std::istream &input, CrashSequence &out,
     }
     step.kind = CrashStepKind::Note;
     step.label = token[pitch_index];
-    step.hz = parsed_hz;
-    step.wave_id = cardlink::midi::HzToNearestMidi(step.hz);
+    step.key = cardlink::midi::HzToNearestMidi(parsed_hz);
+    step.wave_id = step.key;
     if (!ParseMs(token[pitch_index + 1], step.duration_ms)) {
       return Fail(line_number, "invalid note duration `" +
                                    token[pitch_index + 1] + "`", error);

@@ -190,18 +190,8 @@ bool SampleDryMixer::LoadRootsFile(const std::string &path, std::string &err)
 
 double SampleDryMixer::IncOf(const Voice &v) const
 {
-  const double root = root_hz_[v.wave_id].load(std::memory_order_relaxed);
-  double inc = 1.0;
-  if (root > 0.0 && v.freq_hz > 0.0) {
-    inc = v.freq_hz / root;
-  }
-  if (inc > 16.0) {
-    inc = 16.0;
-  }
-  if (inc < (1.0 / 16.0)) {
-    inc = 1.0 / 16.0;
-  }
-  return inc;
+  (void)v;
+  return 1.0;
 }
 
 double SampleDryMixer::Fade0Of(unsigned attack_len)
@@ -754,12 +744,6 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
     }
     return;
   }
-  if (c.kind == CmdKind::Pitch) {
-    if (v.active) {
-      v.freq_hz = c.freq_hz;
-    }
-    return;
-  }
   if (c.kind == CmdKind::Silence) {
     if (v.urgent_pending) {
       urgent_ready_.fetch_sub(1u, std::memory_order_relaxed);
@@ -779,7 +763,7 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
     return;
   }
   const bool was_active = v.active;
-  const double old_inc = was_active ? IncOf(v) : 0.0;
+  const double old_inc = was_active ? 16.0 : 0.0;
   if (v.urgent_pending) {
     urgent_ready_.fetch_sub(1u, std::memory_order_relaxed);
   }
@@ -789,7 +773,6 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
   v.urgent_pending = true;
   v.session = c.session;
   v.wave_id = c.wave_id;
-  v.freq_hz = c.freq_hz;
   v.attack_elapsed_ms = std::max(0.0, c.attack_elapsed_ms);
   v.phase = 0.0;
   v.queued = 0.0;
@@ -808,10 +791,7 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
    * The reservation remains the hard cap while the direct packets bridge
    * host callback and status timing. */
   const unsigned safe_capacity = kRingSamples - reserve;
-  const unsigned prefill_target = static_cast<unsigned>(std::ceil(
-      IncOf(v) * static_cast<double>(kSampleRateHz) *
-      static_cast<double>(kUrgentPrefillMs) / 1000.0));
-  v.urgent_budget = std::min(safe_capacity, prefill_target);
+  v.urgent_budget = safe_capacity;
   v.urgent_epoch = c.epoch;
   urgent_ready_.fetch_add(1u, std::memory_order_release);
   v.vq_seen = vq_seq_.load(std::memory_order_acquire);
@@ -832,11 +812,11 @@ void SampleDryMixer::DrainCmds()
   cmd_rd_.store(r, std::memory_order_release);
 }
 
-uint8_t SampleDryMixer::NoteOn(uint8_t voice, uint16_t wave_id, double freq_hz,
+uint8_t SampleDryMixer::NoteOn(uint8_t voice, uint16_t wave_id,
                                double attack_elapsed_ms)
 {
   const uint8_t session = ReserveSession(voice);
-  return NoteOnSession(voice, wave_id, freq_hz, session, attack_elapsed_ms);
+  return NoteOnSession(voice, wave_id, session, attack_elapsed_ms);
 }
 
 uint8_t SampleDryMixer::ReserveSession(uint8_t voice)
@@ -851,7 +831,7 @@ uint8_t SampleDryMixer::ReserveSession(uint8_t voice)
 }
 
 uint8_t SampleDryMixer::NoteOnSession(uint8_t voice, uint16_t wave_id,
-                                      double freq_hz, uint8_t session,
+                                      uint8_t session,
                                       double attack_elapsed_ms)
 {
   if (voice >= kSampleVoices || wave_id >= bodies_.size()) {
@@ -868,7 +848,6 @@ uint8_t SampleDryMixer::NoteOnSession(uint8_t voice, uint16_t wave_id,
   c.kind = CmdKind::On;
   c.voice = voice;
   c.wave_id = wave_id;
-  c.freq_hz = freq_hz;
   c.attack_elapsed_ms = attack_elapsed_ms;
   c.session = session;
   c.epoch = note_epoch_.fetch_add(1u, std::memory_order_relaxed) + 1u;
@@ -1039,18 +1018,6 @@ void SampleDryMixer::AbortUrgentBurst(uint8_t voice, uint8_t session,
     v.urgent_pending = true;
     urgent_ready_.fetch_add(1u, std::memory_order_release);
   }
-}
-
-void SampleDryMixer::SetPitchHz(uint8_t voice, double freq_hz)
-{
-  if (voice >= kSampleVoices) {
-    return;
-  }
-  Cmd c;
-  c.kind = CmdKind::Pitch;
-  c.voice = voice;
-  c.freq_hz = freq_hz;
-  Post(c);
 }
 
 unsigned SampleDryMixer::QueuedSamples(uint8_t voice) const

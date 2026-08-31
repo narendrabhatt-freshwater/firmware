@@ -1,4 +1,5 @@
 #include "preview_scope.hpp"
+#include "cardlink/midi/pitch.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -7,16 +8,20 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-void PreviewScope::SetVoices(const cardlink::midi::VoiceBank &bank)
+void PreviewScope::SetVoices(
+    const cardlink::midi::VoiceBank &bank,
+    const cardlink::vm::ChannelProgramMetadata &metadata)
 {
   const auto &slots = bank.Slots();
   for (uint8_t i = 0; i < cardlink::midi::kVoiceCount; ++i) {
-    const bool on = slots[i].active && slots[i].freq_hz > 0.0;
+    const bool on = slots[i].active;
     if (on && !oscs_[i].active) {
       oscs_[i].phase = 0.0;
     }
     oscs_[i].active = on;
-    oscs_[i].freq_hz = on ? slots[i].freq_hz : 0.0;
+    const uint8_t mapped = metadata.keymap[slots[i].midi_key];
+    oscs_[i].freq_hz = on ? cardlink::midi::MidiNoteToHz(mapped) *
+                                metadata.tuning_scale : 0.0;
   }
 }
 

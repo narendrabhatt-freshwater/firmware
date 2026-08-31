@@ -226,7 +226,7 @@ namespace
     for (uint8_t i = 0; i < cardlink::midi::kVoiceCount; ++i)
     {
       const auto &s = slots[i];
-      if (!s.active || s.freq_hz <= 0.0)
+      if (!s.active)
       {
         continue;
       }
@@ -240,7 +240,7 @@ namespace
       {
         root = cardlink::audio::kDefaultBodyRootHz;
       }
-      const double inc = BodyIncOf(s.freq_hz, root);
+      const double inc = BodyIncOf(cardlink::midi::MidiNoteToHz(s.midi_key), root);
       c4_units += inc;
       samp_ms += rate_ms * inc;
     }
@@ -563,7 +563,7 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
          * sync without sending a duplicate nX gate-on. */
         for (size_t i = 0u; i < npending; ++i)
         {
-          bus.AcknowledgeSlotHz(pending[i].voice, pending[i].hz);
+          bus.AcknowledgeSlotKey(pending[i].voice, pending[i].key);
         }
       }
       pending_voice.fill(false);
@@ -575,7 +575,9 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
   {
     if (want_speakers && audio)
     {
-      audio->ApplyBankEvent(ev);
+      const uint8_t mapped = channel_program_metadata.keymap[ev.midi_key];
+      audio->ApplyBankEvent(ev, cardlink::midi::MidiNoteToHz(mapped) *
+                                   channel_program_metadata.tuning_scale);
     }
     if (want_card && ev.slot < cardlink::audio::kSampleVoices)
     {
@@ -588,7 +590,7 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
           flush_card_notes();
         }
         samples.NoteOff(ev.slot);
-        bus.AcknowledgeSlotHz(ev.slot, 0.0);
+        bus.AcknowledgeSlotOff(ev.slot);
         break;
       case cardlink::midi::BankEventKind::On:
       case cardlink::midi::BankEventKind::Retrig:
@@ -597,7 +599,7 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
           flush_card_notes();
         }
         pending[npending++] = cardlink::sample::NoteRequest{
-            ev.slot, ev.freq_hz, ev.midi_key};
+            ev.slot, ev.midi_key, ev.midi_key, 0xFFu, true};
         pending_voice[ev.slot] = true;
         break;
       case cardlink::midi::BankEventKind::Steal:
@@ -623,7 +625,9 @@ void App::ApplyLocalBankEvents(
   {
     if (want_speakers && audio)
     {
-      audio->ApplyBankEvent(ev);
+      const uint8_t mapped = channel_program_metadata.keymap[ev.midi_key];
+      audio->ApplyBankEvent(ev, cardlink::midi::MidiNoteToHz(mapped) *
+                                   channel_program_metadata.tuning_scale);
     }
   }
 }
@@ -633,7 +637,8 @@ void App::AllNotesOff()
   const auto evs = bank.AllOff();
   ApplyLocalBankEvents(evs);
   samples.AllNotesOff();
-  bus.AcknowledgeAllHz(0.0);
+  for (uint8_t slot = 0; slot < cardlink::midi::kVoiceCount; ++slot)
+    bus.AcknowledgeSlotOff(slot);
 }
 
 void App::HandleKeyboardPiano()
@@ -835,15 +840,18 @@ void App::Tick()
         std::vector<cardlink::midi::BankEvent> evs;
         if (p.note_slot < 0)
         {
-          evs = bank.SetAllFreq(p.note_hz);
-          bus.AcknowledgeAllHz(p.note_hz);
+          evs = bank.AllOff();
+          for (uint8_t slot = 0; slot < cardlink::midi::kVoiceCount; ++slot)
+            bus.AcknowledgeSlotOff(slot);
         }
         else
         {
           const uint8_t slot =
               static_cast<uint8_t>(std::clamp(p.note_slot, 0, 7));
-          evs = bank.SetSlotFreq(slot, p.note_hz);
-          bus.AcknowledgeSlotHz(slot, p.note_hz);
+          evs = p.note_on ? bank.SetSlotKey(slot, p.note_key)
+                          : bank.ClearSlot(slot);
+          if (p.note_on) bus.AcknowledgeSlotKey(slot, p.note_key);
+          else bus.AcknowledgeSlotOff(slot);
         }
         ApplyLocalBankEvents(evs);
         dirty = true;
@@ -919,7 +927,7 @@ void App::Tick()
   scope_volt = std::clamp(scope_volt, 0.1f, 8.f);
   preview.SetTimeDivUs(scope_time_ms * 1000.f);
   preview.SetVoltDiv(scope_volt);
-  preview.SetVoices(bank);
+  preview.SetVoices(bank, channel_program_metadata);
   preview.Render(48000.f);
 
   const float peak = preview.Peak();
@@ -2190,6 +2198,9 @@ void App::DrawPerform()
                   id);
       if (s.active)
       {
+        const uint8_t mapped = channel_program_metadata.keymap[s.midi_key];
+        const double display_hz = cardlink::midi::MidiNoteToHz(mapped) *
+                                  channel_program_metadata.tuning_scale;
         const std::string note = cardlink::midi::MidiNoteName(s.midi_key);
         const ImVec2 nw =
             fs->CalcTextSizeA(fs->FontSize, FLT_MAX, 0.f, note.c_str());
@@ -2197,17 +2208,17 @@ void App::DrawPerform()
                     ImVec2(p0.x + (cell_w - nw.x) * 0.5f, p0.y + S(13.f)),
                     fw::theme::U32(kPalette.accent_bright), note.c_str());
         char hz[12];
-        if (s.freq_hz >= 1000.0)
+        if (display_hz >= 1000.0)
         {
-          std::snprintf(hz, sizeof(hz), "%.2fk", s.freq_hz / 1000.0);
+          std::snprintf(hz, sizeof(hz), "%.2fk", display_hz / 1000.0);
         }
-        else if (s.freq_hz >= 100.0)
+        else if (display_hz >= 100.0)
         {
-          std::snprintf(hz, sizeof(hz), "%.0f", s.freq_hz);
+          std::snprintf(hz, sizeof(hz), "%.0f", display_hz);
         }
         else
         {
-          std::snprintf(hz, sizeof(hz), "%.1f", s.freq_hz);
+          std::snprintf(hz, sizeof(hz), "%.1f", display_hz);
         }
         const ImVec2 hw =
             fcap->CalcTextSizeA(fcap->FontSize, FLT_MAX, 0.f, hz);
@@ -2239,7 +2250,7 @@ void App::DrawPerform()
       {
         std::snprintf(info, sizeof(info), "n%x — %s %.2f Hz", selected_voice,
                       cardlink::midi::MidiNoteName(s.midi_key).c_str(),
-                      static_cast<double>(s.freq_hz));
+                      cardlink::midi::MidiNoteToHz(s.midi_key));
       }
       else
       {

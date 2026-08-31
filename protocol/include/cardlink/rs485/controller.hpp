@@ -78,8 +78,8 @@ public:
   uint32_t ErrCount() const;
   std::size_t QueueDepth() const;
 
-  void AcknowledgeSlotHz(uint8_t slot, double hz);
-  void AcknowledgeAllHz(double hz);
+  void AcknowledgeSlotKey(uint8_t slot, uint8_t key);
+  void AcknowledgeSlotOff(uint8_t slot);
 
   void SetLogHandler(LogHandler handler);
   /** Status-poll messages use this callback, or the normal log when unset. */

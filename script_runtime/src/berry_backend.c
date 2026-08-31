@@ -16,6 +16,8 @@ typedef struct { uint32_t size, used; } ArenaBlock;
 typedef struct { const uint8_t *data; size_t size, position; } MemoryFile;
 static ScriptBerryRuntime *s_runtime;
 static MemoryFile s_file;
+static uint8_t s_upload_scratch[SCRIPT_BERRY_UPLOAD_SIZE];
+static uint8_t s_keymap[FW_SCRIPT_CHANNEL_VOICE_COUNT][FW_SCRIPT_CHANNEL_KEY_COUNT];
 
 static size_t align8(size_t n) { return (n+7u)&~(size_t)7u; }
 static ArenaBlock *first_block(ScriptBerryRuntime *r) {
@@ -168,10 +170,22 @@ static int native_set_amplitude(bvm *vm) {
   be_pushnil(vm);be_return(vm);
 }
 static int native_ramp(bvm *vm) {
-  float target,slope;require_handler(vm);require_count(vm,2);target=checked_float(vm,1);slope=checked_float(vm,2);
+  float target,slope;require_handler(vm);require_count(vm,2);
+  target=checked_float(vm,1);slope=checked_float(vm,2);
   if(!s_runtime->ops.ramp||s_runtime->ops.ramp(s_runtime->ops.context,s_runtime->current_voice,target,slope)!=0)
     native_error(vm,FW_VM_FAULT_HOST_CALL,"ramp failed");
   be_pushnil(vm);be_return(vm);
+}
+static int native_keymap_get(bvm *vm) {
+  bint key;require_handler(vm);require_count(vm,1);
+  key=checked_int(vm,1,0,FW_SCRIPT_CHANNEL_KEY_COUNT-1);
+  be_pushint(vm,s_keymap[s_runtime->current_voice][key]);be_return(vm);
+}
+static int native_pow(bvm *vm) {
+  float base,exponent,value;require_handler(vm);require_count(vm,2);
+  base=checked_float(vm,1);exponent=checked_float(vm,2);value=powf(base,exponent);
+  if(!isfinite(value))native_error(vm,FW_VM_FAULT_NONFINITE,"pow result must be finite");
+  be_pushreal(vm,value);be_return(vm);
 }
 static int native_noarg(bvm *vm,int (*fn)(void *,uint8_t),const char *message) {
   require_handler(vm);require_count(vm,0);
@@ -198,7 +212,7 @@ static void observation_hook(bvm *vm,int event,...) {
 }
 static void register_int(bvm *vm,const char *name,bint value){be_pushint(vm,value);be_setglobal(vm,name);be_pop(vm,1);}
 static void register_nil(bvm *vm,const char *name){be_pushnil(vm);be_setglobal(vm,name);be_pop(vm,1);}
-static void clear_handler_globals(bvm *vm){register_nil(vm,"on_note_on");register_nil(vm,"on_note_off");register_nil(vm,"on_ramp_end");}
+static void clear_handler_globals(bvm *vm){register_nil(vm,"on_init");register_nil(vm,"on_note_on");register_nil(vm,"on_note_off");register_nil(vm,"on_ramp_end");}
 static int create_vm(ScriptBerryRuntime *r) {
   bvm *vm; unsigned i;
   arena_reset(r);s_runtime=r;r->phase=PHASE_INIT;r->discard_vm=0u;r->pending_fault=FW_VM_FAULT_NONE;
@@ -209,16 +223,19 @@ static int create_vm(ScriptBerryRuntime *r) {
   be_regfunc(vm,"input",native_input);be_regfunc(vm,"state_get",native_state_get);be_regfunc(vm,"state_set",native_state_set);
   be_regfunc(vm,"set_amplitude",native_set_amplitude);be_regfunc(vm,"ramp",native_ramp);be_regfunc(vm,"hold",native_hold);
   be_regfunc(vm,"start_note",native_start_note);be_regfunc(vm,"note_end",native_note_end);
+  be_regfunc(vm,"keymap_get",native_keymap_get);be_regfunc(vm,"pow",native_pow);
   register_int(vm,"INPUT_NOTE_ID",FW_VM_CHANNEL_INPUT_NOTE_ID);register_int(vm,"INPUT_FREQUENCY",FW_VM_CHANNEL_INPUT_FREQUENCY);
   register_int(vm,"INPUT_GAIN",FW_VM_CHANNEL_INPUT_GAIN);register_int(vm,"INPUT_GATE",FW_VM_CHANNEL_INPUT_GATE);
   register_int(vm,"INPUT_ACTIVE",FW_VM_CHANNEL_INPUT_ACTIVE);register_int(vm,"INPUT_HAS_PENDING",FW_VM_CHANNEL_INPUT_HAS_PENDING);
   register_int(vm,"INPUT_PENDING_FREQUENCY",FW_VM_CHANNEL_INPUT_PENDING_FREQUENCY);
   register_int(vm,"INPUT_PENDING_GAIN",FW_VM_CHANNEL_INPUT_PENDING_GAIN);register_int(vm,"INPUT_AMPLITUDE",FW_VM_CHANNEL_INPUT_AMPLITUDE);
   register_int(vm,"INPUT_CRASH_RELEASE",FW_VM_CHANNEL_INPUT_CRASH_RELEASE);
+  register_int(vm,"INPUT_KEY",FW_VM_CHANNEL_INPUT_KEY);register_int(vm,"INPUT_MAPPED_KEY",FW_VM_CHANNEL_INPUT_MAPPED_KEY);
+  register_int(vm,"INPUT_PENDING_KEY",FW_VM_CHANNEL_INPUT_PENDING_KEY);register_int(vm,"INPUT_PENDING_MAPPED_KEY",FW_VM_CHANNEL_INPUT_PENDING_MAPPED_KEY);
   clear_handler_globals(vm);
   be_newlist(vm);for(i=0u;i<FW_SCRIPT_CHANNEL_VOICE_COUNT;++i){be_pushnil(vm);be_data_push(vm,-2);be_pop(vm,1);}be_setglobal(vm,"_fw_programs");be_pop(vm,1);
   /* Intern all native exception text before handlers become allocation-free. */
-  { static const char *const text[]={"value_error","invalid argument count","integer required","integer out of range","number required","finite number required","handler context required","input failed","set amplitude failed","ramp failed","hold failed","start note failed","note end failed"};
+  { static const char *const text[]={"value_error","invalid argument count","integer required","integer out of range","number required","finite number required","handler context required","input failed","set amplitude failed","pow result must be finite","ramp failed","hold failed","start note failed","note end failed"};
     for(i=0u;i<sizeof(text)/sizeof(text[0]);++i){be_pushstring(vm,text[i]);be_pop(vm,1);} }
   be_gc_collect(vm);r->phase=PHASE_IDLE;r->shared_valid=1u;r->active_mask=0u;update_memory(r);return 0;
 }
@@ -239,9 +256,10 @@ static int push_handler(bvm *vm,uint8_t voice,uint8_t handler){
   return be_isfunction(vm,-1)?0:-1;
 }
 static int validate_program(bvm *vm,int index){
-  unsigned i;int stable=index<0?be_top(vm)+index+1:index;
+  static const bbyte argc[]={1u,1u,0u};unsigned i;int stable=index<0?be_top(vm)+index+1:index;
   if(!be_islist(vm,stable)||be_data_size(vm,stable)!=FW_SCRIPT_CHANNEL_HANDLER_COUNT)return -1;
-  for(i=0u;i<FW_SCRIPT_CHANNEL_HANDLER_COUNT;++i){be_pushint(vm,(bint)i);be_getindex(vm,stable);if(!be_isfunction(vm,-1)){be_pop(vm,2);return -1;}be_pop(vm,2);}return 0;
+  for(i=0u;i<FW_SCRIPT_CHANNEL_HANDLER_COUNT;++i){bvalue *value;be_pushint(vm,(bint)i);be_getindex(vm,stable);value=be_indexof(vm,-1);
+    if(!var_isclosure(value)||((bclosure *)var_toobj(value))->proto->argc!=argc[i]){be_pop(vm,2);return -1;}be_pop(vm,2);}return 0;
 }
 static int install_program(bvm *vm,uint8_t voice,int candidate){
   int stable=candidate<0?be_top(vm)+candidate+1:candidate;
@@ -274,6 +292,8 @@ void script_berry_stop(ScriptBerryRuntime *r,uint8_t voice){
 void script_berry_stop_all(ScriptBerryRuntime *r){for(uint8_t v=0;v<FW_SCRIPT_CHANNEL_VOICE_COUNT;++v)script_berry_stop(r,v);}
 uint8_t script_berry_is_active(const ScriptBerryRuntime *r,uint8_t v){return v<FW_SCRIPT_CHANNEL_VOICE_COUNT&&(r->active_mask&(1u<<v))!=0u;}
 uint8_t script_berry_active_mask(const ScriptBerryRuntime *r){return r->active_mask;}
+uint8_t script_berry_map_key(const ScriptBerryRuntime *r,uint8_t v,uint8_t key){(void)r;return v<FW_SCRIPT_CHANNEL_VOICE_COUNT&&key<FW_SCRIPT_CHANNEL_KEY_COUNT?s_keymap[v][key]:0u;}
+float script_berry_tuning_scale(const ScriptBerryRuntime *r,uint8_t v){return v<FW_SCRIPT_CHANNEL_VOICE_COUNT?r->tuning_scale[v]:0.0f;}
 FwVmFault script_berry_fault(const ScriptBerryRuntime *r,uint8_t v){return v<FW_SCRIPT_CHANNEL_VOICE_COUNT?r->voice_fault[v]:FW_VM_FAULT_BAD_HOST_ARGUMENT;}
 const FwVmMetrics *script_berry_voice_metrics(const ScriptBerryRuntime *r,uint8_t v){return v<FW_SCRIPT_CHANNEL_VOICE_COUNT?&r->voice_metrics[v]:NULL;}
 const FwVmMemoryMetrics *script_berry_memory_metrics(ScriptBerryRuntime *r){update_memory(r);return &r->memory;}
@@ -284,11 +304,23 @@ void script_berry_record_cycles(ScriptBerryRuntime *r,uint8_t v,uint32_t cycles)
   if(r->boundary_cycles>SCRIPT_BERRY_BOUNDARY_CYCLE_LIMIT&&r->shared_valid)invalidate_shared(r,FW_VM_FAULT_BUDGET);
 }
 int script_berry_dispatch(ScriptBerryRuntime *r,FwVmChannelHandler handler,uint8_t voice){
-  bvm *vm=(bvm *)r->vm;volatile int result=BE_EXCEPTION;uint32_t used;
+  bvm *vm=(bvm *)r->vm;volatile int result=BE_EXCEPTION;uint32_t used;float first=0.0f;
   if(!r->shared_valid||!script_berry_is_active(r,voice)||handler>=FW_SCRIPT_CHANNEL_HANDLER_COUNT)return -1;
+  if(handler==FW_VM_CHANNEL_HANDLER_NOTE_ON){
+    if(!r->ops.read_input||r->ops.read_input(r->ops.context,voice,FW_VM_CHANNEL_INPUT_PENDING_KEY,&first)!=0||
+       !isfinite(first)||first<0.0f||first>127.0f){
+      silence(r,voice,FW_VM_FAULT_HOST_CALL);return -1;}
+  }else if(handler==FW_VM_CHANNEL_HANDLER_NOTE_OFF){
+    if(!r->ops.read_input||r->ops.read_input(r->ops.context,voice,FW_VM_CHANNEL_INPUT_HAS_PENDING,&first)!=0||!isfinite(first)){
+      silence(r,voice,FW_VM_FAULT_HOST_CALL);return -1;}
+  }
   s_runtime=r;r->current_voice=voice;r->pending_fault=FW_VM_FAULT_NONE;r->discard_vm=0u;r->phase=PHASE_HANDLER;
   r->handler_instruction_start=vm->counter_ins;r->abort_active=1u;
-  if(setjmp(r->abort_jump)==0){if(push_handler(vm,voice,(uint8_t)handler)==0)result=be_pcall(vm,0);}
+  if(setjmp(r->abort_jump)==0){if(push_handler(vm,voice,(uint8_t)handler)==0){
+    if(handler==FW_VM_CHANNEL_HANDLER_NOTE_ON){be_pushint(vm,(bint)first);}
+    else if(handler==FW_VM_CHANNEL_HANDLER_NOTE_OFF)be_pushbool(vm,first!=0.0f);
+    result=be_pcall(vm,handler==FW_VM_CHANNEL_HANDLER_NOTE_ON?1:
+                       handler==FW_VM_CHANNEL_HANDLER_NOTE_OFF?1:0);}}
   r->abort_active=0u;used=vm->counter_ins-r->handler_instruction_start;r->phase=PHASE_IDLE;
   if(!r->discard_vm)be_pop(vm,be_top(vm));
   if(r->discard_vm){invalidate_shared(r,r->pending_fault?r->pending_fault:FW_VM_FAULT_SHARED_VM);return -1;}
@@ -300,6 +332,7 @@ int script_berry_dispatch(ScriptBerryRuntime *r,FwVmChannelHandler handler,uint8
 
 static uint16_t read16(const uint8_t *p){return (uint16_t)p[0]|((uint16_t)p[1]<<8);}
 static uint32_t read32(const uint8_t *p){return (uint32_t)p[0]|((uint32_t)p[1]<<8)|((uint32_t)p[2]<<16)|((uint32_t)p[3]<<24);}
+static float read_float(const uint8_t *p){uint32_t bits=read32(p);float value;memcpy(&value,&bits,sizeof(value));return value;}
 static int parse_header(ScriptBerryRuntime *r){const uint8_t *h=r->upload_header;
   if(memcmp(h,"FWSC",4u)||read16(h+4u)!=FW_SCRIPT_CONTAINER_VERSION||h[6]!=FW_SCRIPT_RUNTIME_BERRY||
      h[7]!=FW_SCRIPT_CONFIG_FLOAT32_INT32||read16(h+8u)!=FW_SCRIPT_CHANNEL_ABI_VERSION||
@@ -314,7 +347,7 @@ int script_berry_upload_begin(ScriptBerryRuntime *r,uint8_t voice){
   r->upload_expected_size=0u;r->upload_expected_crc=0u;return 0;
 }
 int script_berry_upload_feed(ScriptBerryRuntime *r,const void *data,size_t size){
-  const uint8_t *p=(const uint8_t *)data;uint8_t *scratch=r->arena.bytes+r->heap_limit;
+  const uint8_t *p=(const uint8_t *)data;uint8_t *scratch=s_upload_scratch;
   if(!r->upload_active||(!p&&size))return -1;
   while(size&&r->upload_header_bytes<FW_SCRIPT_CONTAINER_HEADER_SIZE){r->upload_header[r->upload_header_bytes++]=*p++;--size;
     if(r->upload_header_bytes==FW_SCRIPT_CONTAINER_HEADER_SIZE&&parse_header(r)!=0){script_berry_upload_abort(r);r->voice_fault[r->upload_voice]=FW_VM_FAULT_BAD_CONTAINER;return -1;}}
@@ -323,10 +356,15 @@ int script_berry_upload_feed(ScriptBerryRuntime *r,const void *data,size_t size)
   memcpy(scratch+r->upload_payload_bytes,p,size);r->upload_payload_bytes+=(uint32_t)size;return 0;
 }
 int script_berry_upload_commit(ScriptBerryRuntime *r){
-  bvm *vm=(bvm *)r->vm;uint8_t voice=r->upload_voice;uint8_t *scratch=r->arena.bytes+r->heap_limit;int load,result;
+  bvm *vm=(bvm *)r->vm;uint8_t voice=r->upload_voice;uint8_t *scratch=s_upload_scratch;int load,result;float reference_hz,standard_hz;uint8_t reference_key;unsigned key;
   if(!r->upload_active||r->upload_header_bytes!=FW_SCRIPT_CONTAINER_HEADER_SIZE||r->upload_payload_bytes!=r->upload_expected_size||
      fw_vm_crc32(scratch,r->upload_payload_bytes)!=r->upload_expected_crc){script_berry_upload_abort(r);r->voice_fault[voice]=FW_VM_FAULT_BAD_CONTAINER;return -1;}
-  s_runtime=r;r->phase=PHASE_LOAD;r->pending_fault=FW_VM_FAULT_NONE;s_file.data=scratch;s_file.size=r->upload_payload_bytes;s_file.position=0u;
+  if(r->upload_payload_bytes<=FW_SCRIPT_CHANNEL_METADATA_SIZE||scratch[0]!=FW_SCRIPT_CHANNEL_METADATA_VERSION||scratch[2]!=0u||scratch[3]!=0u){script_berry_upload_abort(r);r->voice_fault[voice]=FW_VM_FAULT_BAD_CONTAINER;return -1;}
+  reference_key=scratch[FW_SCRIPT_CHANNEL_METADATA_REFERENCE_KEY_OFFSET];reference_hz=read_float(scratch+FW_SCRIPT_CHANNEL_METADATA_REFERENCE_HZ_OFFSET);
+  standard_hz=fw_vm_channel_standard_hz(reference_key);
+  if(reference_key>=FW_SCRIPT_CHANNEL_KEY_COUNT||!isfinite(reference_hz)||reference_hz<=0.0f||standard_hz<=0.0f){script_berry_upload_abort(r);r->voice_fault[voice]=FW_VM_FAULT_BAD_CONTAINER;return -1;}
+  for(key=0u;key<FW_SCRIPT_CHANNEL_KEY_COUNT;++key)if(scratch[FW_SCRIPT_CHANNEL_METADATA_KEYMAP_OFFSET+key]>=FW_SCRIPT_CHANNEL_KEY_COUNT){script_berry_upload_abort(r);r->voice_fault[voice]=FW_VM_FAULT_BAD_CONTAINER;return -1;}
+  s_runtime=r;r->phase=PHASE_LOAD;r->pending_fault=FW_VM_FAULT_NONE;s_file.data=scratch+FW_SCRIPT_CHANNEL_METADATA_SIZE;s_file.size=r->upload_payload_bytes-FW_SCRIPT_CHANNEL_METADATA_SIZE;s_file.position=0u;
   be_pop(vm,be_top(vm));clear_handler_globals(vm);load=be_loadmode(vm,"@fwsc-memory",0);result=load;if(result==BE_OK)result=be_pcall(vm,0);s_file.data=NULL;
   if(result==BE_OK){be_pop(vm,be_top(vm));if(push_candidate_program(vm)!=0)result=BE_EXCEPTION;}
   { int valid=(result==BE_OK)?validate_program(vm,-1):-1;int installed=(result==BE_OK&&valid==0)?install_program(vm,voice,-1):-1;
@@ -337,7 +375,7 @@ int script_berry_upload_commit(ScriptBerryRuntime *r){
     be_pop(vm,be_top(vm));clear_handler_globals(vm);be_gc_collect(vm);r->phase=PHASE_IDLE;r->upload_active=0u;r->voice_fault[voice]=load==BE_OK?FW_VM_FAULT_BAD_HANDLER:FW_VM_FAULT_BAD_PROGRAM;update_memory(r);return -1;
   }
   }
-  be_pop(vm,be_top(vm));memset(r->state[voice],0,sizeof(r->state[voice]));r->active_mask|=(uint8_t)(1u<<voice);r->voice_fault[voice]=FW_VM_FAULT_NONE;
+  be_pop(vm,be_top(vm));memset(r->state[voice],0,sizeof(r->state[voice]));memcpy(s_keymap[voice],scratch+FW_SCRIPT_CHANNEL_METADATA_KEYMAP_OFFSET,FW_SCRIPT_CHANNEL_KEY_COUNT);r->tuning_scale[voice]=reference_hz/standard_hz;r->active_mask|=(uint8_t)(1u<<voice);r->voice_fault[voice]=FW_VM_FAULT_NONE;
   be_gc_collect(vm);r->phase=PHASE_IDLE;r->upload_active=0u;update_memory(r);return 0;
 }
 void script_berry_upload_abort(ScriptBerryRuntime *r){r->upload_active=0u;r->upload_header_bytes=0u;r->upload_payload_bytes=0u;}

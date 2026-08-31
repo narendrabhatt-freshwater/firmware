@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cardlink/midi/voice_bank.hpp"
+#include "cardlink/vm/compiler.hpp"
 
 #include <array>
 #include <cstdint>
@@ -12,7 +13,8 @@ class PreviewScope
 public:
   static constexpr int kDisplaySamples = 512;
 
-  void SetVoices(const cardlink::midi::VoiceBank &bank);
+  void SetVoices(const cardlink::midi::VoiceBank &bank,
+                 const cardlink::vm::ChannelProgramMetadata &metadata);
   /** Oscilloscope timebase: milliseconds per horizontal division (10 divs). */
   void SetTimeDivMs(float ms_per_div) { time_div_ms_ = ms_per_div; }
   /** Oscilloscope timebase: microseconds per horizontal division (10 divs). */

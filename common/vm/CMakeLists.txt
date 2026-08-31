@@ -5,7 +5,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   include(CTest)
 endif()
 
-add_library(freshwater_vm STATIC src/vm.c)
+add_library(freshwater_vm STATIC src/vm.c src/vm_source.c)
 add_library(freshwater::vm ALIAS freshwater_vm)
 set_target_properties(freshwater_vm PROPERTIES EXPORT_NAME vm)
 

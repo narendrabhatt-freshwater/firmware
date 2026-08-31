@@ -21,16 +21,13 @@ void Check(bool condition, const char *message)
 
 int main()
 {
-  Check(cardproto::FormatSetNote(0, 261.625565) == "n0 261.625565000",
+  Check(cardproto::FormatNoteOn(0, 60u) == "n0 on 60",
         "note formatting changed");
-  Check(cardproto::FormatSetNote(7, 0.0) == "n7 0",
-        "note-off formatting changed");
-  Check(cardproto::FormatSetStreamNote(3, 440.0, 17u) ==
-            "n3 440.000000000 0.125000000 @17",
+  Check(cardproto::FormatNoteOn(7, 0u) == "n7 on 0",
+        "lowest-key formatting changed");
+  Check(cardproto::FormatStreamNoteOn(3, 69u, 17u) ==
+            "n3 on 69 @17",
         "session-bound note formatting changed");
-  Check(cardproto::FormatSetAllNotes(440.0, 0.125) ==
-            "n 440.000000000 0.125000000",
-        "all-note formatting changed");
   Check(cardproto::FormatSet48V(true) == "v 1",
         "effect formatting changed");
 
