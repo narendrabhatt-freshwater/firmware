@@ -233,20 +233,16 @@ void StartVmLoad(App &app, const VmExample &example)
 
 } // namespace
 
-void DrawVmProgramCard(App &app)
+void DrawVmProgramHeader(App &app)
 {
   FinishVmLoad(app);
   ImFont *fs = fw::theme::g_fonts.mono_small;
   const bool busy = app.vm_load.busy.load();
   const bool competing_upload = app.sample_load.busy.load();
 
-  fw::ui::BeginSection("vm_program", "CHANNEL BERRY PROGRAM",
-                       ImVec2(0, S(248.f)));
-  ImGui::NewLine();
-  ImGui::Spacing();
-
-  MonoText("Program", kPalette.text_dim, fs);
-  ImGui::SetNextItemWidth(S(220.f));
+  MonoText("SCRIPT", kPalette.text_dim, fs);
+  ImGui::SameLine(0.f, S(8.f));
+  ImGui::SetNextItemWidth(S(170.f));
   ImGui::BeginDisabled(busy);
   if (ImGui::BeginCombo("##vm_program_select",
                         kExamples[app.vm_script_index].name)) {
@@ -257,21 +253,13 @@ void DrawVmProgramCard(App &app)
     ImGui::EndCombo();
   }
   ImGui::EndDisabled();
-  MonoText(kExamples[app.vm_script_index].description, kPalette.muted, fs);
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("%s", kExamples[app.vm_script_index].description);
 
-  ImGui::Spacing();
-  MonoText("Channel CDC", kPalette.text_dim, fs);
-  MonoText(app.attack_cdc_path[0] ? app.attack_cdc_path : "not selected",
-           app.attack_cdc_path[0] ? kPalette.text : kPalette.warning, fs);
-  if (fw::ui::Btn("Find CDC", ImVec2(0, S(22.f)), BtnKind::Neutral)) {
-    std::string error;
-    if (!app.EnsureAttackCdc(error)) app.PushToastErr(error);
-  }
-
-  ImGui::Spacing();
+  ImGui::SameLine(0.f, S(6.f));
   ImGui::BeginDisabled(busy || competing_upload);
-  if (fw::ui::Btn(busy ? "Uploading…" : "BUILD + UPLOAD n0–n7",
-                  ImVec2(0, S(26.f)), BtnKind::Primary)) {
+  if (fw::ui::Btn(busy ? "UPLOADING…" : "UPLOAD n0–n7",
+                  ImVec2(S(112.f), S(24.f)), BtnKind::Primary)) {
     std::string error;
     if (!app.EnsureAttackCdc(error)) {
       app.log.Push(error);
@@ -285,22 +273,16 @@ void DrawVmProgramCard(App &app)
   }
   ImGui::EndDisabled();
 
-  if (busy) {
-    std::string status;
-    {
-      std::lock_guard<std::mutex> lock(app.vm_load.mu);
-      status = app.vm_load.status;
-    }
-    ImGui::SameLine(0.f, S(12.f));
-    fw::ui::ProgressBar("vm_upload", app.vm_load.progress.load(),
-                        ImVec2(S(130.f), S(4.f)));
-    MonoText(status.c_str(), kPalette.accent, fs);
-  } else if (competing_upload) {
-    MonoText("Wait for the sample upload to finish.", kPalette.warning, fs);
-  } else {
-    MonoText("Upload silences the card, then programs all eight voices.",
-             kPalette.text_dim, fs);
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    if (competing_upload)
+      ImGui::SetTooltip("Wait for the sample upload to finish");
+    else if (!busy)
+      ImGui::SetTooltip("Build and upload to all eight Channel voices");
   }
 
-  fw::ui::EndSection();
+  if (busy) {
+    ImGui::SameLine(0.f, S(8.f));
+    fw::ui::ProgressBar("vm_upload", app.vm_load.progress.load(),
+                        ImVec2(S(54.f), S(4.f)));
+  }
 }

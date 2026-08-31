@@ -260,31 +260,6 @@ namespace
     }
   }
 
-  /** Underlined phosphor "link" text; returns true on click. */
-  bool LinkText(const char *label)
-  {
-    ImFont *font = fw::theme::g_fonts.caps;
-    if (font)
-    {
-      ImGui::PushFont(font);
-    }
-    ImGui::TextColored(kPalette.accent, "%s", label);
-    const ImVec2 mn = ImGui::GetItemRectMin();
-    const ImVec2 mx = ImGui::GetItemRectMax();
-    ImGui::GetWindowDrawList()->AddLine(ImVec2(mn.x, mx.y - 1.f),
-                                        ImVec2(mx.x, mx.y - 1.f),
-                                        fw::theme::U32A(kPalette.accent, 0.7f));
-    if (font)
-    {
-      ImGui::PopFont();
-    }
-    if (ImGui::IsItemHovered())
-    {
-      ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-    }
-    return ImGui::IsItemClicked();
-  }
-
 } // namespace
 
 void App::MarkSettingsDirty()
@@ -847,11 +822,6 @@ void App::Tick()
         filter_bypass = p.filter_bypass;
         dirty = true;
       }
-      if (p.has_filter_voice)
-      {
-        filter_voice = std::clamp(p.filter_voice, 0, 7);
-        dirty = true;
-      }
       if (p.has_fx_phantom)
       {
         effect.phantom = p.fx_phantom;
@@ -1056,10 +1026,9 @@ void App::DrawSidebar()
   };
   static const NavDef kNav[] = {
       {"\u25C8", "PERFORM", "[1]", GuiView::Perform},
-      {"\u25C7", "TONE", "[2]", GuiView::Tone},
-      {"\u229F", "SAMPLE", "[3]", GuiView::Sample},
-      {"\u229E", "EFFECT", "[4]", GuiView::Effect},
-      {"\u25E7", "SETUP", "[5]", GuiView::Setup},
+      {"\u25C7", "CHANNEL", "[2]", GuiView::Channel},
+      {"\u229E", "EFFECT", "[3]", GuiView::Effect},
+      {"\u25E7", "SETUP", "[4]", GuiView::Setup},
   };
 
   ImGui::SetCursorPosY(ImGui::GetCursorPosY() + S(6.f));
@@ -1074,8 +1043,6 @@ void App::DrawSidebar()
     const bool hovered = ImGui::IsItemHovered();
     if (ImGui::IsItemClicked())
     {
-      if (n.v == GuiView::Tone) SetSourceMode(SourceMode::Wave);
-      if (n.v == GuiView::Sample) SetSourceMode(SourceMode::Sample);
       view = n.v;
       MarkSettingsDirty();
     }
@@ -2312,17 +2279,17 @@ void App::DrawPerform()
       }
       Mono(info, kPalette.text_dim, fs);
       ImGui::SetCursorPosX(S(12.f));
-      if (fw::ui::ChipBtn("\u2192 Tone", false, BtnKind::Neutral))
+      if (fw::ui::ChipBtn("\u2192 Channel · Wave", false, BtnKind::Neutral))
       {
         SetSourceMode(SourceMode::Wave);
-        view = GuiView::Tone;
+        view = GuiView::Channel;
         MarkSettingsDirty();
       }
       ImGui::SameLine(0.f, S(6.f));
-      if (fw::ui::ChipBtn("\u2192 Sample", false, BtnKind::Neutral))
+      if (fw::ui::ChipBtn("\u2192 Channel · Sample", false, BtnKind::Neutral))
       {
         SetSourceMode(SourceMode::Sample);
-        view = GuiView::Sample;
+        view = GuiView::Channel;
         MarkSettingsDirty();
       }
 
@@ -2569,12 +2536,23 @@ void App::DrawPerform()
   ImGui::PopStyleVar();
 }
 
-/* ── Tone: mode bar + oscillator / filter ───────────────────────────── */
+/* ── Channel: shared Wave / Sample page ─────────────────────────────── */
 
-void App::DrawTone()
+void App::DrawChannel()
+{
+  if (source_mode == SourceMode::Sample)
+  {
+    DrawSamplePage(*this);
+    return;
+  }
+  DrawWavePage();
+}
+
+/* ── Wave source: mode bar + oscillator / filter ────────────────────── */
+
+void App::DrawWavePage()
 {
   ImFont *fs = fw::theme::g_fonts.mono_small;
-  const bool offline = !bus.IsOpen() || bus.BusFault();
 
   // Explicit source mode: card-generated waves need no USB BODY transport.
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kPalette.bg_alt);
@@ -2597,28 +2575,11 @@ void App::DrawTone()
     if (fw::ui::ChipBtn("SAMPLE", false, BtnKind::Neutral))
     {
       SetSourceMode(SourceMode::Sample);
-      view = GuiView::Sample;
       MarkSettingsDirty();
     }
-    ImGui::SameLine(0.f, S(12.f));
-    ImGui::SetCursorPosY(mid_y + S(3.f));
-    Mono("generated on card · no UAC/BODY", kPalette.muted, fs);
-    if (offline)
-    {
-      ImGui::SameLine(0.f, S(18.f));
-      ImGui::SetCursorPosY(mid_y + S(5.f));
-      fw::ui::StatusDot(3.f, kPalette.muted, false);
-      ImGui::SameLine(0.f, S(8.f));
-      ImGui::SetCursorPosY(mid_y + S(3.f));
-      Mono("Bus offline —", kPalette.text_dim, fs);
-      ImGui::SameLine(0.f, S(4.f));
-      ImGui::SetCursorPosY(mid_y + S(2.f));
-      if (LinkText("open Setup"))
-      {
-        view = GuiView::Setup;
-        MarkSettingsDirty();
-      }
-    }
+    ImGui::SameLine(0.f, S(18.f));
+    ImGui::SetCursorPosY(mid_y - S(1.f));
+    DrawVmProgramHeader(*this);
   }
   ImGui::EndChild();
   ImGui::PopStyleVar();
@@ -2629,15 +2590,15 @@ void App::DrawTone()
   ImGui::BeginChild("tone_body", ImVec2(0, 0), ImGuiChildFlags_None);
   ImGui::PopStyleVar();
 
-  ImGui::BeginChild("tone_left", ImVec2(S(280.f), 0), ImGuiChildFlags_None);
+  const float gap = S(12.f);
+  const float col_w = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
+  ImGui::BeginChild("tone_left", ImVec2(col_w, 0), ImGuiChildFlags_None);
   DrawOscillatorCard(*this);
-  ImGui::Spacing();
-  DrawFilterCard(*this);
   ImGui::EndChild();
 
-  ImGui::SameLine(0.f, S(12.f));
+  ImGui::SameLine(0.f, gap);
   ImGui::BeginChild("tone_right", ImVec2(0, 0), ImGuiChildFlags_None);
-  DrawVmProgramCard(*this);
+  DrawFilterCard(*this);
   ImGui::EndChild();
 
   ImGui::EndChild();
@@ -3063,7 +3024,7 @@ void App::DrawShortcutSheet()
       const char *desc;
     };
     static const Row kRows[] = {
-        {"1\u20135", "Switch feature area"},
+        {"1\u20134", "Switch feature area"},
         {"Space", "Silence all voices"},
         {"A W S E D F T G Y H U J K", "Piano keys (C\u2013C)"},
         {"Z / X", "Octave down / up"},
@@ -3178,22 +3139,15 @@ void App::Draw()
     }
     if (ImGui::IsKeyPressed(ImGuiKey_2))
     {
-      SetSourceMode(SourceMode::Wave);
-      view = GuiView::Tone;
+      view = GuiView::Channel;
       MarkSettingsDirty();
     }
     if (ImGui::IsKeyPressed(ImGuiKey_3))
     {
-      SetSourceMode(SourceMode::Sample);
-      view = GuiView::Sample;
-      MarkSettingsDirty();
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_4))
-    {
       view = GuiView::Effect;
       MarkSettingsDirty();
     }
-    if (ImGui::IsKeyPressed(ImGuiKey_5))
+    if (ImGui::IsKeyPressed(ImGuiKey_4))
     {
       view = GuiView::Setup;
       MarkSettingsDirty();
@@ -3247,13 +3201,9 @@ void App::Draw()
   {
     DrawPerform();
   }
-  else if (view == GuiView::Tone)
+  else if (view == GuiView::Channel)
   {
-    DrawTone();
-  }
-  else if (view == GuiView::Sample)
-  {
-    DrawSamplePage(*this);
+    DrawChannel();
   }
   else if (view == GuiView::Effect)
   {

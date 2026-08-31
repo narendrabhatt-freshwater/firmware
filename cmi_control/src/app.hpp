@@ -29,8 +29,7 @@
 enum class GuiView : int
 {
   Perform = 0,
-  Tone = 1,
-  Sample = 2,
+  Channel = 1,
   Effect = 3,
   Setup = 4,
 };
@@ -174,8 +173,6 @@ struct App
   float filter_q_f = 1.f;
   float filter_k_f = 0.f;
   bool filter_bypass = true;
-  int filter_voice = 0; // n0..n7 chip selection on the Filter panel
-  bool env_apply_all = false;
   int selected_voice = 0;
   cardlink::vm::ChannelProgramMetadata channel_program_metadata = [] {
     cardlink::vm::ChannelProgramMetadata metadata;
@@ -227,7 +224,8 @@ struct App
   void DrawStatusBar();
   void DrawActivityLog();
   void DrawPerform();
-  void DrawTone();
+  void DrawChannel();
+  void DrawWavePage();
   void DrawSetup();
   void DrawAbout();
   void DrawBusFaultBanner();

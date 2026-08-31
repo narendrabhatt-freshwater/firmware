@@ -39,15 +39,16 @@ cmake --build cmi_control/build
 ## Views
 
 1. **Perform** — full-height preview scope with TIME/DIV / VOLTS/DIV controls, voice grid, two-octave on-screen + computer keyboard piano (A–K / W E T Y U, Z/X octave)
-2. **Tone** — oscillator shape with waveform preview, n0–n7 LPF + fk, multi-segment envelope editor (voice thumbnails, presets, undo, segment table)
-3. **SAMPLE** — 8-voice sample set, CDC attack upload (`al`), 10-channel int16 UAC2 BODY streaming, drag-and-drop files, root pitch (`ar`), voice assignment (`aw`)
-4. **Effect** — phantom / AUDIO_EN / LEDs (last-sent state), USB ADC channel, ADC/I2C tools
+2. **Channel** — switch between Wave (oscillator, n0–n7 LPF + fk, Berry program upload) and Sample (8-voice sample set, CDC attack upload, UAC2 BODY streaming, root pitch and voice assignment)
+3. **Effect** — phantom / AUDIO_EN / LEDs (last-sent state), USB ADC channel, ADC/I2C tools
+4. **Setup** — RS485 / MIDI / output routing, auto-reconnect, port refresh
 
 ## Channel Berry program test
 
-The Tone page contains a **CHANNEL BERRY PROGRAM** panel with three deliberately
-small examples: Envelope, Gate, and Pluck. Select the Channel Card CDC port,
-choose a program, and press **BUILD + UPLOAD n0–n7**.
+The Channel header keeps its **SCRIPT** selector and **UPLOAD n0–n7** action
+available in both Wave and Sample modes, because the script owns envelope,
+retrigger, key mapping, and release behavior for either source. It includes six
+examples covering envelope, retrigger, pitch tracking, gate, and pluck behavior.
 
 The build generates cached FWSC files under `cmi_control/build/vm_scripts`.
 The GUI checks the selected source and cache again at upload time and recompiles
@@ -55,15 +56,14 @@ when the FWSC is missing, corrupt, or older than its `.be` source. It then sends
 note-off to every voice, waits for release, and uploads the same program to all
 eight voice slots over USB CDC. Keep the card idle during this initial test;
 the operation intentionally silences any playing notes.
-5. **Setup** — RS485 / MIDI / output routing, auto-reconnect, port refresh
 
 The UI follows a phosphor-terminal design language (green-on-dark,
 scanline accents).
 
-The Tone and Sample pages are the two Channel source modes. **Wave** generates
-sine/pulse/triangle/saw directly on the card and never starts UAC/BODY.
-**Sample** uses attack CDC plus UAC BODY; the GUI opens BODY automatically on
-the first card note, so there is no separate Start BODY step.
+The Channel page has two source modes. **Wave** generates sine/pulse/triangle/
+saw directly on the card and never starts UAC/BODY. **Sample** uses attack CDC
+plus UAC BODY; the GUI opens BODY automatically on the first card note, so
+there is no separate Start BODY step.
 
 ## Shell
 
@@ -78,7 +78,7 @@ the first card note, so there is no separate Start BODY step.
 
 | Key                  | Action                  |
 | -------------------- | ----------------------- |
-| `1`–`5`              | Switch views            |
+| `1`–`4`              | Switch views            |
 | `Space`              | All notes off / silence |
 | `Cmd/Ctrl` `+`/`-`/`0` | UI zoom in / out / reset (persisted) |
 | `F1`                 | About                   |

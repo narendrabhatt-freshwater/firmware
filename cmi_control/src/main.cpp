@@ -155,8 +155,6 @@ int main(int argc, char **argv)
         }
       });
   fw::settings::Load(app);
-  if (app.view == GuiView::Tone) app.source_mode = SourceMode::Wave;
-  if (app.view == GuiView::Sample) app.source_mode = SourceMode::Sample;
   app.samples.SetCdcPath(app.attack_cdc_path);
 
   // Effective UI scale = persisted user zoom × monitor content scale

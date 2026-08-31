@@ -149,7 +149,14 @@ bool Load(App &app)
       continue;
     }
     if (key == "view") {
-      app.view = static_cast<GuiView>(std::clamp(std::atoi(val.c_str()), 0, 4));
+      const int saved_view = std::clamp(std::atoi(val.c_str()), 0, 4);
+      if (saved_view == 2) {
+        /* Legacy SAMPLE page: it is now the Sample source on Channel. */
+        app.view = GuiView::Channel;
+        app.source_mode = SourceMode::Sample;
+      } else {
+        app.view = static_cast<GuiView>(saved_view);
+      }
     } else if (key == "log_collapsed") {
       app.log_collapsed = (std::atoi(val.c_str()) != 0);
     } else if (key == "gain_db") {

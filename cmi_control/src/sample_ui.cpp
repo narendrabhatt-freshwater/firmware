@@ -506,14 +506,13 @@ void DrawSamplePage(App &app)
     ImGui::SetCursorPosY(mid_y);
     if (fw::ui::ChipBtn("WAVE", false, BtnKind::Neutral)) {
       app.SetSourceMode(SourceMode::Wave);
-      app.view = GuiView::Tone;
       app.MarkSettingsDirty();
     }
     ImGui::SameLine(0.f, S(6.f));
     (void)fw::ui::ChipBtn("SAMPLE", true, BtnKind::Primary);
-    ImGui::SameLine(0.f, S(12.f));
-    ImGui::SetCursorPosY(mid_y + S(4.f));
-    MonoText("attack CDC + UAC BODY", kPalette.muted, fs);
+    ImGui::SameLine(0.f, S(18.f));
+    ImGui::SetCursorPosY(mid_y);
+    DrawVmProgramHeader(app);
   }
   ImGui::EndChild();
   ImGui::PopStyleVar();
