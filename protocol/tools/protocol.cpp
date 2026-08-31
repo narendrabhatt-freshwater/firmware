@@ -4,6 +4,8 @@
 #include "cardlink/sequence/crash_sequence.hpp"
 #include "cardlink/serial_port.hpp"
 #include "cardlink/usb/cdc_port.hpp"
+#include "cardlink/vm/compiler.hpp"
+#include "cardlink/vm/uploader.hpp"
 
 #include <algorithm>
 #include <array>
@@ -81,9 +83,9 @@ void Usage()
   std::fprintf(stderr,
       "usage: protocol --crash FILE [--g DB] [--r N]\n"
       "                [--s FILE | --d DIR] [--dry-run]\n"
+      "       protocol --script PROGRAM.be [--u CDC] [--dry-run]\n"
       "       overrides: --p RS485 --u CDC --b BAUD\n");
 }
-
 bool SleepMs(uint32_t ms)
 {
   const auto deadline = std::chrono::steady_clock::now() +
@@ -280,22 +282,6 @@ bool LoadSamples(cardlink::sample::Client &samples,
   return true;
 }
 
-bool QueueEnvelope(cardlink::rs485::Controller &bus, uint8_t slot,
-                   const std::string &tokens)
-{
-  auto result = std::make_shared<std::promise<bool>>();
-  auto ready = result->get_future();
-  if (bus.QueueChannel(
-          [slot, tokens, result](cardproto::ChannelClient &channel) {
-            auto reply = channel.SetEnvelope(slot, tokens);
-            result->set_value(reply.ok());
-            return reply;
-          }) != cardlink::rs485::QueueResult::Ok) {
-    return false;
-  }
-  return ready.wait_for(2s) == std::future_status::ready && ready.get();
-}
-
 bool QueueCommand(cardlink::rs485::Controller &bus,
                   const std::string &command)
 {
@@ -317,6 +303,7 @@ bool QueueCommand(cardlink::rs485::Controller &bus,
 int main(int argc, char **argv)
 {
   std::string crash_path;
+  std::string vm_script_path;
   std::string port_path;
   std::string cdc_path;
   std::string samples_dir;
@@ -339,6 +326,10 @@ int main(int argc, char **argv)
     };
     if (std::strcmp(arg, "--crash") == 0 || std::strcmp(arg, "--c") == 0) {
       crash_path = need(arg);
+    } else if (std::strcmp(arg, "--script") == 0 ||
+               std::strcmp(arg, "--vm-script") == 0 ||
+               std::strcmp(arg, "--vm") == 0) {
+      vm_script_path = need(arg);
     } else if (std::strcmp(arg, "--port") == 0 ||
                std::strcmp(arg, "--p") == 0) {
       port_path = need(arg);
@@ -373,10 +364,63 @@ int main(int argc, char **argv)
       return 2;
     }
   }
-  if (crash_path.empty() || baud == 0 || atten > 127 ||
+  if ((crash_path.empty() == vm_script_path.empty()) || baud == 0 ||
+      atten > 127 ||
       (!sample_file.empty() && !samples_dir.empty())) {
     Usage();
     return 2;
+  }
+
+  if (!vm_script_path.empty()) {
+    if (!fs::is_regular_file(vm_script_path)) {
+      std::fprintf(stderr, "Berry script not found: %s\n",
+                   vm_script_path.c_str());
+      return 2;
+    }
+    cardlink::vm::BerryCompiler compiler;
+    const auto compiled = compiler.CompileChannelFile(vm_script_path);
+    if (!compiled.ok) {
+      std::fprintf(stderr, "%s: %s\n", vm_script_path.c_str(),
+                   compiled.message.c_str());
+      return 2;
+    }
+    std::printf("compiled %s -> %zu-byte FWSC\n", vm_script_path.c_str(),
+                compiled.program.size());
+    if (dry_run) {
+      std::printf("dry run; no card opened\n");
+      return 0;
+    }
+    const auto ports = cardlink::SerialPort::ListPorts();
+    if (cdc_path.empty()) cdc_path = PickCdc(ports);
+    if (cdc_path.empty()) {
+      std::fprintf(stderr,
+                   "Channel Card CDC not found (expected CHCARD/ttyACM)\n");
+      return 1;
+    }
+    cardlink::SerialPort cdc;
+    std::string cdc_error;
+    if (!cardlink::usb::OpenCdcPort(cdc, cdc_path, cdc_error)) {
+      std::fprintf(stderr, "%s\n", cdc_error.c_str());
+      return 1;
+    }
+    std::printf("selected CDC %s\n", cdc_path.c_str());
+    cardlink::vm::VmUploader uploader(cdc);
+    int last_voice = -1;
+    const auto uploaded = uploader.UploadAll(
+        compiled.program.data(), compiled.program.size(),
+        [&last_voice](uint8_t voice, float) {
+          if (last_voice != static_cast<int>(voice)) {
+            last_voice = static_cast<int>(voice);
+            std::printf("uploading voice %u\n", static_cast<unsigned>(voice));
+          }
+        });
+    cdc.Close();
+    if (!uploaded.ok) {
+      std::fprintf(stderr, "%s\n", uploaded.message.c_str());
+      return 1;
+    }
+    std::printf("ok: uploaded %s to voices 0-7\n", vm_script_path.c_str());
+    return 0;
   }
 
   cardlink::sequence::CrashSequence sequence;
@@ -399,16 +443,10 @@ int main(int argc, char **argv)
           std::printf(" then note-off");
         }
         std::printf("\n");
-        if (!step.envelope.empty()) {
-          std::printf("           en %s\n", step.envelope.c_str());
-        }
       } else if (step.kind == CrashStepKind::Delay) {
         std::printf("  line %u: delay %ums\n", step.line, step.duration_ms);
       } else if (step.kind == CrashStepKind::Command) {
         std::printf("  line %u: %s\n", step.line, step.command.c_str());
-      } else if (step.kind == CrashStepKind::Envelope) {
-        std::printf("  line %u: envelope %s\n", step.line,
-                    step.envelope.c_str());
       } else {
         std::printf("  line %u: crash release %ums\n", step.line,
                     static_cast<unsigned>(step.release_ms));
@@ -550,13 +588,7 @@ int main(int argc, char **argv)
   size_t first_play_step = 0;
   while (first_play_step < sequence.steps.size()) {
     const auto &step = sequence.steps[first_play_step];
-    if (step.kind == cardlink::sequence::CrashStepKind::Envelope) {
-      if (!QueueEnvelope(bus, static_cast<uint8_t>(slot), step.envelope)) {
-        std::fprintf(stderr, "line %u: envelope setup failed\n", step.line);
-        bus.Close();
-        return 1;
-      }
-    } else if (step.kind == cardlink::sequence::CrashStepKind::CrashRelease) {
+    if (step.kind == cardlink::sequence::CrashStepKind::CrashRelease) {
       samples.SetCrashReleaseMs(static_cast<uint8_t>(step.release_ms));
       if (!WaitQueue(bus)) {
         std::fprintf(stderr, "line %u: crash setup failed\n", step.line);
@@ -599,11 +631,6 @@ int main(int argc, char **argv)
         if (step.release) {
           samples.SetCrashReleaseMs(static_cast<uint8_t>(step.release_ms));
         }
-        if (!step.envelope.empty() &&
-            !QueueEnvelope(bus, static_cast<uint8_t>(slot), step.envelope)) {
-          okay = false;
-          break;
-        }
         samples.NoteOn(static_cast<uint8_t>(slot), step.hz, step.wave_id);
         if (!note_gate.Wait() || !SleepMs(step.duration_ms)) {
           okay = g_stop.load();
@@ -618,11 +645,6 @@ int main(int argc, char **argv)
         }
       } else if (step.kind == CrashStepKind::Delay) {
         if (!SleepMs(step.duration_ms)) {
-          break;
-        }
-      } else if (step.kind == CrashStepKind::Envelope) {
-        if (!QueueEnvelope(bus, static_cast<uint8_t>(slot), step.envelope)) {
-          okay = false;
           break;
         }
       } else if (step.kind == CrashStepKind::CrashRelease) {

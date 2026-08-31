@@ -14,8 +14,10 @@ extern "C"
 #endif
 
 #include <stdint.h>
+#include <stddef.h>
 
 #include "attack_bank.h"
+#include "freshwater/vm.h"
 
 /** Voices available in SAMPLE mode (n0..n7). */
 #define NOTE_BANK_VOICES SAMPLE_VOICES
@@ -40,12 +42,13 @@ extern "C"
    * freq_hz > 0 is always a note-on (restarts attack + body). Applied on
    * the next I2S sample. Voice uses the assigned wave_id (`aw`).
    */
-  void NoteBank_SetFreq(uint8_t note, double freq_hz, double scale);
+  /** Returns -2 when this voice has no active VM program. */
+  int NoteBank_SetFreq(uint8_t note, double freq_hz, double scale);
 
   /** Streamed note-on variant. The session is bound to nX before its ACK so
    * only the matching USB SOF can claim the replacement ring. */
-  void NoteBank_SetFreqSession(uint8_t note, double freq_hz, double scale,
-                               uint8_t session);
+  int NoteBank_SetFreqSession(uint8_t note, double freq_hz, double scale,
+                              uint8_t session);
 
   double NoteBank_GetFreq(uint8_t note);
   double NoteBank_GetScale(uint8_t note);
@@ -66,6 +69,25 @@ extern "C"
   uint8_t NoteBank_IsActive(uint8_t note);
   uint8_t NoteBank_AnyActive(void);
   int32_t NoteBank_NextSample(void);
+
+  /** VM hooks bracketing one 48-sample DMA refill. */
+  void NoteBank_VmBoundaryBegin(void);
+  void NoteBank_VmBoundaryEnd(void);
+  void NoteBank_VmStop(uint8_t voice);
+  void NoteBank_VmStopAll(void);
+  uint8_t NoteBank_VmIsActive(uint8_t voice);
+  uint8_t NoteBank_VmActiveMask(void);
+  /** Chunked FWSC upload. Invalid uploads preserve the active program. */
+  int NoteBank_VmUploadBegin(uint8_t voice);
+  int NoteBank_VmUploadFeed(uint8_t voice, const void *data, size_t size);
+  int NoteBank_VmUploadCommit(uint8_t voice);
+  void NoteBank_VmUploadAbort(uint8_t voice);
+  uint8_t NoteBank_VmUploadIsActive(uint8_t voice);
+  uint8_t NoteBank_VmUploadIsBusy(void);
+  const FwVmMemoryMetrics *NoteBank_VmMemoryMetrics(void);
+  FwVmFault NoteBank_VmFault(uint8_t voice);
+  uint32_t NoteBank_VmMaxCycles(uint8_t voice);
+  uint32_t NoteBank_VmFaultCount(uint8_t voice);
 
   /** Active mask and hungriest voice (0xFF if none). */
   void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out);

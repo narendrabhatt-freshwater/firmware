@@ -140,79 +140,6 @@ public:
    */
   Result Triangle(double asymmetry);
 
-  /* ---- envelope (en / ek) ---- */
-
-  /**
-   * @brief List programmed envelopes.
-   * @return Exchange result for wire `en`.
-   */
-  Result ListEnvelopes();
-
-  /**
-   * @brief Program the amplitude envelope on all 8 voices.
-   *
-   * @param[in] tokens Segment list (`end slope[±k] … release`) or `"0"` to
-   *                   clear; exact grammar is defined by the protocol spec.
-   * @return Exchange result for wire `en <tokens>`.
-   */
-  Result SetEnvelopeAll(const std::string &tokens);
-
-  /**
-   * @brief Clear envelopes on all voices (unprogrammed bypass).
-   * @return Exchange result for wire `en 0`.
-   */
-  Result ClearEnvelopeAll();
-
-  /**
-   * @brief Query one voice envelope.
-   * @param[in] slot Voice index in `[0, 7]`.
-   * @return LocalErr on bad slot; otherwise wire `enX` exchange result.
-   */
-  Result GetEnvelope(uint8_t slot);
-
-  /**
-   * @brief Program one voice envelope.
-   * @param[in] slot   Voice index in `[0, 7]`.
-   * @param[in] tokens Segment list or `"0"` to clear.
-   * @return LocalErr on bad slot; otherwise wire `enX …` exchange result.
-   */
-  Result SetEnvelope(uint8_t slot, const std::string &tokens);
-
-  /**
-   * @brief Clear one voice envelope.
-   * @param[in] slot Voice index in `[0, 7]`.
-   * @return LocalErr on bad slot; otherwise wire `enX 0` exchange result.
-   */
-  Result ClearEnvelope(uint8_t slot);
-
-  /**
-   * @brief Query global envelope pitch-track coefficient.
-   * @return Exchange result for wire `ek`.
-   */
-  Result GetEnvK();
-
-  /**
-   * @brief Set global envelope pitch-track coefficient.
-   * @param[in] k Coefficient in `[-10, 10]`.
-   * @return LocalErr on bad @p k; otherwise wire `ek …` exchange result.
-   */
-  Result SetEnvK(double k);
-
-  /**
-   * @brief Query one voice envelope pitch-track coefficient.
-   * @param[in] slot Voice index in `[0, 7]`.
-   * @return LocalErr on bad slot; otherwise wire `ekX` exchange result.
-   */
-  Result GetEnvK(uint8_t slot);
-
-  /**
-   * @brief Set one voice envelope pitch-track coefficient.
-   * @param[in] slot Voice index in `[0, 7]`.
-   * @param[in] k    Coefficient in `[-10, 10]`.
-   * @return LocalErr on bad args; otherwise wire `ekX …` exchange result.
-   */
-  Result SetEnvK(uint8_t slot, double k);
-
   /* ---- digital LPF voices 0…7 only (f / fk) ---- */
 
   /**
@@ -339,19 +266,6 @@ std::string FormatPulse(double duty);
 std::string FormatTriangle(double asymmetry);
 
 /**
- * @param[in] slot   Voice 0…15.
- * @param[in] tokens Envelope token list or `"0"`.
- * @return Command string for wire `enX …`.
- */
-std::string FormatSetEnvelope(uint8_t slot, const std::string &tokens);
-
-/**
- * @param[in] tokens Envelope token list or `"0"`.
- * @return Command string for wire `en …`.
- */
-std::string FormatSetEnvelopeAll(const std::string &tokens);
-
-/**
  * @param[in] slot Voice 0…7.
  * @param[in] hz   Cutoff Hz.
  * @param[in] q    Q, or `< 0` to omit.
@@ -378,19 +292,6 @@ std::string FormatSetFk(uint8_t slot, double k);
  * @return Command string for wire `fk …`.
  */
 std::string FormatSetFkAll(double k);
-
-/**
- * @param[in] slot Voice 0…15.
- * @param[in] k    Envelope pitch-track coefficient.
- * @return Command string for wire `ekX …`.
- */
-std::string FormatSetEnvK(uint8_t slot, double k);
-
-/**
- * @param[in] k Envelope pitch-track coefficient.
- * @return Command string for wire `ek …`.
- */
-std::string FormatSetEnvKAll(double k);
 
 /**
  * @param[in] ch       DAC channel 1…4.

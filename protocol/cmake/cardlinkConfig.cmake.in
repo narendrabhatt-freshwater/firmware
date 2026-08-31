@@ -4,6 +4,7 @@ include(CMakeFindDependencyMacro)
 find_dependency(RtMidi CONFIG REQUIRED)
 find_dependency(RtAudio CONFIG REQUIRED)
 
+include("${CMAKE_CURRENT_LIST_DIR}/freshwaterVmTargets.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/cardlinkTargets.cmake")
 
 check_required_components(cardlink)

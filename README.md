@@ -9,12 +9,11 @@ project's own `README.md`; the host↔card wire contract lives in
 | Channel Card | `channel_card/` | STM32H725xG | `channel_MCU` | `channel_MCU.ioc` |
 | Effect Card  | `effect_card/`  | STM32H743xx | `effect_card` | `effect_card.ioc` |
 
-Both are standalone CMake projects — build them independently. Each is
-self-contained: all dependencies (HAL, CMSIS, TinyUSB) are vendored
-in-tree, so a copy-paste of either `channel_card/` or
-`effect_card/` folder builds as-is with no package manager or
-submodule fetch. The C++17 `cardlink` host SDK and its `cmi_control` example
-application are separate from the two firmware projects — see §6.
+Both are independently buildable CMake projects. HAL, CMSIS, and TinyUSB are
+vendored inside each card, while both cards intentionally share the portable
+`common/vm` target. Build from this repository layout so that shared source is
+resolved. The C++17 `cardlink` host SDK and its `cmi_control` example application
+are separate from the two firmware projects — see §6.
 
 ---
 
@@ -160,8 +159,8 @@ CODE blocks, but check anyway):
 ## 5. Repository layout (same shape in both projects)
 
 The firmware projects live at the repo root (`channel_card/`,
-`effect_card/`), alongside the C++17 `cardlink` host SDK under
-`protocol/` and the `cmi_control` example application.
+`effect_card/`), alongside the C++17 `cardlink` host SDK under `protocol/`, the
+shared interpreter under `common/vm/`, and the `cmi_control` example application.
 The `fw` CLI wrapping all of this lives in `scripts/` at the repo root.
 
 ```
@@ -201,7 +200,7 @@ reference; the summary:
 
 **Channel Card** — 8 SAMPLE voices (`n0`…`n7`, summed on CH1), fallback
 oscillator shape (`s`/`p`/`t`), sample upload/assignment
-(`al`/`ar`/`aw`/`a`/`vq`), per-voice envelope (`en`/`ek`) and LPF
+(`al`/`ar`/`aw`/`a`/`vq`), per-voice VM programs (`vmload`/`vm`) and LPF
 (`f`/`fk`), DAC gain (`g`), CPU probe (`cpu`).
 
 | Command                        | Meaning                                                         |

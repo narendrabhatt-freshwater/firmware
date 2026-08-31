@@ -42,6 +42,19 @@ cmake --build cmi_control/build
 2. **Tone** — oscillator shape with waveform preview, n0–n7 LPF + fk, multi-segment envelope editor (voice thumbnails, presets, undo, segment table)
 3. **SAMPLE** — 8-voice sample set, CDC attack upload (`al`), 10-channel int16 UAC2 BODY streaming, drag-and-drop files, root pitch (`ar`), voice assignment (`aw`)
 4. **Effect** — phantom / AUDIO_EN / LEDs (last-sent state), USB ADC channel, ADC/I2C tools
+
+## Channel Berry program test
+
+The Tone page contains a **CHANNEL BERRY PROGRAM** panel with three deliberately
+small examples: Envelope, Gate, and Pluck. Select the Channel Card CDC port,
+choose a program, and press **BUILD + UPLOAD n0–n7**.
+
+The build generates cached FWSC files under `cmi_control/build/vm_scripts`.
+The GUI checks the selected source and cache again at upload time and recompiles
+when the FWSC is missing, corrupt, or older than its `.be` source. It then sends
+note-off to every voice, waits for release, and uploads the same program to all
+eight voice slots over USB CDC. Keep the card idle during this initial test;
+the operation intentionally silences any playing notes.
 5. **Setup** — RS485 / MIDI / output routing, auto-reconnect, port refresh
 
 The UI follows a phosphor-terminal design language (green-on-dark,

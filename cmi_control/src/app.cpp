@@ -1,7 +1,7 @@
 #include "app.hpp"
 
 #include "anim.hpp"
-#include "env_editor.hpp"
+#include "card_panels.hpp"
 #include "cardlink/midi/note_event.hpp"
 #include "cardlink/serial_port.hpp"
 #include "cardlink/usb/cdc_port.hpp"
@@ -542,8 +542,6 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
   }
   if (want_card)
   {
-    /* Reassert after reconnects before an urgent USB note can replace a slot. */
-    samples.SetCrashReleaseMs(static_cast<uint8_t>(crash_release_ms));
     (void)EnsureSampleStream();
   }
 
@@ -1380,7 +1378,7 @@ void App::DrawStatusBar()
                2, false, kPalette.border, false, false);
   }
 
-  // Playable voice limit + crash-in release, kept beside VOICES for live use.
+  // Playable voice limit.
   ImGui::SameLine(0.f, S(10.f));
   ImGui::BeginGroup();
   ImGui::SetCursorPosY(chip_y + S(4.f));
@@ -1403,23 +1401,6 @@ void App::DrawStatusBar()
   if (ImGui::IsItemHovered())
   {
     ImGui::SetTooltip("Playable voices (1–8)");
-  }
-  ImGui::SameLine(0.f, S(9.f));
-  ImGui::SetCursorPosY(chip_y + S(4.f));
-  Mono("REL", kPalette.text_dim, fs);
-  ImGui::SameLine(0.f, S(5.f));
-  ImGui::SetCursorPosY(chip_y + S(2.f));
-  ImGui::SetNextItemWidth(S(66.f));
-  if (ImGui::SliderInt("##crash_release_top", &crash_release_ms, 0, 50,
-                       "%dms"))
-  {
-    samples.SetCrashReleaseMs(static_cast<uint8_t>(crash_release_ms));
-    MarkSettingsDirty();
-  }
-  if (ImGui::IsItemHovered())
-  {
-    ImGui::SetTooltip(
-        "Release before stolen-slot retrigger (0–50 ms; 0 = hard cut)");
   }
   ImGui::EndGroup();
 
@@ -2510,7 +2491,7 @@ void App::DrawPerform()
   ImGui::PopStyleVar();
 }
 
-/* ── Tone: mode bar + oscillator / filter + envelope ─────────────────── */
+/* ── Tone: mode bar + oscillator / filter ───────────────────────────── */
 
 void App::DrawTone()
 {
@@ -2569,7 +2550,7 @@ void App::DrawTone()
 
   ImGui::SameLine(0.f, S(12.f));
   ImGui::BeginChild("tone_right", ImVec2(0, 0), ImGuiChildFlags_None);
-  DrawEnvelopeEditor(*this);
+  DrawVmProgramCard(*this);
   ImGui::EndChild();
 
   ImGui::EndChild();

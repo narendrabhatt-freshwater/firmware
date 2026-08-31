@@ -12,7 +12,6 @@ enum class CrashStepKind : uint8_t {
   Note,
   Delay,
   Command,
-  Envelope,
   CrashRelease,
 };
 
@@ -26,7 +25,6 @@ struct CrashStep
   bool release = false;
   uint32_t release_ms = 0;
   std::string command;
-  std::string envelope;
   std::string label;
 };
 

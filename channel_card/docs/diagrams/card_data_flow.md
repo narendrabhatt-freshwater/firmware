@@ -100,7 +100,7 @@ flowchart TB
     Xfade["overlap: attack out, body consume"]
     BodyOnly["body lerp from ring rd"]
     Lpf["note_filter DF4"]
-    Env["note_envelope"]
+    Env["native amplitude ramp"]
     Ph --> Join
     Inc --> Ph
     Atk --> AtkOnly

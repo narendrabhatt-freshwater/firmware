@@ -88,10 +88,9 @@ but reply `err:range`. All voices mix onto DAC channel 1.
 
 Each voice is a **SAMPLE voice**: note-on plays the assigned attack head
 from AXI RAM, then the USB BODY slots, through one on-card playhead
-(pitch, filter, envelope). Host streams unpitched body; the card rate-scales
+(pitch, filter, and VM-controlled amplitude). Host streams unpitched body; the card rate-scales
 (`note_Hz / root_Hz`). Voices without a loaded wave synthesize the global
-DDS shape (`s` / `p` / `t`). Envelope (`en`) and per-voice LPF (`f`) apply
-to either source.
+DDS shape (`s` / `p` / `t`). The VM-controlled amplitude and per-voice LPF (`f`) apply to either source.
 
 Boot / bare `n0` also turns the analog bypass path on and sets CH1 DAC
 trim to 0 dB (`g 1 0`). Frequency changes do not touch gain or bypass.
@@ -162,62 +161,11 @@ until that join. `nX > 0` is always a note-on.
 
 Applies to voices whose assigned wave id has no loaded attack head.
 
-### Amplitude envelope
+### VM-controlled amplitude envelope
 
-Each voice can have a multi-segment linear envelope: pairs of
-`(end_amp, slope[±k])` then a final `release_slope[±k]`. Start of the first
-segment is always 0. Last segment is release to 0.
-
-| Command               | Meaning                                |
-| --------------------- | -------------------------------------- |
-| `en`                  | List which slots have a program        |
-| `en <tokens…>`        | Program all 8 voices                   |
-| `en 0`                | Clear all voices (unprogrammed bypass) |
-| `en0`…`en7`           | Query one voice                        |
-| `en0`…`en7 <tokens…>` | Program one voice                      |
-| `en0`…`en7 0`         | Clear one voice (unprogrammed bypass)  |
-
-Slot digits `8`–`f` are accepted by the parser (the envelope bank is
-16 deep for historical reasons) but drive no audible voice.
-
-Token list rules:
-
-- Clear: single token `0`.
-- Program: odd count, at least 3 tokens, at most 19.
-- Pattern: `end slope[±k] [end slope[±k] …] release_slope[±k]`
-- Each `end` in **[0, 1]**; each `slope` **> 0** (amplitude units per second)
-- Optional pitch-track constant glued to the slope token: `10+1`, `2.0-0.5`
-  (no spaces). Omit the suffix for `k = 0`.
-- Segment count ends up between 2 and 10 (including release)
-
-Examples:
-
-```text
-en0 1.0 10  0.2
-en0 1.0 10+1  0.7 5  0.2
-en0 1.0 2.0+2  0.2-1
-en0 0
-en 0
-```
-
-Unprogrammed voices leave amplitude at full scale (envelope bypass).
-
-### Envelope pitch tracking
-
-Per-segment `k` is set on the `en` slope token (above). Each segment’s rate
-is scaled by `(note_Hz / C4)^k` with C4 = 261.625565 Hz. Same idea as filter
-`fk` below, but it changes timing, not cutoff. Negative `k` lengthens
-higher notes.
-
-| Command                       | Meaning                                      |
-| ----------------------------- | -------------------------------------------- |
-| `ek`                          | Dump k for all 8 voices                      |
-| `ek <k>`                      | Set the same k on all segments of all voices |
-| `ek0`…`ek7` / `ek0`…`ek7 <k>` | Query / bulk-set one voice                   |
-
-`k` is in **[−10, 10]**. Default **0** (no pitch effect). `ek` is a bulk
-override; prefer `slope±k` on `en` for per-segment values. Query prints one
-value when all segments share k, otherwise one k per segment.
+Amplitude ramps and note lifecycle are controlled only by the uploaded per-voice
+VM program. The firmware exposes no separate envelope-programming commands.
+See `vmload` below.
 
 ### Digital low-pass filter
 
@@ -293,7 +241,6 @@ c:p 0.5
 c:f0 300
 c:fk0 1
 c:n0 523.25
-c:en0 1.0 10+1 0.2
 c:aw 0 0
 c:a
 c:vq
@@ -493,6 +440,7 @@ physical-frame alignment. The five reason counts sum to `bad`.
 | Echo           | Channel: off. Effect: `ec` (default off)    | Local keystroke echo on                                                        |
 | Baud           | **921600 8N1** on the UART                  | Host may open any rate (e.g. 115200); TinyUSB CDC ignores line coding for data |
 | `al`           | Rejected (`err:usb`)                        | Allowed                                                                        |
+| `vmload`       | Rejected (`err:usb`)                        | Allowed                                                                        |
 
 Typical host path on macOS / Linux: Channel `cu.usbmodem*` / `ttyACM*`.
 USB–UART adapters (`cu.usbserial*`, `ttyUSB*`) are the RS485 dongle — wrong
@@ -553,6 +501,29 @@ Notes:
    app starts it with RS485 `aw <voice> <id>` then session-bound
    `nX <Hz> <scale> @<session>` immediately after launching its USB BODY job;
    later sustain uses vq-authorized BODY refills.
+
+### VM program upload (`vmload`)
+
+The Channel Card boots with no active note program. Until a valid program is
+uploaded, note commands return `err:no-program` and the note bank stays silent.
+
+`vmload <voice> <nbytes>` is CDC-only and uses the same line-to-binary
+transition as `al`. Each voice 0..7 owns an independent program. The payload is
+one Berry ABI3 `FWSC` container, up to 4116 bytes (20-byte container header
+plus at most 4096 payload bytes). The card writes
+`ok:ready`, receives exactly `nbytes`, validates target/version, CRC, bytecode,
+runtime/configuration, handlers, host calls, and CRC, then replies
+`ok:vm <voice> <target> <version>`. `vm` reports the active voice mask;
+`vm <voice>` reports `ok:vm <voice> inactive <fault>` or
+`ok:vm <voice> active <target> <version> <fault>`.
+
+One fixed-arena Berry VM roots eight independent program objects and gives each
+voice 16 native float state slots. Upload is accepted only while no voice is
+sounding; note-ons during transfer return `err:vm-busy`. Invalid or interrupted
+replacement preserves the selected program. Protected native-argument faults
+remain voice-local; allocation, GC, watchdog, or uncertain interpreter state
+invalidates the shared VM and silences all voices. Programs are lost on reset.
+`vm mem` reports arena current/peak/free and allocation/GC diagnostics.
 
 ---
 

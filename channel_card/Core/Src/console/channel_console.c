@@ -22,6 +22,8 @@
 #include "usb_stream.h"
 #include "attack_bank.h"
 #include "attack_upload.h"
+#include "vm_upload.h"
+#include "freshwater/vm_channel.h"
 #include "stream_ring.h"
 
 #include <stdio.h>
@@ -321,14 +323,12 @@ static const SwitchDef_t switches[] = {
  *   n <Hz> [sc]       — all 8 voices (n 0 = silence)
  *   s / p <d> / t <a> — global note-bank shape (sine / pulse duty / tri asym)
  *   al <id> <len>     — CDC attack-head upload (2..ATTACK_BANK_BYTES)
+ *   vmload <v> <len>  — CDC Berry ABI3 upload; vm [v|mem] — status
  *   ar <id> <Hz>      — sample root pitch (id = wave 0..255); a — loaded mask
  *   a / vq            — loaded heads per voice / hungriest + exact credit
  *   crash [0..50]     — query/set voice-steal release overlap in milliseconds
  *   usb               — BODY counters: drop/hold/min/fill/z/sof/rx/bytes/bad
  *   usb 0             — clear those counters, then same reply
- *   en0..enf / en     — envelope: end slope[±k] … release_slope[±k]
- *                       (en0 0 / en 0 = clear → unprogrammed bypass)
- *   ek0..ekf / ek     — env pitch-track k (−10..10, rate ∝ (f/C4)^k)
  *   f0..f7 <Hz> [q] / f <Hz> [q] — LPF on the 8 voices (0 or 20000 = bypass;
  *                        q = DF4 g 0.5..10, default 1.0; higher = more peak)
  *   fk0..fk7 / fk     — filter pitch-track k (0..10, fc = fbase*(f/C4)^k)
@@ -376,10 +376,21 @@ static uint8_t Console_ParseNoteSlot(char hex_digit)
 static void Console_SetNoteFreq(uint8_t note, double hz, double scale,
                                 uint16_t session)
 {
+  /* Silence must remain available before any RAM-only VM program is loaded. */
   if (hz <= 0.0)
   {
     NoteBank_SetFreq(note, 0.0, 0.0);
     RS485_Reply("ok\r\n");
+    return;
+  }
+  if (hz > 0.0 && NoteBank_VmUploadIsBusy() != 0u)
+  {
+    RS485_Reply("err:vm-busy\r\n");
+    return;
+  }
+  if (NoteBank_VmIsActive(note) == 0u)
+  {
+    RS485_Reply("err:no-program\r\n");
     return;
   }
 
@@ -510,353 +521,11 @@ static void Console_Help(void)
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   snprintf(b, sizeof b,
            "ok: SAMPLE n0..n7 Hz [sc] | s|p d|t a | aw v id | "
-           "al id n | ar id Hz | a | vq | crash [0..50] | usb | "
-           "en0..en7 end slope[±k] ... rel[±k]|0 | ek0..ek7 k | "
+           "al id n | vmload v n | vm [v] | ar id Hz | a | vq | "
+           "crash [0..50] | usb | "
            "f0..f7 Hz [q] | fk0..fk7 k | g ch dB | "
            "cpu [0|N|q N]\r\n");
   RS485_Reply(b);
-}
-
-/** Hex slot char for replies (0..15 → '0'..'9','a'..'f'). */
-static char Console_NoteSlotChar(uint8_t note)
-{
-  if (note < 10u)
-  {
-    return (char)('0' + note);
-  }
-  return (char)('a' + (note - 10u));
-}
-
-/** Append " %.2f" or " %.2f%+.2f" when k != 0. */
-static int Console_AppendSlopeK(char *b, size_t bsz, int n, float slope, float k)
-{
-  if (n < 0 || (size_t)n >= bsz)
-  {
-    return n;
-  }
-  if (k != 0.0f)
-  {
-    return n + snprintf(b + n, bsz - (size_t)n, " %.2f%+.2f", (double)slope,
-                        (double)k);
-  }
-  return n + snprintf(b + n, bsz - (size_t)n, " %.2f", (double)slope);
-}
-
-static void Console_EnvReply(uint8_t voice)
-{
-  char b[280];
-  int n;
-  uint8_t nseg;
-  uint8_t i;
-  uint8_t release_idx;
-
-  nseg = NoteEnv_GetSegmentCount(voice);
-  if (nseg < NOTE_ENV_SEGMENTS_MIN)
-  {
-    snprintf(b, sizeof b, "ok: en%c (none)\r\n", Console_NoteSlotChar(voice));
-    RS485_Reply(b);
-    return;
-  }
-
-  /* Echo console form: end slope[±k] … release_slope[±k]. */
-  n = snprintf(b, sizeof b, "ok: en%c", Console_NoteSlotChar(voice));
-  release_idx = (uint8_t)(nseg - 1u);
-  for (i = 0; i < release_idx && n > 0 && (size_t)n < sizeof b; i++)
-  {
-    NoteEnv_Segment_t seg;
-    if (NoteEnv_GetSegment(voice, i, &seg) != 0)
-    {
-      break;
-    }
-    n += snprintf(b + n, sizeof b - (size_t)n, " %.2f", (double)seg.end_amp);
-    n = Console_AppendSlopeK(b, sizeof b, n, seg.slope, seg.k);
-  }
-  if (n > 0 && (size_t)n < sizeof b)
-  {
-    NoteEnv_Segment_t rel;
-    if (NoteEnv_GetSegment(voice, release_idx, &rel) == 0)
-    {
-      n = Console_AppendSlopeK(b, sizeof b, n, rel.slope, rel.k);
-    }
-  }
-  if (n > 0 && (size_t)n < sizeof b)
-  {
-    snprintf(b + n, sizeof b - (size_t)n, "\r\n");
-  }
-  RS485_Reply(b);
-}
-
-static void Console_EkReply(uint8_t voice)
-{
-  char b[120];
-  uint8_t nseg;
-  uint8_t i;
-  int n;
-  float k0;
-  uint8_t same;
-
-  nseg = NoteEnv_GetSegmentCount(voice);
-  if (nseg < NOTE_ENV_SEGMENTS_MIN)
-  {
-    snprintf(b, sizeof b, "ok: ek%c %.1f\r\n", Console_NoteSlotChar(voice),
-             (double)NoteEnv_GetPitchK(voice));
-    RS485_Reply(b);
-    return;
-  }
-
-  same = 1u;
-  {
-    NoteEnv_Segment_t seg0;
-    if (NoteEnv_GetSegment(voice, 0u, &seg0) != 0)
-    {
-      RS485_Reply("err:range\r\n");
-      return;
-    }
-    k0 = seg0.k;
-    for (i = 1u; i < nseg; i++)
-    {
-      NoteEnv_Segment_t seg;
-      if (NoteEnv_GetSegment(voice, i, &seg) != 0 || seg.k != k0)
-      {
-        same = 0u;
-        break;
-      }
-    }
-  }
-  if (same != 0u)
-  {
-    snprintf(b, sizeof b, "ok: ek%c %.1f\r\n", Console_NoteSlotChar(voice),
-             (double)k0);
-    RS485_Reply(b);
-    return;
-  }
-
-  n = snprintf(b, sizeof b, "ok: ek%c", Console_NoteSlotChar(voice));
-  for (i = 0u; i < nseg && n > 0 && (size_t)n < sizeof b; i++)
-  {
-    NoteEnv_Segment_t seg;
-    if (NoteEnv_GetSegment(voice, i, &seg) != 0)
-    {
-      break;
-    }
-    n += snprintf(b + n, sizeof b - (size_t)n, " %.1f", (double)seg.k);
-  }
-  if (n > 0 && (size_t)n < sizeof b)
-  {
-    snprintf(b + n, sizeof b - (size_t)n, "\r\n");
-  }
-  RS485_Reply(b);
-}
-
-/**
- * Parse one whitespace-delimited token as a plain float (no trailing junk).
- * Returns 0 ok, -1 syntax.
- */
-static int Console_ParsePlainFloatToken(const char *tok, float *out)
-{
-  char *end = NULL;
-  double v;
-
-  if (tok == NULL || *tok == '\0' || out == NULL)
-  {
-    return -1;
-  }
-  v = strtod(tok, &end);
-  if (end == tok || *end != '\0')
-  {
-    return -1;
-  }
-  *out = (float)v;
-  return 0;
-}
-
-/**
- * Parse slope[±k]: "10", "10+2", "2.0-1.5". No spaces inside the token.
- * Returns 0 ok, -1 syntax.
- */
-static int Console_ParseSlopeKToken(const char *tok, float *slope_out,
-                                    float *k_out)
-{
-  char *end = NULL;
-  double slope;
-  float k = 0.0f;
-
-  if (tok == NULL || *tok == '\0' || slope_out == NULL || k_out == NULL)
-  {
-    return -1;
-  }
-  slope = strtod(tok, &end);
-  if (end == tok)
-  {
-    return -1;
-  }
-  if (*end == '+' || *end == '-')
-  {
-    char *kend = NULL;
-    double kd = strtod(end, &kend);
-    if (kend == end || *kend != '\0')
-    {
-      return -1;
-    }
-    k = (float)kd;
-  }
-  else if (*end != '\0')
-  {
-    return -1;
-  }
-  *slope_out = (float)slope;
-  *k_out = k;
-  return 0;
-}
-
-/**
- * Copy next whitespace-delimited token into tok. Advances *pp past it.
- * Returns 0 ok, -1 if no token or token too long.
- */
-static int Console_NextToken(const char **pp, char *tok, size_t tok_sz)
-{
-  const char *p;
-  size_t len = 0u;
-
-  if (pp == NULL || *pp == NULL || tok == NULL || tok_sz < 2u)
-  {
-    return -1;
-  }
-  p = *pp;
-  while (*p == ' ')
-  {
-    p++;
-  }
-  if (*p == '\0')
-  {
-    return -1;
-  }
-  while (p[len] != '\0' && p[len] != ' ')
-  {
-    len++;
-  }
-  if (len >= tok_sz)
-  {
-    return -1;
-  }
-  memcpy(tok, p, len);
-  tok[len] = '\0';
-  *pp = p + len;
-  return 0;
-}
-
-/**
- * Parse en program: end slope[±k] [end slope[±k] ...] release_slope[±k].
- * Single token 0 → NoteEnv_Clear (unprogrammed bypass, *nseg_out = 0).
- * Odd token count 3..NOTE_ENV_CONSOLE_FLOATS_MAX.
- * Returns 0 ok, -1 syntax/count, -2 range (SetSegments).
- */
-static int Console_EnvApplyProgram(uint8_t voice, const char *rest,
-                                   uint8_t *nseg_out)
-{
-  NoteEnv_Segment_t segs[NOTE_ENV_SEGMENTS_MAX];
-  char tok[32];
-  const char *p = rest;
-  const char *count_p = rest;
-  uint8_t ntok = 0u;
-  uint8_t n_pre;
-  uint8_t nseg;
-  uint8_t i;
-  int rc;
-
-  /* Count tokens first. */
-  while (Console_NextToken(&count_p, tok, sizeof tok) == 0)
-  {
-    ntok++;
-    if (ntok > NOTE_ENV_CONSOLE_FLOATS_MAX)
-    {
-      return -1;
-    }
-  }
-  while (*count_p == ' ')
-  {
-    count_p++;
-  }
-  if (*count_p != '\0')
-  {
-    return -1; /* token too long or junk */
-  }
-
-  /* en 0 / en0 0 → clear to bypass. */
-  if (ntok == 1u)
-  {
-    float clear_v;
-
-    if (Console_NextToken(&p, tok, sizeof tok) != 0 ||
-        Console_ParsePlainFloatToken(tok, &clear_v) != 0 || clear_v != 0.0f)
-    {
-      return -1;
-    }
-    while (*p == ' ')
-    {
-      p++;
-    }
-    if (*p != '\0')
-    {
-      return -1;
-    }
-    NoteEnv_Clear(voice);
-    if (nseg_out != NULL)
-    {
-      *nseg_out = 0u;
-    }
-    return 0;
-  }
-
-  if (ntok < 3u || (ntok % 2u) == 0u)
-  {
-    return -1;
-  }
-
-  n_pre = (uint8_t)((ntok - 1u) / 2u);
-  nseg = (uint8_t)(n_pre + 1u);
-  if (nseg < NOTE_ENV_SEGMENTS_MIN || nseg > NOTE_ENV_SEGMENTS_MAX)
-  {
-    return -1;
-  }
-
-  for (i = 0u; i < n_pre; i++)
-  {
-    if (Console_NextToken(&p, tok, sizeof tok) != 0 ||
-        Console_ParsePlainFloatToken(tok, &segs[i].end_amp) != 0)
-    {
-      return -1;
-    }
-    if (Console_NextToken(&p, tok, sizeof tok) != 0 ||
-        Console_ParseSlopeKToken(tok, &segs[i].slope, &segs[i].k) != 0)
-    {
-      return -1;
-    }
-  }
-  if (Console_NextToken(&p, tok, sizeof tok) != 0)
-  {
-    return -1;
-  }
-  segs[n_pre].end_amp = 0.0f;
-  if (Console_ParseSlopeKToken(tok, &segs[n_pre].slope, &segs[n_pre].k) != 0)
-  {
-    return -1;
-  }
-  while (*p == ' ')
-  {
-    p++;
-  }
-  if (*p != '\0')
-  {
-    return -1;
-  }
-
-  rc = NoteEnv_SetSegments(voice, segs, nseg);
-  if (rc == 0 && nseg_out != NULL)
-  {
-    *nseg_out = nseg;
-  }
-  return rc;
 }
 
 static void Console_ShapeReply(void)
@@ -927,184 +596,6 @@ static void Console_CmdGain(char *line)
   {
     RS485_Reply("err:range\r\n");
   }
-}
-
-/** en / en0..enf: multi-segment amplitude envelope. */
-static void Console_CmdEnv(char *line, char *b, size_t bsz)
-{
-  const char *rest;
-  int rc;
-  uint8_t note;
-  uint8_t nseg = 0u;
-
-  if (line[2] == '\0' || line[2] == ' ')
-  {
-    rest = line + 2;
-    while (*rest == ' ')
-    {
-      rest++;
-    }
-    if (*rest == '\0')
-    {
-      /* Compact dump of all programmed voices. */
-      int n = snprintf(b, bsz, "ok:");
-      for (uint8_t i = 0; i < NOTE_BANK_VOICES && n > 0 && (size_t)n < bsz;
-           i++)
-      {
-        if (NoteEnv_IsProgrammed(i) != 0u)
-        {
-          n += snprintf(b + n, bsz - (size_t)n, " en%c",
-                        Console_NoteSlotChar(i));
-        }
-      }
-      if (n == (int)strlen("ok:"))
-      {
-        snprintf(b, bsz, "ok: en (none)\r\n");
-      }
-      else if ((size_t)n < bsz - 2u)
-      {
-        snprintf(b + n, bsz - (size_t)n, "\r\n");
-      }
-      RS485_Reply(b);
-      return;
-    }
-    for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
-    {
-      rc = Console_EnvApplyProgram(i, rest, &nseg);
-      if (rc == -1)
-      {
-        RS485_Reply("err:syntax\r\n");
-        return;
-      }
-      if (rc != 0)
-      {
-        RS485_Reply("err:range\r\n");
-        return;
-      }
-    }
-    if (nseg == 0u)
-    {
-      snprintf(b, bsz, "ok: en (none)\r\n");
-    }
-    else
-    {
-      snprintf(b, bsz, "ok: en (%u seg)\r\n", (unsigned)nseg);
-    }
-    RS485_Reply(b);
-    return;
-  }
-
-  note = Console_ParseNoteSlot(line[2]);
-  if (note == 0xFFu || (line[3] != '\0' && line[3] != ' '))
-  {
-    RS485_Reply("err:syntax\r\n");
-    return;
-  }
-  rest = line + 3;
-  while (*rest == ' ')
-  {
-    rest++;
-  }
-  if (*rest == '\0')
-  {
-    Console_EnvReply(note);
-    return;
-  }
-  rc = Console_EnvApplyProgram(note, rest, &nseg);
-  if (rc == -1)
-  {
-    RS485_Reply("err:syntax\r\n");
-    return;
-  }
-  if (rc != 0)
-  {
-    RS485_Reply("err:range\r\n");
-    return;
-  }
-  Console_EnvReply(note);
-}
-
-/** ek / ek0..ekf: pitch-track constant. */
-static void Console_CmdEk(char *line, char *b, size_t bsz)
-{
-  const char *rest;
-  double kd;
-  float k;
-  int rc;
-  uint8_t note;
-
-  if (line[2] == '\0' || line[2] == ' ')
-  {
-    rest = line + 2;
-    while (*rest == ' ')
-    {
-      rest++;
-    }
-    if (*rest == '\0')
-    {
-      int n = snprintf(b, bsz, "ok:");
-      for (uint8_t i = 0; i < NOTE_BANK_VOICES && n > 0 && (size_t)n < bsz;
-           i++)
-      {
-        n += snprintf(b + n, bsz - (size_t)n, " ek%c=%.1f",
-                      Console_NoteSlotChar(i), (double)NoteEnv_GetPitchK(i));
-      }
-      if ((size_t)n < bsz - 2u)
-      {
-        snprintf(b + n, bsz - (size_t)n, "\r\n");
-      }
-      RS485_Reply(b);
-      return;
-    }
-    if (sscanf(rest, "%lf", &kd) != 1)
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-    k = (float)kd;
-    for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
-    {
-      rc = NoteEnv_SetPitchK(i, k);
-      if (rc != 0)
-      {
-        RS485_Reply("err:range\r\n");
-        return;
-      }
-    }
-    snprintf(b, bsz, "ok: ek %.1f\r\n", (double)k);
-    RS485_Reply(b);
-    return;
-  }
-
-  note = Console_ParseNoteSlot(line[2]);
-  if (note == 0xFFu || (line[3] != '\0' && line[3] != ' '))
-  {
-    RS485_Reply("err:syntax\r\n");
-    return;
-  }
-  rest = line + 3;
-  while (*rest == ' ')
-  {
-    rest++;
-  }
-  if (*rest == '\0')
-  {
-    Console_EkReply(note);
-    return;
-  }
-  if (sscanf(rest, "%lf", &kd) != 1)
-  {
-    RS485_Reply("err:syntax\r\n");
-    return;
-  }
-  k = (float)kd;
-  rc = NoteEnv_SetPitchK(note, k);
-  if (rc != 0)
-  {
-    RS485_Reply("err:range\r\n");
-    return;
-  }
-  Console_EkReply(note);
 }
 
 /** f0..f7 / f: LPF on first 8 voices; optional q = DF4 g. */
@@ -1348,6 +839,12 @@ static void Console_CmdCpu(char *line, char *b, size_t bsz)
     return;
   }
 
+  if (NoteBank_VmUploadIsBusy() != 0u)
+  {
+    RS485_Reply("err:vm-busy\r\n");
+    return;
+  }
+
   Console_ApplySessionDefaults();
   Audio_StartPlayback();
   Console_CpuLoad_EnableVoices(nvoices);
@@ -1456,6 +953,16 @@ static void Console_CmdNoteAll(char *line)
   {
     Console_CpuLoad_DisableVoices();
     RS485_Reply("ok\r\n");
+    return;
+  }
+  if (NoteBank_VmActiveMask() != 0xffu)
+  {
+    RS485_Reply("err:no-program\r\n");
+    return;
+  }
+  if (NoteBank_VmUploadIsBusy() != 0u)
+  {
+    RS485_Reply("err:vm-busy\r\n");
     return;
   }
   if (hz < 20.0 || hz >= 20000.0 || scale < 0.0 || scale > 1.0)
@@ -1608,6 +1115,85 @@ static void Console_CmdAttackLoad(char *line)
   RS485_Reply("ok:ready\r\n");
 }
 
+/** vmload <voice> <nbytes> — receive one Channel ABI3 FWSC container over CDC. */
+static void Console_CmdVmLoad(char *line)
+{
+  unsigned int voice;
+  unsigned long nbytes;
+  if (!console_via_usb)
+  {
+    RS485_Reply("err:usb\r\n");
+    return;
+  }
+  if (sscanf(line, "vmload %u %lu", &voice, &nbytes) != 2 ||
+      voice >= FW_VM_CHANNEL_VOICE_COUNT)
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+  if (NoteBank_AnyActive() != 0u)
+  {
+    RS485_Reply("err:vm-busy\r\n");
+    return;
+  }
+  if (AttackUpload_IsActive() != 0u || VmUpload_Begin((uint8_t)voice, (uint32_t)nbytes) != 0)
+  {
+    RS485_Reply("err:range\r\n");
+    return;
+  }
+  RS485_Reply("ok:ready\r\n");
+}
+
+static void Console_CmdVmStatus(char *line)
+{
+  char reply[192];
+  unsigned int voice;
+  if (strcmp(line, "vm mem") == 0)
+  {
+    const FwVmMemoryMetrics *m = NoteBank_VmMemoryMetrics();
+    (void)snprintf(reply, sizeof(reply),
+      "ok:vm mem %lu %lu %lu %lu %lu %lu %lu %lu %u\r\n",
+      (unsigned long)m->arena_size, (unsigned long)m->arena_current,
+      (unsigned long)m->arena_peak, (unsigned long)m->arena_largest_free,
+      (unsigned long)m->load_allocations, (unsigned long)m->handler_allocations,
+      (unsigned long)m->load_gc, (unsigned long)m->handler_gc,
+      (unsigned)m->shared_vm_valid);
+    RS485_Reply(reply);
+    for (voice = 0u; voice < FW_VM_CHANNEL_VOICE_COUNT; ++voice)
+    {
+      (void)snprintf(reply, sizeof(reply), "ok:vm memv %u %u %lu %lu\r\n",
+        voice, (unsigned)NoteBank_VmFault((uint8_t)voice),
+        (unsigned long)NoteBank_VmMaxCycles((uint8_t)voice),
+        (unsigned long)NoteBank_VmFaultCount((uint8_t)voice));
+      RS485_Reply(reply);
+    }
+    return;
+  }
+  else if (strcmp(line, "vm") == 0)
+  {
+    (void)snprintf(reply, sizeof(reply), "ok:vm mask %02x\r\n",
+                   (unsigned)NoteBank_VmActiveMask());
+  }
+  else if (sscanf(line, "vm %u", &voice) != 1 ||
+           voice >= FW_VM_CHANNEL_VOICE_COUNT)
+  {
+    (void)snprintf(reply, sizeof(reply), "err:syntax\r\n");
+  }
+  else if (NoteBank_VmIsActive((uint8_t)voice) != 0u)
+  {
+    (void)snprintf(reply, sizeof(reply), "ok:vm %u active %lu %u %u\r\n",
+                   voice, (unsigned long)FW_VM_TARGET_CHANNEL,
+                   (unsigned)FW_VM_TARGET_CHANNEL_VERSION,
+                   (unsigned)NoteBank_VmFault((uint8_t)voice));
+  }
+  else
+  {
+    (void)snprintf(reply, sizeof(reply), "ok:vm %u inactive %u\r\n",
+                   voice, (unsigned)NoteBank_VmFault((uint8_t)voice));
+  }
+  RS485_Reply(reply);
+}
+
 /** bl is retired — body is the USB BODY stream, not on-card RAM. */
 static void Console_CmdBodyLoad(char *line)
 {
@@ -1654,6 +1240,18 @@ static void Console_Exec(char *line)
       strcmp(line, "?") == 0)
   {
     Console_Help();
+    return;
+  }
+
+  if (strncmp(line, "vmload ", 7) == 0)
+  {
+    Console_CmdVmLoad(line);
+    return;
+  }
+
+  if (strcmp(line, "vm") == 0 || strncmp(line, "vm ", 3) == 0)
+  {
+    Console_CmdVmStatus(line);
     return;
   }
 
@@ -1821,20 +1419,6 @@ static void Console_Exec(char *line)
     (void)ch;
     (void)val;
     Console_CmdGain(line);
-    return;
-  }
-
-  /* ---- en / en0..enf: multi-segment amplitude envelope ---- */
-  if (line[0] == 'e' && line[1] == 'n')
-  {
-    Console_CmdEnv(line, b, sizeof b);
-    return;
-  }
-
-  /* ---- ek / ek0..ekf: envelope pitch-track constant ---- */
-  if (line[0] == 'e' && line[1] == 'k')
-  {
-    Console_CmdEk(line, b, sizeof b);
     return;
   }
 

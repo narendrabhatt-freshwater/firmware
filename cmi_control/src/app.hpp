@@ -1,7 +1,7 @@
 #pragma once
 
 #include "bus_controller.hpp"
-#include "env_editor.hpp"
+#include "card_panels.hpp"
 #include "file_dialog.hpp"
 #include "log_buffer.hpp"
 #include "preview_scope.hpp"
@@ -71,6 +71,30 @@ struct SampleLoadJob
   }
 };
 
+/** Background compile/cache and all-eight-voice Berry upload. */
+struct VmLoadJob
+{
+  std::atomic<bool> busy{false};
+  std::atomic<float> progress{0.f};
+  std::atomic<int> voice{-1};
+  std::thread worker;
+  std::mutex mu;
+  std::string status;
+  std::string result;
+  bool ok = false;
+  bool ready = false;
+
+  VmLoadJob() = default;
+  VmLoadJob(const VmLoadJob &) = delete;
+  VmLoadJob &operator=(const VmLoadJob &) = delete;
+  ~VmLoadJob()
+  {
+    if (worker.joinable()) {
+      worker.join();
+    }
+  }
+};
+
 /** Last-sent Effect toggles (GUI-side until a firmware status poll exists). */
 struct EffectUiState
 {
@@ -97,7 +121,6 @@ struct App
   cardlink::midi::MidiInput midi;
   std::unique_ptr<cardlink::audio::AudioEngine> audio;
   PreviewScope preview;
-  std::array<EnvProgram, cardlink::midi::kVoiceCount> voice_envs;
   cardlink::sample::Client samples;
   std::unique_ptr<cardlink::audio::SampleBulkOut> sample_bulk;
   fw::ui::ToastHost toasts;
@@ -145,10 +168,10 @@ struct App
   int filter_voice = 0; // n0..n7 chip selection on the Filter panel
   bool env_apply_all = false;
   int selected_voice = 0;
+  int vm_script_index = 0;
   int piano_octave = 0; // offset from C4 (0 = C4–C5)
   int piano_velocity = 100;
   int voice_limit = 8;       // playable MIDI/sample voices, 1..8
-  int crash_release_ms = 3;  // release before a stolen slot retriggers
   /** Perform scope controls (design: continuous halve/double + slider). */
   float scope_time_ms = 4.f; // ms per division, 0.1–200
   float scope_volt = 1.f;    // amplitude compression, 0.1–8
@@ -163,10 +186,6 @@ struct App
 
   EffectUiState effect;
 
-  /** Named envelope presets stored next to settings. */
-  std::vector<std::pair<std::string, EnvProgram>> env_presets;
-  std::vector<EnvProgram> env_undo;
-  char env_preset_name[64] = "My patch";
 
   std::deque<LogEntry> log_view;
   std::deque<LogEntry> poll_log_view;
@@ -176,8 +195,9 @@ struct App
 
   std::array<float, cardlink::midi::kVoiceCount> voice_glow{};
   std::vector<std::string> pending_drops;
-  /** Last so the worker is joined while samples / log are still alive. */
+  /** Last so workers are joined while samples / log are still alive. */
   SampleLoadJob sample_load;
+  VmLoadJob vm_load;
 
   void RefreshPortLists();
   /**

@@ -43,7 +43,7 @@ extern "C"
 
 /**
  * Pitch-track reference (middle C / C4), Hz.
- * Must match NOTE_ENV_F_REF_HZ (envelope pitch-track).
+ * Middle-C reference used for filter pitch tracking.
  */
 #define NOTE_FILTER_F_REF_HZ 261.625565
 
@@ -132,7 +132,7 @@ extern "C"
    * @brief Note-on / pitch change: cache freq and retune if k > 0.
    * @param voice   Voice index 0..15.
    * @param freq_hz Oscillator frequency (Hz). <=0 is ignored (no redesign).
-   * @note Cold path only. No-op when bypassed. Same law as envelope ek.
+   * @note Cold path only. No-op when bypassed.
    */
   void NoteFilter_OnNoteFreq(uint8_t voice, double freq_hz);
 

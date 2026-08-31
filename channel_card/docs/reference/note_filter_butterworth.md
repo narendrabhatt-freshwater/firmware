@@ -129,7 +129,7 @@ f_c = f_{\text{base}} \cdot 2^{k\, n / 12}
 \]
 
 with \(n = 12\log_2(f_{\text{note}}/C4)\) and \(C4 = 261.625565\,\mathrm{Hz}\)
-(same reference as envelope `ek`). \(k = 0\) → absolute;
+\(k = 0\) → absolute;
 \(k = 1\) → full 1:1 key follow (octave up doubles \(f_c\)).
 
 Track never flips bypass; overflow clamps to just below 20 kHz.

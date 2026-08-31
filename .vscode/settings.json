@@ -1,5 +1,5 @@
-# Freshwater — put `fw` on PATH when this workspace is open.
-# New integrated terminals pick this up automatically.
+// Freshwater — put `fw` on PATH when this workspace is open.
+// New integrated terminals pick this up automatically.
 
 {
   "terminal.integrated.env.osx": {
@@ -10,5 +10,8 @@
   },
   "terminal.integrated.env.windows": {
     "PATH": "${workspaceFolder};${env:PATH}"
+  },
+  "files.associations": {
+    "*.be": "ruby"
   }
 }

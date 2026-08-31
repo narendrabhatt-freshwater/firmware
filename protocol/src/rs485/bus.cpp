@@ -105,7 +105,12 @@ cardproto::Result Bus::Open(const std::string &path, const BusOptions &opts)
   }
 
   last_ = channel_->AllNotesOff();
-  if (!last_.ok()) {
+  /* Older Berry firmware rejected the harmless startup silence command until
+   * all eight RAM-only programs had been uploaded. Keep the bus usable so the
+   * GUI can connect first and upload those programs later over CDC. */
+  const bool no_program_yet =
+      std::string(last_.raw).find("err:no-program") != std::string::npos;
+  if (!last_.ok() && !no_program_yet) {
     return fail_close(last_);
   }
 

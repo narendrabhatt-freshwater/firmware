@@ -7,6 +7,7 @@ The single C++17 host library for Freshwater card control:
 | `cardlink::SerialPort` | Shared byte pipe (termios / Win32) |
 | `cardlink::rs485` | Tagged link, `Bus` bootstrap, and threaded `Controller` |
 | `cardlink::usb` | CDC console + `al` attack upload + packed UAC2 BODY framing |
+| `cardlink::vm` | Berry compiler, FWSC upload, and status APIs |
 | `cardlink::sample` | Plug-and-play SAMPLE session: attack upload, BODY mixer, notes |
 | `cardlink::midi` | MIDI input, pitch helpers, and 8-voice FIFO allocation |
 | `cardlink::audio` | Local speaker and Channel Card BODY stream (`SampleBulkOut`, UAC2 int16) |
@@ -16,6 +17,45 @@ The archive includes the `cardproto` implementation. Existing build-tree
 consumers may continue to link `cardproto::cardproto`, which aliases the same
 target. The normative wire contract is
 [`docs/protocol.md`](../docs/protocol.md).
+
+## Channel VM program
+
+Channel firmware boots silent and has no built-in envelope policy. Compile and
+upload an explicit editable program after every reset:
+
+```bash
+protocol/build/fw_vmc compile \
+  protocol/examples/vm/channel/current_envelope.be \
+  -o current_envelope.fwsc
+protocol/build/fw_vmc upload /dev/cu.usbmodemCHCARD1 0 current_envelope.fwsc
+protocol/build/fw_vmc status /dev/cu.usbmodemCHCARD1 0
+```
+
+Applications can use `cardlink::vm::BerryCompiler` and
+`cardlink::vm::VmUploader` directly instead of invoking the CLI.
+Each Channel Card voice owns an independent RAM-only program. Upload a chosen
+file to voices 0 through 7 after every reset; the same file may be reused, or
+each voice may receive a different program. With eight cards this provides 64
+independently addressed programs.
+
+For the normal all-voice hardware workflow, pass the editable `.be` source
+directly to the main protocol runner:
+
+```bash
+protocol/build/protocol --script \
+  protocol/examples/vm/channel/current_envelope.be
+```
+
+The runner compiles the source in memory, auto-detects the Channel Card CDC,
+checks that the connected firmware supports Berry, sends note-off to all
+voices, waits for release, and uploads the same FWSC to voices 0 through 7.
+Use `--u /dev/...` to override CDC detection. Compilation can be checked
+without opening hardware:
+
+```bash
+protocol/build/protocol --script protocol/examples/vm/channel/gate.be --dry-run
+protocol/build/protocol --script protocol/examples/vm/channel/pluck.be --dry-run
+```
 
 ## Editable crash sequence
 
@@ -44,9 +84,7 @@ instruction. Ctrl-C always sends all notes off before closing the bus.
 
 ```text
 c4 200 2
-en 1.0 100 0.7 10 20
 d4 200
-en 1.0 50 0.5 5 10
 w 500
 repeat
 ```
@@ -55,10 +93,9 @@ repeat
 ramp, and leaves C4 active for the following note to replace. Omitting the last
 value sends note-off after the hold. `w 500` is the only synthetic delay: it
 waits 500 ms.
-An `en ...` line belongs to the note directly above it; the runner applies it
-to that note's voice immediately before note-on. It accepts the firmware's full
-envelope grammar, including up to 10 segments. Other normal Channel Card
-commands pass through unchanged. A bare `repeat` loops until Ctrl-C;
+Envelope behavior comes from the VM program already uploaded to that voice.
+Other normal Channel Card commands pass through unchanged. A bare `repeat`
+loops until Ctrl-C;
 `repeat N` runs exactly N passes.
 
 ## Build and consume

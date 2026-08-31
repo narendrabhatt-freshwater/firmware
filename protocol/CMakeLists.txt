@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(cardlink VERSION 1.0.0 LANGUAGES CXX)
+project(cardlink VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,6 +8,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(FetchContent)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+
+set(SCRIPT_RUNTIME_BUILD_HOST_TOOLS ON CACHE BOOL "" FORCE)
+add_subdirectory(../script_runtime ${CMAKE_CURRENT_BINARY_DIR}/script_runtime)
 
 set(RTMIDI_BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
 set(RTMIDI_BUILD_TESTING OFF CACHE BOOL "" FORCE)
@@ -58,7 +61,6 @@ add_library(cardlink STATIC
   src/cardproto/result.cpp
   src/cardproto/channel_notes.cpp
   src/cardproto/channel_shape.cpp
-  src/cardproto/channel_envelope.cpp
   src/cardproto/channel_filter.cpp
   src/cardproto/channel_gain.cpp
   src/cardproto/channel_cpu.cpp
@@ -71,6 +73,8 @@ add_library(cardlink STATIC
   src/usb/cdc_transport.cpp
   src/usb/cdc_port.cpp
   src/usb/attack_upload.cpp
+  src/vm/compiler.cpp
+  src/vm/uploader.cpp
   src/audio/sample_dry.cpp
   src/audio/wave_loader.cpp
   src/audio/audio_engine.cpp
@@ -89,15 +93,21 @@ target_compile_features(cardlink PUBLIC cxx_std_17)
 
 target_include_directories(cardlink PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../common/vm/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 target_link_libraries(cardlink PUBLIC
+  freshwater::vm
   $<BUILD_INTERFACE:rtmidi>
   $<BUILD_INTERFACE:rtaudio>
   $<INSTALL_INTERFACE:RtMidi::rtmidi>
   $<INSTALL_INTERFACE:RtAudio::rtaudio>
 )
+target_include_directories(cardlink PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../script_runtime/third_party/berry/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/../script_runtime/config/host)
+target_sources(cardlink PRIVATE $<TARGET_OBJECTS:berry_host>)
 
 if(APPLE)
   target_link_libraries(cardlink PUBLIC
@@ -119,10 +129,21 @@ install(TARGETS cardlink
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
+install(TARGETS freshwater_vm
+  EXPORT freshwaterVmTargets
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(DIRECTORY ../common/vm/include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(EXPORT cardlinkTargets
   FILE cardlinkTargets.cmake
   NAMESPACE cardlink::
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/cardlink
+)
+install(EXPORT freshwaterVmTargets
+  FILE freshwaterVmTargets.cmake
+  NAMESPACE freshwater::
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/cardlink
 )
 
@@ -154,8 +175,16 @@ target_link_libraries(cardlink_uac_restart_smoke PRIVATE cardlink::cardlink)
 add_executable(protocol tools/protocol.cpp)
 target_link_libraries(protocol PRIVATE cardlink::cardlink)
 
+add_executable(fw_vmc tools/fw_vmc.cpp)
+target_link_libraries(fw_vmc PRIVATE cardlink::cardlink)
+
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(cardlink_vm_tests tests/vm_test.cpp)
+  target_link_libraries(cardlink_vm_tests PRIVATE cardlink::cardlink)
+  target_compile_definitions(cardlink_vm_tests PRIVATE
+    FW_VM_EXAMPLE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/examples/vm/channel/current_envelope.be")
+  add_test(NAME cardlink.vm COMMAND cardlink_vm_tests)
   add_executable(cardlink_voice_bank_tests tests/voice_bank_test.cpp)
   target_link_libraries(cardlink_voice_bank_tests PRIVATE cardlink::cardlink)
   add_test(NAME cardlink.voice_bank COMMAND cardlink_voice_bank_tests)

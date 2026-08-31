@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(cmi_control VERSION 1.0.0 LANGUAGES CXX)
+project(cmi_control VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -59,13 +59,14 @@ set(CMI_CONTROL_SOURCES
   src/bus_controller.cpp
   src/console_mirror.cpp
   src/preview_scope.cpp
-  src/env_editor.cpp
+  src/card_panels.cpp
   src/theme.cpp
   src/widgets.cpp
   src/settings.cpp
   src/toast.cpp
   src/file_dialog.cpp
   src/sample_ui.cpp
+  src/vm_ui.cpp
 )
 if(APPLE)
   list(APPEND CMI_CONTROL_SOURCES src/macos_app.mm)
@@ -84,7 +85,29 @@ target_compile_definitions(cmi_control PRIVATE
   FW_FONT_DIR="${imgui_SOURCE_DIR}/misc/fonts"
   CMI_VERSION="${CMI_VERSION}"
   CMI_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
+  CMI_VM_EXAMPLE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../protocol/examples/vm/channel"
+  CMI_VM_EXAMPLE_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/vm_scripts"
 )
+
+set(CMI_VM_EXAMPLE_NAMES simple_envelope current_envelope gate pluck)
+set(CMI_VM_EXAMPLE_OUTPUTS)
+foreach(CMI_VM_EXAMPLE IN LISTS CMI_VM_EXAMPLE_NAMES)
+  set(CMI_VM_EXAMPLE_OUTPUT
+      "${CMAKE_CURRENT_BINARY_DIR}/vm_scripts/${CMI_VM_EXAMPLE}.fwsc")
+  add_custom_command(
+    OUTPUT "${CMI_VM_EXAMPLE_OUTPUT}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${CMAKE_CURRENT_BINARY_DIR}/vm_scripts"
+    COMMAND fw_scriptc
+            "${CMAKE_CURRENT_SOURCE_DIR}/../protocol/examples/vm/channel/${CMI_VM_EXAMPLE}.be"
+            -o "${CMI_VM_EXAMPLE_OUTPUT}"
+    DEPENDS fw_scriptc
+            "${CMAKE_CURRENT_SOURCE_DIR}/../protocol/examples/vm/channel/${CMI_VM_EXAMPLE}.be"
+    VERBATIM)
+  list(APPEND CMI_VM_EXAMPLE_OUTPUTS "${CMI_VM_EXAMPLE_OUTPUT}")
+endforeach()
+add_custom_target(cmi_vm_examples DEPENDS ${CMI_VM_EXAMPLE_OUTPUTS})
+add_dependencies(cmi_control cmi_vm_examples)
 
 target_include_directories(cmi_control PRIVATE
   src

@@ -454,8 +454,10 @@ static void Audio_I2S1_FillHalf(uint8_t half)
     g_i2s1_fill_late++;
   }
   i2s1_fill_busy = 1u;
+  NoteBank_VmBoundaryBegin();
   Audio_FillToneSlot(buf, frames, 1, 1);
   Audio_RefillCh1Slot(buf, frames);
+  NoteBank_VmBoundaryEnd();
   i2s1_fill_busy = 0u;
 }
 

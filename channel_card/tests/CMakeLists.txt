@@ -4,6 +4,9 @@ project(channel_card_host_tests LANGUAGES C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+set(SCRIPT_RUNTIME_BUILD_HOST_TOOLS ON CACHE BOOL "" FORCE)
+add_subdirectory(../../script_runtime ${CMAKE_CURRENT_BINARY_DIR}/script_runtime)
+
 add_executable(stream_ring_handoff_test
   stream_ring_handoff_test.c
   ../Core/Src/audio/stream_ring.c)
@@ -15,21 +18,33 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
     -Wall -Wextra -Werror)
 endif()
 
-add_executable(note_bank_release_test
-  note_bank_release_test.c
-  ../Core/Src/audio/note_bank.c
-  ../Core/Src/audio/stream_ring.c)
-target_include_directories(note_bank_release_test PRIVATE
-  ../Core/Inc/audio
-  ../Core/Inc/filters
-  ../USB_APP)
+add_executable(note_envelope_test
+  note_envelope_test.c
+  ../Core/Src/audio/note_envelope.c)
+target_include_directories(note_envelope_test PRIVATE ../Core/Inc/audio)
+target_link_libraries(note_envelope_test PRIVATE m)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
-  target_compile_options(note_bank_release_test PRIVATE
-    -Wall -Wextra -Werror)
+  target_compile_options(note_envelope_test PRIVATE -Wall -Wextra -Werror)
+endif()
+
+add_executable(note_bank_vm_test
+  note_bank_vm_test.c
+  ../Core/Src/audio/note_bank.c
+  ../Core/Src/audio/channel_vm.c
+  ../Core/Src/audio/note_envelope.c
+  ../Core/Src/audio/stream_ring.c)
+target_include_directories(note_bank_vm_test PRIVATE
+  ../Core/Inc/audio ../Core/Inc/filters ../USB_APP ../../common/vm/include
+  ../../script_runtime/include)
+target_link_libraries(note_bank_vm_test PRIVATE script_runtime::berry m)
+add_dependencies(note_bank_vm_test shared_berry_program)
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+  target_compile_options(note_bank_vm_test PRIVATE -Wall -Wextra -Werror)
 endif()
 
 enable_testing()
 add_test(NAME channel_card.stream_ring_handoff
   COMMAND stream_ring_handoff_test)
-add_test(NAME channel_card.note_bank_release
-  COMMAND note_bank_release_test)
+add_test(NAME channel_card.note_envelope COMMAND note_envelope_test)
+add_test(NAME channel_card.note_bank_vm COMMAND note_bank_vm_test
+  "${CMAKE_CURRENT_BINARY_DIR}/script_runtime/channel_envelope.fwsc")

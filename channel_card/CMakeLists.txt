@@ -36,6 +36,8 @@ add_executable(${CMAKE_PROJECT_NAME})
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
+set(SCRIPT_RUNTIME_BUILD_HOST_TOOLS OFF CACHE BOOL "" FORCE)
+add_subdirectory(../script_runtime ${CMAKE_CURRENT_BINARY_DIR}/script_runtime)
 
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
@@ -63,7 +65,9 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/console/channel_console.c
     Core/Src/console/uart5_rx.c
     Core/Src/console/attack_upload.c
+    Core/Src/console/vm_upload.c
     Core/Src/audio/audio_bridge.c
+    Core/Src/audio/channel_vm.c
     # TinyUSB core + device stack.  Kept in ThirdParty/ (NOT
     # Middlewares/, which CubeMX manages and prunes on regeneration).
     ThirdParty/tinyusb/src/tusb.c
@@ -86,6 +90,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Inc/console
     ThirdParty/tinyusb/src
     USB_APP
+    ../common/vm/include
+    ../script_runtime/include
 )
 
 # Add project symbols (macros)
@@ -99,13 +105,15 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
+    script_runtime::berry
+    berry_runtime
     m
 )
 
 # --specs=nano.specs (cmake/gcc-arm-none-eabi.cmake) strips floating-point
 # scanf/printf conversions out of newlib-nano by default to save flash.
 # The console parses fractional values with sscanf(..., "%lf", ...)
-# (note frequencies 'nX <Hz>', envelope slopes, filter cutoffs) and
+# (note frequencies 'nX <Hz>' and filter cutoffs) and
 # formats replies with %.1f/%.2f. Without these, sscanf("%lf") always
 # returns 0 -> every such command answers "err:" for valid input.
 # Force-link the float variants instead of dropping nano.specs entirely

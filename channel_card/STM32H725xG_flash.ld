@@ -279,6 +279,15 @@ SECTIONS
     . = ALIGN(4);
   } >RAM_D1
 
+  /* Fixed-memory VM. Kept out of DTCM so the native stack reserve is
+     unaffected; linker placement makes arena growth visible in the map. */
+  .vm_arena (NOLOAD) : ALIGN(4)
+  {
+    *(.vm_arena)
+    *(.vm_arena*)
+    . = ALIGN(4);
+  } >RAM_D1
+
   /* Attack heads (256 × 512 int16) in AXI — not DTCM. */
   .attack_bank (NOLOAD) : ALIGN(4)
   {

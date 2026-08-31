@@ -2,7 +2,7 @@
  *
  * Composite device on USB1_OTG_HS (full-speed embedded PHY):
  *   - synchronous UAC2 output, 10ch int16 / 51 kHz BODY carrier
- *   - CDC-ACM console + attack-head load
+ *   - CDC-ACM console + attack-head/VM program loads
  *
  * Traffic is exactly 10 x 2 x 51 = 1020 bytes/ms, the largest complete-frame
  * payload below the 1023-byte Full-Speed limit. BODY and DAC remain 48 kHz.

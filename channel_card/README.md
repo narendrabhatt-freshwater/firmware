@@ -29,6 +29,10 @@ over I2S.
   by I2S with no USB involvement (0 V at boot)
 - Console over RS485 (`c:` prefix) and USB CDC
 
+The note bank has no firmware-owned envelope policy. After each reset, upload a
+valid Channel Berry ABI3 program with Protocol's `fw_vmc` tool before sending note
+commands. Until then the card stays silent and replies `err:no-program`.
+
 ## Audio signal path
 
 Firmware / USB / playhead / I2S (including ISR vs main loop):
@@ -66,8 +70,8 @@ Audio from CH1 reaches the output by either — or both — of:
 - **Dry:** `bypass` switch → straight to `out`
 - **Wet:** through SCF and/or VCF → **VCA** → `vca` switch → `out`
 
-For bring-up/verification with no PC attached, use the note bank:
-`n0 440` sums a 440 Hz voice onto CH1 with no USB involvement. Bypass
+For bring-up/verification, first upload a Channel VM program to voice 0, then
+use the note bank: `n0 440` sums a 440 Hz voice onto CH1. Bypass
 is already ON from the boot session defaults (bare `n0` re-applies
 them), so the tone is heard clean and filter-free at `out`. `n 0`
 silences all voices.
@@ -232,10 +236,9 @@ Type `h` / `help` / `?` on the card for the live list.
 | `p <0.1..0.9>`                            | Fallback oscillator shape: pulse (duty)                                                                                                                                                                                            |
 | `t <0.1..0.9>`                            | Fallback oscillator shape: triangle (asymmetry)                                                                                                                                                                                    |
 | `f0`…`f7` `<Hz>` `[q]` / `f` `<Hz>` `[q]` | LPF **base** cutoff at C4 on voices **0..7** (20..20000; **`0` or `20000` = bypass**). Optional **`q`** = DF4 **g** **0.5..10** (default **1.0**). See [`docs/reference/note_filter_butterworth.md`](docs/reference/note_filter_butterworth.md). |
-| `fk0`…`fk7` `[k]` / `fk` `[k]`            | Filter pitch-track **k** (0..10, default **0**): `fc = fbase × (note/C4)^k`. Same C4 as envelope `slope±k` / `ek`.                                                                                                                 |
-| `en0`…`en7` `<end slope[±k] …>` / `en`    | Multi-segment amplitude envelope per voice (bare = query; `en0 0` / `en 0` = clear)                                                                                                                                                |
-| `ek0`…`ek7` `<k>` / `ek <k>`              | Envelope pitch-track **k** (−10..10, rate ∝ (f/C4)^k)                                                                                                                                                                              |
+| `fk0`…`fk7` `[k]` / `fk` `[k]`            | Filter pitch-track **k** (0..10, default **0**): `fc = fbase × (note/C4)^k`.                                                                                                                                                         |
 | `al <id> <nbytes>`                        | CDC upload: int16 attack head for wave `<id>` 0…255 (2…1024 bytes; join at committed length)                                                                                                                                        |
+| `vmload <v> <nbytes>` / `vm [v]` / `vm mem` | CDC upload one ABI3 FWSC Berry program (maximum 4 KiB payload) to voice 0…7 / status / shared-arena diagnostics                                                                                                                    |
 | `ar <id> <Hz>` / `aw <v> <id>` / `a`      | Root pitch of head `<id>` / assign head to voice 0…7 / loaded count + hex mask                                                                                                                                                      |
 | `vq`                                      | Active mask + hungriest voice + free-slot codes 0–14; 15 means empty                                                                                                                                                               |
 | `g <ch> <dB>`                             | DAC atten 0..127 dB on ch 1..4                                                                                                                                                                                                     |

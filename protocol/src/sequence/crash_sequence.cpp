@@ -61,55 +61,6 @@ std::string Join(const std::vector<std::string> &tokens)
   return command;
 }
 
-bool ParsePlainDouble(const std::string &text, double &value)
-{
-  char *end = nullptr;
-  errno = 0;
-  value = std::strtod(text.c_str(), &end);
-  return errno == 0 && end != text.c_str() && *end == '\0' &&
-         std::isfinite(value);
-}
-
-bool ParseSlope(const std::string &text)
-{
-  char *end = nullptr;
-  errno = 0;
-  const double slope = std::strtod(text.c_str(), &end);
-  if (errno != 0 || end == text.c_str() || !std::isfinite(slope) ||
-      slope <= 0.0) {
-    return false;
-  }
-  if (*end == '\0') {
-    return true;
-  }
-  if (*end != '+' && *end != '-') {
-    return false;
-  }
-  char *k_end = nullptr;
-  const double k = std::strtod(end, &k_end);
-  return k_end != end && *k_end == '\0' && std::isfinite(k) &&
-         k >= -10.0 && k <= 10.0;
-}
-
-bool ValidEnvelope(const std::vector<std::string> &token)
-{
-  const size_t count = token.size() - 1u;
-  if (count == 1u) {
-    return token[1] == "0";
-  }
-  if (count < 3u || count > 19u || (count % 2u) == 0u) {
-    return false;
-  }
-  for (size_t i = 1u; i + 1u < token.size(); i += 2u) {
-    double end = 0.0;
-    if (!ParsePlainDouble(token[i], end) || end < 0.0 || end > 1.0 ||
-        !ParseSlope(token[i + 1u])) {
-      return false;
-    }
-  }
-  return ParseSlope(token.back());
-}
-
 bool ParsePitch(const std::string &text, double &hz)
 {
   char *end = nullptr;
@@ -209,28 +160,6 @@ bool ParseCrashSequence(std::istream &input, CrashSequence &out,
 
     CrashStep step;
     step.line = line_number;
-    if (op == "en") {
-      if (token.size() < 2 || parsed.steps.empty() ||
-          parsed.steps.back().kind != CrashStepKind::Note ||
-          !parsed.steps.back().envelope.empty()) {
-        return Fail(line_number, "en must follow one note", error);
-      }
-      if (!ValidEnvelope(token)) {
-        return Fail(line_number,
-                    "en needs TARGET SLOPE ... RELEASE_SLOPE "
-                    "(3, 5, ... 19 values)",
-                    error);
-      }
-      std::string envelope;
-      for (size_t i = 1; i < token.size(); ++i) {
-        if (!envelope.empty()) {
-          envelope += ' ';
-        }
-        envelope += token[i];
-      }
-      parsed.steps.back().envelope = std::move(envelope);
-      continue;
-    }
     if (op == "w" || op == "delay" || op == "wait") {
       if (token.size() != 2 || !ParseMs(token[1], step.duration_ms)) {
         return Fail(line_number, "expected `w MILLISECONDS`", error);
@@ -249,24 +178,6 @@ bool ParseCrashSequence(std::istream &input, CrashSequence &out,
       parsed.steps.push_back(std::move(step));
       continue;
     }
-    if (op == "env" || op == "envelope") {
-      const auto first_space = line.find_first_of(" \t");
-      const auto first_token = first_space == std::string::npos
-                                   ? std::string::npos
-                                   : line.find_first_not_of(" \t", first_space);
-      if (first_token == std::string::npos) {
-        return Fail(line_number, "envelope needs firmware envelope tokens", error);
-      }
-      step.kind = CrashStepKind::Envelope;
-      step.envelope = line.substr(first_token);
-      while (!step.envelope.empty() &&
-             std::isspace(static_cast<unsigned char>(step.envelope.back()))) {
-        step.envelope.pop_back();
-      }
-      parsed.steps.push_back(std::move(step));
-      continue;
-    }
-
     size_t pitch_index = op == "note" ? 1 : 0;
     double parsed_hz = 0.0;
     if (pitch_index >= token.size() ||

@@ -4,6 +4,7 @@
 #include "audio_bridge.h"
 #include "attack_upload.h"
 #include "channel_console.h"
+#include "vm_upload.h"
 #include "main.h"
 #include "stream_ring.h"
 #include "tusb.h"
@@ -132,9 +133,25 @@ static void CDC_Console_Poll(void)
 {
   static char line[64];
   static uint8_t len;
+  if (!tud_cdc_connected())
+  {
+    if (VmUpload_IsActive() != 0u) VmUpload_Abort();
+    if (AttackUpload_IsActive() != 0u) AttackUpload_Abort();
+    len = 0u;
+    return;
+  }
   while (tud_cdc_available())
   {
     char c;
+    if (VmUpload_IsActive() != 0u)
+    {
+      uint8_t tmp[256];
+      uint32_t n = tud_cdc_read(tmp, sizeof tmp);
+      if (n == 0u)
+        break;
+      (void)VmUpload_Feed(tmp, n);
+      continue;
+    }
     if (AttackUpload_IsActive() != 0u)
     {
       uint8_t tmp[256];

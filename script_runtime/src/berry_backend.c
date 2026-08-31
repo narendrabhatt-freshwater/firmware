@@ -1,8 +1,9 @@
 #include "script/berry_backend.h"
 
-#include "be_vm.h"
 #include "be_exec.h"
+#include "be_gc.h"
 #include "be_vector.h"
+#include "be_vm.h"
 #include "berry.h"
 
 #include <math.h>
@@ -10,437 +11,334 @@
 #include <stdio.h>
 #include <string.h>
 
-typedef struct {
-    uint32_t size;
-    uint32_t used;
-} ArenaBlock;
+enum { PHASE_IDLE=0, PHASE_INIT, PHASE_LOAD, PHASE_HANDLER };
+typedef struct { uint32_t size, used; } ArenaBlock;
+typedef struct { const uint8_t *data; size_t size, position; } MemoryFile;
+static ScriptBerryRuntime *s_runtime;
+static MemoryFile s_file;
 
-typedef struct {
-    const uint8_t *data;
-    size_t size;
-    size_t position;
-} MemoryFile;
-
-static ScriptBerryBackend *active_backend;
-static MemoryFile memory_file;
-
-static size_t align8(size_t value) { return (value + 7u) & ~(size_t)7u; }
-
-static ArenaBlock *first_block(ScriptBerryBackend *b)
-{
-    return (ArenaBlock *)(void *)b->arena.bytes;
+static size_t align8(size_t n) { return (n+7u)&~(size_t)7u; }
+static ArenaBlock *first_block(ScriptBerryRuntime *r) {
+  return (ArenaBlock *)(void *)r->arena.bytes;
 }
-
-static ArenaBlock *next_block(ScriptBerryBackend *b, ArenaBlock *block)
-{
-    uint8_t *next = (uint8_t *)(void *)(block + 1) + block->size;
-    uint8_t *end = b->arena.bytes + b->heap_limit;
-    return next + sizeof(ArenaBlock) <= end ? (ArenaBlock *)(void *)next : NULL;
+static ArenaBlock *next_block(ScriptBerryRuntime *r, ArenaBlock *b) {
+  uint8_t *next=(uint8_t *)(void *)(b+1)+b->size;
+  return next+sizeof(*b)<=r->arena.bytes+r->heap_limit ?
+         (ArenaBlock *)(void *)next : NULL;
 }
-
-static void arena_reset(ScriptBerryBackend *b, uint32_t limit)
-{
-    ArenaBlock *block;
-    memset(b->arena.bytes, 0, SCRIPT_BERRY_ARENA_SIZE);
-    b->heap_limit = limit;
-    block = first_block(b);
-    block->size = limit - (uint32_t)sizeof(*block);
-    block->used = 0;
-    memset(&b->metrics, 0, sizeof(b->metrics));
-    b->metrics.arena_largest_free = block->size;
+static void update_memory(ScriptBerryRuntime *r) {
+  uint32_t used=0u, largest=0u; ArenaBlock *b;
+  for (b=first_block(r); b!=NULL; b=next_block(r,b)) {
+    if (b->used) used+=b->size;
+    else if (b->size>largest) largest=b->size;
+  }
+  r->memory.arena_size=SCRIPT_BERRY_ARENA_SIZE;
+  r->memory.arena_current=used;
+  if (used>r->memory.arena_peak) r->memory.arena_peak=used;
+  r->memory.arena_largest_free=largest;
+  r->memory.load_allocations=r->allocations[PHASE_INIT]+r->allocations[PHASE_LOAD];
+  r->memory.handler_allocations=r->allocations[PHASE_HANDLER];
+  r->memory.load_gc=r->gc_runs[PHASE_INIT]+r->gc_runs[PHASE_LOAD];
+  r->memory.handler_gc=r->gc_runs[PHASE_HANDLER];
+  r->memory.shared_vm_valid=r->shared_valid;
 }
-
-static void update_arena_metrics(ScriptBerryBackend *b)
-{
-    uint32_t current = 0, largest = 0;
-    for (ArenaBlock *block = first_block(b); block; block = next_block(b, block)) {
-        if (block->used) current += block->size;
-        else if (block->size > largest) largest = block->size;
-    }
-    b->metrics.arena_current = current;
-    if (current > b->metrics.arena_peak) b->metrics.arena_peak = current;
-    b->metrics.arena_largest_free = largest;
+static void arena_reset(ScriptBerryRuntime *r) {
+  ArenaBlock *b;
+  memset(r->arena.bytes,0,sizeof(r->arena.bytes));
+  r->heap_limit=SCRIPT_BERRY_HEAP_SIZE;
+  b=first_block(r); b->size=r->heap_limit-(uint32_t)sizeof(*b); b->used=0u;
+  memset(r->allocations,0,sizeof(r->allocations));
+  memset(r->frees,0,sizeof(r->frees));
+  memset(r->gc_runs,0,sizeof(r->gc_runs));
+  memset(&r->memory,0,sizeof(r->memory)); update_memory(r);
 }
-
-static void *arena_malloc(ScriptBerryBackend *b, size_t requested)
-{
-    const size_t size = align8(requested);
-    if (!requested) return NULL;
-    if (b->phase == SCRIPT_PHASE_TICK) {
-        ++b->metrics.allocations[SCRIPT_PHASE_TICK];
-        b->pending_fault = SCRIPT_BACKEND_ALLOCATION_IN_TICK;
-        b->discard_vm = true;
-        if (b->abort_active) longjmp(b->abort_jump, 1);
-        return NULL;
-    }
-    for (ArenaBlock *block = first_block(b); block; block = next_block(b, block)) {
-        if (!block->used && block->size >= size) {
-            if (block->size >= size + sizeof(ArenaBlock) + 8u) {
-                ArenaBlock *split = (ArenaBlock *)(void *)((uint8_t *)(block + 1) + size);
-                split->size = block->size - (uint32_t)size - (uint32_t)sizeof(*split);
-                split->used = 0;
-                block->size = (uint32_t)size;
-            }
-            block->used = 1;
-            ++b->metrics.allocations[b->phase];
-            update_arena_metrics(b);
-            return block + 1;
-        }
-    }
+static void *arena_malloc(ScriptBerryRuntime *r, size_t requested) {
+  size_t size=align8(requested); ArenaBlock *b;
+  if (requested==0u) return NULL;
+  if (r->phase==PHASE_HANDLER) {
+    ++r->allocations[PHASE_HANDLER]; r->pending_fault=FW_VM_FAULT_ALLOCATION;
+    r->discard_vm=1u;
+    if (r->abort_active) longjmp(r->abort_jump,1);
     return NULL;
-}
-
-static void arena_free(ScriptBerryBackend *b, void *ptr)
-{
-    ArenaBlock *block;
-    if (!ptr) return;
-    block = (ArenaBlock *)ptr - 1;
-    if ((uint8_t *)(void *)block < b->arena.bytes ||
-        (uint8_t *)(void *)block >= b->arena.bytes + b->heap_limit || !block->used) return;
-    block->used = 0;
-    ++b->metrics.frees[b->phase];
-    for (ArenaBlock *it = first_block(b); it;) {
-        ArenaBlock *next = next_block(b, it);
-        if (next && !it->used && !next->used) {
-            it->size += (uint32_t)sizeof(*next) + next->size;
-        } else {
-            it = next;
-        }
+  }
+  for (b=first_block(r); b!=NULL; b=next_block(r,b)) if (!b->used&&b->size>=size) {
+    if (b->size>=size+sizeof(ArenaBlock)+8u) {
+      ArenaBlock *split=(ArenaBlock *)(void *)((uint8_t *)(b+1)+size);
+      split->size=b->size-(uint32_t)size-(uint32_t)sizeof(*split); split->used=0u;
+      b->size=(uint32_t)size;
     }
-    update_arena_metrics(b);
+    b->used=1u; ++r->allocations[r->phase]; update_memory(r); return b+1;
+  }
+  return NULL;
+}
+static void arena_free(ScriptBerryRuntime *r, void *ptr) {
+  ArenaBlock *b,*it;
+  if (ptr==NULL) return;
+  b=(ArenaBlock *)ptr-1;
+  if ((uint8_t *)(void *)b<r->arena.bytes ||
+      (uint8_t *)(void *)b>=r->arena.bytes+r->heap_limit || !b->used) return;
+  b->used=0u; ++r->frees[r->phase];
+  for (it=first_block(r); it!=NULL;) {
+    ArenaBlock *next=next_block(r,it);
+    if (next!=NULL&&!it->used&&!next->used) it->size+=(uint32_t)sizeof(*next)+next->size;
+    else it=next;
+  }
+  update_memory(r);
+}
+void *script_berry_malloc(size_t n) { return s_runtime?arena_malloc(s_runtime,n):NULL; }
+void script_berry_free(void *p) { if (s_runtime) arena_free(s_runtime,p); }
+void *script_berry_realloc(void *p,size_t n) {
+  ArenaBlock *old; void *fresh;
+  if (!s_runtime) return NULL;
+  if (!p) return arena_malloc(s_runtime,n);
+  if (!n) { arena_free(s_runtime,p); return NULL; }
+  if (s_runtime->phase==PHASE_HANDLER) return arena_malloc(s_runtime,n);
+  old=(ArenaBlock *)p-1; if (old->size>=align8(n)) return p;
+  fresh=arena_malloc(s_runtime,n); if (fresh) { memcpy(fresh,p,old->size); arena_free(s_runtime,p); }
+  return fresh;
 }
 
-void *script_berry_malloc(size_t size)
-{
-    return active_backend ? arena_malloc(active_backend, size) : NULL;
+void be_writebuffer(const char *b,size_t n) {
+#if !defined(__arm__) && !defined(__thumb__)
+  (void)fwrite(b,1u,n,stderr);
+#else
+  (void)b;(void)n;
+#endif
 }
-
-void script_berry_free(void *ptr)
-{
-    if (active_backend) arena_free(active_backend, ptr);
+char *be_readstring(char *b,size_t n) { (void)b;(void)n;return NULL; }
+void *be_fopen(const char *name,const char *mode) {
+  (void)mode; if (strcmp(name,"@fwsc-memory")!=0||!s_file.data) return NULL;
+  s_file.position=0u; return &s_file;
 }
+int be_fclose(void *f) { return f==&s_file?0:-1; }
+size_t be_fwrite(void *f,const void *b,size_t n) { (void)f;(void)b;(void)n;return 0u; }
+size_t be_fread(void *f,void *b,size_t n) {
+  size_t left; if (f!=&s_file) return 0u; left=s_file.size-s_file.position;
+  if (n>left) n=left;
+  memcpy(b,s_file.data+s_file.position,n); s_file.position+=n; return n;
+}
+char *be_fgets(void *f,void *b,int n) { (void)f;(void)b;(void)n;return NULL; }
+int be_fseek(void *f,long o) { if(f!=&s_file||o<0||(size_t)o>s_file.size)return -1;s_file.position=(size_t)o;return 0; }
+long be_ftell(void *f) { return f==&s_file?(long)s_file.position:-1; }
+long be_fflush(void *f) { (void)f;return 0; }
+size_t be_fsize(void *f) { return f==&s_file?s_file.size:0u; }
 
-void *script_berry_realloc(void *ptr, size_t size)
-{
-    ArenaBlock *old;
-    void *fresh;
-    if (!active_backend) return NULL;
-    if (!ptr) return arena_malloc(active_backend, size);
-    if (!size) { arena_free(active_backend, ptr); return NULL; }
-    ++active_backend->metrics.reallocations[active_backend->phase];
-    if (active_backend->phase == SCRIPT_PHASE_TICK) {
-        active_backend->pending_fault = SCRIPT_BACKEND_ALLOCATION_IN_TICK;
-        active_backend->discard_vm = true;
-        if (active_backend->abort_active) longjmp(active_backend->abort_jump, 1);
-        return NULL;
+static void native_error(bvm *vm,FwVmFault fault,const char *message) {
+  /* Berry formats protected exceptions through its allocator. Native ABI
+   * validation is a known-safe voice-local unwind, so account that work as
+   * fault handling rather than as a handler allocation. */
+  s_runtime->pending_fault=fault; s_runtime->phase=PHASE_IDLE;
+  be_raise(vm,"value_error",message);
+}
+static void require_count(bvm *vm,int n) {
+  if (be_top(vm)!=n) native_error(vm,FW_VM_FAULT_BAD_HOST_ARGUMENT,"invalid argument count");
+}
+static bint checked_int(bvm *vm,int i,bint lo,bint hi) {
+  bint v; if(!be_isint(vm,i))native_error(vm,FW_VM_FAULT_BAD_HOST_ARGUMENT,"integer required");
+  v=be_toint(vm,i); if(v<lo||v>hi)native_error(vm,FW_VM_FAULT_BAD_HOST_ARGUMENT,"integer out of range"); return v;
+}
+static float checked_float(bvm *vm,int i) {
+  float v; if(!be_isnumber(vm,i))native_error(vm,FW_VM_FAULT_BAD_HOST_ARGUMENT,"number required");
+  v=(float)be_toreal(vm,i); if(!isfinite(v))native_error(vm,FW_VM_FAULT_NONFINITE,"finite number required"); return v;
+}
+static void require_handler(bvm *vm) {
+  if (s_runtime->phase!=PHASE_HANDLER) native_error(vm,FW_VM_FAULT_BAD_HOST_ARGUMENT,"handler context required");
+}
+static int native_input(bvm *vm) {
+  float value=0.0f; bint id; require_handler(vm); require_count(vm,1);
+  id=checked_int(vm,1,0,FW_VM_CHANNEL_INPUT_COUNT-1);
+  if(!s_runtime->ops.read_input||s_runtime->ops.read_input(s_runtime->ops.context,
+     s_runtime->current_voice,(FwVmChannelInput)id,&value)!=0||!isfinite(value))
+    native_error(vm,FW_VM_FAULT_HOST_CALL,"input failed");
+  be_pushreal(vm,value); be_return(vm);
+}
+static int native_state_get(bvm *vm) {
+  bint slot; require_handler(vm);require_count(vm,1);slot=checked_int(vm,1,0,FW_SCRIPT_CHANNEL_STATE_VALUES-1);
+  be_pushreal(vm,s_runtime->state[s_runtime->current_voice][slot]);be_return(vm);
+}
+static int native_state_set(bvm *vm) {
+  bint slot; float value;require_handler(vm);require_count(vm,2);
+  slot=checked_int(vm,1,0,FW_SCRIPT_CHANNEL_STATE_VALUES-1);value=checked_float(vm,2);
+  s_runtime->state[s_runtime->current_voice][slot]=value;be_pushnil(vm);be_return(vm);
+}
+static int native_set_amplitude(bvm *vm) {
+  float v;require_handler(vm);require_count(vm,1);v=checked_float(vm,1);
+  if(!s_runtime->ops.set_amplitude||s_runtime->ops.set_amplitude(s_runtime->ops.context,s_runtime->current_voice,v)!=0)
+    native_error(vm,FW_VM_FAULT_HOST_CALL,"set amplitude failed");
+  be_pushnil(vm);be_return(vm);
+}
+static int native_ramp(bvm *vm) {
+  float target,slope;require_handler(vm);require_count(vm,2);target=checked_float(vm,1);slope=checked_float(vm,2);
+  if(!s_runtime->ops.ramp||s_runtime->ops.ramp(s_runtime->ops.context,s_runtime->current_voice,target,slope)!=0)
+    native_error(vm,FW_VM_FAULT_HOST_CALL,"ramp failed");
+  be_pushnil(vm);be_return(vm);
+}
+static int native_noarg(bvm *vm,int (*fn)(void *,uint8_t),const char *message) {
+  require_handler(vm);require_count(vm,0);
+  if(!fn||fn(s_runtime->ops.context,s_runtime->current_voice)!=0)
+    native_error(vm,FW_VM_FAULT_HOST_CALL,message);
+  be_pushnil(vm);be_return(vm);
+}
+static int native_hold(bvm *vm){return native_noarg(vm,s_runtime->ops.hold,"hold failed");}
+static int native_start_note(bvm *vm){return native_noarg(vm,s_runtime->ops.start_note,"start note failed");}
+static int native_note_end(bvm *vm){return native_noarg(vm,s_runtime->ops.note_end,"note end failed");}
+
+static void observation_hook(bvm *vm,int event,...) {
+  ScriptBerryRuntime *r=s_runtime;(void)vm;if(!r)return;
+  if(event==BE_OBS_GC_START) {
+    ++r->gc_runs[r->phase];
+    if(r->phase==PHASE_HANDLER){r->pending_fault=FW_VM_FAULT_GC;r->discard_vm=1u;if(r->abort_active)longjmp(r->abort_jump,1);}
+  } else if(event==BE_OBS_VM_HEARTBEAT&&r->phase==PHASE_HANDLER) {
+    uint32_t used=((bvm *)r->vm)->counter_ins-r->handler_instruction_start;
+    if(used>SCRIPT_BERRY_HANDLER_INSTRUCTION_LIMIT||
+       r->boundary_instructions+used>SCRIPT_BERRY_BOUNDARY_INSTRUCTION_LIMIT){
+      r->pending_fault=FW_VM_FAULT_BUDGET;r->discard_vm=1u;if(r->abort_active)longjmp(r->abort_jump,1);
     }
-    old = (ArenaBlock *)ptr - 1;
-    if (old->size >= align8(size)) return ptr;
-    fresh = arena_malloc(active_backend, size);
-    if (fresh) {
-        memcpy(fresh, ptr, old->size);
-        arena_free(active_backend, ptr);
-    }
-    return fresh;
+  }
+}
+static void register_int(bvm *vm,const char *name,bint value){be_pushint(vm,value);be_setglobal(vm,name);be_pop(vm,1);}
+static void register_nil(bvm *vm,const char *name){be_pushnil(vm);be_setglobal(vm,name);be_pop(vm,1);}
+static void clear_handler_globals(bvm *vm){register_nil(vm,"on_note_on");register_nil(vm,"on_note_off");register_nil(vm,"on_ramp_end");}
+static int create_vm(ScriptBerryRuntime *r) {
+  bvm *vm; unsigned i;
+  arena_reset(r);s_runtime=r;r->phase=PHASE_INIT;r->discard_vm=0u;r->pending_fault=FW_VM_FAULT_NONE;
+  vm=be_vm_new();r->vm=vm;if(!vm){r->shared_valid=0u;return -1;}
+  be_set_obs_hook(vm,observation_hook);
+  if(vm->stacktop-vm->stack<BE_STACK_TOTAL_MAX)be_stack_expansion(vm,BE_STACK_TOTAL_MAX-(int)(vm->stacktop-vm->stack));
+  be_vector_resize(vm,&vm->callstack,8);be_vector_clear(&vm->callstack);
+  be_regfunc(vm,"input",native_input);be_regfunc(vm,"state_get",native_state_get);be_regfunc(vm,"state_set",native_state_set);
+  be_regfunc(vm,"set_amplitude",native_set_amplitude);be_regfunc(vm,"ramp",native_ramp);be_regfunc(vm,"hold",native_hold);
+  be_regfunc(vm,"start_note",native_start_note);be_regfunc(vm,"note_end",native_note_end);
+  register_int(vm,"INPUT_NOTE_ID",FW_VM_CHANNEL_INPUT_NOTE_ID);register_int(vm,"INPUT_FREQUENCY",FW_VM_CHANNEL_INPUT_FREQUENCY);
+  register_int(vm,"INPUT_GAIN",FW_VM_CHANNEL_INPUT_GAIN);register_int(vm,"INPUT_GATE",FW_VM_CHANNEL_INPUT_GATE);
+  register_int(vm,"INPUT_ACTIVE",FW_VM_CHANNEL_INPUT_ACTIVE);register_int(vm,"INPUT_HAS_PENDING",FW_VM_CHANNEL_INPUT_HAS_PENDING);
+  register_int(vm,"INPUT_PENDING_FREQUENCY",FW_VM_CHANNEL_INPUT_PENDING_FREQUENCY);
+  register_int(vm,"INPUT_PENDING_GAIN",FW_VM_CHANNEL_INPUT_PENDING_GAIN);register_int(vm,"INPUT_AMPLITUDE",FW_VM_CHANNEL_INPUT_AMPLITUDE);
+  register_int(vm,"INPUT_CRASH_RELEASE",FW_VM_CHANNEL_INPUT_CRASH_RELEASE);
+  clear_handler_globals(vm);
+  be_newlist(vm);for(i=0u;i<FW_SCRIPT_CHANNEL_VOICE_COUNT;++i){be_pushnil(vm);be_data_push(vm,-2);be_pop(vm,1);}be_setglobal(vm,"_fw_programs");be_pop(vm,1);
+  /* Intern all native exception text before handlers become allocation-free. */
+  { static const char *const text[]={"value_error","invalid argument count","integer required","integer out of range","number required","finite number required","handler context required","input failed","set amplitude failed","ramp failed","hold failed","start note failed","note end failed"};
+    for(i=0u;i<sizeof(text)/sizeof(text[0]);++i){be_pushstring(vm,text[i]);be_pop(vm,1);} }
+  be_gc_collect(vm);r->phase=PHASE_IDLE;r->shared_valid=1u;r->active_mask=0u;update_memory(r);return 0;
+}
+static void silence(ScriptBerryRuntime *r,uint8_t voice,FwVmFault fault){
+  r->active_mask&=(uint8_t)~(1u<<voice);r->voice_fault[voice]=fault;++r->voice_metrics[voice].faults;
+  if(r->ops.silence_voice)r->ops.silence_voice(r->ops.context,voice,fault);
+}
+static void invalidate_shared(ScriptBerryRuntime *r,FwVmFault fault){
+  uint8_t v;r->shared_valid=0u;r->memory.shared_vm_valid=0u;
+  for(v=0u;v<FW_SCRIPT_CHANNEL_VOICE_COUNT;++v)silence(r,v,fault);
+}
+static int push_handler(bvm *vm,uint8_t voice,uint8_t handler){
+  if(!be_getglobal(vm,"_fw_programs"))return -1;
+  be_pushint(vm,voice);
+  if(!be_getindex(vm,-2)){be_pop(vm,3);return -1;}be_remove(vm,-2);be_remove(vm,-2);
+  if(!be_islist(vm,-1)){be_pop(vm,1);return -1;}be_pushint(vm,handler);
+  if(!be_getindex(vm,-2)){be_pop(vm,3);return -1;}be_remove(vm,-2);be_remove(vm,-2);
+  return be_isfunction(vm,-1)?0:-1;
+}
+static int validate_program(bvm *vm,int index){
+  unsigned i;int stable=index<0?be_top(vm)+index+1:index;
+  if(!be_islist(vm,stable)||be_data_size(vm,stable)!=FW_SCRIPT_CHANNEL_HANDLER_COUNT)return -1;
+  for(i=0u;i<FW_SCRIPT_CHANNEL_HANDLER_COUNT;++i){be_pushint(vm,(bint)i);be_getindex(vm,stable);if(!be_isfunction(vm,-1)){be_pop(vm,2);return -1;}be_pop(vm,2);}return 0;
+}
+static int install_program(bvm *vm,uint8_t voice,int candidate){
+  int stable=candidate<0?be_top(vm)+candidate+1:candidate;
+  if(!be_getglobal(vm,"_fw_programs"))return -1;
+  be_pushint(vm,voice);be_pushvalue(vm,stable);
+  if(!be_setindex(vm,-3)){be_pop(vm,3);return -1;}be_pop(vm,3);return 0;
+}
+static int push_candidate_program(bvm *vm){
+  static const char *const names[]={"on_note_on","on_note_off","on_ramp_end"};unsigned i;
+  be_newlist(vm);
+  for(i=0u;i<FW_SCRIPT_CHANNEL_HANDLER_COUNT;++i){
+    bbool found=be_getglobal(vm,names[i]);
+    if(!found||!be_isfunction(vm,-1)){be_pop(vm,2);return -1;}
+    be_data_push(vm,-2);be_pop(vm,1);
+  }
+  /* Handler globals exist only while loading. The rooted list is the sole
+   * program namespace retained by the shared VM. */
+  clear_handler_globals(vm);
+  return 0;
 }
 
-void be_writebuffer(const char *buffer, size_t length)
-{
-    (void)buffer;
-    (void)length;
+void script_berry_init(ScriptBerryRuntime *r,const ScriptBerryNativeOps *ops){
+  memset(r,0,sizeof(*r));if(ops)r->ops=*ops;for(unsigned v=0;v<FW_SCRIPT_CHANNEL_VOICE_COUNT;++v)r->voice_fault[v]=FW_VM_FAULT_NO_PROGRAM;(void)create_vm(r);
+}
+void script_berry_stop(ScriptBerryRuntime *r,uint8_t voice){
+  bvm *vm;if(voice>=FW_SCRIPT_CHANNEL_VOICE_COUNT)return;vm=(bvm *)r->vm;
+  if(r->shared_valid&&vm&&be_getglobal(vm,"_fw_programs")){be_pushint(vm,voice);be_pushnil(vm);(void)be_setindex(vm,-3);be_pop(vm,3);}
+  silence(r,voice,FW_VM_FAULT_NO_PROGRAM);
+}
+void script_berry_stop_all(ScriptBerryRuntime *r){for(uint8_t v=0;v<FW_SCRIPT_CHANNEL_VOICE_COUNT;++v)script_berry_stop(r,v);}
+uint8_t script_berry_is_active(const ScriptBerryRuntime *r,uint8_t v){return v<FW_SCRIPT_CHANNEL_VOICE_COUNT&&(r->active_mask&(1u<<v))!=0u;}
+uint8_t script_berry_active_mask(const ScriptBerryRuntime *r){return r->active_mask;}
+FwVmFault script_berry_fault(const ScriptBerryRuntime *r,uint8_t v){return v<FW_SCRIPT_CHANNEL_VOICE_COUNT?r->voice_fault[v]:FW_VM_FAULT_BAD_HOST_ARGUMENT;}
+const FwVmMetrics *script_berry_voice_metrics(const ScriptBerryRuntime *r,uint8_t v){return v<FW_SCRIPT_CHANNEL_VOICE_COUNT?&r->voice_metrics[v]:NULL;}
+const FwVmMemoryMetrics *script_berry_memory_metrics(ScriptBerryRuntime *r){update_memory(r);return &r->memory;}
+void script_berry_boundary_begin(ScriptBerryRuntime *r){r->boundary_instructions=0u;r->boundary_cycles=0u;}
+void script_berry_record_cycles(ScriptBerryRuntime *r,uint8_t v,uint32_t cycles){
+  if(v>=FW_SCRIPT_CHANNEL_VOICE_COUNT)return;
+  r->boundary_cycles+=cycles;if(cycles>r->voice_metrics[v].boundary_cycles_max)r->voice_metrics[v].boundary_cycles_max=cycles;
+  if(r->boundary_cycles>SCRIPT_BERRY_BOUNDARY_CYCLE_LIMIT&&r->shared_valid)invalidate_shared(r,FW_VM_FAULT_BUDGET);
+}
+int script_berry_dispatch(ScriptBerryRuntime *r,FwVmChannelHandler handler,uint8_t voice){
+  bvm *vm=(bvm *)r->vm;volatile int result=BE_EXCEPTION;uint32_t used;
+  if(!r->shared_valid||!script_berry_is_active(r,voice)||handler>=FW_SCRIPT_CHANNEL_HANDLER_COUNT)return -1;
+  s_runtime=r;r->current_voice=voice;r->pending_fault=FW_VM_FAULT_NONE;r->discard_vm=0u;r->phase=PHASE_HANDLER;
+  r->handler_instruction_start=vm->counter_ins;r->abort_active=1u;
+  if(setjmp(r->abort_jump)==0){if(push_handler(vm,voice,(uint8_t)handler)==0)result=be_pcall(vm,0);}
+  r->abort_active=0u;used=vm->counter_ins-r->handler_instruction_start;r->phase=PHASE_IDLE;
+  if(!r->discard_vm)be_pop(vm,be_top(vm));
+  if(r->discard_vm){invalidate_shared(r,r->pending_fault?r->pending_fault:FW_VM_FAULT_SHARED_VM);return -1;}
+  if(result!=BE_OK){silence(r,voice,r->pending_fault?r->pending_fault:FW_VM_FAULT_EXCEPTION);return -1;}
+  r->boundary_instructions+=used;++r->voice_metrics[voice].dispatches;r->voice_metrics[voice].instructions_total+=used;
+  if(used>r->voice_metrics[voice].instructions_max)r->voice_metrics[voice].instructions_max=used;
+  return 0;
 }
 
-char *be_readstring(char *buffer, size_t size)
-{
-    (void)buffer; (void)size; return NULL;
+static uint16_t read16(const uint8_t *p){return (uint16_t)p[0]|((uint16_t)p[1]<<8);}
+static uint32_t read32(const uint8_t *p){return (uint32_t)p[0]|((uint32_t)p[1]<<8)|((uint32_t)p[2]<<16)|((uint32_t)p[3]<<24);}
+static int parse_header(ScriptBerryRuntime *r){const uint8_t *h=r->upload_header;
+  if(memcmp(h,"FWSC",4u)||read16(h+4u)!=FW_SCRIPT_CONTAINER_VERSION||h[6]!=FW_SCRIPT_RUNTIME_BERRY||
+     h[7]!=FW_SCRIPT_CONFIG_FLOAT32_INT32||read16(h+8u)!=FW_SCRIPT_CHANNEL_ABI_VERSION||
+     read16(h+10u)!=FW_SCRIPT_CONTAINER_HEADER_SIZE)return -1;
+  r->upload_expected_size=read32(h+12u);r->upload_expected_crc=read32(h+16u);
+  return r->upload_expected_size<=FW_SCRIPT_MAX_PAYLOAD?0:-1;
 }
-
-void *be_fopen(const char *filename, const char *modes)
-{
-    (void)modes;
-    if (strcmp(filename, "@fwsc-memory") != 0 || !memory_file.data) return NULL;
-    memory_file.position = 0;
-    return &memory_file;
+int script_berry_upload_begin(ScriptBerryRuntime *r,uint8_t voice){
+  if(voice>=FW_SCRIPT_CHANNEL_VOICE_COUNT||r->upload_active)return -1;
+  if(!r->shared_valid&&create_vm(r)!=0)return -1;
+  r->upload_active=1u;r->upload_voice=voice;r->upload_header_bytes=0u;r->upload_payload_bytes=0u;
+  r->upload_expected_size=0u;r->upload_expected_crc=0u;return 0;
 }
-
-int be_fclose(void *file) { return file == &memory_file ? 0 : -1; }
-size_t be_fwrite(void *file, const void *buffer, size_t length)
-{ (void)file; (void)buffer; (void)length; return 0; }
-size_t be_fread(void *file, void *buffer, size_t length)
-{
-    size_t available;
-    if (file != &memory_file) return 0;
-    available = memory_file.size - memory_file.position;
-    if (length > available) length = available;
-    memcpy(buffer, memory_file.data + memory_file.position, length);
-    memory_file.position += length;
-    return length;
+int script_berry_upload_feed(ScriptBerryRuntime *r,const void *data,size_t size){
+  const uint8_t *p=(const uint8_t *)data;uint8_t *scratch=r->arena.bytes+r->heap_limit;
+  if(!r->upload_active||(!p&&size))return -1;
+  while(size&&r->upload_header_bytes<FW_SCRIPT_CONTAINER_HEADER_SIZE){r->upload_header[r->upload_header_bytes++]=*p++;--size;
+    if(r->upload_header_bytes==FW_SCRIPT_CONTAINER_HEADER_SIZE&&parse_header(r)!=0){script_berry_upload_abort(r);r->voice_fault[r->upload_voice]=FW_VM_FAULT_BAD_CONTAINER;return -1;}}
+  if(r->upload_header_bytes!=FW_SCRIPT_CONTAINER_HEADER_SIZE)return 0;
+  if(size>r->upload_expected_size-r->upload_payload_bytes){script_berry_upload_abort(r);return -1;}
+  memcpy(scratch+r->upload_payload_bytes,p,size);r->upload_payload_bytes+=(uint32_t)size;return 0;
 }
-char *be_fgets(void *file, void *buffer, int size)
-{ (void)file; (void)buffer; (void)size; return NULL; }
-int be_fseek(void *file, long offset)
-{
-    if (file != &memory_file || offset < 0 || (size_t)offset > memory_file.size) return -1;
-    memory_file.position = (size_t)offset; return 0;
+int script_berry_upload_commit(ScriptBerryRuntime *r){
+  bvm *vm=(bvm *)r->vm;uint8_t voice=r->upload_voice;uint8_t *scratch=r->arena.bytes+r->heap_limit;int load,result;
+  if(!r->upload_active||r->upload_header_bytes!=FW_SCRIPT_CONTAINER_HEADER_SIZE||r->upload_payload_bytes!=r->upload_expected_size||
+     fw_vm_crc32(scratch,r->upload_payload_bytes)!=r->upload_expected_crc){script_berry_upload_abort(r);r->voice_fault[voice]=FW_VM_FAULT_BAD_CONTAINER;return -1;}
+  s_runtime=r;r->phase=PHASE_LOAD;r->pending_fault=FW_VM_FAULT_NONE;s_file.data=scratch;s_file.size=r->upload_payload_bytes;s_file.position=0u;
+  be_pop(vm,be_top(vm));clear_handler_globals(vm);load=be_loadmode(vm,"@fwsc-memory",0);result=load;if(result==BE_OK)result=be_pcall(vm,0);s_file.data=NULL;
+  if(result==BE_OK){be_pop(vm,be_top(vm));if(push_candidate_program(vm)!=0)result=BE_EXCEPTION;}
+  { int valid=(result==BE_OK)?validate_program(vm,-1):-1;int installed=(result==BE_OK&&valid==0)?install_program(vm,voice,-1):-1;
+  if(result!=BE_OK||valid!=0||installed!=0){
+#if !defined(__arm__) && !defined(__thumb__)
+    if(result!=BE_OK)be_dumpexcept(vm);
+#endif
+    be_pop(vm,be_top(vm));clear_handler_globals(vm);be_gc_collect(vm);r->phase=PHASE_IDLE;r->upload_active=0u;r->voice_fault[voice]=load==BE_OK?FW_VM_FAULT_BAD_HANDLER:FW_VM_FAULT_BAD_PROGRAM;update_memory(r);return -1;
+  }
+  }
+  be_pop(vm,be_top(vm));memset(r->state[voice],0,sizeof(r->state[voice]));r->active_mask|=(uint8_t)(1u<<voice);r->voice_fault[voice]=FW_VM_FAULT_NONE;
+  be_gc_collect(vm);r->phase=PHASE_IDLE;r->upload_active=0u;update_memory(r);return 0;
 }
-long be_ftell(void *file) { return file == &memory_file ? (long)memory_file.position : -1; }
-long be_fflush(void *file) { (void)file; return 0; }
-size_t be_fsize(void *file) { return file == &memory_file ? memory_file.size : 0; }
-
-static int require_count(bvm *vm, int count)
-{
-    if (be_top(vm) != count) {
-        if (active_backend->runtime)
-            active_backend->runtime->fault = SCRIPT_FAULT_BAD_NATIVE_ARGUMENT;
-        be_raise(vm, "value_error", "invalid argument count");
-    }
-    return 1;
-}
-
-static void native_argument_error(bvm *vm, const char *message)
-{
-    if (active_backend->runtime)
-        active_backend->runtime->fault = SCRIPT_FAULT_BAD_NATIVE_ARGUMENT;
-    be_raise(vm, "value_error", message);
-}
-
-static bint checked_int(bvm *vm, int index, bint minimum, bint maximum)
-{
-    bint value;
-    if (!be_isint(vm, index)) native_argument_error(vm, "integer argument required");
-    value = be_toint(vm, index);
-    if (value < minimum || value > maximum)
-        native_argument_error(vm, "integer argument out of range");
-    return value;
-}
-
-static float checked_number(bvm *vm, int index)
-{
-    if (!be_isnumber(vm, index)) native_argument_error(vm, "numeric argument required");
-    return (float)be_toreal(vm, index);
-}
-
-static float checked_finite_number(bvm *vm, int index)
-{
-    float value = checked_number(vm, index);
-    if (!isfinite(value)) native_argument_error(vm, "finite argument required");
-    return value;
-}
-
-static int native_configure_outputs(bvm *vm)
-{
-    ScriptRuntime *r = active_backend->runtime;
-    require_count(vm, 1);
-    if (script_runtime_configure_outputs(r,
-            (uint8_t)checked_int(vm, 1, 1, SCRIPT_MAX_OUTPUTS)) != 0)
-        native_argument_error(vm, "invalid output count");
-    be_pushnil(vm); be_return(vm);
-}
-
-static int native_define_control(bvm *vm)
-{
-    int id;
-    require_count(vm, 5);
-    if (!be_isstring(vm, 1)) native_argument_error(vm, "control name must be a string");
-    id = script_runtime_define_control(active_backend->runtime, be_tostring(vm, 1),
-            checked_finite_number(vm, 2), checked_finite_number(vm, 3),
-            checked_finite_number(vm, 4),
-            (uint16_t)checked_int(vm, 5, 0, UINT16_MAX));
-    if (id < 0) native_argument_error(vm, "invalid control definition");
-    be_pushint(vm, id); be_return(vm);
-}
-
-static int native_control_get(bvm *vm)
-{
-    require_count(vm, 1);
-    bint id = checked_int(vm, 1, 0, SCRIPT_MAX_CONTROLS - 1);
-    if ((uint8_t)id >= active_backend->runtime->control_count)
-        native_argument_error(vm, "unknown control ID");
-    be_pushreal(vm, script_runtime_control_get(active_backend->runtime,
-                                                (uint8_t)id));
-    be_return(vm);
-}
-
-static int native_note_is_on(bvm *vm)
-{
-    require_count(vm, 1);
-    bint note = checked_int(vm, 1, 0, SCRIPT_MAX_NOTE_SLOTS - 1);
-    be_pushbool(vm, script_runtime_note_is_on(active_backend->runtime,
-                                               (uint8_t)note));
-    be_return(vm);
-}
-
-static int native_note_started(bvm *vm)
-{
-    require_count(vm, 1);
-    bint note = checked_int(vm, 1, 0, SCRIPT_MAX_NOTE_SLOTS - 1);
-    be_pushbool(vm, script_runtime_note_started(active_backend->runtime,
-                                                 (uint8_t)note));
-    be_return(vm);
-}
-
-static int native_output_set(bvm *vm)
-{
-    require_count(vm, 3);
-    bint note = checked_int(vm, 1, 0, SCRIPT_MAX_NOTE_SLOTS - 1);
-    bint output = checked_int(vm, 2, 0, SCRIPT_MAX_OUTPUTS - 1);
-    if (!script_runtime_output_set(active_backend->runtime,
-            (uint8_t)note, (uint8_t)output, checked_number(vm, 3))) {
-        be_raise(vm, "value_error", "invalid output");
-    }
-    be_pushnil(vm); be_return(vm);
-}
-
-static int native_tick_index(bvm *vm)
-{
-    require_count(vm, 0);
-    be_pushint(vm, (bint)script_runtime_tick_index(active_backend->runtime));
-    be_return(vm);
-}
-
-static void observation_hook(bvm *vm, int event, ...)
-{
-    ScriptBerryBackend *b = active_backend;
-    (void)vm;
-    if (!b) return;
-    if (event == BE_OBS_GC_START) {
-        ++b->metrics.gc_runs[b->phase];
-        if (b->phase == SCRIPT_PHASE_TICK) {
-            if (b->pending_fault == SCRIPT_BACKEND_OK)
-                b->pending_fault = SCRIPT_BACKEND_GC_IN_TICK;
-            b->discard_vm = true;
-            if (b->abort_active) longjmp(b->abort_jump, 1);
-        }
-    } else if (event == BE_OBS_VM_HEARTBEAT &&
-               (b->phase == SCRIPT_PHASE_TICK || b->phase == SCRIPT_PHASE_INIT)) {
-        uint32_t used = vm->counter_ins - b->tick_instruction_start;
-        if (used > b->instruction_budget) {
-            b->pending_fault = SCRIPT_BACKEND_WATCHDOG;
-            b->discard_vm = true;
-            if (b->abort_active) longjmp(b->abort_jump, 1);
-        }
-    }
-}
-
-static uint8_t *backend_begin_upload(void *context, size_t capacity)
-{
-    ScriptBerryBackend *b = (ScriptBerryBackend *)context;
-    if (capacity > SCRIPT_MAX_PAYLOAD) return NULL;
-    active_backend = b;
-    arena_reset(b, SCRIPT_BERRY_LOAD_HEAP_SIZE);
-    b->phase = SCRIPT_PHASE_IDLE;
-    return b->arena.bytes + SCRIPT_BERRY_LOAD_HEAP_SIZE;
-}
-
-static ScriptBackendResult backend_load(void *context, ScriptRuntime *runtime,
-                                        const uint8_t *bytecode, size_t size)
-{
-    ScriptBerryBackend *b = (ScriptBerryBackend *)context;
-    int result, load_result;
-    active_backend = b;
-    b->runtime = runtime;
-    b->phase = SCRIPT_PHASE_INIT;
-    b->pending_fault = SCRIPT_BACKEND_OK;
-    b->discard_vm = false;
-    memory_file.data = bytecode;
-    memory_file.size = size;
-    memory_file.position = 0;
-    b->vm = be_vm_new();
-    if (!b->vm) return SCRIPT_BACKEND_OOM;
-    be_set_obs_hook((bvm *)b->vm, observation_hook);
-    if (((bvm *)b->vm)->stacktop - ((bvm *)b->vm)->stack < BE_STACK_TOTAL_MAX)
-        be_stack_expansion((bvm *)b->vm,
-            BE_STACK_TOTAL_MAX - (int)(((bvm *)b->vm)->stacktop - ((bvm *)b->vm)->stack));
-    be_vector_resize((bvm *)b->vm, &((bvm *)b->vm)->callstack, 16);
-    be_vector_clear(&((bvm *)b->vm)->callstack);
-    be_regfunc((bvm *)b->vm, "configure_outputs", native_configure_outputs);
-    be_regfunc((bvm *)b->vm, "define_control", native_define_control);
-    be_regfunc((bvm *)b->vm, "control_get", native_control_get);
-    be_regfunc((bvm *)b->vm, "note_is_on", native_note_is_on);
-    be_regfunc((bvm *)b->vm, "note_started", native_note_started);
-    be_regfunc((bvm *)b->vm, "output_set", native_output_set);
-    be_regfunc((bvm *)b->vm, "tick_index", native_tick_index);
-    load_result = be_loadmode((bvm *)b->vm, "@fwsc-memory", 0);
-    result = load_result;
-    if (result == BE_OK) {
-        b->tick_instruction_start = ((bvm *)b->vm)->counter_ins;
-        b->abort_active = true;
-        if (setjmp(b->abort_jump) == 0) result = be_pcall((bvm *)b->vm, 0);
-        else result = BE_EXCEPTION;
-        b->abort_active = false;
-    }
-    memory_file.data = NULL;
-    if (b->pending_fault != SCRIPT_BACKEND_OK) return b->pending_fault;
-    if (result != BE_OK) {
-        if (result == BE_MALLOC_FAIL) return SCRIPT_BACKEND_OOM;
-        return load_result == BE_OK ? SCRIPT_BACKEND_EXCEPTION : SCRIPT_BACKEND_BAD_BYTECODE;
-    }
-    be_pop((bvm *)b->vm, be_top((bvm *)b->vm));
-    if (!be_getglobal((bvm *)b->vm, "tick") || !be_isfunction((bvm *)b->vm, -1)) {
-        be_pop((bvm *)b->vm, be_top((bvm *)b->vm));
-        return SCRIPT_BACKEND_BAD_ABI;
-    }
-    be_pop((bvm *)b->vm, be_top((bvm *)b->vm));
-    b->phase = SCRIPT_PHASE_IDLE;
-    update_arena_metrics(b);
-    return SCRIPT_BACKEND_OK;
-}
-
-static ScriptBackendResult backend_tick(void *context)
-{
-    ScriptBerryBackend *b = (ScriptBerryBackend *)context;
-    bvm *vm = (bvm *)b->vm;
-    int result;
-    active_backend = b;
-    b->phase = SCRIPT_PHASE_TICK;
-    b->pending_fault = SCRIPT_BACKEND_OK;
-    b->tick_instruction_start = vm->counter_ins;
-    if (!be_getglobal(vm, "tick")) return SCRIPT_BACKEND_BAD_ABI;
-    b->abort_active = true;
-    if (setjmp(b->abort_jump) == 0) {
-        result = be_pcall(vm, 0);
-    } else {
-        result = BE_EXCEPTION;
-    }
-    b->abort_active = false;
-    b->metrics.instructions_last = vm->counter_ins - b->tick_instruction_start;
-    b->metrics.instructions_total += b->metrics.instructions_last;
-    if (b->metrics.instructions_last > b->metrics.instructions_max)
-        b->metrics.instructions_max = b->metrics.instructions_last;
-    if (!b->discard_vm) be_pop(vm, be_top(vm));
-    b->phase = SCRIPT_PHASE_IDLE;
-    if (b->pending_fault != SCRIPT_BACKEND_OK) return b->pending_fault;
-    return result == BE_OK ? SCRIPT_BACKEND_OK : SCRIPT_BACKEND_EXCEPTION;
-}
-
-static void backend_stop(void *context)
-{
-    ScriptBerryBackend *b = (ScriptBerryBackend *)context;
-    active_backend = b;
-    b->phase = SCRIPT_PHASE_DESTROY;
-    if (b->vm && !b->discard_vm) be_vm_delete((bvm *)b->vm);
-    b->vm = NULL;
-    b->runtime = NULL;
-    b->phase = SCRIPT_PHASE_IDLE;
-    memory_file.data = NULL;
-}
-
-static void backend_metrics(void *context, ScriptBackendMetrics *metrics)
-{
-    ScriptBerryBackend *b = (ScriptBerryBackend *)context;
-    update_arena_metrics(b);
-    *metrics = b->metrics;
-}
-
-void script_berry_backend_init(ScriptBerryBackend *b, ScriptBackend *backend)
-{
-    memset(b, 0, sizeof(*b));
-    arena_reset(b, SCRIPT_BERRY_LOAD_HEAP_SIZE);
-    b->instruction_budget = SCRIPT_BERRY_INSTRUCTION_BUDGET;
-    backend->context = b;
-    backend->begin_upload = backend_begin_upload;
-    backend->load = backend_load;
-    backend->tick = backend_tick;
-    backend->stop = backend_stop;
-    backend->metrics = backend_metrics;
-}
+void script_berry_upload_abort(ScriptBerryRuntime *r){r->upload_active=0u;r->upload_header_bytes=0u;r->upload_payload_bytes=0u;}
+uint8_t script_berry_upload_is_active(const ScriptBerryRuntime *r,uint8_t v){return r->upload_active&&r->upload_voice==v;}
