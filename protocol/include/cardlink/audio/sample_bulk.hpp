@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cardlink/audio/sample_dry.hpp"
+#include "cardproto/channel.hpp"
 
 #include <array>
 #include <cstdint>
@@ -39,9 +40,7 @@ public:
   UrgentScheduleStats LastUrgentSchedule() const;
 
   /** Feed one authoritative RS-485 vq snapshot to the refill scheduler. */
-  void SubmitStatus(uint8_t mask, uint8_t best,
-                    const std::array<uint16_t, kSampleVoices> &free_samples,
-                    uint16_t last_pack_sequence);
+  void SubmitStatus(const cardproto::VoiceQuery &status);
 
 private:
   struct Impl;

@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__clang__)
+#pragma clang diagnostic ignored "-Wmissing-field-initializers"
+#endif
 
 typedef struct {
   float input[FW_SCRIPT_CHANNEL_VOICE_COUNT][FW_VM_CHANNEL_INPUT_COUNT];
@@ -47,7 +50,7 @@ int main(int argc,char **argv){
   ScriptBerryRuntime runtime;Mock mock={.output_hash=UINT32_C(2166136261)};ScriptBerryNativeOps ops={&mock,read_input,set_amplitude,ramp,hold,activate,note_end,silence,set_led};
   const FwVmMemoryMetrics *mem;uint8_t *program;size_t size;uint32_t i;
   assert(argc==7);program=read_file(argv[1],&size);script_berry_init(&runtime,&ops);assert(runtime.shared_valid);
-  for(i=0;i<FW_SCRIPT_CHANNEL_VOICE_COUNT;++i){mock.input[i][FW_VM_CHANNEL_INPUT_CRASH_RELEASE]=3.0f;upload(&runtime,(uint8_t)i,program,size);}
+  for(i=0;i<FW_SCRIPT_CHANNEL_VOICE_COUNT;++i){upload(&runtime,(uint8_t)i,program,size);}
   assert(script_berry_active_mask(&runtime)==0xffu);mem=script_berry_memory_metrics(&runtime);
   printf("eight_program_peak=%u current=%u largest_free=%u\n",mem->arena_peak,mem->arena_current,mem->arena_largest_free);
   for(i=0;i<32u;++i)upload(&runtime,3u,program,size);
@@ -65,10 +68,10 @@ int main(int argc,char **argv){
     assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_RAMP_END,v)==0);
     mock.input[v][FW_VM_CHANNEL_INPUT_ACTIVE]=1.0f;mock.input[v][FW_VM_CHANNEL_INPUT_AMPLITUDE]=0.5f;runtime.state[v][0]=2.0f;
     assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_ON,v)==0);assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_RAMP_END,v)==0);
-    mock.input[v][FW_VM_CHANNEL_INPUT_ACTIVE]=1.0f;mock.input[v][FW_VM_CHANNEL_INPUT_AMPLITUDE]=0.0f;mock.input[v][FW_VM_CHANNEL_INPUT_CRASH_RELEASE]=0.0f;runtime.state[v][0]=2.0f;
+    mock.input[v][FW_VM_CHANNEL_INPUT_ACTIVE]=1.0f;mock.input[v][FW_VM_CHANNEL_INPUT_AMPLITUDE]=0.0f;runtime.state[v][0]=2.0f;
     assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_ON,v)==0);
     mock.input[v][FW_VM_CHANNEL_INPUT_HAS_PENDING]=1.0f;assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_OFF,v)==0);
-    mock.input[v][FW_VM_CHANNEL_INPUT_HAS_PENDING]=0.0f;mock.input[v][FW_VM_CHANNEL_INPUT_CRASH_RELEASE]=3.0f;
+    mock.input[v][FW_VM_CHANNEL_INPUT_HAS_PENDING]=0.0f;
   }
   for(i=0;i<1000000u;++i){uint8_t v=(uint8_t)(i&7u);if(v==0u)script_berry_boundary_begin(&runtime);assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_ON,v)==0);}
   mem=script_berry_memory_metrics(&runtime);assert(mem->handler_allocations==0u);assert(mem->handler_gc==0u);assert(runtime.shared_valid);

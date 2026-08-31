@@ -132,17 +132,13 @@ and are lost on reset.
 | `ar <id> <Hz>`      | Set head `<id>`'s root pitch (Hz > 0)                               |
 | `aw <v> <id>`       | Assign head `<id>` to voice `<v>` 0…7                               |
 | `a`                 | Loaded count + 256-bit hex mask (bit 0 = wave 0)                    |
-| `vq`                | Active mask + hungriest + exact BODY-ring credit                      |
-| `crash [0..50]`     | Release before stolen-slot retrigger, ms; 0 = hard cut (default 3)      |
+| `vq`                | ABI6 active/pending generations + exact runtime ring credit             |
 | `usb`               | BODY counters: drop/hold/fill, RS-485 `vq`, rx/bytes/bad              |
 | `usb 0`             | Clear those counters, then same reply                                 |
 
 Replies: `ok: ar <id> <Hz>`, `ok: aw <v> <id>`, `ok: a <n> <64 hex>`.
-USB CDC returns `vq` as `ok:vq <mask> <best> free0 … free7 <reserved>`.
-RS485 returns the same fields in a 26-byte binary frame: `a5 5a 43 02`,
-mask, best, eight uint16 LE exact free-sample counts, uint16 LE reserved value
-`0xffff`, CRC-8/0x07, then `0a`. Best is 0–7 or 255; each free
-count is 0–8160. At 921600 8N1 the reply is about 282 µs on the wire.
+USB CDC returns a readable `ok:vq7` diagnostic. RS485 returns the fixed
+56-byte ABI6 generation/credit frame; old versions are rejected in Sample mode.
 
 Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 2-tap
 linear interpolation. The attack plays to its committed length (not a hold-pad to
@@ -300,7 +296,7 @@ Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 
 | Interface                    | Role                                                                |
 | ---------------------------- | ------------------------------------------------------------------- |
-| **UAC2 output** (ITF0/1)     | 10-channel signed 16-bit, synchronous 51 kHz carrier; every 1 ms packet carries one tag and 509 raw 48 kHz BODY samples (1020 B). |
+| **UAC2 output** (ITF0/1)     | 10-channel signed 16-bit, synchronous 51 kHz carrier; every 1 ms packet carries a tag, sequence, and 508 raw 48 kHz BODY samples (1020 B). |
 | **CDC ACM** (serial)         | Same ASCII console as RS485, plus binary attack-head upload (`al`). |
 
 The Channel device is class-compliant UAC2 so the operating system owns the
@@ -321,19 +317,18 @@ Effect Card still has CDC and a UAC2 microphone (mono, 32-bit, 96 kHz).
 
 ### BODY stream (UAC2 iso OUT, signed 16-bit)
 
-Little-endian. BODY has no per-packet ACK. The first int16 word is a compact
-routing tag; the remaining 509 words are consecutive raw BODY samples.
-Sequential RS485 `vq`
-polling supplies exact ring free space every 5 ms for steady-state refills.
-Urgent SOF packets launch concurrently with the corresponding RS485 `aw`/`nX`
-transaction and do not wait for `vq`; their conservative credit accounts for
-the configured old-note crash-release tail.
+Little-endian. The first int16 word is a routing tag, the second is a wrapping
+transport sequence, and the remaining 508 words are raw BODY samples. `vq`
+reports the last routed sequence processed by the card, whether accepted or
+rejected, alongside an atomic ring-credit snapshot. The host ledger subtracts
+exactly the later submitted frames; it never estimates in-flight occupancy.
 
 ```text
 UAC carrier: 51 kHz × 10 channels × int16 = 1020000 bytes/s
 BODY/DAC:    48 kHz (pitch and playback rate are unchanged)
 packet word 0      tag = 0xA000 | session[11:4] | SOF[3] | voice[2:0]
-packet words 1..509  509 consecutive int16 LE unpitched BODY samples
+packet word 1      wrapping uint16 transport sequence
+packet words 2..509  508 consecutive int16 LE unpitched BODY samples
 idle tag      0xAFFF (remaining words are zero)
 session       0..254 (255 is reserved for idle/unarmed)
 ```
@@ -341,7 +336,7 @@ session       0..254 (255 is reserved for idle/unarmed)
 VID `0xCafe`, PID `0x402F`. The host opens the 10-channel UAC output through
 RtAudio/CoreAudio; CDC stays a serial port.
 
-The direct carrier supplies 509 BODY samples/ms (509 ksample/s aggregate).
+The direct carrier supplies 508 BODY samples/ms (508 ksample/s aggregate).
 Workloads above that source-consumption ceiling cannot be lossless;
 `hold` records missing playback samples while control remains alive. Each fresh
 `vq` uses exact safe ring credit up to that wire ceiling.
@@ -349,38 +344,39 @@ RS485 `vq` every 5 ms is the steady-state refill authority and lifecycle
 monitor. UAC OUT carries BODY data only.
 
 ```text
-RS485 vq reply, fixed 26-byte binary frame
+RS485 vq reply, fixed 56-byte ABI6 binary frame
 offset  size  field
 0       2     sync = a5 5a
 2       1     card = 43 ('C')
-3       1     type = 02 exact refill status
-4       1     active/requested voice mask
-5       1     hungriest voice, or 255
-6       16    exact uint16 LE free samples for voices 0..7 (0..8160)
-22      2     reserved = ffff
-24      1     CRC-8/0x07 over bytes 0..23
-25      1     terminator = 0a
+3       1     type = 04 sequenced ABI6 generation status
+4       1     active voice mask
+5       1     pending voice mask
+6       1     best refill voice, or 255
+7       1     reserved
+8       2     runtime ring capacity (normally 12240)
+10      2     status sequence
+12      2     last processed UAC sequence
+14      40    eight records: session u8, target fill u16, total writable u16
+54      1     CRC-8/0x07 over bytes 0..53
+55      1     terminator = 0a
 ```
 
-RS485 `vq` supplies an exact free-space snapshot for steady refills. The host
-subtracts direct UAC samples rendered concurrently with that snapshot so it
-cannot over-reserve the physical ring. RS485 `nX on <key>` remains the sole
-audible note-on authority; the Channel Card owns pitch. For streamed playback,
-the host reserves a session and launches `aw` plus
-`nX on <key> @<session>` concurrently with sequential, pitch-neutral SOF BODY.
+RS485 `vq` is the sole BODY permission. The host sends only complete
+508-sample frames within exact credit. `nX on <key> @<session>` arms pending;
+matching SOF fills it, and Berry receives `on_note_on` only after one complete
+BODY frame exists. `start_note()` atomically promotes pending. Native firmware
+does not choose a crash duration or reserve release samples.
 Superseded or late same-wave sessions are stale. Untagged `nX` remains available
-for interactive/legacy use. If a
-conservative 50 ms release reservation leaves no safe prefill credit, USB
-sends no tagged packet; the next `vq` supplies the first SOF BODY normally.
+for interactive/legacy use. There is no native release reservation.
 RS485 `nX off` remains note-off authority. `type` `0x20` CAPTURE remains reserved.
-Urgent jobs form a newest-first priority deque with one latest job per physical
-voice (maximum depth eight). A newer note retires older tagged packets; packets
-already entering USB are rejected as stale by voice/session if superseded.
-Every refill uses exact credit up to its per-voice and wire limits.
+The host schedules playing voices by their computed depletion deadline. A
+silent new voice is admitted only if the exact one-packet (1 ms) service cost
+finishes before the earliest playing deadline. A newer note retires older
+sessions; packets already entering USB are rejected as stale if superseded.
 The controller targets one `vq` every 5 ms (200 Hz) and requests an immediate
 one after successful Channel commands; single-flight RS485 traffic can stretch
-the observed interval. The direct UAC capacity is 509 BODY samples/ms: one
-tag word plus 509 sample words in each 1020-byte packet.
+the observed interval. The direct UAC capacity is 508 BODY samples/ms: one tag
+word, one sequence word, and 508 sample words in each 1020-byte packet.
 If note-off or a newer note generation retires a ring while an old packet is
 arriving, the card ignores that stale voice/session instead of publishing it
 into the new generation.
@@ -469,7 +465,7 @@ uploaded, note commands return `err:no-program` and the note bank stays silent.
 
 `vmload <voice> <nbytes>` is CDC-only and uses the same line-to-binary
 transition as `al`. Each voice 0..7 owns an independent program. The payload is
-one Berry ABI5 `FWSC` container, up to 4116 bytes (20-byte container header
+one Berry ABI6 `FWSC` container, up to 4116 bytes (20-byte container header
 plus at most 4096 payload bytes). The card writes
 `ok:ready`, receives exactly `nbytes`, validates target/version, CRC, bytecode,
 runtime/configuration, handlers, host calls, and CRC, then replies
@@ -485,7 +481,7 @@ remain voice-local; allocation, GC, watchdog, or uncertain interpreter state
 invalidates the shared VM and silences all voices. Programs are lost on reset.
 `vm mem` reports arena current/peak/free and allocation/GC diagnostics.
 
-ABI5 requires `on_note_on(key)`, `on_note_off(has_pending)`, and
+ABI6 requires `on_note_on(key)`, `on_note_off(has_pending)`, and
 `on_ramp_end()`. Optional compile-time `on_init()` may call `tuning_set` once
 and configure the identity-default key map with `keymap_set` or `keymap_fill`.
 Without it, tuning defaults to C4 = 261.625565 Hz. Runtime scripts

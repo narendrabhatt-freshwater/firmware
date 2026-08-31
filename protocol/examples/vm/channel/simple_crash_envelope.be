@@ -3,6 +3,10 @@
 
 def on_note_on(key)
     state stage
+    if !input(INPUT_GATE)
+        discard_pending()  # Transport became ready after the gate was released.
+        return
+    end
     var color = (keymap_get(key) - 36) / 48.0
     if color < 0 color = 0 end
     if color > 1 color = 1 end
@@ -11,8 +15,6 @@ def on_note_on(key)
     var amplitude = input(INPUT_AMPLITUDE)
 
     if active
-        if stage == 5 return end  # A crash fade is already running.
-
         if amplitude > 0
             stage = 5                       # Enter crash release.
             ramp(0, amplitude / 0.002)      # Current amplitude -> 0.0 in 2 ms.

@@ -13,13 +13,14 @@ const int16_t *AttackBank_Table(uint16_t id){(void)id;return NULL;}
 void AttackBank_Stop(uint8_t note){(void)note;} void AttackBank_StopAll(void){}
 int32_t NoteFilter_Process(uint8_t note,int32_t sample){(void)note;return sample;}
 void NoteFilter_Reset(uint8_t note){(void)note;} void NoteFilter_OnNoteFreq(uint8_t note,double hz){(void)note;(void)hz;}
+int ChannelLed_Set(float red,float green,float blue,float brightness){(void)red;(void)green;(void)blue;(void)brightness;return 0;}
 static uint8_t *read_file(const char *path,size_t *size){FILE*f=fopen(path,"rb");long n;uint8_t*p;check(f!=NULL,"open FWSC");fseek(f,0,SEEK_END);n=ftell(f);rewind(f);p=malloc((size_t)n);check(p!=NULL&&fread(p,1,(size_t)n,f)==(size_t)n,"read FWSC");fclose(f);*size=(size_t)n;return p;}
 static void put32(uint8_t *p,uint32_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);p[2]=(uint8_t)(v>>16);p[3]=(uint8_t)(v>>24);}
 static void refresh_crc(uint8_t *program,size_t size){uint32_t crc=fw_vm_crc32(program+FW_SCRIPT_CONTAINER_HEADER_SIZE,size-FW_SCRIPT_CONTAINER_HEADER_SIZE);put32(program+16u,crc);}
 static void boundary(void){NoteBank_VmBoundaryBegin();for(unsigned i=0;i<48u;++i)(void)NoteBank_NextSample();NoteBank_VmBoundaryEnd();}
 static uint32_t render_peak(unsigned count){uint32_t peak=0u;NoteBank_VmBoundaryBegin();for(unsigned i=0;i<count;++i){int64_t s=NoteBank_NextSample();uint32_t a=(uint32_t)(s<0?-s:s);if(a>peak)peak=a;}NoteBank_VmBoundaryEnd();return peak;}
 int main(int argc,char **argv){
-  uint8_t *program;size_t size;check(argc==2,"program path required");program=read_file(argv[1],&size);
+  uint8_t *program;size_t size;check(argc==3,"program paths required");program=read_file(argv[1],&size);
   NoteEnv_Init();StreamRing_Init();NoteBank_Init();check(NoteBank_VmActiveMask()==0u,"reset has no programs");
   check(NoteBank_NoteOn(0u,60u)==-2,"note reports no program");boundary();check(!NoteBank_IsActive(0u),"no-program silent");
   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,program,size)==0&&NoteBank_VmUploadCommit(0u)==0,"valid FWSC activates");
@@ -50,5 +51,13 @@ int main(int argc,char **argv){
   check(fabs(NoteBank_GetFreq(1u)-54.0)<0.001,"A1 resolves under A4=432 tuning");
   check(NoteBank_NoteOn(0u,69u)==0,"identity voice accepts same physical key");boundary();
   check(NoteBank_GetMappedKey(0u)==69u&&fabs(NoteBank_GetFreq(0u)-440.0)<0.001,"voices retain independent maps and tuning");
+  {uint8_t *abi5=malloc(size);int feed;check(abi5!=NULL,"allocate ABI5 case");memcpy(abi5,program,size);abi5[8]=5u;abi5[9]=0u;NoteBank_PanicAll();
+   check(NoteBank_VmUploadBegin(0u)==0,"ABI5 upload begin");feed=NoteBank_VmUploadFeed(0u,abi5,size);
+   check(feed!=0||NoteBank_VmUploadCommit(0u)!=0,"ABI5 container must be rejected");free(abi5);}
+  {size_t n2;uint8_t *two_ms=read_file(argv[2],&n2);NoteBank_VmUploadAbort(0u);
+   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,two_ms,n2)==0&&NoteBank_VmUploadCommit(0u)==0,"load actual ABI6 2ms program");
+   check(NoteBank_NoteOn(0u,60u)==0,"2ms first note");for(unsigned i=0u;i<12u;++i)boundary();
+   check(NoteBank_NoteOn(0u,62u)==0,"2ms retrigger");boundary();check(StreamRing_HasPending(0u)!=0u,"2ms fade must retain pending for first 48 frames");
+   boundary();check(StreamRing_HasPending(0u)==0u,"2ms fade must promote after exactly 96 frames");free(two_ms);}
   free(program);puts("Channel shared Berry VM test passed");return 0;
 }

@@ -679,6 +679,20 @@ void App::AllNotesOff()
     bus.AcknowledgeSlotOff(slot);
 }
 
+void App::ReconcileVmUpload()
+{
+  /* VmUploader silences and hard-stops every card voice before replacing its
+   * program. Mirror that lifecycle transition locally without touching the
+   * loaded sample bank. Sending another note-off here would run the newly
+   * uploaded policy and create a second, artificial release. */
+  ApplyLocalBankEvents(bank.AllOff());
+  for (uint8_t slot = 0; slot < cardlink::midi::kVoiceCount; ++slot)
+  {
+    samples.Silence(slot);
+    bus.AcknowledgeSlotOff(slot);
+  }
+}
+
 void App::HandleKeyboardPiano()
 {
   ImGuiIO &io = ImGui::GetIO();

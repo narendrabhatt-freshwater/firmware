@@ -49,19 +49,21 @@ int main()
   Check(controller.AttenDb() == 6 && controller.QueueDepth() == 0,
         "rejected commands must not mutate controller state");
 
-  uint8_t vq_frame[cardlink::rs485::kVqBinaryFrameLen] = {
-      0xA5, 0x5A, 0x43, 0x02, 0xFF, 0x00,
-      0xE0, 0x1F, 0xE0, 0x1F, 0xE0, 0x1F, 0xE0, 0x1F,
-      0xE0, 0x1F, 0xE0, 0x1F, 0xE0, 0x1F, 0xE0, 0x1F,
-      0x34, 0x12, 0xD6, 0x0A};
+  uint8_t vq_frame[cardlink::rs485::kVqBinaryFrameLen] = {};
+  vq_frame[0]=0xA5;vq_frame[1]=0x5A;vq_frame[2]=0x43;vq_frame[3]=0x04;
+  vq_frame[4]=0xFF;vq_frame[5]=0x01;vq_frame[6]=0;
+  vq_frame[8]=0xD0;vq_frame[9]=0x2F;vq_frame[10]=0x34;vq_frame[11]=0x12;
+  vq_frame[12]=0xCD;vq_frame[13]=0xAB;
+  for(unsigned i=0;i<8u;++i){const unsigned at=14u+5u*i;vq_frame[at]=(uint8_t)i;vq_frame[at+3u]=0xD0;vq_frame[at+4u]=0x2F;}
+  uint8_t crc=0u;for(unsigned i=0;i<54u;++i){crc^=vq_frame[i];for(unsigned bit=0;bit<8u;++bit)crc=(crc&0x80u)?(uint8_t)((crc<<1u)^0x07u):(uint8_t)(crc<<1u);}
+  vq_frame[54]=crc;vq_frame[55]=0x0A;
   const auto vq = cardlink::rs485::ParseVqBinaryReply(
       vq_frame, sizeof(vq_frame));
   Check(vq.ok() &&
             std::strcmp(vq.raw,
-                        "ok:vq ff 0 8160 8160 8160 8160 8160 8160 "
-                        "8160 8160 4660") == 0,
+                        "ok:vq7 ff 01 0 12240 4660 43981 0 0 12240 1 0 12240 2 0 12240 3 0 12240 4 0 12240 5 0 12240 6 0 12240 7 0 12240") == 0,
         "binary vq reply parsing changed");
-  vq_frame[24] ^= 0x01;
+  vq_frame[54] ^= 0x01;
   Check(cardlink::rs485::ParseVqBinaryReply(vq_frame, sizeof(vq_frame)).status ==
             cardlink::rs485::Status::BadReply,
         "binary vq CRC corruption must be rejected");
@@ -72,7 +74,7 @@ int main()
       [](cardproto::Target, const std::string &, const cardproto::Result &) {});
   controller.SetIdleHandler([](uint8_t) {});
   controller.SetVqHandler(
-      [](uint8_t, uint8_t, const std::array<uint16_t, 8> &, uint16_t) {});
+      [](const cardproto::VoiceQuery &) {});
   controller.AcknowledgeSlotKey(0, 69u);
   controller.AcknowledgeSlotKey(255, 69u);
   controller.AcknowledgeSlotOff(0);

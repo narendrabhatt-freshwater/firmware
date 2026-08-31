@@ -44,11 +44,11 @@ int main()
 
   cardproto::VoiceQuery query;
   Check(cardproto::ParseVoiceQuery(
-            "ok:vq 81 7 0 1 255 256 1024 2048 4096 8160 4660", query) &&
-            query.mask == 0x81u && query.best == 7u &&
-            query.free_samples[0] == 0u &&
-            query.free_samples[7] == 8160u &&
-            query.last_pack_sequence == 4660u,
+            "ok:vq7 81 80 7 12240 4660 43981 1 508 11732 2 0 12240 3 0 12240 4 0 12240 5 0 12240 6 0 12240 7 0 12240 8 0 12240", query) &&
+            query.active_mask == 0x81u && query.pending_mask == 0x80u &&
+            query.best == 7u && query.target_session[0] == 1u &&
+            query.target_fill[0] == 508u && query.free_samples[0] == 11732u &&
+            query.status_sequence == 4660u && query.uac_sequence == 43981u,
         "exact-credit vq parsing changed");
   Check(!cardproto::ParseVoiceQuery(
             "ok:vq 01 0 8161 0 0 0 0 0 0 0 0", query),

@@ -118,11 +118,12 @@ int main(int argc, char **argv)
              cardlink::sample::Client::NoteGateStart start,
              cardlink::sample::Client::NoteGateDone done) {
         const auto queued = app.bus.QueueChannel(
-            [note, start = std::move(start),
+            [&app, note, start = std::move(start),
              done = std::move(done)](cardproto::ChannelClient &ch) {
               start();
               if (!note.note_on) {
                 auto result = ch.NoteOff(note.voice);
+                if (result.ok()) app.bus.AcknowledgeSlotOff(note.voice);
                 done(result.ok());
                 return result;
               }
@@ -134,6 +135,7 @@ int main(int argc, char **argv)
               if (result.ok()) {
                 result = ch.StreamNoteOn(note.voice, note.key, note.session);
               }
+              if (result.ok()) app.bus.AcknowledgeSlotKey(note.voice, note.key);
               done(result.ok());
               return result;
             });
@@ -144,14 +146,12 @@ int main(int argc, char **argv)
       app.samples.Silence(slot);
     }
   });
-  /* The RS485 worker launches session-bound SOF immediately before nX;
-   * later vq replies supply exact credit for steady-state refills. */
+  /* The RS485 worker binds the session to nX; ABI6 vq then grants exact
+   * credit for the repeated SOF and steady-state BODY frames. */
   app.bus.SetVqHandler(
-      [&app](uint8_t mask, uint8_t best,
-             const std::array<uint16_t, cardlink::audio::kSampleVoices> &free,
-             uint16_t last_pack_sequence) {
+      [&app](const cardproto::VoiceQuery &status) {
         if (app.sample_bulk && app.sample_bulk->Running()) {
-          app.sample_bulk->SubmitStatus(mask, best, free, last_pack_sequence);
+          app.sample_bulk->SubmitStatus(status);
         }
       });
   fw::settings::Load(app);

@@ -13,7 +13,7 @@ If this document and the firmware disagree, trust the firmware.
 One RS485 multi-drop bus (`c:` / `e:` / `*:`). USB is per-card: Channel
 is Full-Speed **UAC2 BODY OUT** (10-channel signed int16 carrier at 51 kHz,
 1020 B / 1 ms; BODY/DAC remain 48 kHz) plus CDC. Sequential
-RS485 `vq` request/reply cycles every 5 ms provide exact refill credit and PACK ack;
+RS485 `vq` request/reply cycles every 5 ms provide exact refill credit and a processed-UAC acknowledgement;
 Effect is a Full-Speed **UAC2 microphone** (mono int32 @ 96 kHz) plus CDC.
 
 ```mermaid
@@ -88,7 +88,7 @@ flowchart TB
 
   subgraph usb [USB FS]
     Tag["BODY: hdr + voice/session/SOF + int16"]
-    Slots["8160 int16 per voice · DTCM/D2/D3/ITCM SRAM"]
+    Slots["12240 int16 per voice · current/pending spans · DTCM/D2/D3/ITCM SRAM"]
     Body --> Tag --> Slots
   end
 
@@ -122,30 +122,20 @@ flowchart TB
   end
 ```
 
-RS485 `vq` returns a 26-byte binary frame containing active mask, hungriest
-voice, eight exact uint16 free-sample counts, and the last USB PACK sequence
-already reflected by those counts. It is the only live refill authority;
-USB carries BODY PACKs OUT and does not publish status.
-Need-score is remaining play time: `filled / max(phase_inc, target_inc)`.
-The host shares one PACK by the wanting voices' source-consumption rates.
-At most one new logical PACK (or retry of the same unacknowledged PACK) follows
-each fresh `vq`; its complete CRC-protected wire image is ≤ 10200 B inside the
-continuous 16-bit UAC stream.
-Up to three sequence-ordered PACKs may await acknowledgement; their samples
-are all subtracted from later exact-credit replies, so this keeps UAC busy
-without reusing any `vq` permission.
-Each voice is bounded by its exact safe free-space credit.
-If note-off or a newer note generation retires a ring while an authorized
-PACK is in flight, the card still consumes and CRC-checks that PACK and ACKs
-its sequence, but its stale reservation cannot publish into the new ring.
-`nX` starts immediately. The attack plays to its committed length;
-body consume starts at `len − 32` with the same source fraction. The
-first requested-gate `vq` permits the SOF BODY burst; further bursts require
-fresh status too. `nX` retires the old ring and arms consumption; SOF installs
-the new BODY session but never starts or restarts the note. The host fills
-the body FIFO, then holds
-the file cursor until the playhead reaches the join — dropped USB must
-not skip ahead in the wav.
+RS485 `vq` returns a 56-byte ABI6 frame containing active/pending masks,
+runtime capacity, target session/fill, exact credit, and the last processed UAC
+sequence. It is the only live refill authority. Each UAC window carries one
+voice/session tag, one sequence, and 508 BODY samples. The host subtracts the
+exact sequenced frames not yet reflected by `vq`; it never guesses USB
+headroom. Playing voices are scheduled by depletion deadline. A silent voice
+is admitted only when its exact 1 ms service cost fits before that deadline.
+
+`nX` only arms a pending generation. Berry receives `on_note_on` after at least
+one complete pending BODY frame exists, and the script decides when to call
+`start_note()`. That operation discards the remaining current span and promotes
+pending atomically. The attack plays to its committed length; BODY consumption
+starts at `len − 32` with the same source fraction. No native crash duration or
+release reservation exists.
 
 Voices with no loaded attack head play body from the FIFO immediately.
 `en` / `f` / `fk` still apply.
@@ -290,5 +280,5 @@ flowchart LR
 ```
 
 Continuous RS485 `vq` request/reply cycles provide the sole refill permission
-and report the last applied USB PACK sequence. USB carries BODY data only.
+and report the last processed UAC sequence. USB carries BODY data only.
 A full vendor FIFO NAKs the host.

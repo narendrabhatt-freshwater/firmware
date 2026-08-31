@@ -1,310 +1,118 @@
 #include "cardlink/audio/sample_dry.hpp"
 #include "cardlink/midi/voice_bank.hpp"
-#include "cardlink/sample/client.hpp"
-
+#include "cardlink/usb/stream_proto.hpp"
 #include <array>
-#include <cmath>
 #include <cstdlib>
-#include <deque>
 #include <iostream>
 #include <string>
-#include <utility>
 #include <vector>
 
-namespace
-{
-
-using cardlink::audio::SampleDryMixer;
-using cardlink::audio::UrgentBurst;
-using cardlink::midi::BankEvent;
-using cardlink::midi::BankEventKind;
-using cardlink::midi::VoiceBank;
-using cardlink::sample::Client;
-using cardlink::sample::NoteRequest;
-
-constexpr uint8_t kC4 = 60u;
-constexpr uint8_t kA4 = 69u;
-constexpr uint8_t kC6 = 84u;
-
-void Check(bool condition, const char *message)
-{
-  if (!condition) {
-    std::cerr << message << '\n';
-    std::exit(EXIT_FAILURE);
-  }
+namespace {
+void Check(bool ok,const char *message){if(!ok){std::cerr<<message<<'\n';std::exit(EXIT_FAILURE);}}
+void Load(cardlink::audio::SampleDryMixer &m,uint16_t wave){std::vector<int16_t>b(2048,123);std::string e;Check(m.SetBody(wave,b.data(),b.size(),e),"load body");}
+cardproto::VoiceQuery Pending(uint8_t voice,uint8_t session){cardproto::VoiceQuery q;q.pending_mask=(uint8_t)(1u<<voice);q.best=voice;q.capacity=12240u;q.target_session[voice]=session;q.free_samples[voice]=12240u;return q;}
 }
-
-void LoadTone(SampleDryMixer &mixer, uint16_t wave_id)
-{
-  std::vector<int16_t> body(8192u);
-  for (size_t i = 0u; i < body.size(); ++i) {
-    body[i] = static_cast<int16_t>((i * 37u) & 0x7FFFu);
-  }
-  std::string err;
-  Check(mixer.SetBody(wave_id, body.data(), body.size(), err),
-        "voice-mode body must load");
-  mixer.SetAttackLen(wave_id, cardlink::audio::kAttackSamples);
-  mixer.SetBodyRootHz(wave_id, cardlink::audio::kDefaultBodyRootHz);
-}
-
-unsigned ExpectedPrefill()
-{
-  /* A replacement reserves the worst-case 16x card-side crash-fade tail.
-   * BODY itself remains sequential and pitch-neutral. */
-  return cardlink::audio::kRingSamples -
-         (16u * 48u * 3u + 2u);
-}
-
-struct PendingGate {
-  NoteRequest note;
-  Client::NoteGateStart start;
-  Client::NoteGateDone done;
-};
-
-struct Harness {
-  VoiceBank bank;
-  Client client;
-  std::deque<PendingGate> gates;
-
-  explicit Harness(uint8_t voices)
-  {
-    Check(bank.SetVoiceLimit(voices).empty(), "voice limit must apply cleanly");
-    LoadTone(client.Mixer(), kC4);
-    LoadTone(client.Mixer(), kA4);
-    LoadTone(client.Mixer(), kC6);
-    client.SetNoteGate(
-        [this](const NoteRequest &note, Client::NoteGateStart start,
-               Client::NoteGateDone done) {
-          gates.push_back(
-              PendingGate{note, std::move(start), std::move(done)});
-          return true;
-        });
-  }
-
-  void Apply(const std::vector<BankEvent> &events)
-  {
-    std::array<NoteRequest, cardlink::audio::kSampleVoices> notes{};
-    size_t count = 0u;
-    for (const auto &event : events) {
-      if (event.kind == BankEventKind::Off) {
-        client.NoteOff(event.slot);
-      } else if (event.kind == BankEventKind::On ||
-                 event.kind == BankEventKind::Retrig) {
-        notes[count++] = NoteRequest{event.slot, event.midi_key,
-                                     event.midi_key};
-      }
-      /* Steal only describes the retired key. Its following On is the one
-       * authoritative nX restart for the reused physical slot. */
-    }
-    if (count != 0u) {
-      Check(client.NoteOnBatch(notes.data(), count),
-            "voice-mode note batch must queue");
-    }
-  }
-
-  PendingGate AckNext()
-  {
-    Check(!gates.empty(), "expected an RS485 gate transaction");
-    PendingGate gate = std::move(gates.front());
-    gates.pop_front();
-    gate.start();
-    gate.done(true);
-    return gate;
-  }
-
-  UrgentBurst PopUrgent()
-  {
-    std::array<int16_t, cardlink::audio::kBodyBurstMax> body{};
-    UrgentBurst burst{};
-    Check(client.Mixer().FillUrgentBurst(body.data(), body.size(), burst),
-          "ACKed note must expose an urgent BODY job");
-    return burst;
-  }
-
-  std::vector<UrgentBurst> DrainUrgent()
-  {
-    std::vector<UrgentBurst> bursts;
-    while (client.Mixer().UrgentPending()) {
-      Check(bursts.size() < 256u, "urgent queue must make progress");
-      bursts.push_back(PopUrgent());
-    }
-    return bursts;
-  }
-};
-
-uint8_t CheckComplete(const std::vector<UrgentBurst> &bursts, uint8_t voice,
-                      uint16_t wave_id, const char *message)
-{
-  unsigned total = 0u;
-  unsigned sof_count = 0u;
-  uint8_t session = 0xFFu;
-  for (const auto &burst : bursts) {
-    if (burst.voice != voice || burst.wave_id != wave_id) {
-      continue;
-    }
-    if (session == 0xFFu) {
-      session = burst.session;
-    }
-    Check(burst.session == session, message);
-    total += burst.nsamp;
-    sof_count += burst.sof ? 1u : 0u;
-  }
-  Check(session != 0xFFu && sof_count == 1u &&
-            total >= ExpectedPrefill() &&
-            total <= cardlink::audio::kRingSamples,
-        message);
-  return session;
-}
-
-void TestMonoSteal()
-{
-  Harness h(1u);
-
-  h.Apply(h.bank.NoteOn(kC6));
-  Check(!h.client.Mixer().UrgentPending(),
-        "mono C6 BODY prefill must wait for its RS485 worker");
-  const auto c6_gate = h.AckNext();
-  Check(c6_gate.note.voice == 0u && c6_gate.note.wave_id == kC6,
-        "mono C6 must use physical voice zero");
-  const auto c6_bursts = h.DrainUrgent();
-  const uint8_t c6_session = CheckComplete(
-      c6_bursts, 0u, kC6,
-      "mono C6 chunks must build one complete urgent reservoir");
-
-  const auto c4_events = h.bank.NoteOn(kC4);
-  Check(c4_events.size() == 2u &&
-            c4_events[0].kind == BankEventKind::Steal &&
-            c4_events[0].midi_key == kC6 &&
-            c4_events[1].slot == 0u,
-        "mono C4 must steal C6 from voice zero");
-  h.Apply(c4_events);
-  const auto c4_gate = h.AckNext();
-  const auto c4_bursts = h.DrainUrgent();
-  const uint8_t c4_session = CheckComplete(
-      c4_bursts, 0u, kC4,
-      "mono C4 replacement must get a complete chunked prefill");
-  Check(!h.client.Mixer().BurstIsCurrent(0u, c6_session, kC6),
-        "mono steal must stale the old C6 BODY session");
-  Check(c4_session != c6_session,
-        "mono C4 replacement must get a new session and prefill");
-
-  const auto a4_events = h.bank.NoteOn(kA4);
-  Check(a4_events.size() == 2u &&
-            a4_events[0].midi_key == kC4 &&
-            a4_events[1].slot == 0u,
-        "mono A4 must steal C4 from voice zero");
-  h.Apply(a4_events);
-  const auto a4_gate = h.AckNext();
-  const auto a4_bursts = h.DrainUrgent();
-  const uint8_t a4_session = CheckComplete(
-      a4_bursts, 0u, kA4,
-      "mono A4 must receive a complete chunked prefill");
-  Check(a4_session != c4_session && h.bank.ActiveCount() == 1u &&
-            h.bank.Slots()[0].midi_key == kA4,
-        "mono sequence must finish with only A4 on voice zero");
-}
-
-void TestDuoStealAndChordPriority()
-{
-  Harness h(2u);
-  const auto c6_events = h.bank.NoteOn(kC6);
-  const auto c4_events = h.bank.NoteOn(kC4);
-  h.Apply(c6_events);
-  h.Apply(c4_events);
-  Check(h.gates.size() == 2u && !h.client.Mixer().UrgentPending(),
-        "duo chord BODY prefills must wait for their RS485 workers");
-
-  const auto c6_gate = h.AckNext();
-  const auto c4_gate = h.AckNext();
-  uint8_t urgent_order[cardlink::audio::kSampleVoices]{};
-  Check(h.client.Mixer().UrgentVoices(urgent_order) == 2u &&
-            urgent_order[0] == 1u && urgent_order[1] == 0u,
-        "shared urgent scheduling must enumerate both pending chord voices");
-  std::array<int16_t, cardlink::audio::kBodyBurstMax> body{};
-  std::vector<UrgentBurst> chord_bursts;
-  for (unsigned i = 0u; i < 2u; ++i) {
-    UrgentBurst burst{};
-    Check(h.client.Mixer().FillUrgentBurstForVoice(
-              urgent_order[i], body.data(), body.size(),
-              cardlink::audio::kUrgentQuantumMaxMs, burst) &&
-              burst.sof,
-          "first shared urgent quantum must carry each voice SOF");
-    chord_bursts.push_back(burst);
-  }
-  auto remaining = h.DrainUrgent();
-  chord_bursts.insert(chord_bursts.end(), remaining.begin(), remaining.end());
-  const uint8_t c6_session = CheckComplete(
-      chord_bursts, 0u, kC6,
-      "duo C6 chunks must complete without starvation");
-  const uint8_t c4_session = CheckComplete(
-      chord_bursts, 1u, kC4,
-      "duo C4 chunks must complete without starvation");
-  const auto a4_events = h.bank.NoteOn(kA4);
-  Check(a4_events.size() == 2u &&
-            a4_events[0].kind == BankEventKind::Steal &&
-            a4_events[0].midi_key == kC6 &&
-            a4_events[0].slot == 0u &&
-            a4_events[1].midi_key == kA4,
-        "duo overflow must steal oldest C6, not newer C4");
-  h.Apply(a4_events);
-  const auto a4_gate = h.AckNext();
-  Check(a4_gate.note.voice == 0u && a4_gate.note.wave_id == kA4,
-        "duo A4 restart must target stolen voice zero");
-  const auto a4_bursts = h.DrainUrgent();
-  const uint8_t a4_session = CheckComplete(
-      a4_bursts, 0u, kA4,
-      "duo A4 replacement chunks must complete");
-  Check(a4_session != c6_session &&
-            h.client.Mixer().BurstIsCurrent(1u, c4_session, kC4) &&
-            h.bank.ActiveCount() == 2u &&
-            h.bank.Slots()[0].midi_key == kA4 &&
-            h.bank.Slots()[1].midi_key == kC4,
-        "duo steal must finish as A4 + C4 while preserving C4 session");
-}
-
-void TestQueuedStealsDiscardSupersededBodies()
-{
-  {
-    Harness mono(1u);
-    mono.Apply(mono.bank.NoteOn(kC6));
-    mono.Apply(mono.bank.NoteOn(kC4));
-    mono.Apply(mono.bank.NoteOn(kA4));
-    Check(mono.gates.size() == 3u && !mono.client.Mixer().UrgentPending(),
-          "rapid mono BODY prefills must wait for their RS485 workers");
-    (void)mono.AckNext();
-    (void)mono.AckNext();
-    const auto mono_a4_gate = mono.AckNext();
-    const auto only = mono.DrainUrgent();
-    CheckComplete(only, 0u, kA4,
-                  "rapid mono must retain only A4 chunks");
-    Check(!mono.client.Mixer().UrgentPending(),
-          "rapid mono steals must discard queued C6/C4 BODY and keep A4");
-  }
-
-  {
-    Harness duo(2u);
-    duo.Apply(duo.bank.NoteOn(kC6));
-    duo.Apply(duo.bank.NoteOn(kC4));
-    duo.Apply(duo.bank.NoteOn(kA4));
-    (void)duo.AckNext();
-    const auto duo_c4_gate = duo.AckNext();
-    const auto duo_a4_gate = duo.AckNext();
-    const auto bursts = duo.DrainUrgent();
-    CheckComplete(bursts, 0u, kA4,
-                  "rapid duo A4 chunks must replace stolen C6");
-    CheckComplete(bursts, 1u, kC4,
-                  "rapid duo must retain C4 chunks");
-    Check(!duo.client.Mixer().UrgentPending(),
-          "rapid duo steal must queue A4 above C4 and discard stolen C6 BODY");
-  }
-}
-
-} // namespace
 
 int main()
 {
-  TestMonoSteal();
-  TestDuoStealAndChordPriority();
-  TestQueuedStealsDiscardSupersededBodies();
+  cardlink::midi::VoiceBank bank;
+  Check(bank.SetVoiceLimit(1u).empty(),"mono limit");
+  const auto first=bank.NoteOn(84u);
+  Check(first.size()==1u&&first[0].slot==0u,"mono first note");
+  const auto steal=bank.NoteOn(60u);
+  Check(steal.size()==2u&&steal[0].kind==cardlink::midi::BankEventKind::Steal&&
+            steal[1].slot==0u,"mono replacement must reuse slot");
+
+  cardlink::audio::SampleDryMixer mixer;
+  Load(mixer,84u);Load(mixer,60u);
+  constexpr unsigned frame=cardlink::usb::kStreamUacBodySamples;
+  std::array<int16_t,frame> packet{};bool sof=false;uint8_t session=0u;
+  mixer.NoteOnSession(0u,84u,1u);mixer.DrainPendingCommands();
+  mixer.ApplyVoiceStatus(Pending(0u,1u));
+  Check(mixer.FillUacFrame(0u,packet.data(),packet.size(),sof,session)==frame&&sof,
+        "first mono generation needs SOF");
+  mixer.NoteOnSession(0u,60u,2u);mixer.DrainPendingCommands();
+  Check(!mixer.BurstIsCurrent(0u,1u,84u),"steal must stale old host session");
+  mixer.ApplyVoiceStatus(Pending(0u,2u));
+  Check(mixer.FillUacFrame(0u,packet.data(),packet.size(),sof,session)==frame&&
+            sof&&session==2u,
+        "replacement must stream only its new session");
+  mixer.Silence(0u);mixer.DrainPendingCommands();
+  Check(mixer.HasBody(60u),"host voice reconciliation must preserve loaded BODY");
+  Check(mixer.NoteOnSession(0u,60u,3u)==3u,
+        "preserved BODY must be immediately reusable after reconciliation");
+  mixer.DrainPendingCommands();
+
+  cardlink::midi::VoiceBank duo;
+  Check(duo.SetVoiceLimit(2u).empty(),"duo limit");
+  const auto a=duo.NoteOn(60u);const auto b=duo.NoteOn(69u);
+  Check(a.back().slot!=b.back().slot&&duo.ActiveCount()==2u,
+        "polyphonic notes must use independent physical streams");
+
+  cardlink::audio::SampleDryMixer startup;
+  Load(startup,0u);
+  startup.NoteOnSession(0u,0u,1u,0.0,440.0);
+  startup.NoteOnSession(1u,0u,1u,0.0,440.0);
+  startup.DrainPendingCommands();
+  cardproto::VoiceQuery both;
+  both.pending_mask=0x03u;both.capacity=12240u;both.best=0u;
+  for(uint8_t v=0u;v<2u;++v){both.target_session[v]=1u;both.free_samples[v]=12240u;}
+  startup.ApplyVoiceStatus(both);
+  const uint8_t first_voice=startup.HungriestUacWant(frame);
+  Check(first_voice<2u,"startup first voice");
+  Check(startup.FillUacFrame(first_voice,packet.data(),packet.size(),sof,session)==frame,
+        "startup first frame");
+  Check(startup.HungriestUacWant(frame)!=first_voice,
+        "a silent voice may start when its exact 1 ms service cost fits before the playing deadline");
+
+  /* Deterministic full-capacity transport model: eight voices consume exactly
+   * 500 source samples/ms in aggregate, vq arrives every 5 ms, and UAC can
+   * route one 508-sample frame/ms. Pending voices consume immediately after
+   * their first accepted frame, which is stricter than the real 2 ms script. */
+  cardlink::audio::SampleDryMixer capacity;
+  Load(capacity,0u);
+  capacity.SetBodyRootHz(0u,48.0);
+  std::array<unsigned,cardlink::audio::kSampleVoices> card_fill{};
+  std::array<bool,cardlink::audio::kSampleVoices> card_started{};
+  std::array<unsigned,cardlink::audio::kSampleVoices> consume_fraction{};
+  uint16_t card_ack=0u;
+  unsigned holds=0u;
+  for(uint8_t v=0u;v<cardlink::audio::kSampleVoices;++v)
+    capacity.NoteOnSession(v,0u,1u,0.0,62.5);
+  capacity.DrainPendingCommands();
+  for(unsigned ms=0u;ms<20000u;++ms){
+    for(uint8_t v=0u;v<cardlink::audio::kSampleVoices;++v){
+      if(!card_started[v])continue;
+      consume_fraction[v]+=625u;
+      const unsigned consume=consume_fraction[v]/10u;
+      consume_fraction[v]%=10u;
+      if(card_fill[v]<consume){++holds;card_fill[v]=0u;}
+      else card_fill[v]-=consume;
+    }
+    if(ms%5u==0u){
+      cardproto::VoiceQuery q;
+      q.capacity=12240u;q.uac_sequence=card_ack;q.best=0xFFu;
+      for(uint8_t v=0u;v<cardlink::audio::kSampleVoices;++v){
+        const uint8_t bit=static_cast<uint8_t>(1u<<v);
+        if(card_started[v])q.active_mask=static_cast<uint8_t>(q.active_mask|bit);
+        else q.pending_mask=static_cast<uint8_t>(q.pending_mask|bit);
+        q.target_session[v]=1u;
+        q.target_fill[v]=static_cast<uint16_t>(card_fill[v]);
+        q.free_samples[v]=static_cast<uint16_t>(q.capacity-card_fill[v]);
+      }
+      capacity.ApplyVoiceStatus(q);
+    }
+    capacity.ConsumeOutputSamples(48.0);
+    const uint8_t voice=capacity.HungriestUacWant(frame);
+    if(voice<cardlink::audio::kSampleVoices){
+      Check(card_fill[voice]+frame<=12240u,"exact credit must prevent ring overfill");
+      Check(capacity.FillUacFrame(voice,packet.data(),packet.size(),sof,session)==frame,
+            "credited capacity frame");
+      card_ack=capacity.RecordUacSubmission(voice,frame);
+      card_fill[voice]+=frame;card_started[voice]=true;
+    }
+  }
+  Check(holds==0u,"exact 500 samples/ms must sustain 12,240-sample rings without holds");
+  for(bool started:card_started)Check(started,"capacity scheduler must admit every voice");
   return EXIT_SUCCESS;
 }

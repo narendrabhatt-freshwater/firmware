@@ -1,6 +1,7 @@
 #include "cardlink/sample/client.hpp"
 
 #include "cardlink/audio/wave_loader.hpp"
+#include "cardlink/midi/pitch.hpp"
 #include "cardlink/serial_port.hpp"
 #include "cardlink/usb/attack_upload.hpp"
 #include "cardlink/usb/cdc_port.hpp"
@@ -592,7 +593,8 @@ bool Client::NoteOnBatch(const NoteRequest *notes, size_t count,
     const NoteRequest note = prepared[i];
     if (note_gate_(note,
         [this, note]() {
-          mixer_.NoteOnSession(note.voice, note.wave_id, note.session);
+          mixer_.NoteOnSession(note.voice, note.wave_id, note.session, 0.0,
+                               cardlink::midi::MidiNoteToHz(note.key));
         },
         [this, note](bool applied) {
           if (!applied) {
@@ -633,16 +635,6 @@ void Client::AllNotesOff()
 void Client::Silence(uint8_t voice)
 {
   mixer_.Silence(voice);
-}
-
-void Client::SetCrashReleaseMs(uint8_t release_ms)
-{
-  crash_release_ms_ = std::clamp<uint8_t>(release_ms, 0u, 50u);
-  mixer_.SetCrashReleaseMs(crash_release_ms_);
-  char cmd[24];
-  std::snprintf(cmd, sizeof cmd, "crash %u",
-                static_cast<unsigned>(crash_release_ms_));
-  SendConsole(cmd);
 }
 
 } // namespace sample

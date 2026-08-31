@@ -41,21 +41,6 @@ void LogResult(const Controller::LogHandler &push,
   }
 }
 
-bool ParseVq(const char *raw, uint8_t &mask_out, uint8_t &best_out,
-             std::array<uint16_t, kVqVoices> &free_out,
-             uint16_t &last_pack_sequence_out)
-{
-  cardproto::VoiceQuery query;
-  if (!cardproto::ParseVoiceQuery(raw, query)) {
-    return false;
-  }
-  mask_out = query.mask;
-  best_out = query.best;
-  free_out = query.free_samples;
-  last_pack_sequence_out = query.last_pack_sequence;
-  return true;
-}
-
 } // namespace
 
 struct Controller::Impl
@@ -204,12 +189,8 @@ struct Controller::Impl
 
   void HandleVq(const cardproto::Result &result)
   {
-    uint8_t mask = 0;
-    uint8_t best = 0xFF;
-    std::array<uint16_t, kVqVoices> free_samples{};
-    uint16_t last_pack_sequence = 0xFFFFu;
-    if (!ParseVq(result.raw, mask, best, free_samples,
-                 last_pack_sequence)) {
+    cardproto::VoiceQuery query;
+    if (!cardproto::ParseVoiceQuery(result.raw, query)) {
       LogPoll(std::string("warn: bad vq reply: ") +
               (result.raw[0] ? result.raw : "(empty)"));
       return;
@@ -223,11 +204,11 @@ struct Controller::Impl
       idle = idle_handler;
       vq = vq_handler;
       for (uint8_t i = 0; i < kVqVoices; ++i) {
-        const bool active = (mask & static_cast<uint8_t>(1u << i)) != 0;
+        const bool active = (query.active_mask & static_cast<uint8_t>(1u << i)) != 0;
         if (!active) {
           ring_primed[i] = false;
           underrun_logged[i] = false;
-        } else if (free_samples[i] < 8160u) {
+        } else if (query.target_fill[i] != 0u) {
           /* An empty ring is normal while the attack bridges asynchronous
            * startup. It becomes an underrun only after BODY was observed. */
           ring_primed[i] = true;
@@ -259,7 +240,7 @@ struct Controller::Impl
     }
 
     if (vq) {
-      vq(mask, best, free_samples, last_pack_sequence);
+      vq(query);
     }
     if (!idle) {
       return;

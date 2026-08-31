@@ -6,7 +6,8 @@
  * SPSC: USB writes from main, the playhead reads in I2S. A full FIFO drops
  * the write (never unread samples). An empty FIFO is an underrun.
  *
- * Every 1 ms UAC packet carries a route/session tag plus 509 int16 samples.
+ * Every 1 ms UAC packet carries a route/session tag, transport sequence, and
+ * 508 int16 samples.
  * Note-on arms the replacement origin; only its matching session may start
  * the body. Repeated SOF tags for that session append normally.
  ******************************************************************************
@@ -24,9 +25,9 @@ extern "C"
 
 #include "attack_bank.h" /* SAMPLE_VOICES, SAMPLE_CROSSFADE_LEN */
 
-/** The normal streaming profile keeps one base bank and one tail bank. */
+/** Three physical banks form one FIFO split into current/pending spans. */
 #define STREAM_BANK_LEN 4080u
-#define STREAM_BASE_BANKS 1u
+#define STREAM_BASE_BANKS 2u
 #define STREAM_TAIL_BANKS 1u
 #define STREAM_BANKS (STREAM_BASE_BANKS + STREAM_TAIL_BANKS)
 #define STREAM_RING_BASE_SAMPLES (STREAM_BASE_BANKS * STREAM_BANK_LEN)
@@ -44,12 +45,12 @@ extern "C"
     uint8_t voice;
     uint8_t session;
     uint8_t sof;
+    uint8_t pending;
     uint8_t active;
   } StreamRing_Write_t;
 
 #define STREAM_RING_WRITE_OK 0
 #define STREAM_RING_WRITE_STALE 1
-#define STREAM_RING_WRITE_PENDING 2
 #define STREAM_RING_WRITE_FUTURE 3
 #define STREAM_RING_WRITE_ERROR (-1)
 
@@ -62,24 +63,17 @@ extern "C"
    */
   void StreamRing_Prime(uint8_t voice);
 
-  /** Bind the next nX replacement to its authoritative BODY identity before
-   * the command is ACKed. session 0xFF keeps untagged nX behavior. */
-  void StreamRing_ArmReplacement(uint8_t voice, uint16_t wave_id,
-                                 uint8_t session);
+  /** Create an empty pending generation. Superseding only drops old pending. */
+  void StreamRing_ArmPending(uint8_t voice, uint16_t wave_id, uint8_t session);
 
-  /** Retire pending/current producer ownership immediately on note-off. */
-  void StreamRing_Disarm(uint8_t voice);
+  /** Atomically discard current remainder and promote the pending origin. */
+  int StreamRing_StartNote(uint8_t voice);
 
-  /** Start a replacement session without destroying the old unread tail.
-   * New BODY data begins after up to @p release_samples reserved samples. */
-  uint32_t StreamRing_BeginReplacement(uint8_t voice, uint16_t wave_id,
-                                       uint32_t release_samples);
+  /** Reject an incoming generation without disturbing current playback. */
+  void StreamRing_DiscardPending(uint8_t voice);
 
-  /** Read/consume the old tail at rd. Replacement BODY is already appended
-   * after it, so rd naturally reaches the new BODY origin at release end. */
-  int StreamRing_GetReleaseRel(uint8_t voice, uint32_t offset, int16_t *out);
-  void StreamRing_AdvanceRelease(uint8_t voice, uint32_t n);
-  uint32_t StreamRing_ReleaseLevel(uint8_t voice);
+  /** End only the current generation; a pending generation remains armed. */
+  void StreamRing_EndCurrent(uint8_t voice);
 
   /** Stop consume and empty the FIFO (note-off). */
   void StreamRing_Release(uint8_t voice);
@@ -95,10 +89,12 @@ extern "C"
   /** Route one direct tagged 1 ms UAC packet into its voice ring. */
   uint32_t StreamRing_WriteUac(const int16_t *packet);
 
+  /** Last routed UAC sequence processed, including rejected routed frames. */
+  uint16_t StreamRing_LastUacSequence(void);
+
   /** Reserve a complete BODY burst without publishing it to the consumer.
    * @retval STREAM_RING_WRITE_OK reservation active
    * @retval STREAM_RING_WRITE_STALE prior note/session already retired
-   * @retval STREAM_RING_WRITE_PENDING matching nX awaits I2S application
    * @retval STREAM_RING_WRITE_FUTURE SOF arrived before its tagged nX
    * @retval STREAM_RING_WRITE_ERROR invalid request or insufficient credit */
   int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
@@ -131,13 +127,19 @@ extern "C"
   /** Drop up to n unread samples from rd (playhead consumed them). */
   void StreamRing_Advance(uint8_t voice, uint32_t n);
 
+  uint32_t StreamRing_CurrentFill(uint8_t voice);
+  uint32_t StreamRing_PendingFill(uint8_t voice);
   uint32_t StreamRing_FillLevel(uint8_t voice);
 
-  /** Exact producer credit, including space occupied by a crash-in tail. */
+  /** Exact producer credit: capacity - current fill - pending fill. */
   uint32_t StreamRing_FreeLevel(uint8_t voice);
 
-  /** 1 if this session has committed at least one sample. */
+  /** 1 once pending contains a complete UAC BODY frame. */
   uint8_t StreamRing_HasBody(uint8_t voice);
+
+  uint8_t StreamRing_HasPending(uint8_t voice);
+  uint8_t StreamRing_TargetSession(uint8_t voice);
+  uint32_t StreamRing_TargetFill(uint8_t voice);
 
   /** Highest fill among all voices (feedback / console). */
   uint32_t StreamRing_MaxFill(void);
@@ -159,6 +161,10 @@ extern "C"
 
   /** Bursts whose samples were all zero. */
   uint32_t StreamRing_ZeroCount(void);
+  uint32_t StreamRing_StaleCount(void);
+  uint32_t StreamRing_FutureCount(void);
+  uint32_t StreamRing_FullCount(void);
+  uint32_t StreamRing_SupersededCount(void);
 
   void StreamRing_StatsClear(void);
 

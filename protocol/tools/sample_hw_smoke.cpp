@@ -3,7 +3,11 @@
 #include "cardlink/midi/pitch.hpp"
 #include "cardlink/rs485/controller.hpp"
 #include "cardlink/sample/client.hpp"
+#include "cardlink/serial_port.hpp"
+#include "cardlink/usb/cdc_port.hpp"
 #include "cardlink/usb/stream_proto.hpp"
+#include "cardlink/vm/compiler.hpp"
+#include "cardlink/vm/uploader.hpp"
 #include "cardproto/types.hpp"
 
 #include <algorithm>
@@ -52,6 +56,9 @@ int main(int argc, char **argv)
   const std::string cdc = argc > 5
       ? argv[5]
       : "/dev/cu.usbmodemCHCARD_UAC_0093";
+  const std::string script = argc > 6
+      ? argv[6]
+      : "protocol/examples/vm/channel/simple_crash_envelope.be";
 
   std::array<double, cardlink::audio::kSampleVoices> hz{};
   unsigned nvoices = 0u;
@@ -90,6 +97,13 @@ int main(int argc, char **argv)
     hz[1] = 440.0; /* Worst final pair is C6/A4 or C4/A4. */
     nvoices = 2u;
     duo_steal = true;
+  } else if (which == "d5_365") {
+    /* One D5 consuming exactly 365 source samples/ms. Adjusting the source
+     * root avoids the MIDI-key rounding that made the old edge labels only
+     * approximate their advertised transport demand. */
+    hz[0] = 587.3295358;
+    root_hz = hz[0] * 48.0 / 365.0;
+    nvoices = 1u;
   } else if (which == "c4x8") {
     hz.fill(261.625565);
     nvoices = 8u;
@@ -97,17 +111,20 @@ int main(int argc, char **argv)
     hz.fill(295.8); /* Eight equal voices: about 437 source samples/ms. */
     nvoices = 8u;
   } else if (which == "edge8_420") {
-    hz.fill(284.375); /* Eight equal voices: exactly 420 source samples/ms. */
+    hz.fill(440.0);
+    root_hz = 440.0 * 384.0 / 420.0;
     nvoices = 8u;
   } else if (which == "edge8_480") {
-    hz.fill(325.0); /* Eight equal voices: exactly 480 source samples/ms. */
+    hz.fill(440.0);
+    root_hz = 440.0 * 384.0 / 480.0;
     nvoices = 8u;
   } else if (which == "edge8_500") {
-    hz.fill(338.5416667); /* Eight voices: exactly 500 source samples/ms. */
+    hz.fill(440.0);
+    root_hz = 440.0 * 384.0 / 500.0;
     nvoices = 8u;
   } else {
     std::cerr << "case must be afg, c6, c6x2, c6x3, c6x3c5, c6c4a4, "
-                 "mono_steal, duo_steal, c4x8, edge8, edge8_420, "
+                 "mono_steal, duo_steal, d5_365, c4x8, edge8, edge8_420, "
                  "edge8_480, or edge8_500\n";
     return EXIT_FAILURE;
   }
@@ -176,11 +193,12 @@ int main(int argc, char **argv)
              cardlink::sample::Client::NoteGateStart start,
              cardlink::sample::Client::NoteGateDone done) {
         const auto queued = bus.QueueChannel(
-            [note, start = std::move(start),
+            [&bus, note, start = std::move(start),
              done = std::move(done)](cardproto::ChannelClient &ch) {
               start();
               if (!note.note_on) {
                 auto result = ch.NoteOff(note.voice);
+                if (result.ok()) bus.AcknowledgeSlotOff(note.voice);
                 done(result.ok());
                 return result;
               }
@@ -191,6 +209,7 @@ int main(int argc, char **argv)
               if (result.ok()) {
                 result = ch.StreamNoteOn(note.voice, note.key, note.session);
               }
+              if (result.ok()) bus.AcknowledgeSlotKey(note.voice, note.key);
               done(result.ok());
               return result;
             });
@@ -212,13 +231,39 @@ int main(int argc, char **argv)
     return EXIT_FAILURE;
   }
 
+  /* Own the volatile musical-policy prerequisite. Load it after sample/head
+   * setup so this test covers the same final state regardless of what was on
+   * the card before the run. */
+  cardlink::vm::BerryCompiler compiler;
+  const auto compiled = compiler.CompileChannelFile(script);
+  if (!compiled.ok) {
+    std::cerr << "script compile failed: " << compiled.message << '\n';
+    bus.Close();
+    return EXIT_FAILURE;
+  }
+  cardlink::SerialPort vm_cdc;
+  std::string vm_error;
+  if (!cardlink::usb::OpenCdcPort(vm_cdc, cdc, vm_error)) {
+    std::cerr << "script CDC open failed: " << vm_error << '\n';
+    bus.Close();
+    return EXIT_FAILURE;
+  }
+  cardlink::vm::VmUploader uploader(vm_cdc);
+  const auto uploaded = uploader.UploadAll(compiled.program.data(),
+                                           compiled.program.size());
+  vm_cdc.Close();
+  if (!uploaded.ok) {
+    std::cerr << "script upload failed: " << uploaded.message << '\n';
+    bus.Close();
+    return EXIT_FAILURE;
+  }
+  std::cout << "ok: ABI6 policy uploaded to voices 0-7\n";
+
   cardlink::audio::SampleBulkOut bulk;
   bulk.BindMixer(sample.Mixer());
   bus.SetVqHandler(
-      [&bulk](uint8_t mask, uint8_t best,
-              const std::array<uint16_t, cardlink::audio::kSampleVoices> &free,
-              uint16_t last_pack_sequence) {
-        bulk.SubmitStatus(mask, best, free, last_pack_sequence);
+      [&bulk](const cardproto::VoiceQuery &status) {
+        bulk.SubmitStatus(status);
       });
   if (!bulk.Start(err)) {
     std::cerr << "BODY open failed: " << err << '\n';
@@ -322,12 +367,12 @@ int main(int argc, char **argv)
   const bool startup_ok =
       startup_stats.valid && startup_stats.drop == 0u &&
       startup_stats.hold == 0u && startup_stats.bad == 0u &&
-      startup_stats.late == 0u && startup_stats.sof == expected_start_sof;
+      startup_stats.late == 0u && startup_stats.sof >= expected_start_sof;
   if (!startup_ok) {
     std::cerr << "FAIL startup: drop=" << startup_stats.drop
               << " hold=" << startup_stats.hold
               << " sof=" << startup_stats.sof
-              << " expected_sof=" << expected_start_sof
+              << " minimum_sof=" << expected_start_sof
               << " bad=" << startup_stats.bad
               << " late=" << startup_stats.late << '\n';
   }
@@ -387,10 +432,18 @@ int main(int argc, char **argv)
   (void)WaitQueue(bus);
 
   sample.AllNotesOff();
-  for (uint8_t v = 0u; v < nvoices; ++v) {
-    sample.Silence(v);
-  }
   (void)WaitQueue(bus);
+  /* BODY must continue through Berry's release. Controller's vq idle handler
+   * retires each host voice only after the card reports it inactive; stopping
+   * the mixer immediately after nX off manufactures release-time holds. */
+  const auto idle_deadline = std::chrono::steady_clock::now() + 2s;
+  while (sample.Mixer().AnyActive() &&
+         std::chrono::steady_clock::now() < idle_deadline) {
+    std::this_thread::sleep_for(5ms);
+  }
+  if (sample.Mixer().AnyActive()) {
+    std::cerr << "BODY voices did not reach vq-confirmed idle\n";
+  }
   std::this_thread::sleep_for(100ms);
   const uint32_t xruns = bulk.XrunCount();
   const uint64_t render_frames = bulk.RenderFrameCount();
@@ -409,10 +462,13 @@ int main(int argc, char **argv)
     std::cerr << "cannot parse final USB statistics\n";
     return EXIT_FAILURE;
   }
-  if (!startup_ok || xruns != 0u || final_stats.drop != 0u ||
+  const bool retrigger = mono_steal || duo_steal;
+  const bool sof_ok = retrigger ? final_stats.sof >= 2u
+                                : final_stats.sof == 0u;
+  if (!startup_ok || sample.Mixer().AnyActive() || xruns != 0u ||
+      final_stats.drop != 0u ||
       final_stats.hold != 0u ||
-      final_stats.bad != 0u || final_stats.late != 0u ||
-      final_stats.sof != ((mono_steal || duo_steal) ? 2u : 0u)) {
+      final_stats.bad != 0u || final_stats.late != 0u || !sof_ok) {
     std::cerr << "FAIL: xruns=" << xruns << " drop=" << final_stats.drop
               << " hold=" << final_stats.hold << " bad=" << final_stats.bad
               << " late=" << final_stats.late

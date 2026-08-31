@@ -239,6 +239,9 @@ struct App
   /** Local preview / VoiceBank only — card already got the console command. */
   void ApplyLocalBankEvents(const std::vector<cardlink::midi::BankEvent> &events);
   void AllNotesOff();
+  /** Reconcile host voices after VM upload hard-stops every card voice.
+   * Loaded sample bodies, attack heads, roots, and slot assignments survive. */
+  void ReconcileVmUpload();
   bool EnsureAudio();
   void ShutdownAudio();
   bool ConnectMidi();

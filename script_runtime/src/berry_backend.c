@@ -196,6 +196,7 @@ static int native_noarg(bvm *vm,int (*fn)(void *,uint8_t),const char *message) {
 static int native_hold(bvm *vm){return native_noarg(vm,s_runtime->ops.hold,"hold failed");}
 static int native_start_note(bvm *vm){return native_noarg(vm,s_runtime->ops.start_note,"start note failed");}
 static int native_note_end(bvm *vm){return native_noarg(vm,s_runtime->ops.note_end,"note end failed");}
+static int native_discard_pending(bvm *vm){return native_noarg(vm,s_runtime->ops.discard_pending,"discard pending failed");}
 static int native_led(bvm *vm) {
   float red,green,blue,brightness;require_handler(vm);require_count(vm,4);
   red=checked_float(vm,1);green=checked_float(vm,2);blue=checked_float(vm,3);brightness=checked_float(vm,4);
@@ -232,6 +233,7 @@ static int create_vm(ScriptBerryRuntime *r) {
   be_regfunc(vm,"input",native_input);be_regfunc(vm,"state_get",native_state_get);be_regfunc(vm,"state_set",native_state_set);
   be_regfunc(vm,"set_amplitude",native_set_amplitude);be_regfunc(vm,"ramp",native_ramp);be_regfunc(vm,"hold",native_hold);
   be_regfunc(vm,"start_note",native_start_note);be_regfunc(vm,"note_end",native_note_end);
+  be_regfunc(vm,"discard_pending",native_discard_pending);
   be_regfunc(vm,"led",native_led);
   be_regfunc(vm,"keymap_get",native_keymap_get);be_regfunc(vm,"pow",native_pow);
   register_int(vm,"INPUT_NOTE_ID",FW_VM_CHANNEL_INPUT_NOTE_ID);register_int(vm,"INPUT_FREQUENCY",FW_VM_CHANNEL_INPUT_FREQUENCY);
@@ -239,7 +241,6 @@ static int create_vm(ScriptBerryRuntime *r) {
   register_int(vm,"INPUT_ACTIVE",FW_VM_CHANNEL_INPUT_ACTIVE);register_int(vm,"INPUT_HAS_PENDING",FW_VM_CHANNEL_INPUT_HAS_PENDING);
   register_int(vm,"INPUT_PENDING_FREQUENCY",FW_VM_CHANNEL_INPUT_PENDING_FREQUENCY);
   register_int(vm,"INPUT_PENDING_GAIN",FW_VM_CHANNEL_INPUT_PENDING_GAIN);register_int(vm,"INPUT_AMPLITUDE",FW_VM_CHANNEL_INPUT_AMPLITUDE);
-  register_int(vm,"INPUT_CRASH_RELEASE",FW_VM_CHANNEL_INPUT_CRASH_RELEASE);
   register_int(vm,"INPUT_KEY",FW_VM_CHANNEL_INPUT_KEY);register_int(vm,"INPUT_MAPPED_KEY",FW_VM_CHANNEL_INPUT_MAPPED_KEY);
   register_int(vm,"INPUT_PENDING_KEY",FW_VM_CHANNEL_INPUT_PENDING_KEY);register_int(vm,"INPUT_PENDING_MAPPED_KEY",FW_VM_CHANNEL_INPUT_PENDING_MAPPED_KEY);
   clear_handler_globals(vm);

@@ -128,10 +128,13 @@ bool SampleBulkOut::Start(std::string &err)
               uint8_t session = 0u;
               const uint16_t wave_id = mixer.LiveWave(voice);
               const unsigned got = mixer.FillUacFrame(
-                  voice, packet.data() + 1u,
+                  voice, packet.data() + 2u,
                   cardlink::usb::kStreamUacBodySamples, sof, session);
               if (got == cardlink::usb::kStreamUacBodySamples) {
                 packet[0] = EncodeTag(voice, session, sof);
+                packet[1] = static_cast<int16_t>(
+                    mixer.RecordUacSubmission(voice,
+                                              static_cast<uint16_t>(got)));
                 mixer.CommitBurst(voice, session, wave_id, got, sof);
                 if (sof) {
                   uint8_t order[kSampleVoices]{};
@@ -231,16 +234,12 @@ UrgentScheduleStats SampleBulkOut::LastUrgentSchedule() const
   return stats;
 }
 
-void SampleBulkOut::SubmitStatus(
-    uint8_t mask, uint8_t best,
-    const std::array<uint16_t, kSampleVoices> &free_samples,
-    uint16_t last_pack_sequence)
+void SampleBulkOut::SubmitStatus(const cardproto::VoiceQuery &status)
 {
-  (void)last_pack_sequence;
   if (!Running()) {
     return;
   }
-  mixer_->ApplyVoiceStatus(mask, best, free_samples.data());
+  mixer_->ApplyVoiceStatus(status);
 }
 
 } // namespace cardlink::audio

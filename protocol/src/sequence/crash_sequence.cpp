@@ -169,14 +169,9 @@ bool ParseCrashSequence(std::istream &input, CrashSequence &out,
       continue;
     }
     if (op == "crash") {
-      uint32_t ms = 0;
-      if (token.size() != 2 || !ParseMs(token[1], ms) || ms > 50) {
-        return Fail(line_number, "crash release must be 0..50ms", error);
-      }
-      step.kind = CrashStepKind::CrashRelease;
-      step.release_ms = static_cast<uint8_t>(ms);
-      parsed.steps.push_back(std::move(step));
-      continue;
+      return Fail(line_number,
+                  "native crash timing was removed; upload an ABI6 Berry envelope",
+                  error);
     }
     size_t pitch_index = op == "note" ? 1 : 0;
     double parsed_hz = 0.0;

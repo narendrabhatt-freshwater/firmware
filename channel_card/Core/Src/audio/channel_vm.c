@@ -20,6 +20,7 @@ void ChannelVm_Init(const ChannelVmNativeOps *ops)
     native_ops.hold = ops->hold;
     native_ops.start_note = ops->start_note;
     native_ops.note_end = ops->note_end;
+    native_ops.discard_pending = ops->discard_pending;
     native_ops.silence_voice = ops->silence_voice;
     native_ops.set_led = ops->set_led;
   }

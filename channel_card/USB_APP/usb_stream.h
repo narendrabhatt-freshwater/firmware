@@ -3,7 +3,8 @@
  * @brief Direct BODY samples carried in each 1 ms Channel Card UAC2 packet.
  *
  * The USB interface is class-compliant UAC2 (10ch, int16, 51 kHz).
- * Each 1 ms USB packet is one routing tag followed by 509 raw BODY samples.
+ * Each 1 ms USB packet is a routing tag, a wrapping transport sequence, and
+ * 508 raw BODY samples.
  * USB supplies the packet boundary; there is no inner header, length, or CRC.
  */
 
@@ -44,7 +45,9 @@ extern "C" {
 #define USB_STREAM_TAG_SESSION_MASK 0x00FFu
 #define USB_STREAM_UAC_PACKET_WORDS                                 \
   (USB_STREAM_UAC_PACKET_BYTES / USB_STREAM_UAC_SAMPLE_BYTES)
-#define USB_STREAM_UAC_BODY_SAMPLES (USB_STREAM_UAC_PACKET_WORDS - 1u)
+#define USB_STREAM_UAC_SEQUENCE_WORDS 1u
+#define USB_STREAM_UAC_BODY_SAMPLES \
+  (USB_STREAM_UAC_PACKET_WORDS - 1u - USB_STREAM_UAC_SEQUENCE_WORDS)
 
 #ifdef __cplusplus
 }

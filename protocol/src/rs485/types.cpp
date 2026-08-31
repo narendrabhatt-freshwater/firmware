@@ -150,47 +150,63 @@ ExchangeResult ParseVqBinaryReply(const uint8_t *frame, size_t len) {
   constexpr uint8_t kSync0 = 0xA5;
   constexpr uint8_t kSync1 = 0x5A;
   constexpr uint8_t kCardChannel = 0x43;
-  constexpr uint8_t kTypeStatus = 0x02;
+  constexpr uint8_t kTypeStatus = 0x04;
 
   ExchangeResult out;
   out.from = Target::Channel;
   if (frame == nullptr || len != kVqBinaryFrameLen ||
       frame[0] != kSync0 || frame[1] != kSync1 ||
       frame[2] != kCardChannel || frame[3] != kTypeStatus ||
-      frame[25] != '\n' || frame[24] != Crc8(frame, 24)) {
+      frame[55] != '\n' || frame[54] != Crc8(frame, 54)) {
     out.status = Status::BadReply;
     std::snprintf(out.raw, sizeof(out.raw), "bad binary vq frame");
     return out;
   }
 
+  const uint16_t capacity = static_cast<uint16_t>(frame[8]) |
+                            static_cast<uint16_t>(frame[9] << 8u);
+  const uint16_t status_sequence = static_cast<uint16_t>(frame[10]) |
+                                   static_cast<uint16_t>(frame[11] << 8u);
+  const uint16_t uac_sequence = static_cast<uint16_t>(frame[12]) |
+                                static_cast<uint16_t>(frame[13] << 8u);
+  std::array<uint8_t, 8> sessions{};
+  std::array<uint16_t, 8> fills{};
   std::array<uint16_t, 8> free_samples{};
+  if (capacity == 0u) {
+    out.status = Status::BadReply;
+    std::snprintf(out.raw, sizeof(out.raw), "bad binary vq capacity");
+    return out;
+  }
   for (size_t i = 0; i < free_samples.size(); ++i) {
-    free_samples[i] = static_cast<uint16_t>(frame[6 + 2 * i]) |
-                      static_cast<uint16_t>(frame[7 + 2 * i] << 8u);
-    if (free_samples[i] > 8160u) {
+    const size_t at = 14u + 5u * i;
+    sessions[i] = frame[at];
+    fills[i] = static_cast<uint16_t>(frame[at + 1u]) |
+               static_cast<uint16_t>(frame[at + 2u] << 8u);
+    free_samples[i] = static_cast<uint16_t>(frame[at + 3u]) |
+                      static_cast<uint16_t>(frame[at + 4u] << 8u);
+    if (fills[i] > capacity || free_samples[i] > capacity ||
+        static_cast<uint32_t>(fills[i]) + free_samples[i] > capacity) {
       out.status = Status::BadReply;
-      std::snprintf(out.raw, sizeof(out.raw), "bad binary vq free count");
+      std::snprintf(out.raw, sizeof(out.raw), "bad binary vq credit");
       return out;
     }
   }
-  const uint16_t last_pack_sequence =
-      static_cast<uint16_t>(frame[22]) |
-      static_cast<uint16_t>(frame[23] << 8u);
-
   out.status = Status::Ok;
-  std::snprintf(out.raw, sizeof(out.raw),
-                "ok:vq %02x %u %u %u %u %u %u %u %u %u %u",
-                static_cast<unsigned>(frame[4]),
-                static_cast<unsigned>(frame[5]),
-                static_cast<unsigned>(free_samples[0]),
-                static_cast<unsigned>(free_samples[1]),
-                static_cast<unsigned>(free_samples[2]),
-                static_cast<unsigned>(free_samples[3]),
-                static_cast<unsigned>(free_samples[4]),
-                static_cast<unsigned>(free_samples[5]),
-                static_cast<unsigned>(free_samples[6]),
-                static_cast<unsigned>(free_samples[7]),
-                static_cast<unsigned>(last_pack_sequence));
+  int n = std::snprintf(out.raw, sizeof(out.raw),
+                        "ok:vq7 %02x %02x %u %u %u %u",
+                        static_cast<unsigned>(frame[4]),
+                        static_cast<unsigned>(frame[5]),
+                        static_cast<unsigned>(frame[6]),
+                        static_cast<unsigned>(capacity),
+                        static_cast<unsigned>(status_sequence),
+                        static_cast<unsigned>(uac_sequence));
+  for (size_t i = 0; i < 8u && n > 0 &&
+       static_cast<size_t>(n) < sizeof(out.raw); ++i) {
+    n += std::snprintf(out.raw + n, sizeof(out.raw) - static_cast<size_t>(n),
+                       " %u %u %u", static_cast<unsigned>(sessions[i]),
+                       static_cast<unsigned>(fills[i]),
+                       static_cast<unsigned>(free_samples[i]));
+  }
   return out;
 }
 

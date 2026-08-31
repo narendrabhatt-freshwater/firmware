@@ -192,7 +192,7 @@ int main(int argc, char **argv)
     while (fgets(line, sizeof(line), source)) {
         if (!source_line_allowed(line)) {
             fclose(source); fclose(wrapper); remove(wrapped);
-            return fail("only ABI5 Channel handlers are allowed at top level", input);
+            return fail("only ABI6 Channel handlers are allowed at top level", input);
         }
         fputs(line, wrapper);
     }
@@ -209,6 +209,7 @@ int main(int argc, char **argv)
     be_regfunc(vm, "hold", compile_only_native);
     be_regfunc(vm, "start_note", compile_only_native);
     be_regfunc(vm, "note_end", compile_only_native);
+    be_regfunc(vm, "discard_pending", compile_only_native);
     be_regfunc(vm, "led", compile_only_native);
     be_regfunc(vm, "keymap_set", keymap_set_native);
     be_regfunc(vm, "keymap_fill", keymap_fill_native);
@@ -224,7 +225,6 @@ int main(int argc, char **argv)
     compiler_int(vm, "INPUT_PENDING_FREQUENCY", FW_VM_CHANNEL_INPUT_PENDING_FREQUENCY);
     compiler_int(vm, "INPUT_PENDING_GAIN", FW_VM_CHANNEL_INPUT_PENDING_GAIN);
     compiler_int(vm, "INPUT_AMPLITUDE", FW_VM_CHANNEL_INPUT_AMPLITUDE);
-    compiler_int(vm, "INPUT_CRASH_RELEASE", FW_VM_CHANNEL_INPUT_CRASH_RELEASE);
     compiler_int(vm, "INPUT_KEY", FW_VM_CHANNEL_INPUT_KEY);
     compiler_int(vm, "INPUT_MAPPED_KEY", FW_VM_CHANNEL_INPUT_MAPPED_KEY);
     compiler_int(vm, "INPUT_PENDING_KEY", FW_VM_CHANNEL_INPUT_PENDING_KEY);

@@ -205,6 +205,16 @@ ExchangeResult Link::ReadTerminalReply(Target expected,
     if (FindVqFrame(window, frame)) {
       return ParseVqBinaryReply(frame.data(), frame.size());
     }
+    const auto sync = window.find(std::string("\xA5\x5A\x43", 3));
+    if (sync != std::string::npos && window.size() > sync + 3u &&
+        static_cast<uint8_t>(window[sync + 3u]) != 0x04u) {
+      ExchangeResult r;
+      r.status = Status::BadReply;
+      r.from = Target::Channel;
+      std::snprintf(r.raw, sizeof(r.raw),
+                    "firmware/host mismatch: Sample mode requires ABI6 vq3");
+      return r;
+    }
   }
   std::string tagged = ExtractTaggedRegion(window);
   if (tagged.empty()) {

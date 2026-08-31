@@ -93,8 +93,8 @@ public:
   Result AllNotesOff();
 
   /**
-   * @brief Query active mask, hungriest voice, exact ring credit and PACK ACK.
-   * @return `ok:vq <mask> <best> free0..free7 last_pack_sequence`.
+   * @brief Query generations, exact ring credit, and processed UAC sequence.
+   * @return Versioned `vq7` status (binary on RS485, readable on USB CDC).
    */
   Result QueryVoiceStatus();
 
@@ -288,10 +288,15 @@ std::string FormatCpu(CpuProbe kind, uint8_t nvoices = 0);
 /** @} */
 
 struct VoiceQuery {
-  uint8_t mask = 0;
+  uint8_t active_mask = 0;
+  uint8_t pending_mask = 0;
   uint8_t best = 0xFF; /**< Hungriest voice, or 0xFF if none. */
+  uint16_t capacity = 0;
+  uint16_t status_sequence = 0;
+  uint16_t uac_sequence = 0; /**< Last routed UAC frame processed by card. */
+  std::array<uint8_t, 8> target_session{};
+  std::array<uint16_t, 8> target_fill{};
   std::array<uint16_t, 8> free_samples{};
-  uint16_t last_pack_sequence = 0xFFFFu;
 };
 
 /** Parse exact-credit `ok:vq`; accepts an optional `[C]`/`[E]` tag. */

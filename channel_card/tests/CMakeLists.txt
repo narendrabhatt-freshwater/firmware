@@ -34,11 +34,20 @@ add_executable(note_bank_vm_test
   ../Core/Src/audio/note_envelope.c
   ../Core/Src/audio/stream_ring.c)
 target_include_directories(note_bank_vm_test PRIVATE
-  ../Core/Inc/audio ../Core/Inc/filters ../USB_APP ../../common/vm/include
+  ../Core/Inc/audio ../Core/Inc/filters ../Core/Inc/drivers ../USB_APP ../../common/vm/include
   ../../script_runtime/include)
 target_link_libraries(note_bank_vm_test PRIVATE script_runtime::berry m)
 target_compile_definitions(note_bank_vm_test PRIVATE CHANNEL_TEST_WAVETABLE=1)
 add_dependencies(note_bank_vm_test shared_berry_program)
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/simple_crash_envelope.fwsc"
+  COMMAND fw_scriptc
+          "${CMAKE_CURRENT_SOURCE_DIR}/../../protocol/examples/vm/channel/simple_crash_envelope.be"
+          -o "${CMAKE_CURRENT_BINARY_DIR}/simple_crash_envelope.fwsc"
+  DEPENDS fw_scriptc
+          "${CMAKE_CURRENT_SOURCE_DIR}/../../protocol/examples/vm/channel/simple_crash_envelope.be")
+add_custom_target(channel_abi6_2ms_program DEPENDS
+  "${CMAKE_CURRENT_BINARY_DIR}/simple_crash_envelope.fwsc")
+add_dependencies(note_bank_vm_test channel_abi6_2ms_program)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(note_bank_vm_test PRIVATE -Wall -Wextra -Werror)
 endif()
@@ -48,4 +57,5 @@ add_test(NAME channel_card.stream_ring_handoff
   COMMAND stream_ring_handoff_test)
 add_test(NAME channel_card.note_envelope COMMAND note_envelope_test)
 add_test(NAME channel_card.note_bank_vm COMMAND note_bank_vm_test
-  "${CMAKE_CURRENT_BINARY_DIR}/script_runtime/channel_envelope.fwsc")
+  "${CMAKE_CURRENT_BINARY_DIR}/script_runtime/channel_envelope.fwsc"
+  "${CMAKE_CURRENT_BINARY_DIR}/simple_crash_envelope.fwsc")

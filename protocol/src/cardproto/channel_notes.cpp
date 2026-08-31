@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <sstream>
 
 namespace cardproto
 {
@@ -107,31 +108,37 @@ namespace cardproto
     while (*p == ' ') {
       ++p;
     }
-    if (std::strncmp(p, "vq", 2) == 0) {
-      p += 2;
+    if (std::strncmp(p, "vq7", 3) != 0) {
+      return false;
     }
-    unsigned mask = 0;
-    unsigned best = 0;
-    unsigned free_samples[8] = {};
-    unsigned last_pack_sequence = 0;
-    const int n = std::sscanf(
-        p, " %x %u %u %u %u %u %u %u %u %u %u", &mask, &best,
-        &free_samples[0], &free_samples[1], &free_samples[2],
-        &free_samples[3], &free_samples[4], &free_samples[5],
-        &free_samples[6], &free_samples[7], &last_pack_sequence);
-    if (n != 11 || mask > 0xffu || best > 0xffu ||
-        last_pack_sequence > 0xffffu) {
+    p += 3;
+    std::istringstream in(p);
+    unsigned active = 0, pending = 0, best = 0, capacity = 0, sequence = 0;
+    unsigned uac_sequence = 0;
+    in >> std::hex >> active >> pending >> std::dec >> best >> capacity >>
+        sequence >> uac_sequence;
+    if (!in || active > 0xffu || pending > 0xffu || best > 0xffu ||
+        capacity == 0u || capacity > 0xffffu || sequence > 0xffffu ||
+        uac_sequence > 0xffffu) {
       return false;
     }
     for (unsigned i = 0; i < 8; ++i) {
-      if (free_samples[i] > 8160u) {
+      unsigned session = 0, fill = 0, free_samples = 0;
+      in >> session >> fill >> free_samples;
+      if (!in || session > 0xffu || fill > capacity ||
+          free_samples > capacity || fill + free_samples > capacity) {
         return false;
       }
-      out.free_samples[i] = static_cast<uint16_t>(free_samples[i]);
+      out.target_session[i] = static_cast<uint8_t>(session);
+      out.target_fill[i] = static_cast<uint16_t>(fill);
+      out.free_samples[i] = static_cast<uint16_t>(free_samples);
     }
-    out.mask = static_cast<uint8_t>(mask);
+    out.active_mask = static_cast<uint8_t>(active);
+    out.pending_mask = static_cast<uint8_t>(pending);
     out.best = static_cast<uint8_t>(best);
-    out.last_pack_sequence = static_cast<uint16_t>(last_pack_sequence);
+    out.capacity = static_cast<uint16_t>(capacity);
+    out.status_sequence = static_cast<uint16_t>(sequence);
+    out.uac_sequence = static_cast<uint16_t>(uac_sequence);
     return true;
   }
 

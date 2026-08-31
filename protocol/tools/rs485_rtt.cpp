@@ -2,7 +2,7 @@
  * Sequential RS485 ping-pong: send 1, wait reply 1, send 2, wait reply 2.
  *
  * Times the host-visible command/ACK cycle with no extra idle pad. Channel
- * `vq` on current card firmware is a 26-byte binary frame (A5 5A … LF);
+ * `vq` on ABI6 card firmware is a 56-byte binary frame (A5 5A … LF);
  * other commands still use tagged ASCII (`[C] …\\r\\n`).
  */
 
@@ -129,7 +129,7 @@ int main(int argc, char **argv) {
   std::printf("port %s  %u 8N1\n", port_path.c_str(), baud);
   std::printf("pattern  send %s\\r  → wait reply  → next\n", line.c_str());
   std::printf("reply    %s\n",
-              binary_vq ? "26-byte exact-credit vq (A5 5A … LF)"
+              binary_vq ? "56-byte ABI6 sequenced generation-credit vq (A5 5A … LF)"
                         : "tagged ASCII [C]/[E] line");
   std::printf("warmup %d  timed %d\n\n", warmup, count);
 

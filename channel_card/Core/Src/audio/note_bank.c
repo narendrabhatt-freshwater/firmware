@@ -33,8 +33,8 @@ _Static_assert(NOTE_ENV_VOICE_COUNT == NOTE_BANK_VOICES,
                "note_envelope voice count must match note_bank");
 _Static_assert(STREAM_BANK_LEN == 4080u,
                "Berry integration must not resize a USB BODY bank");
-_Static_assert(STREAM_RING_SAMPLES == 8160u,
-               "normal streaming profile must keep base and tail banks");
+_Static_assert(STREAM_RING_SAMPLES == 12240u,
+               "normal streaming profile must keep three BODY banks");
 
 #define NOTE_AMP_Q15_MAX 32767
 #define PHASE_ONE (1u << 16)
@@ -45,7 +45,6 @@ _Static_assert(STREAM_RING_SAMPLES == 8160u,
 #define INTERP_LEFT_TAPS 0u
 #define BODY_ADVANCE_PHASE ((INTERP_LEFT_TAPS + 1u) * PHASE_ONE)
 #define NOTE_SAMPLE_RATE_HZ 48000u
-#define NOTE_CRASH_RELEASE_MAX_MS 50u
 #define NOTE_DEFAULT_SCALE 0.125
 #define WAVETABLE_SAMPLES 128u
 #define WAVETABLE_PHASE_ONE (WAVETABLE_SAMPLES * PHASE_ONE)
@@ -68,25 +67,16 @@ static uint16_t note_wave_id[NOTE_BANK_VOICES];
 static uint16_t note_play_wid[NOTE_BANK_VOICES];
 static uint16_t note_play_alen[NOTE_BANK_VOICES];
 static uint8_t note_body_only[NOTE_BANK_VOICES];
-/* On a slot reuse, the old voice completes its DSP chain and ramps out before
- * the staged replacement starts. New BODY follows the retained old tail. */
-static uint32_t note_crash_frac[NOTE_BANK_VOICES];
-static uint32_t note_crash_inc[NOTE_BANK_VOICES];
-static int32_t note_crash_hold[NOTE_BANK_VOICES];
-static uint8_t note_crash_ring[NOTE_BANK_VOICES];
 static uint32_t note_next_inc[NOTE_BANK_VOICES];
 static float note_next_hz[NOTE_BANK_VOICES];
 static int32_t note_next_amp_q15[NOTE_BANK_VOICES];
 static uint16_t note_next_wid[NOTE_BANK_VOICES];
 static uint8_t note_next_pending[NOTE_BANK_VOICES];
-static uint8_t note_vm_crash[NOTE_BANK_VOICES];
-static uint8_t note_replacement_prepared[NOTE_BANK_VOICES];
 static float note_play_hz[NOTE_BANK_VOICES];
 static uint8_t note_play_key[NOTE_BANK_VOICES];
 static uint8_t note_play_mapped_key[NOTE_BANK_VOICES];
 static uint8_t note_next_key[NOTE_BANK_VOICES];
 static uint8_t note_next_mapped_key[NOTE_BANK_VOICES];
-static uint8_t note_crash_release_ms = 3u;
 static NoteBank_Shape_t note_shape = NOTE_SHAPE_SINE;
 static double note_shape_param = 0.5;
 #if defined(CHANNEL_TEST_WAVETABLE)
@@ -373,9 +363,6 @@ static void NoteBank_ActivateReplacement(uint8_t note)
   note_body_only[note] = (note_play_alen[note] == 0u) ? 1u : 0u;
   NoteFilter_Reset(note);
   NoteFilter_OnNoteFreq(note, (double)note_next_hz[note]);
-  note_vm_crash[note] = 0u;
-  note_replacement_prepared[note] = 0u;
-  StreamRing_AdvanceRelease(note, StreamRing_ReleaseLevel(note));
   note_next_pending[note] = 0u;
   note_next_key[note] = 0u;
   note_next_mapped_key[note] = 0u;
@@ -430,8 +417,6 @@ static void NoteBank_CatchUpBody(uint8_t note)
 static void NoteBank_StartVoice(uint8_t note, uint8_t key, uint8_t mapped_key,
                                 uint32_t inc, float hz)
 {
-  uint32_t kept = 0u;
-
   note_next_inc[note] = inc;
   note_next_hz[note] = hz;
   note_next_key[note] = key;
@@ -440,86 +425,6 @@ static void NoteBank_StartVoice(uint8_t note, uint8_t key, uint8_t mapped_key,
   note_next_wid[note] = note_wave_id[note];
   note_next_pending[note] = 1u;
 
-  if (ChannelVm_IsActive(note) != 0u)
-  {
-    if (note_vm_crash[note] != 0u)
-    {
-      kept = StreamRing_BeginReplacement(
-          note, note_next_wid[note], StreamRing_ReleaseLevel(note));
-      note_crash_ring[note] = (kept >= 2u) ? 1u : 0u;
-      note_replacement_prepared[note] = 1u;
-      return;
-    }
-    if (note_active[note] != 0u)
-    {
-      note_crash_hold[note] = note_hold[note];
-      note_crash_inc[note] = note_inc[note];
-#if defined(CHANNEL_TEST_WAVETABLE)
-      note_crash_frac[note] = (uint32_t)note_phase[note];
-#else
-      note_crash_frac[note] = note_body_frac[note];
-#endif
-      note_replacement_prepared[note] = 0u;
-      note_vm_crash[note] = 1u;
-    }
-    else
-    {
-      (void)StreamRing_BeginReplacement(note, note_next_wid[note], 0u);
-      note_replacement_prepared[note] = 1u;
-    }
-    return;
-  }
-
-  /* No uploaded program means no note policy. The command drain will discard
-   * this staged note and keep the slot silent. */
-}
-
-static int32_t NoteBank_CrashSample(uint8_t note)
-{
-  int32_t y = note_crash_hold[note];
-  float env;
-  int32_t env_q15 = NOTE_AMP_Q15_MAX;
-  int32_t gain_q15;
-  int32_t amp;
-
-  if (note_vm_crash[note] == 0u)
-  {
-    return 0;
-  }
-#if defined(CHANNEL_TEST_WAVETABLE)
-  y = NoteBank_WavetableSample(&note_crash_frac[note], note_crash_inc[note]);
-#else
-  if (note_crash_ring[note] != 0u)
-  {
-    uint32_t i0 = note_crash_frac[note] >> 16;
-    uint32_t frac = note_crash_frac[note] & 0xFFFFu;
-    int16_t s0;
-    int16_t s1;
-    if (StreamRing_GetReleaseRel(note, i0, &s0) == 0 &&
-        StreamRing_GetReleaseRel(note, i0 + 1u, &s1) == 0)
-    {
-      y = (int32_t)((((int64_t)s0) << 16) +
-                    ((int64_t)(s1 - s0) * frac));
-      note_crash_hold[note] = y;
-    }
-    note_crash_frac[note] += note_crash_inc[note];
-    while (note_crash_frac[note] >= PHASE_ONE)
-    {
-      StreamRing_AdvanceRelease(note, 1u);
-      note_crash_frac[note] -= PHASE_ONE;
-    }
-  }
-#endif
-
-  y = NoteFilter_Process(note, y);
-  env = NoteEnv_RenderSample(note);
-  if (env < 0.0f) env = 0.0f;
-  if (env > 1.0f) env = 1.0f;
-  env_q15 = (int32_t)(env * (float)NOTE_AMP_Q15_MAX + 0.5f);
-  gain_q15 = (int32_t)(((int64_t)note_play_amp_q15[note] *
-                        (int64_t)env_q15) >> 15);
-  amp = (int32_t)(((int64_t)y * (int64_t)gain_q15) >> 15);
-  return amp;
 }
 
 static void NoteBank_PostOn(uint8_t note, uint8_t key, uint8_t mapped_key,
@@ -536,9 +441,6 @@ static void NoteBank_HardOff(uint8_t note)
 {
   note_freq_hz[note] = 0.0;
   note_active[note] = 0u;
-  note_crash_ring[note] = 0u;
-  note_vm_crash[note] = 0u;
-  note_replacement_prepared[note] = 0u;
   note_next_pending[note] = 0u;
   note_play_key[note] = 0u;
   note_play_mapped_key[note] = 0u;
@@ -551,6 +453,19 @@ static void NoteBank_HardOff(uint8_t note)
   NoteEnv_Stop(note);
 }
 
+static void NoteBank_EndCurrent(uint8_t note)
+{
+  note_freq_hz[note] = 0.0;
+  note_active[note] = 0u;
+  note_play_key[note] = 0u;
+  note_play_mapped_key[note] = 0u;
+  NoteBank_ClearPlayhead(note);
+  StreamRing_EndCurrent(note);
+  AttackBank_Stop(note);
+  NoteFilter_Reset(note);
+  NoteEnv_Stop(note);
+}
+
 static void NoteBank_DrainCmd(uint8_t note)
 {
   const uint8_t cmd = note_cmd[note];
@@ -558,19 +473,26 @@ static void NoteBank_DrainCmd(uint8_t note)
   {
     return;
   }
-  note_cmd[note] = NOTE_CMD_NONE;
   if (cmd == NOTE_CMD_ON)
   {
     if (ChannelVm_IsActive(note) == 0u)
     {
+      note_cmd[note] = NOTE_CMD_NONE;
       NoteBank_HardOff(note);
       return;
     }
+#if !defined(CHANNEL_TEST_WAVETABLE)
+    /* Authority alone cannot change musical state. Wait for one whole BODY
+     * frame, retaining the current note indefinitely if transport stalls. */
+    if (StreamRing_HasBody(note) == 0u) return;
+#endif
+    note_cmd[note] = NOTE_CMD_NONE;
     NoteBank_StartVoice(note, note_cmd_key[note], note_cmd_mapped_key[note],
                         note_cmd_inc[note], note_cmd_hz[note]);
     (void)NoteBank_VmDispatch(FW_VM_CHANNEL_HANDLER_NOTE_ON, note);
     return;
   }
+  note_cmd[note] = NOTE_CMD_NONE;
   if (cmd == NOTE_CMD_REL)
   {
     if (ChannelVm_IsActive(note) == 0u) NoteBank_HardOff(note);
@@ -695,13 +617,6 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
   int32_t gain_q15;
   int32_t amp;
 
-  /* While the VM keeps the old note selected, its playhead and native envelope
-   * continue. Only start_note switches the replacement to phase zero. */
-  if (note_vm_crash[note] != 0u)
-  {
-    return NoteBank_CrashSample(note);
-  }
-
   NoteBank_SlewInc(note);
   s = NoteBank_Sample(note);
   s = NoteFilter_Process(note, s);
@@ -756,7 +671,6 @@ static int NoteBank_VmRead(void *context, uint8_t note,
   case FW_VM_CHANNEL_INPUT_PENDING_GAIN:
     *out = (float)note_next_amp_q15[note] / (float)NOTE_AMP_Q15_MAX; break;
   case FW_VM_CHANNEL_INPUT_AMPLITUDE: *out = NoteEnv_Amplitude(note); break;
-  case FW_VM_CHANNEL_INPUT_CRASH_RELEASE: *out = (float)note_crash_release_ms; break;
   case FW_VM_CHANNEL_INPUT_KEY: *out = (float)note_play_key[note]; break;
   case FW_VM_CHANNEL_INPUT_MAPPED_KEY: *out = (float)note_play_mapped_key[note]; break;
   case FW_VM_CHANNEL_INPUT_PENDING_KEY: *out = (float)note_next_key[note]; break;
@@ -773,26 +687,6 @@ static int NoteBank_VmRamp(void *context, uint8_t note, float target, float slop
   (void)context;
   if (!isfinite(slope) || !(slope / (float)NOTE_SAMPLE_RATE_HZ > 0.0f))
     return -1;
-  if (note_vm_crash[note] != 0u && note_next_pending[note] != 0u &&
-      note_replacement_prepared[note] == 0u)
-  {
-    float distance = fabsf(NoteEnv_Amplitude(note) - target);
-    float sample_count = distance * (float)NOTE_SAMPLE_RATE_HZ / slope;
-    uint32_t output_samples = (!isfinite(sample_count) ||
-                               sample_count >= (float)UINT32_MAX)
-                                  ? UINT32_MAX
-                                  : (uint32_t)sample_count + 1u;
-    uint32_t release_samples = 0u;
-    uint32_t kept;
-    if (note_body_only[note] != 0u && StreamRing_FillLevel(note) >= 2u)
-    {
-      release_samples = (uint32_t)(((uint64_t)output_samples *
-          (uint64_t)note_crash_inc[note] + (uint64_t)note_crash_frac[note]) >> 16) + 2u;
-    }
-    kept = StreamRing_BeginReplacement(note, note_next_wid[note], release_samples);
-    note_crash_ring[note] = (kept >= 2u) ? 1u : 0u;
-    note_replacement_prepared[note] = 1u;
-  }
   return NoteEnv_StartRamp(note, target, slope);
 }
 static int NoteBank_VmHold(void *context, uint8_t note)
@@ -801,17 +695,23 @@ static int NoteBank_VmStartNote(void *context, uint8_t note)
 {
   (void)context;
   if (note_next_pending[note] == 0u) return -1;
-  if (note_replacement_prepared[note] == 0u)
-  {
-    (void)StreamRing_BeginReplacement(note, note_next_wid[note], 0u);
-    note_replacement_prepared[note] = 1u;
-  }
+  if (StreamRing_StartNote(note) != 0) return -1;
   NoteBank_ActivateReplacement(note);
   note_freq_hz[note] = note_play_hz[note];
   return 0;
 }
 static int NoteBank_VmEnd(void *context, uint8_t note)
-{ (void)context; NoteBank_HardOff(note); return 0; }
+{ (void)context; NoteBank_EndCurrent(note); return 0; }
+static int NoteBank_VmDiscardPending(void *context, uint8_t note)
+{
+  (void)context;
+  if (note >= NOTE_BANK_VOICES) return -1;
+  StreamRing_DiscardPending(note);
+  note_next_pending[note] = 0u;
+  note_next_key[note] = 0u;
+  note_next_mapped_key[note] = 0u;
+  return 0;
+}
 static void NoteBank_VmSilence(void *context, uint8_t note, FwVmFault fault)
 { (void)context; (void)fault; NoteBank_HardOff(note); }
 static int NoteBank_VmLed(void *context, uint8_t note, float red, float green,
@@ -836,7 +736,7 @@ static int NoteBank_VmDispatch(FwVmChannelHandler handler, uint8_t note)
 void NoteBank_Init(void)
 {
   uint8_t i;
-  ChannelVmNativeOps vm_ops;
+  ChannelVmNativeOps vm_ops = {0};
 
   note_shape = NOTE_SHAPE_SINE;
   note_shape_param = 0.5;
@@ -862,17 +762,11 @@ void NoteBank_Init(void)
     note_play_wid[i] = (uint16_t)i;
     note_play_alen[i] = 0u;
     note_body_only[i] = 0u;
-    note_crash_frac[i] = 0u;
-    note_crash_inc[i] = PHASE_ONE;
-    note_crash_hold[i] = 0;
-    note_crash_ring[i] = 0u;
     note_next_inc[i] = PHASE_ONE;
     note_next_hz[i] = 0.0f;
     note_next_amp_q15[i] = 0;
     note_next_wid[i] = (uint16_t)i;
     note_next_pending[i] = 0u;
-    note_vm_crash[i] = 0u;
-    note_replacement_prepared[i] = 0u;
     note_play_hz[i] = 0.0f;
     note_play_key[i] = 0u;
     note_play_mapped_key[i] = 0u;
@@ -892,6 +786,7 @@ void NoteBank_Init(void)
   vm_ops.note_end = NoteBank_VmEnd;
   vm_ops.silence_voice = NoteBank_VmSilence;
   vm_ops.set_led = NoteBank_VmLed;
+  vm_ops.discard_pending = NoteBank_VmDiscardPending;
 #if defined(__arm__) || defined(__thumb__)
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
   DWT->CYCCNT = 0u;
@@ -922,10 +817,7 @@ void NoteBank_PanicAll(void)
     note_body_skip[i] = 0u;
     note_play_alen[i] = 0u;
     note_body_only[i] = 0u;
-    note_crash_ring[i] = 0u;
     note_next_pending[i] = 0u;
-    note_vm_crash[i] = 0u;
-    note_replacement_prepared[i] = 0u;
     note_cmd[i] = NOTE_CMD_NONE;
     note_cmd_inc[i] = PHASE_ONE;
     note_cmd_hz[i] = 0.0f;
@@ -937,20 +829,6 @@ void NoteBank_PanicAll(void)
     NoteFilter_Reset(i);
     NoteEnv_Stop(i);
   }
-}
-
-void NoteBank_SetCrashReleaseMs(uint8_t release_ms)
-{
-  if (release_ms > NOTE_CRASH_RELEASE_MAX_MS)
-  {
-    release_ms = NOTE_CRASH_RELEASE_MAX_MS;
-  }
-  note_crash_release_ms = release_ms;
-}
-
-uint8_t NoteBank_GetCrashReleaseMs(void)
-{
-  return note_crash_release_ms;
 }
 
 static int NoteBank_NoteOnBound(uint8_t note, uint8_t key, uint8_t session)
@@ -998,7 +876,7 @@ static int NoteBank_NoteOnBound(uint8_t note, uint8_t key, uint8_t session)
   note_amp_q15[note] = NoteBank_ScaleToQ15(scale);
   note_inc_tgt[note] = inc;
   note_gate_requested[note] = 1u;
-  StreamRing_ArmReplacement(note, note_wave_id[note], session);
+  StreamRing_ArmPending(note, note_wave_id[note], session);
   NoteBank_PostOn(note, key, mapped_key, inc, (float)freq_hz);
   return 0;
 }
@@ -1020,7 +898,6 @@ int NoteBank_NoteOnSession(uint8_t note, uint8_t key, uint8_t session)
 int NoteBank_NoteOff(uint8_t note)
 {
   if (note >= NOTE_BANK_VOICES) return -1;
-  StreamRing_Disarm(note);
   note_gate_requested[note] = 0u;
   note_freq_hz[note] = 0.0;
   note_cmd[note] = NOTE_CMD_REL;
@@ -1146,17 +1023,18 @@ void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out)
     uint32_t inc;
     uint32_t t;
 
-    /* nX posts the audible start to I2S. Expose its requested gate
-     * immediately to lifecycle polling while that command is pending. */
-    if (NoteBank_IsActive(i) == 0u && note_gate_requested[i] == 0u)
+    if (NoteBank_IsActive(i) != 0u)
+    {
+      mask = (uint8_t)(mask | (uint8_t)(1u << i));
+    }
+    if (NoteBank_IsActive(i) == 0u && StreamRing_HasPending(i) == 0u)
     {
       continue;
     }
-    mask = (uint8_t)(mask | (uint8_t)(1u << i));
 #if defined(CHANNEL_TEST_WAVETABLE)
     continue;
 #endif
-    filled = StreamRing_FillLevel(i);
+    filled = StreamRing_TargetFill(i);
     if (filled >= STREAM_RING_SAMPLES)
     {
       continue;

@@ -151,6 +151,7 @@ void FinishVmLoad(App &app)
   if (result.empty()) return;
   app.log.Push(result);
   if (ok) {
+    app.ReconcileVmUpload();
     app.channel_program_metadata = metadata;
     app.PushToastOk(result);
   }

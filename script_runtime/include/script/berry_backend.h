@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* ABI5 eight-program/reload peak 17,120 B + 4 KiB upload scratch + 20% headroom,
+/* ABI6 eight-program/reload peak 17,120 B + 4 KiB upload scratch + 20% headroom,
  * rounded to 1 KiB by the qualification probe. */
 #define SCRIPT_BERRY_ARENA_SIZE (25u * 1024u)
 #define SCRIPT_BERRY_UPLOAD_SIZE FW_SCRIPT_MAX_PAYLOAD
@@ -30,6 +30,7 @@ typedef struct {
   int (*note_end)(void *, uint8_t);
   void (*silence_voice)(void *, uint8_t, FwVmFault);
   int (*set_led)(void *, uint8_t, float, float, float, float);
+  int (*discard_pending)(void *, uint8_t);
 } ScriptBerryNativeOps;
 
 typedef union {

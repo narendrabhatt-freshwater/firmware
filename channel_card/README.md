@@ -30,26 +30,26 @@ over I2S.
 - Console over RS485 (`c:` prefix) and USB CDC
 
 The note bank has no firmware-owned envelope policy. After each reset, upload a
-valid Channel Berry ABI5 program with Protocol's `fw_vmc` tool before sending note
+valid Channel Berry ABI6 program with Protocol's `fw_vmc` tool before sending note
 commands. Until then the card stays silent and replies `err:no-program`.
 
-### Wavetable test profile
+### USB streaming profile (default)
 
-This branch defaults `CHANNEL_TEST_WAVETABLE=ON`. It generates one 128-sample
-Q15 sine table during card initialization and loops it with a per-voice phase
-accumulator. Pulse, triangle, and saw use the same phase accumulator directly;
-this avoids trigonometry in the audio ISR. Attack uploads and USB BODY writes
-are disabled in this profile, and `vq` reports zero BODY credit.
+Normal Debug and Release builds use USB BODY streaming with a 12,240-sample
+ring per voice. The `fw build` command and the CMake presets explicitly select
+this profile with `CHANNEL_TEST_WAVETABLE=OFF`.
 
-To build the normal USB streaming path instead:
+The optional wavetable test profile generates one 128-sample Q15 sine table
+during card initialization and disables attack uploads and USB BODY writes.
+Enable it only for a direct CMake test build:
 
 ```sh
-cmake --preset Release -DCHANNEL_TEST_WAVETABLE=OFF
+cmake --preset Release -DCHANNEL_TEST_WAVETABLE=ON
 cmake --build --preset Release
 ```
 
-The normal profile keeps one 4,080-sample base bank plus one 4,080-sample tail
-bank per voice (8,160 int16 samples, or 16,320 bytes per voice).
+The normal profile keeps two 4,080-sample base banks plus one 4,080-sample tail
+bank per voice (12,240 int16 samples, or 24,480 bytes per voice).
 
 ## Audio signal path
 
@@ -256,7 +256,7 @@ Type `h` / `help` / `?` on the card for the live list.
 | `f0`…`f7` `<Hz>` `[q]` / `f` `<Hz>` `[q]` | LPF **base** cutoff at C4 on voices **0..7** (20..20000; **`0` or `20000` = bypass**). Optional **`q`** = DF4 **g** **0.5..10** (default **1.0**). See [`docs/reference/note_filter_butterworth.md`](docs/reference/note_filter_butterworth.md). |
 | `fk0`…`fk7` `[k]` / `fk` `[k]`            | Filter pitch-track **k** (0..10, default **0**): `fc = fbase × (note/C4)^k`.                                                                                                                                                         |
 | `al <id> <nbytes>`                        | CDC upload: int16 attack head for wave `<id>` 0…255 (2…1024 bytes; join at committed length)                                                                                                                                        |
-| `vmload <v> <nbytes>` / `vm [v]` / `vm mem` | CDC upload one ABI5 FWSC Berry program (maximum 4 KiB payload) to voice 0…7 / status / shared-arena diagnostics                                                                                                                    |
+| `vmload <v> <nbytes>` / `vm [v]` / `vm mem` | CDC upload one ABI6 FWSC Berry program (maximum 4 KiB payload) to voice 0…7 / status / shared-arena diagnostics                                                                                                                    |
 | `ar <id> <Hz>` / `aw <v> <id>` / `a`      | Root pitch of head `<id>` / assign head to voice 0…7 / loaded count + hex mask                                                                                                                                                      |
 | `vq`                                      | Active mask + hungriest voice + free-slot codes 0–14; 15 means empty                                                                                                                                                               |
 | `g <ch> <dB>`                             | DAC atten 0..127 dB on ch 1..4                                                                                                                                                                                                     |

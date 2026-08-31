@@ -529,10 +529,11 @@ int main(int argc, char **argv)
         note_gate.Begin();
         const auto queued = bus.QueueChannel(
             [note, start = std::move(start), done = std::move(done),
-             &note_gate](cardproto::ChannelClient &channel) {
+             &bus, &note_gate](cardproto::ChannelClient &channel) {
               start();
               if (!note.note_on) {
                 auto result = channel.NoteOff(note.voice);
+                if (result.ok()) bus.AcknowledgeSlotOff(note.voice);
                 done(result.ok());
                 note_gate.Complete(result.ok());
                 return result;
@@ -544,6 +545,7 @@ int main(int argc, char **argv)
               if (result.ok()) {
                 result = channel.StreamNoteOn(note.voice, note.key, note.session);
               }
+              if (result.ok()) bus.AcknowledgeSlotKey(note.voice, note.key);
               done(result.ok());
               note_gate.Complete(result.ok());
               return result;
@@ -569,10 +571,8 @@ int main(int argc, char **argv)
   cardlink::audio::SampleBulkOut bulk;
   bulk.BindMixer(samples.Mixer());
   bus.SetVqHandler(
-      [&bulk](uint8_t mask, uint8_t best,
-              const std::array<uint16_t, cardlink::audio::kSampleVoices> &free,
-              uint16_t last_pack_sequence) {
-        bulk.SubmitStatus(mask, best, free, last_pack_sequence);
+      [&bulk](const cardproto::VoiceQuery &status) {
+        bulk.SubmitStatus(status);
       });
   if (!bulk.Start(error)) {
     std::fprintf(stderr, "Channel Card BODY output failed: %s\n", error.c_str());
@@ -588,14 +588,7 @@ int main(int argc, char **argv)
   size_t first_play_step = 0;
   while (first_play_step < sequence.steps.size()) {
     const auto &step = sequence.steps[first_play_step];
-    if (step.kind == cardlink::sequence::CrashStepKind::CrashRelease) {
-      samples.SetCrashReleaseMs(static_cast<uint8_t>(step.release_ms));
-      if (!WaitQueue(bus)) {
-        std::fprintf(stderr, "line %u: crash setup failed\n", step.line);
-        bus.Close();
-        return 1;
-      }
-    } else {
+    if (step.kind != cardlink::sequence::CrashStepKind::CrashRelease) {
       break;
     }
     ++first_play_step;
@@ -628,9 +621,6 @@ int main(int argc, char **argv)
           std::printf(" then note-off");
         }
         std::printf("\n");
-        if (step.release) {
-          samples.SetCrashReleaseMs(static_cast<uint8_t>(step.release_ms));
-        }
         samples.NoteOn(static_cast<uint8_t>(slot), step.key, step.wave_id);
         if (!note_gate.Wait() || !SleepMs(step.duration_ms)) {
           okay = g_stop.load();
@@ -648,11 +638,10 @@ int main(int argc, char **argv)
           break;
         }
       } else if (step.kind == CrashStepKind::CrashRelease) {
-        samples.SetCrashReleaseMs(static_cast<uint8_t>(step.release_ms));
-        if (!WaitQueue(bus)) {
-          okay = false;
-          break;
-        }
+        std::fprintf(stderr, "line %u: crash timing belongs to ABI6 Berry\n",
+                     step.line);
+        okay = false;
+        break;
       } else if (!QueueCommand(bus, step.command)) {
         okay = false;
         break;

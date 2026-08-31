@@ -19,6 +19,7 @@ typedef struct {
   void (*silence_voice)(void *context, uint8_t voice, FwVmFault fault);
   int (*set_led)(void *context, uint8_t voice, float red, float green,
                  float blue, float brightness);
+  int (*discard_pending)(void *context, uint8_t note);
 } ChannelVmNativeOps;
 
 void ChannelVm_Init(const ChannelVmNativeOps *ops);

@@ -35,10 +35,6 @@ extern "C"
   void NoteBank_Init(void);
   void NoteBank_PanicAll(void);
 
-  /** Crash-in tail length. Values are clamped to 0..50 ms (0 = hard cut). */
-  void NoteBank_SetCrashReleaseMs(uint8_t release_ms);
-  uint8_t NoteBank_GetCrashReleaseMs(void);
-
   /** Raw MIDI-key note-on. The per-voice script map and tuning select pitch. */
   int NoteBank_NoteOn(uint8_t note, uint8_t key);
 

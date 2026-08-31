@@ -17,7 +17,7 @@ int main(){
   Check(std::memcmp(result.program.data(),"FWSC",4u)==0,"FWSC magic");
   Check(Read16(result.program.data()+4u)==FW_SCRIPT_CONTAINER_VERSION,"container version");
   Check(result.program[6]==FW_SCRIPT_RUNTIME_BERRY&&result.program[7]==FW_SCRIPT_CONFIG_FLOAT32_INT32,"Berry numeric configuration");
-  Check(Read16(result.program.data()+8u)==FW_SCRIPT_CHANNEL_ABI_VERSION,"Channel ABI5");
+  Check(Read16(result.program.data()+8u)==FW_SCRIPT_CHANNEL_ABI_VERSION,"Channel ABI6");
   Check(Read16(result.program.data()+10u)==FW_SCRIPT_CONTAINER_HEADER_SIZE,"header size");
   const uint32_t size=Read32(result.program.data()+12u);Check(size+FW_SCRIPT_CONTAINER_HEADER_SIZE==result.program.size(),"payload size");
   Check(Read32(result.program.data()+16u)==fw_vm_crc32(result.program.data()+FW_SCRIPT_CONTAINER_HEADER_SIZE,size),"payload CRC");

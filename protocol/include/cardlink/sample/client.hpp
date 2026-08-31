@@ -85,10 +85,6 @@ public:
   void AllNotesOff();
   void Silence(uint8_t voice);
 
-  /** Configure 0..50 ms release before a stolen slot retriggers. */
-  void SetCrashReleaseMs(uint8_t release_ms);
-  uint8_t CrashReleaseMs() const { return crash_release_ms_; }
-
   const Slot &GetSlot(uint8_t voice) const;
 
 private:
@@ -105,7 +101,6 @@ private:
   std::string cdc_path_;
   cardlink::SerialPort cdc_port_;
   int cdc_refs_ = 0;
-  uint8_t crash_release_ms_ = 3u;
   cardlink::audio::SampleDryMixer mixer_;
   std::array<Slot, cardlink::audio::kSampleVoices> slots_{};
 };

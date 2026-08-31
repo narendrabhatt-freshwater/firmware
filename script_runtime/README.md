@@ -27,6 +27,7 @@ set_amplitude(value)
 ramp(target, slope)
 hold()
 start_note()
+discard_pending()
 note_end()
 led(red, green, blue, brightness)
 keymap_get(key)
@@ -36,10 +37,15 @@ pow(base, exponent)
 The lower-level `input(id)` call remains available for less-common data. Input
 constants are `INPUT_NOTE_ID`, `INPUT_FREQUENCY`, `INPUT_GAIN`, `INPUT_GATE`,
 `INPUT_ACTIVE`, `INPUT_HAS_PENDING`, `INPUT_PENDING_FREQUENCY`,
-`INPUT_PENDING_GAIN`, `INPUT_AMPLITUDE`, `INPUT_CRASH_RELEASE`, `INPUT_KEY`,
+`INPUT_PENDING_GAIN`, `INPUT_AMPLITUDE`, `INPUT_KEY`,
 `INPUT_MAPPED_KEY`, `INPUT_PENDING_KEY`, and `INPUT_PENDING_MAPPED_KEY`.
 Scripts implement pitch-dependent envelope policy themselves with allocation-free
 `pow()` and a two-argument `ramp()`.
+
+`start_note()` atomically promotes a transport-ready pending generation;
+`discard_pending()` rejects it without touching the current voice, and
+`note_end()` ends only the current voice. Crash/retrigger timing belongs entirely
+to the script.
 
 `led()` controls the Channel Card's RGB package. All four arguments are
 normalized from `0.0` to `1.0`; brightness scales the selected color. The most
@@ -84,7 +90,7 @@ The qualification test loads eight distinct objects, performs replacement,
 runs one million event dispatches, checks the fault-containment matrix, and
 prints the allocator peak and formula-derived arena size.
 
-`fw_scriptc` emits an FWSC v1 container carrying ABI5 tuning/map metadata and bytecode:
+`fw_scriptc` emits an FWSC v1 container carrying ABI6 tuning/map metadata and bytecode:
 
 ```sh
 build/shared-berry/fw_scriptc script_runtime/examples/channel_envelope.be \

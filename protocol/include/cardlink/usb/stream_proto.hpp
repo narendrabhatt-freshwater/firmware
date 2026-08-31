@@ -22,7 +22,9 @@ constexpr unsigned kStreamUacPacketBytes =
     kStreamUacAudioFrameBytes * kStreamUacFramesPerMs;
 constexpr unsigned kStreamUacPacketWords =
     kStreamUacPacketBytes / kStreamUacSampleBytes;
-constexpr unsigned kStreamUacBodySamples = kStreamUacPacketWords - 1u;
+constexpr unsigned kStreamUacSequenceWords = 1u;
+constexpr unsigned kStreamUacBodySamples =
+    kStreamUacPacketWords - 1u - kStreamUacSequenceWords;
 constexpr uint16_t kStreamTagMask = 0xF000u;
 constexpr uint16_t kStreamTagBase = 0xA000u;
 constexpr uint16_t kStreamTagIdle = 0xAFFFu;
@@ -38,7 +40,7 @@ static_assert(kStreamUacPacketBytes == 1020u,
               "maximum complete-frame 10ch int16 carrier packet");
 static_assert(kStreamUacPacketBytes <= 1023u, "Full-Speed ISO packet limit");
 static_assert(kStreamUacPacketWords == 510u, "1020-byte packet as int16 words");
-static_assert(kStreamBodySamplesPerMs == 509u,
-              "one tag then 509 BODY samples per millisecond");
+static_assert(kStreamBodySamplesPerMs == 508u,
+              "one tag, one sequence, then 508 BODY samples per millisecond");
 
 } // namespace cardlink::usb
