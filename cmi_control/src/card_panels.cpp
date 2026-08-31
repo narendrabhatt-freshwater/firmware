@@ -67,7 +67,7 @@ void DrawOscillatorCard(App &app)
   const bool offline = !app.bus.IsOpen() || app.bus.BusFault();
   ImFont *fs = fw::theme::g_fonts.mono_small;
 
-  const bool has_param = (app.shape_mode != 0);
+  const bool has_param = (app.shape_mode == 1 || app.shape_mode == 2);
   fw::ui::BeginSection("osc_card", "OSCILLATOR",
                        ImVec2(0, S(has_param ? 216.f : 188.f)));
   ImGui::NewLine();
@@ -82,7 +82,7 @@ void DrawOscillatorCard(App &app)
       int mode;
     };
     static const ShapeOpt kShapes[] = {
-        {"Sine", 0}, {"Pulse", 1}, {"Tri", 2}};
+        {"Sine", 0}, {"Pulse", 1}, {"Tri", 2}, {"Saw", 3}};
     for (const auto &s : kShapes) {
       if (s.mode) {
         ImGui::SameLine(0.f, 4.f);
@@ -138,9 +138,11 @@ void DrawOscillatorCard(App &app)
         y = std::sin(2.f * 3.14159265f * t);
       } else if (app.shape_mode == 1) {
         y = t < app.shape_param ? 1.f : -1.f;
-      } else {
+      } else if (app.shape_mode == 2) {
         const float a = std::clamp(app.shape_param, 0.05f, 0.95f);
         y = t < a ? (2.f * t / a) - 1.f : 1.f - 2.f * (t - a) / (1.f - a);
+      } else {
+        y = 2.f * t - 1.f;
       }
       pts[i] = ImVec2(p0.x + t * pw, p0.y + ph * 0.5f - y * ph * 0.38f);
     }
@@ -162,10 +164,13 @@ void DrawOscillatorCard(App &app)
         r = app.bus.QueueChannel([p](cardproto::ChannelClient &ch) {
           return ch.Pulse(static_cast<double>(p));
         });
-      } else {
+      } else if (app.shape_mode == 2) {
         r = app.bus.QueueChannel([p](cardproto::ChannelClient &ch) {
           return ch.Triangle(static_cast<double>(p));
         });
+      } else {
+        r = app.bus.QueueChannel(
+            [](cardproto::ChannelClient &ch) { return ch.Saw(); });
       }
       app.NotifyEnqueue(r == BusQueueResult::Ok, "bus offline");
     }
@@ -570,4 +575,3 @@ void DrawEffectPanel(App &app)
 
   ImGui::EndChild();
 }
-

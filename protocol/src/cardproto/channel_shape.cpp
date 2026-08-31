@@ -27,6 +27,8 @@ namespace cardproto
 
   Result ChannelClient::Sine() { return Send("s"); }
 
+  Result ChannelClient::Saw() { return Send("saw"); }
+
   Result ChannelClient::Pulse(double duty)
   {
     if (!ValidShapeParam(duty))

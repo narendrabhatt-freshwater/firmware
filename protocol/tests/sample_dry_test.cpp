@@ -352,7 +352,7 @@ int main()
     std::array<uint16_t, kSampleVoices> empty{};
     empty.fill(static_cast<uint16_t>(kRingSamples));
     std::array<uint16_t, kSampleVoices> pending{};
-    const unsigned expected[] = {4096u, 4096u, 4048u};
+    const unsigned expected[] = {4096u, 4064u};
     for (unsigned grant : expected) {
       pipelined.ApplyVoiceStatus(0x01u, 0u, empty.data(), pending.data());
       pipelined.ConsumeOutputSamples(0.0);

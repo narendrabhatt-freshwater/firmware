@@ -120,6 +120,9 @@ public:
    */
   Result Triangle(double asymmetry);
 
+  /** Select the phase-derived saw oscillator. Wire `saw`. */
+  Result Saw();
+
   /* ---- digital LPF voices 0…7 only (f / fk) ---- */
 
   /**

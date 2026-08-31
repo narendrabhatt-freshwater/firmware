@@ -88,7 +88,7 @@ flowchart TB
 
   subgraph usb [USB FS]
     Tag["BODY: hdr + voice/session/SOF + int16"]
-    Slots["12240 int16 per voice · DTCM/D2/D3/ITCM SRAM"]
+    Slots["8160 int16 per voice · DTCM/D2/D3/ITCM SRAM"]
     Body --> Tag --> Slots
   end
 

@@ -119,7 +119,7 @@ namespace cardproto
       return false;
     }
     for (unsigned i = 0; i < 8; ++i) {
-      if (free_samples[i] > 12240u) {
+      if (free_samples[i] > 8160u) {
         return false;
       }
       out.free_samples[i] = static_cast<uint16_t>(free_samples[i]);

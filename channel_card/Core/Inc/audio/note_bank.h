@@ -22,12 +22,14 @@ extern "C"
 /** Voices available in SAMPLE mode (n0..n7). */
 #define NOTE_BANK_VOICES SAMPLE_VOICES
 
-  /** Kept for console compatibility; SAMPLE ignores oscillator shape. */
+  /** Test-oscillator shapes. Streaming builds preserve these controls for
+   * console compatibility but source their audio from attack/BODY samples. */
   typedef enum
   {
     NOTE_SHAPE_SINE = 0,
     NOTE_SHAPE_PULSE = 1,
-    NOTE_SHAPE_TRI = 2
+    NOTE_SHAPE_TRI = 2,
+    NOTE_SHAPE_SAW = 3
   } NoteBank_Shape_t;
 
   void NoteBank_Init(void);

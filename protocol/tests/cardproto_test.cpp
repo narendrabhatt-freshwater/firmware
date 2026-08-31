@@ -41,14 +41,14 @@ int main()
 
   cardproto::VoiceQuery query;
   Check(cardproto::ParseVoiceQuery(
-            "ok:vq 81 7 0 1 255 256 1024 2048 4096 12240 4660", query) &&
+            "ok:vq 81 7 0 1 255 256 1024 2048 4096 8160 4660", query) &&
             query.mask == 0x81u && query.best == 7u &&
             query.free_samples[0] == 0u &&
-            query.free_samples[7] == 12240u &&
+            query.free_samples[7] == 8160u &&
             query.last_pack_sequence == 4660u,
         "exact-credit vq parsing changed");
   Check(!cardproto::ParseVoiceQuery(
-            "ok:vq 01 0 12241 0 0 0 0 0 0 0 0", query),
+            "ok:vq 01 0 8161 0 0 0 0 0 0 0 0", query),
         "vq must reject free space beyond the physical ring");
 
   const auto err =

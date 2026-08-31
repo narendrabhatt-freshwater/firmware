@@ -51,15 +51,15 @@ int main()
 
   uint8_t vq_frame[cardlink::rs485::kVqBinaryFrameLen] = {
       0xA5, 0x5A, 0x43, 0x02, 0xFF, 0x00,
-      0xD0, 0x2F, 0xD0, 0x2F, 0xD0, 0x2F, 0xD0, 0x2F,
-      0xD0, 0x2F, 0xD0, 0x2F, 0xD0, 0x2F, 0xD0, 0x2F,
-      0x34, 0x12, 0x25, 0x0A};
+      0xE0, 0x1F, 0xE0, 0x1F, 0xE0, 0x1F, 0xE0, 0x1F,
+      0xE0, 0x1F, 0xE0, 0x1F, 0xE0, 0x1F, 0xE0, 0x1F,
+      0x34, 0x12, 0xD6, 0x0A};
   const auto vq = cardlink::rs485::ParseVqBinaryReply(
       vq_frame, sizeof(vq_frame));
   Check(vq.ok() &&
             std::strcmp(vq.raw,
-                        "ok:vq ff 0 12240 12240 12240 12240 12240 12240 "
-                        "12240 12240 4660") == 0,
+                        "ok:vq ff 0 8160 8160 8160 8160 8160 8160 "
+                        "8160 8160 4660") == 0,
         "binary vq reply parsing changed");
   vq_frame[24] ^= 0x01;
   Check(cardlink::rs485::ParseVqBinaryReply(vq_frame, sizeof(vq_frame)).status ==

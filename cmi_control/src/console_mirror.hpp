@@ -16,7 +16,7 @@ struct UiMirrorPatch
   int gain_db = 0;
 
   bool has_shape = false;
-  int shape_mode = 0; // 0 sine, 1 pulse, 2 triangle
+  int shape_mode = 0; // 0 sine, 1 pulse, 2 triangle, 3 saw
   float shape_param = 0.5f;
 
   bool has_filter_hz = false;

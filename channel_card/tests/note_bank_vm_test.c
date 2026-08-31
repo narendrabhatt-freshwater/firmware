@@ -17,6 +17,7 @@ static uint8_t *read_file(const char *path,size_t *size){FILE*f=fopen(path,"rb")
 static void put32(uint8_t *p,uint32_t v){p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>8);p[2]=(uint8_t)(v>>16);p[3]=(uint8_t)(v>>24);}
 static void refresh_crc(uint8_t *program,size_t size){uint32_t crc=fw_vm_crc32(program+FW_SCRIPT_CONTAINER_HEADER_SIZE,size-FW_SCRIPT_CONTAINER_HEADER_SIZE);put32(program+16u,crc);}
 static void boundary(void){NoteBank_VmBoundaryBegin();for(unsigned i=0;i<48u;++i)(void)NoteBank_NextSample();NoteBank_VmBoundaryEnd();}
+static uint32_t render_peak(unsigned count){uint32_t peak=0u;NoteBank_VmBoundaryBegin();for(unsigned i=0;i<count;++i){int64_t s=NoteBank_NextSample();uint32_t a=(uint32_t)(s<0?-s:s);if(a>peak)peak=a;}NoteBank_VmBoundaryEnd();return peak;}
 int main(int argc,char **argv){
   uint8_t *program;size_t size;check(argc==2,"program path required");program=read_file(argv[1],&size);
   NoteEnv_Init();StreamRing_Init();NoteBank_Init();check(NoteBank_VmActiveMask()==0u,"reset has no programs");
@@ -26,8 +27,13 @@ int main(int argc,char **argv){
   check(NoteBank_GetKey(0u)==60u&&NoteBank_GetMappedKey(0u)==60u,"identity key map applied");
   check(fabs(NoteBank_GetFreq(0u)-261.625565)<0.001,"C4 frequency resolved on card");
   check(NoteBank_IsActive(0u)&&NoteEnv_Amplitude(0u)>0.0f,"Berry starts native attack");
+  check(StreamRing_FreeLevel(0u)==0u,"wavetable profile advertises no BODY credit");
+  check(NoteBank_SetShape(NOTE_SHAPE_SINE,0.0)==0&&render_peak(256u)>0u,"sine wavetable renders");
+  check(NoteBank_SetShape(NOTE_SHAPE_PULSE,0.5)==0&&render_peak(32u)>0u,"pulse oscillator renders");
+  check(NoteBank_SetShape(NOTE_SHAPE_TRI,0.5)==0&&render_peak(32u)>0u,"triangle oscillator renders");
+  check(NoteBank_SetShape(NOTE_SHAPE_SAW,0.0)==0&&render_peak(32u)>0u,"saw oscillator renders");
   check(NoteBank_VmUploadBegin(1u)==-2,"reload rejected while sounding");
-  check(NoteBank_NoteOff(0u)==0,"note off accepted");for(unsigned i=0;i<16u&&NoteBank_IsActive(0u);++i)boundary();
+  check(NoteBank_NoteOff(0u)==0,"note off accepted");for(unsigned i=0;i<64u&&NoteBank_IsActive(0u);++i)boundary();
   check(!NoteBank_IsActive(0u),"release ends note");check(NoteBank_VmFaultCount(0u)==0u,"no integration fault");
   check(NoteBank_VmUploadBegin(0u)==0,"replacement begins idle");check(NoteBank_NoteOn(0u,60u)==-3,"note-on rejected while uploading");NoteBank_VmUploadAbort(0u);
   check(NoteBank_VmIsActive(0u),"abort preserves program");

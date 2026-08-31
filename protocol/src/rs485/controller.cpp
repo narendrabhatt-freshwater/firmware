@@ -227,7 +227,7 @@ struct Controller::Impl
         if (!active) {
           ring_primed[i] = false;
           underrun_logged[i] = false;
-        } else if (free_samples[i] < 12240u) {
+        } else if (free_samples[i] < 8160u) {
           /* An empty ring is normal while the attack bridges asynchronous
            * startup. It becomes an underrun only after BODY was observed. */
           ring_primed[i] = true;

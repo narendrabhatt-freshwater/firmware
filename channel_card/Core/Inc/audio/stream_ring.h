@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    stream_ring.h
- * @brief   Per-voice body FIFO: 3 × 4080 int16, filled from USB.
+ * @brief   Per-voice body FIFO: base + tail banks, filled from USB.
  *
  * SPSC: USB writes from main, the playhead reads in I2S. A full FIFO drops
  * the write (never unread samples). An empty FIFO is an underrun.
@@ -24,9 +24,9 @@ extern "C"
 
 #include "attack_bank.h" /* SAMPLE_VOICES, SAMPLE_CROSSFADE_LEN */
 
-/** Two base banks live in DTCM/D2/D3 and one extension bank lives in ITCM. */
+/** The normal streaming profile keeps one base bank and one tail bank. */
 #define STREAM_BANK_LEN 4080u
-#define STREAM_BASE_BANKS 2u
+#define STREAM_BASE_BANKS 1u
 #define STREAM_TAIL_BANKS 1u
 #define STREAM_BANKS (STREAM_BASE_BANKS + STREAM_TAIL_BANKS)
 #define STREAM_RING_BASE_SAMPLES (STREAM_BASE_BANKS * STREAM_BANK_LEN)

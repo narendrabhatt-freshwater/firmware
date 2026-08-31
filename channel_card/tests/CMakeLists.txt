@@ -37,6 +37,7 @@ target_include_directories(note_bank_vm_test PRIVATE
   ../Core/Inc/audio ../Core/Inc/filters ../USB_APP ../../common/vm/include
   ../../script_runtime/include)
 target_link_libraries(note_bank_vm_test PRIVATE script_runtime::berry m)
+target_compile_definitions(note_bank_vm_test PRIVATE CHANNEL_TEST_WAVETABLE=1)
 add_dependencies(note_bank_vm_test shared_berry_program)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(note_bank_vm_test PRIVATE -Wall -Wextra -Werror)

@@ -33,6 +33,24 @@ The note bank has no firmware-owned envelope policy. After each reset, upload a
 valid Channel Berry ABI5 program with Protocol's `fw_vmc` tool before sending note
 commands. Until then the card stays silent and replies `err:no-program`.
 
+### Wavetable test profile
+
+This branch defaults `CHANNEL_TEST_WAVETABLE=ON`. It generates one 128-sample
+Q15 sine table during card initialization and loops it with a per-voice phase
+accumulator. Pulse, triangle, and saw use the same phase accumulator directly;
+this avoids trigonometry in the audio ISR. Attack uploads and USB BODY writes
+are disabled in this profile, and `vq` reports zero BODY credit.
+
+To build the normal USB streaming path instead:
+
+```sh
+cmake --preset Release -DCHANNEL_TEST_WAVETABLE=OFF
+cmake --build --preset Release
+```
+
+The normal profile keeps one 4,080-sample base bank plus one 4,080-sample tail
+bank per voice (8,160 int16 samples, or 16,320 bytes per voice).
+
 ## Audio signal path
 
 Firmware / USB / playhead / I2S (including ISR vs main loop):
@@ -71,7 +89,7 @@ Audio from CH1 reaches the output by either — or both — of:
 - **Wet:** through SCF and/or VCF → **VCA** → `vca` switch → `out`
 
 For bring-up/verification, first upload a Channel VM program to voice 0, then
-use the note bank: `n0 440` sums a 440 Hz voice onto CH1. Bypass
+use the note bank: `n0 on 69` plays A4 onto CH1 with the default tuning. Bypass
 is already ON from the boot session defaults (bare `n0` re-applies
 them), so the tone is heard clean and filter-free at `out`. `n off`
 silences all voices.
@@ -246,9 +264,10 @@ Type `h` / `help` / `?` on the card for the live list.
 | `cpu q` `[N]`                             | Soft-queue load probe                                                                                                                                                                                                              |
 | `cpu 0`                                   | Clear notes; resume LED chaser                                                                                                                                                                                                     |
 
-Shape smoke with no attack loaded for n0 (scope on CH1): `n0 440`, `s`,
+Shape smoke with a loaded script for n0 (scope on CH1): `n0 on 69`, then
+`s`, `p 0.5`, `t 0.5`, or `saw`.
 `p 0.5`, `t 0.5`, `p 0.1`, then `f0` sweep — pulse/tri should show
 harmonics; LPF still responds.
 
-Pitch-track smoke: `f0 300`, `fk0 1`, `p 0.5`, `n0 261.63 1` then
-`n0 523.25 1` — corner should roughly double with the octave (query `f0`).
+Pitch-track smoke: `f0 300`, `fk0 1`, `p 0.5`, `n0 on 60` then
+`n0 on 72` — corner should roughly double with the octave (query `f0`).

@@ -142,7 +142,7 @@ USB CDC returns `vq` as `ok:vq <mask> <best> free0 … free7 <pack_seq>`.
 RS485 returns the same fields in a 26-byte binary frame: `a5 5a 43 02`,
 mask, best, eight uint16 LE exact free-sample counts, uint16 LE last applied
 USB PACK sequence, CRC-8/0x07, then `0a`. Best is 0–7 or 255; each free
-count is 0–12240. At 921600 8N1 the reply is about 282 µs on the wire.
+count is 0–8160. At 921600 8N1 the reply is about 282 µs on the wire.
 
 Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 2-tap
 linear interpolation. The attack plays to its committed length (not a hold-pad to
@@ -384,7 +384,7 @@ offset  size  field
 3       1     type = 02 exact refill status
 4       1     active/requested voice mask
 5       1     hungriest voice, or 255
-6       16    exact uint16 LE free samples for voices 0..7 (0..12240)
+6       16    exact uint16 LE free samples for voices 0..7 (0..8160)
 22      2     last USB PACK sequence reflected by these free counts
 24      1     CRC-8/0x07 over bytes 0..23
 25      1     terminator = 0a

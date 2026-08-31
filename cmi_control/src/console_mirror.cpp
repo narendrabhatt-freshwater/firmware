@@ -110,6 +110,12 @@ void MirrorChannel(const std::string &cmd, const cardproto::Result &result,
     p.shape_param = 0.5f;
     return;
   }
+  if (cmd == "saw") {
+    p.has_shape = true;
+    p.shape_mode = 3;
+    p.shape_param = 0.5f;
+    return;
+  }
 
   double param = 0.0;
   if (std::sscanf(cmd.c_str(), "p %lf", &param) == 1 && param >= 0.1 &&

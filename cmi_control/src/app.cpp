@@ -771,7 +771,7 @@ void App::Tick()
       }
       if (p.has_shape)
       {
-        shape_mode = std::clamp(p.shape_mode, 0, 2);
+        shape_mode = std::clamp(p.shape_mode, 0, 3);
         shape_param = std::clamp(p.shape_param, 0.1f, 0.9f);
         dirty = true;
       }

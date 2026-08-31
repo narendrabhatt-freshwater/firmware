@@ -36,7 +36,7 @@ constexpr unsigned kSampleRateHz = 48000;
 constexpr unsigned kAttackSamples = 512;
 constexpr unsigned kCrossfadeSamples = 32;
 constexpr unsigned kBodyOrigin = kAttackSamples - kCrossfadeSamples;
-constexpr unsigned kRingSamples = 12240;
+constexpr unsigned kRingSamples = 8160;
 /** Leave room for interpolator taps. */
 constexpr unsigned kRingHeadroom = 32;
 /** Coalesce refill credit to amortize eight per-voice BODY metas. */

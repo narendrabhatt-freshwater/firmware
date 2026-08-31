@@ -27,6 +27,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 # Core project settings
 project(${CMAKE_PROJECT_NAME})
 message("Build type: " ${CMAKE_BUILD_TYPE})
+option(CHANNEL_TEST_WAVETABLE
+    "Use the small looped test oscillator instead of attack/BODY storage" ON)
 
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
@@ -98,6 +100,10 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     CFG_TUSB_MCU=OPT_MCU_STM32H7
 )
+if(CHANNEL_TEST_WAVETABLE)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+        CHANNEL_TEST_WAVETABLE=1)
+endif()
 
 # Remove wrong libob.a library dependency when using cpp files
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)

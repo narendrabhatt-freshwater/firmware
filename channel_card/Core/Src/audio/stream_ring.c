@@ -11,6 +11,14 @@
 #include <stddef.h>
 #include <string.h>
 
+#if defined(CHANNEL_TEST_WAVETABLE)
+#define STREAM_RING_STORAGE_SAMPLES 1u
+#define STREAM_RING_TAIL_STORAGE_SAMPLES 1u
+#else
+#define STREAM_RING_STORAGE_SAMPLES STREAM_RING_BASE_SAMPLES
+#define STREAM_RING_TAIL_STORAGE_SAMPLES STREAM_RING_TAIL_SAMPLES
+#endif
+
 typedef struct
 {
   volatile uint32_t wr;
@@ -24,7 +32,7 @@ typedef struct
   volatile uint16_t expected_wave_id;
   uint32_t generation;
   volatile uint32_t release_left;
-  int16_t data[STREAM_RING_BASE_SAMPLES];
+  int16_t data[STREAM_RING_STORAGE_SAMPLES];
 } StreamRing_t;
 
 #if defined(__APPLE__)
@@ -42,10 +50,7 @@ static StreamRing_t s_rings_d2[2]
     STREAM_RING_SECTION(".ring_d2");
 static StreamRing_t s_rings_d3[1]
     STREAM_RING_SECTION(".ring_d3");
-/* The H725's otherwise-unused 64 KiB ITCM is CPU-accessible zero-wait-state
- * RAM. One extension bank per voice increases real jitter tolerance without
- * delaying playback or changing the 48 kHz int16 stream. */
-static int16_t s_ring_tail[SAMPLE_VOICES][STREAM_RING_TAIL_SAMPLES]
+static int16_t s_ring_tail[SAMPLE_VOICES][STREAM_RING_TAIL_STORAGE_SAMPLES]
     STREAM_RING_SECTION(".ring_itcm");
 
 static StreamRing_t *StreamRing_At(uint8_t voice)
@@ -188,6 +193,12 @@ uint32_t StreamRing_BeginReplacement(uint8_t voice, uint16_t wave_id,
 int StreamRing_GetReleaseRel(uint8_t voice, uint32_t offset, int16_t *out)
 {
   StreamRing_t *r;
+#if defined(CHANNEL_TEST_WAVETABLE)
+  (void)voice;
+  (void)offset;
+  (void)out;
+  return -1;
+#endif
   if (voice >= SAMPLE_VOICES || out == NULL)
   {
     return -1;
@@ -252,6 +263,19 @@ int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
                           StreamRing_Write_t *write)
 {
   StreamRing_t *r;
+
+#if defined(CHANNEL_TEST_WAVETABLE)
+  (void)voice;
+  (void)session;
+  (void)sof;
+  (void)wave_id;
+  (void)nsamp;
+  if (write != NULL)
+  {
+    memset(write, 0, sizeof *write);
+  }
+  return STREAM_RING_WRITE_ERROR;
+#endif
 
   if (voice >= SAMPLE_VOICES || nsamp == 0u ||
       nsamp > USB_STREAM_NSAMP_MAX || write == NULL)
@@ -513,6 +537,13 @@ int StreamRing_GetRel(uint8_t voice, uint32_t offset, int16_t *out)
   uint32_t rd;
   uint32_t wr;
 
+#if defined(CHANNEL_TEST_WAVETABLE)
+  (void)voice;
+  (void)offset;
+  (void)out;
+  return -1;
+#endif
+
   if (voice >= SAMPLE_VOICES || out == NULL)
   {
     return -1;
@@ -563,6 +594,10 @@ uint32_t StreamRing_FillLevel(uint8_t voice)
 uint32_t StreamRing_FreeLevel(uint8_t voice)
 {
   uint32_t used;
+#if defined(CHANNEL_TEST_WAVETABLE)
+  (void)voice;
+  return 0u;
+#endif
   if (voice >= SAMPLE_VOICES)
   {
     return 0u;

@@ -167,7 +167,7 @@ ExchangeResult ParseVqBinaryReply(const uint8_t *frame, size_t len) {
   for (size_t i = 0; i < free_samples.size(); ++i) {
     free_samples[i] = static_cast<uint16_t>(frame[6 + 2 * i]) |
                       static_cast<uint16_t>(frame[7 + 2 * i] << 8u);
-    if (free_samples[i] > 12240u) {
+    if (free_samples[i] > 8160u) {
       out.status = Status::BadReply;
       std::snprintf(out.raw, sizeof(out.raw), "bad binary vq free count");
       return out;

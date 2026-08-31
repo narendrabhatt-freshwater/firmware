@@ -490,7 +490,8 @@ static void Console_Help(void)
   char b[256];
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   snprintf(b, sizeof b,
-           "ok: SAMPLE n0..n7 Hz [sc] | s|p d|t a | aw v id | "
+           "ok: SAMPLE n0..n7 on key [@session] | off | s|p d|t a|saw | "
+           "aw v id | "
            "al id n | vmload v n | vm [v] | ar id Hz | a | vq | "
            "crash [0..50] | usb | "
            "f0..f7 Hz [q] | fk0..fk7 k | g ch dB | "
@@ -510,6 +511,10 @@ static void Console_ShapeReply(void)
   else if (sh == NOTE_SHAPE_TRI)
   {
     snprintf(b, sizeof b, "ok: t %.2f\r\n", NoteBank_GetShapeParam());
+  }
+  else if (sh == NOTE_SHAPE_SAW)
+  {
+    snprintf(b, sizeof b, "ok: saw\r\n");
   }
   else
   {
@@ -1294,10 +1299,16 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- s / p <0.1..0.9> / t <0.1..0.9>: global note-bank shape ---- */
+  /* ---- s / p <0.1..0.9> / t <0.1..0.9> / saw: oscillator shape ---- */
   if (strcmp(line, "s") == 0)
   {
     (void)NoteBank_SetShape(NOTE_SHAPE_SINE, 0.0);
+    Console_ShapeReply();
+    return;
+  }
+  if (strcmp(line, "saw") == 0)
+  {
+    (void)NoteBank_SetShape(NOTE_SHAPE_SAW, 0.0);
     Console_ShapeReply();
     return;
   }
