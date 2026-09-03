@@ -70,17 +70,25 @@ int main(int argc,char **argv){
    check(NoteBank_NoteOn(0u,60u,32u)==0,"low velocity note accepted");boundary();
    boundaries(49u);
    check(NoteBank_GetVelocity(0u)==32u,"low velocity reaches active voice");
-   check(fabsf(NoteEnv_Amplitude(0u)-(32.0f/127.0f))<0.0001f,"50 ms attack reaches velocity amplitude");
+   check(NoteEnv_Amplitude(0u)<32.0f/127.0f,"soft velocity attack remains below its peak at 50 ms");
+   boundaries(150u);
+   check(fabsf(NoteEnv_Amplitude(0u)-(32.0f/127.0f))<0.002f,"soft velocity attack reaches its peak near 200 ms");
+   boundaries(500u);
+   check(fabsf(NoteEnv_Amplitude(0u)-(32.0f/127.0f*0.2f))<0.0001f,"decay reaches velocity-scaled sustain");
    check(NoteBank_NoteOff(0u)==0,"low velocity note off accepted");boundaries(50u);
    check(!NoteBank_IsActive(0u),"release retires low velocity note");
    check(NoteBank_NoteOn(0u,61u,127u)==0,"full velocity note accepted");boundary();boundaries(49u);
    check(fabsf(NoteEnv_Amplitude(0u)-1.0f)<0.0001f,"full velocity reaches full envelope amplitude");
    check(NoteBank_NoteOn(0u,62u,64u)==0,"replacement velocity accepted");boundary();
-   check(StreamRing_HasPending(0u)!=0u,"replacement stays pending during 2 ms steal fade");
+   check(StreamRing_HasPending(0u)!=0u,"replacement stays pending during steal fade");
    boundary();
    check(StreamRing_HasPending(0u)==0u,"replacement starts after 2 ms steal fade");
    boundaries(50u);
    check(NoteBank_GetVelocity(0u)==64u,"replacement keeps its own velocity");
-   check(fabsf(NoteEnv_Amplitude(0u)-(64.0f/127.0f))<0.0001f,"replacement attack reaches velocity amplitude");free(channel_program);}
+   check(NoteEnv_Amplitude(0u)<64.0f/127.0f,"medium velocity attack remains below its peak at 50 ms");
+   boundaries(50u);
+   check(fabsf(NoteEnv_Amplitude(0u)-(64.0f/127.0f))<0.002f,"medium velocity attack reaches its peak near 100 ms");
+   boundaries(500u);
+   check(fabsf(NoteEnv_Amplitude(0u)-(64.0f/127.0f*0.2f))<0.0001f,"replacement decay reaches sustain");free(channel_program);}
   free(program);puts("Channel shared Berry VM test passed");return 0;
 }

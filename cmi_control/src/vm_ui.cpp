@@ -40,7 +40,7 @@ struct VmExample
 };
 
 constexpr VmExample kExamples[] = {
-    {"Channel", "channel", "Velocity level, 50 ms attack, and up to 2 ms voice steal."},
+    {"Channel", "channel", "Velocity ADSR with 50 ms attack and up to 2 ms voice steal."},
 };
 
 void MonoText(const char *text, const ImVec4 &color, ImFont *font)

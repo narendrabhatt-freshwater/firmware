@@ -49,9 +49,10 @@ Every pending note initially uses standard MIDI pitch with A4 = 440 Hz.
 atomically overrides it with any positive frequency in Hz and promotes the
 pending note without requiring the lookup.
 
-`led()` flashes the Channel Card's RGB package for 100 ms. All four arguments
-are normalized from `0.0` to `1.0`; brightness scales the selected color. The
-most recent call from any voice owns the card-wide flash.
+`led()` sets the Channel Card's RGB package until the next `led()` call. All
+four arguments are normalized from `0.0` to `1.0`; brightness scales the
+selected color. Call `led(0, 0, 0, 0)` to turn it off. The most recent call from
+any voice owns the card-wide LED.
 
 Persistent per-voice state can use names instead of numeric slots. Declare a
 name exactly once inside any handler with `state name` or initialize it at that

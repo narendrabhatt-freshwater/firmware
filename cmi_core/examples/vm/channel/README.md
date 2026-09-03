@@ -1,9 +1,9 @@
 # Channel script example
 
 `channel.be` is the single production-ready example. Its active configuration
-uses MIDI velocity, a fixed 50 ms attack, an at-most 2 ms voice-steal fade, and
-an at-most 50 ms release. Commented alternatives in the file show the available
-amplitude, pitch, and LED choices.
+uses MIDI velocity for attack speed, a 500 ms decay to 20% sustain, a fast
+voice-steal fade, and a manual note-off release. Commented alternatives in the
+file show the available amplitude, pitch, and LED choices.
 
 Load `channel.be` into all eight voices to use it with automatic MIDI voice
 allocation. When a ninth note arrives, the oldest allocated voice fades for at

@@ -101,7 +101,7 @@ actions.
 | `pitch_for_key(key)` | Returns the standard MIDI frequency for key `0..127` (A4 = 440 Hz). Using it is optional. |
 | `note_end()` | Retires the current note and releases its playback resources. It does not promote a pending note. |
 | `pow(base, exponent)` | Returns an allocation-free floating-point power calculation. |
-| `led(red, green, blue, brightness)` | Flashes the card RGB LED for 100 ms. Every argument is `0.0..1.0`. |
+| `led(red, green, blue, brightness)` | Sets the card RGB LED until the next `led()` call. Every argument is `0.0..1.0`; use `led(0, 0, 0, 0)` to turn it off. |
 | `state_get(slot)` | Returns persistent state slot `0..15`. Prefer named state. |
 | `state_set(slot, value)` | Stores a finite number in persistent state slot `0..15`. Prefer named state. |
 

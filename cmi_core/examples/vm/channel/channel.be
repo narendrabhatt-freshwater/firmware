@@ -1,32 +1,34 @@
-# Complete Channel voice program.
-#
-# Active behaviour:
-# - standard MIDI pitch (A4 = 440 Hz)
-# - MIDI velocity controls the held amplitude
-# - fixed 50 ms attack
-# - at most 2 ms fade before a pending note steals this voice
-# - at most 50 ms release
-#
-# stage: 0=idle, 1=attack, 2=hold, 3=release, 4=voice steal
+# stage: 0=idle, 1=attack, 2=decay, 3=hold, 4=release, 5=voice steal
 
 def on_note_on(key, velocity)
     state stage
     state level
+    state sustain
+    state attack_slope
 
     # Amplitude choices (leave only one assignment active).
     level = velocity / 127.0                 # linear MIDI velocity
     # level = 1                              # ignore MIDI velocity
     # level = pow(velocity / 127.0, 2)       # quieter, squared response
 
+    # Higher velocity gives a faster attack:
+    # velocity 127 ~= 50 ms, 64 ~= 100 ms, and 32 ~= 200 ms.
+    attack_slope = level * level * 20
+
+    # Sustain choices (leave only one assignment active).
+    sustain = level * 0.2                    # hold at 20% of the peak
+    # sustain = level                        # no decay; hold at the peak
+    # sustain = level * 0.5                  # hold at 50% of the peak
+
     if stage != 0
         # A newer pending note replaces the previous pending note while the
         # current voice-steal fade continues. `level` already has its velocity.
-        if stage == 4
+        if stage == 5
             return
         end
 
-        stage = 4
-        ramp(0, 500)                          # full scale -> 0 in 2 ms
+        stage = 5
+        ramp(0, 200)                          # full scale -> 0 in 2 ms
         return
     end
 
@@ -39,49 +41,38 @@ def on_note_on(key, velocity)
 
     set_amplitude(0)
     stage = 1
-    ramp(level, level / 0.05)                 # silence -> level in 50 ms
+    ramp(level, attack_slope)                 # velocity controls attack time
 
-    # Optional 100 ms velocity-brightness flash.
-    # led(0.1, 0.4, 1.0, level)
+    # Keep RGB on for the note, with brightness controlled by velocity.
+    led(0.1, 0.4, 1.0, level)
 end
 
 def on_note_off()
-    stage = 3
-    ramp(0, 20)                               # full scale -> 0 in 50 ms
+    # Manual release
+    stage = 4
+    ramp(0, 20)                             # full scale -> 0 in 50 ms
 end
 
 def on_ramp_end()
-    if stage == 4
+    # Switch-style stage dispatcher. The Channel Berry subset uses if/elif
+    # rather than a switch/case statement.
+    if stage == 5
         start_note()
         set_amplitude(0)
         stage = 1
-        ramp(level, level / 0.05)             # replacement attack: 50 ms
+        ramp(level, attack_slope)             # replacement keeps its velocity attack
+
+        led(0.1, 0.4, 1.0, level)              # show the replacement note
         return
-    end
-    if stage == 1
+    elif stage == 1
         stage = 2
+        ramp(sustain, (level - sustain) / 0.5) # peak -> sustain in 500 ms
+        return
+    elif stage == 2
+        stage = 3                             # hold until note-off
         return
     end
     stage = 0
+    led(0, 0, 0, 0)                            # RGB off when the note ends
     note_end()
-end
-
-# Other envelope recipes (examples only; the program above stays active):
-#
-# Immediate velocity gate instead of a 50 ms attack:
-#     set_amplitude(level)
-#     stage = 2
-#
-# Fixed 2 ms attack instead of a 50 ms attack:
-#     set_amplitude(0)
-#     stage = 1
-#     ramp(level, level / 0.002)
-#
-# A pluck can start a decay from the stage-1 branch in on_ramp_end():
-#     stage = 3
-#     ramp(0, level / 0.5)                    # decay to zero in 500 ms
-# (Use a separate stage value if note-off needs different cleanup behaviour.)
-#
-# Other actions:
-# discard_pending()                           # reject a pending replacement
-# note_end()                                  # retire the current note
+end                              # retire the current note
