@@ -624,6 +624,13 @@ void App::ReconcileVmUpload()
     samples.Silence(slot);
     bus.AcknowledgeSlotOff(slot);
   }
+  /* Older controller builds could latch err:no-program as a bus fault when a
+   * key was played before upload. A completed upload makes recovery valid and
+   * should restore note delivery without requiring a manual Soft Recover. */
+  if (bus.BusFault())
+  {
+    bus.RequestRecover(log);
+  }
 }
 
 void App::HandleKeyboardPiano()

@@ -493,11 +493,24 @@ struct Controller::Impl
           MarkNoteSentLocked(note_slot, note_key);
           vq_now = true;
         } else {
-          MarkFault("*** RS485 fault on n" +
-                    std::string(1, "0123456789abcdef"[note_slot]) +
-                    " — note TX stopped");
-          if (!bus.SoftRecover()) {
-            bus.ForceClearBus();
+          const bool transport_fault =
+              result.status == cardproto::Status::Timeout ||
+              result.status == cardproto::Status::IoError ||
+              result.status == cardproto::Status::BadReply;
+          if (transport_fault) {
+            MarkFault("*** RS485 fault on n" +
+                      std::string(1, "0123456789abcdef"[note_slot]) +
+                      " — note TX stopped");
+            if (!bus.SoftRecover()) {
+              bus.ForceClearBus();
+            }
+          } else {
+            /* A well-formed err reply means the bus is healthy. In
+             * particular, err:no-program is expected before the RAM-only VM
+             * slots have been uploaded; treating it as a bus fault leaves the
+             * controller halted even after a successful CDC upload. */
+            Log("[C] " + std::string(result.raw[0] ? result.raw
+                                                   : "err:note-rejected"));
           }
           std::lock_guard<std::mutex> lock(mutex);
           desired_key.fill(-1);
