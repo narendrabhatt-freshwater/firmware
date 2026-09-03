@@ -337,7 +337,7 @@ static const SwitchDef_t switches[] = {
  *   n off             — release all 8 voices
  *   al <id> <len>     — CDC signed-int8 attack upload (1..ATTACK_BANK_BYTES)
  *   wl <wave> <len>   — CDC logical wavetable upload (wave 0..7, len 2..512)
- *   vmload <v> <len>  — CDC Berry ABI1 upload; vm [v|mem] — status
+ *   vmload <v> <len>  — CDC Berry ABI2 upload; vm [v|mem] — status
  *   ar <id> <Hz>      — attack-bank root pitch (id 0..255); a — loaded mask
  *   a / vq            — loaded heads per voice / hungriest + exact credit
  *   usb               — BODY counters: drop/hold/min/fill/z/sof/rx/bytes/bad
@@ -938,7 +938,7 @@ static void Console_CmdWavetableLoad(char *line)
   RS485_Reply("ok:ready\r\n");
 }
 
-/** vmload <voice> <nbytes> — receive one Channel ABI1 FWSC container over CDC. */
+/** vmload <voice> <nbytes> — receive one Channel ABI2 FWSC container over CDC. */
 static void Console_CmdVmLoad(char *line)
 {
   unsigned int voice;

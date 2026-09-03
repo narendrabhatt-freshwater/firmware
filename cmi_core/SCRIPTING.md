@@ -99,6 +99,8 @@ actions.
 | `start_note(frequency)` | Overrides the pending pitch with a positive frequency in Hz and starts the note. |
 | `discard_pending()` | Removes the pending note without changing the current note; primarily used when `on_note_on()` rejects a transport-ready note. |
 | `osc(wave, frequency)` | Appends a pending-note oscillator using logical wavetable `0..7` at an absolute frequency greater than 0 and no greater than 24,000 Hz, and returns an opaque note-local handle. |
+| `route(source, OUTPUT, weight)` | Sends a pending oscillator's audio to the voice output with a nonnegative finite mix weight. |
+| `modulate(source, target, control, amount)` | Uses a pending oscillator to modulate `FREQUENCY` or `AMPLITUDE` on `SAMPLE` or another oscillator. |
 | `pitch_for_key(key)` | Returns the standard MIDI frequency for key `0..127` (A4 = 440 Hz). Using it is optional. |
 | `note_end()` | Retires the current note and releases its playback resources. It does not promote a pending note. |
 | `pow(base, exponent)` | Returns an allocation-free floating-point power calculation. |
@@ -155,11 +157,42 @@ def on_note_on(key, velocity)
 end
 ```
 
-The sample and enabled oscillators have equal source gain and are averaged
-before the existing per-voice filter and common envelope. Filter pitch
-tracking continues to use the primary note frequency. There is no
-per-oscillator gain, envelope, phase, or modulation control yet; returned
-handles establish the identity those future calls will use.
+An oscillator with no explicit connection keeps its legacy, full-weight
+connection to the output mixer. Its first successful `route()` or `modulate()`
+removes that implicit connection; add `route(handle, OUTPUT, weight)` when it
+should also remain audible. The sample has mixer weight 1, implicit oscillator
+routes have weight 1, and explicit audio routes use their nonnegative finite
+weight.
+The weighted sum is divided by the total weight before the existing filter,
+common envelope, and voice gain.
+
+`modulate(source, target, FREQUENCY, amount)` accepts `SAMPLE` or an oscillator
+target. Its signed finite amount is peak deviation in Hz, applied as
+`base + source * amount`. Instantaneous oscillator frequency is clamped to
+0…24 kHz and sample playback to its existing 1/16×…16× root-pitch range.
+`modulate(source, target, AMPLITUDE, gain)` accepts the same targets and a gain
+from 0…1. It converts the bipolar oscillator source to unipolar and applies
+`target *= clamp((source + 1) / 2, 0, 1) * gain`. Gain 1 therefore moves the
+target between silence and its full level; gain 0.5 moves it between silence
+and half level. Multiple amplitude modulators multiply.
+Connections and handles must belong to the pending
+note; duplicates, self-routes, and cycles fault the
+voice. The complete graph becomes active at `start_note()` and follows the
+note's normal discard, replacement, end, fault, and panic lifecycle.
+
+```berry
+def on_note_on(key, velocity)
+    var modulator = osc(0, 7000)
+    var carrier = osc(1, pitch_for_key(key))
+    modulate(modulator, carrier, FREQUENCY, 250) # +/-250 Hz
+    route(carrier, OUTPUT, 0.5)
+    start_note()
+end
+```
+
+The v2 routing targets and parameters are deliberately typed. Future firmware
+may add filter or other destinations without changing the graph model; they
+are not available in this release.
 
 ## Inputs
 

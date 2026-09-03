@@ -39,7 +39,8 @@ endif()
 add_executable(wavetable_osc_test
   wavetable_osc_test.c
   ../Core/Src/audio/wavetable_osc.c)
-target_include_directories(wavetable_osc_test PRIVATE ../Core/Inc/audio)
+target_include_directories(wavetable_osc_test PRIVATE
+  ../Core/Inc/audio ../../cmi_core/shared/vm/include)
 target_link_libraries(wavetable_osc_test PRIVATE m)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(wavetable_osc_test PRIVATE -Wall -Wextra -Werror)

@@ -150,7 +150,7 @@ int main(int argc, char **argv)
     while (fgets(line, sizeof(line), source)) {
         if (!source_line_allowed(line)) {
             fclose(source); fclose(wrapper); remove(wrapped);
-            return fail("only ABI1 Channel handlers are allowed at top level", input);
+            return fail("only ABI2 Channel handlers are allowed at top level", input);
         }
         fputs(line, wrapper);
     }
@@ -168,6 +168,8 @@ int main(int argc, char **argv)
     be_regfunc(vm, "note_end", compile_only_native);
     be_regfunc(vm, "discard_pending", compile_only_native);
     be_regfunc(vm, "osc", compile_only_native);
+    be_regfunc(vm, "route", compile_only_native);
+    be_regfunc(vm, "modulate", compile_only_native);
     be_regfunc(vm, "led", compile_only_native);
     be_regfunc(vm, "pitch_for_key", compile_only_native);
     be_regfunc(vm, "pow", pow_native);
@@ -184,6 +186,10 @@ int main(int argc, char **argv)
     compiler_int(vm, "INPUT_PENDING_KEY", FW_VM_CHANNEL_INPUT_PENDING_KEY);
     compiler_int(vm, "INPUT_VELOCITY", FW_VM_CHANNEL_INPUT_VELOCITY);
     compiler_int(vm, "INPUT_PENDING_VELOCITY", FW_VM_CHANNEL_INPUT_PENDING_VELOCITY);
+    compiler_int(vm, "OUTPUT", FW_VM_CHANNEL_TARGET_OUTPUT);
+    compiler_int(vm, "SAMPLE", FW_VM_CHANNEL_TARGET_SAMPLE);
+    compiler_int(vm, "FREQUENCY", FW_VM_CHANNEL_ROUTE_FREQUENCY);
+    compiler_int(vm, "AMPLITUDE", FW_VM_CHANNEL_ROUTE_AMPLITUDE);
     compiler_nil(vm, "on_note_on");
     compiler_nil(vm, "on_note_off");
     compiler_nil(vm, "on_ramp_end");

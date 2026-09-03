@@ -250,9 +250,9 @@ static int NoteBank_InterpBody(uint8_t note, int32_t *out)
   return 0;
 }
 
-static void NoteBank_AdvanceBody(uint8_t note)
+static void NoteBank_AdvanceBody(uint8_t note, uint32_t increment)
 {
-  note_body_frac[note] += note_inc[note];
+  note_body_frac[note] += increment;
   while (note_body_frac[note] >= BODY_ADVANCE_PHASE)
   {
     if (StreamRing_FillLevel(note) == 0u)
@@ -464,7 +464,7 @@ static void NoteBank_SlewInc(uint8_t note)
  * same source index (len - overlap); the FIFO is caught up if the
  * playhead lands past that point.
  */
-static int32_t NoteBank_Sample(uint8_t note)
+static int32_t NoteBank_Sample(uint8_t note, uint32_t increment)
 {
   uint16_t wid = note_play_wid[note];
   uint64_t phase = note_phase[note];
@@ -479,8 +479,8 @@ static int32_t NoteBank_Sample(uint8_t note)
     {
       return NoteBank_BodyMiss(note);
     }
-    NoteBank_AdvanceBody(note);
-    note_phase[note] = phase + (uint64_t)note_inc[note];
+    NoteBank_AdvanceBody(note, increment);
+    note_phase[note] = phase + (uint64_t)increment;
     note_hold[note] = y;
     return y;
   }
@@ -509,7 +509,7 @@ static int32_t NoteBank_Sample(uint8_t note)
         {
           y = joined;
         }
-        NoteBank_AdvanceBody(note);
+        NoteBank_AdvanceBody(note, increment);
       }
       else
       {
@@ -518,7 +518,7 @@ static int32_t NoteBank_Sample(uint8_t note)
          * BODY boundary. */
       }
     }
-    note_phase[note] = phase + (uint64_t)note_inc[note];
+    note_phase[note] = phase + (uint64_t)increment;
     note_hold[note] = y;
     return y;
   }
@@ -532,8 +532,8 @@ static int32_t NoteBank_Sample(uint8_t note)
     return NoteBank_BodyMiss(note);
   }
   note_body_only[note] = 1u;
-  NoteBank_AdvanceBody(note);
-  note_phase[note] = phase + (uint64_t)note_inc[note];
+  NoteBank_AdvanceBody(note, increment);
+  note_phase[note] = phase + (uint64_t)increment;
   note_hold[note] = y;
   return y;
 }
@@ -541,18 +541,32 @@ static int32_t NoteBank_Sample(uint8_t note)
 static inline int32_t NoteBank_VoiceSample(uint8_t note)
 {
   int32_t s;
-  int64_t source_sum;
   float env;
+  float sample_frequency_mod;
+  float sample_amplitude;
   int32_t env_q15;
   int32_t gain_q15;
   int32_t amp;
-  uint32_t oscillator_count;
+  uint32_t frame_inc;
+  double delta_inc;
+  float root_hz;
 
   NoteBank_SlewInc(note);
-  s = NoteBank_Sample(note);
-  source_sum = (int64_t)s +
-               WavetableOsc_NextSum(note, &oscillator_count);
-  s = (int32_t)(source_sum / (int64_t)(1u + oscillator_count));
+  WavetableOsc_BeginSample(note, &sample_frequency_mod, &sample_amplitude);
+  (void)sample_amplitude;
+  root_hz = AttackBank_GetRootHz(note_play_wid[note]);
+  delta_inc = (root_hz > 0.0f)
+                  ? (double)sample_frequency_mod * (double)PHASE_ONE /
+                        (double)root_hz
+                  : 0.0;
+  delta_inc += (double)note_inc[note];
+  if (!isfinite(delta_inc))
+    delta_inc = delta_inc > 0.0 ? PHASE_INC_MAX : PHASE_INC_MIN;
+  if (delta_inc < (double)PHASE_INC_MIN) delta_inc = PHASE_INC_MIN;
+  if (delta_inc > (double)PHASE_INC_MAX) delta_inc = PHASE_INC_MAX;
+  frame_inc = (uint32_t)(delta_inc + 0.5);
+  s = NoteBank_Sample(note, frame_inc);
+  s = WavetableOsc_MixSample(note, s);
   s = NoteFilter_Process(note, s);
 
   env = NoteEnv_RenderSample(note);
@@ -636,6 +650,7 @@ static int NoteBank_VmStartNoteAt(void *context, uint8_t note,
   inc = NoteBank_HzToInc(note_next_wid[note], (double)frequency_hz);
   if (inc < PHASE_INC_MIN) inc = PHASE_INC_MIN;
   if (inc > PHASE_INC_MAX) inc = PHASE_INC_MAX;
+  if (WavetableOsc_FinalizePending(note) != 0) return -1;
   if (StreamRing_StartNote(note) != 0) return -1;
   note_next_hz[note] = frequency_hz;
   note_next_inc[note] = inc;
@@ -647,6 +662,7 @@ static int NoteBank_VmStartNote(void *context, uint8_t note)
 {
   (void)context;
   if (note_next_pending[note] == 0u) return -1;
+  if (WavetableOsc_FinalizePending(note) != 0) return -1;
   if (StreamRing_StartNote(note) != 0) return -1;
   NoteBank_ActivateReplacement(note);
   note_freq_hz[note] = note_play_hz[note];
@@ -682,6 +698,15 @@ static int NoteBank_VmOsc(void *context, uint8_t note, uint8_t wave,
     return -1;
   }
   return WavetableOsc_AddPending(note, wave, frequency_hz, handle_out);
+}
+static int NoteBank_VmRoute(void *context, uint8_t note,
+                            uint32_t source_handle, int32_t target,
+                            uint8_t parameter, float gain)
+{
+  (void)context;
+  if (note >= NOTE_BANK_VOICES || note_next_pending[note] == 0u) return -1;
+  return WavetableOsc_AddRoutePending(note, source_handle, target, parameter,
+                                      gain);
 }
 
 static int NoteBank_VmDispatch(FwVmChannelHandler handler, uint8_t note)
@@ -746,6 +771,7 @@ void NoteBank_Init(void)
   vm_ops.discard_pending = NoteBank_VmDiscardPending;
   vm_ops.start_note_at = NoteBank_VmStartNoteAt;
   vm_ops.osc = NoteBank_VmOsc;
+  vm_ops.route = NoteBank_VmRoute;
 #if defined(__arm__) || defined(__thumb__)
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
   DWT->CYCCNT = 0u;

@@ -233,6 +233,29 @@ static int native_osc(bvm *vm) {
     native_error(vm,FW_VM_FAULT_HOST_CALL,"osc configuration failed");
   be_pushint(vm,(bint)handle);be_return(vm);
 }
+static int native_route(bvm *vm) {
+  bint source,target;float gain;require_handler(vm);require_count(vm,3);
+  source=checked_int(vm,1,1,INT32_MAX);
+  target=checked_int(vm,2,FW_VM_CHANNEL_TARGET_OUTPUT,FW_VM_CHANNEL_TARGET_OUTPUT);
+  gain=checked_float(vm,3);
+  if(!s_runtime->ops.route||s_runtime->ops.route(s_runtime->ops.context,s_runtime->current_voice,
+      (uint32_t)source,(int32_t)target,FW_VM_CHANNEL_ROUTE_AUDIO,gain)!=0)
+    native_error(vm,FW_VM_FAULT_HOST_CALL,"route configuration failed");
+  be_pushnil(vm);be_return(vm);
+}
+static int native_modulate(bvm *vm) {
+  bint source,target,parameter;float gain;require_handler(vm);require_count(vm,4);
+  source=checked_int(vm,1,1,INT32_MAX);
+  target=checked_int(vm,2,FW_VM_CHANNEL_TARGET_SAMPLE,INT32_MAX);
+  if(target==FW_VM_CHANNEL_TARGET_OUTPUT)
+    native_error(vm,FW_VM_FAULT_BAD_HOST_ARGUMENT,"modulate target must be SAMPLE or an oscillator");
+  parameter=checked_int(vm,3,FW_VM_CHANNEL_ROUTE_FREQUENCY,FW_VM_CHANNEL_ROUTE_AMPLITUDE);
+  gain=checked_float(vm,4);
+  if(!s_runtime->ops.route||s_runtime->ops.route(s_runtime->ops.context,s_runtime->current_voice,
+      (uint32_t)source,(int32_t)target,(uint8_t)parameter,gain)!=0)
+    native_error(vm,FW_VM_FAULT_HOST_CALL,"modulation configuration failed");
+  be_pushnil(vm);be_return(vm);
+}
 
 static void observation_hook(bvm *vm,int event,...) {
   ScriptBerryRuntime *r=s_runtime;(void)vm;if(!r)return;
@@ -257,6 +280,12 @@ static int create_vm(ScriptBerryRuntime *r) {
   be_regfunc(vm,"discard_pending",native_discard_pending);
   be_regfunc(vm,"led",native_led);
   be_regfunc(vm,"osc",native_osc);
+  be_regfunc(vm,"route",native_route);
+  be_regfunc(vm,"modulate",native_modulate);
+  register_int(vm,"OUTPUT",FW_VM_CHANNEL_TARGET_OUTPUT);
+  register_int(vm,"SAMPLE",FW_VM_CHANNEL_TARGET_SAMPLE);
+  register_int(vm,"FREQUENCY",FW_VM_CHANNEL_ROUTE_FREQUENCY);
+  register_int(vm,"AMPLITUDE",FW_VM_CHANNEL_ROUTE_AMPLITUDE);
   be_regfunc(vm,"pitch_for_key",native_pitch_for_key);be_regfunc(vm,"pow",native_pow);
   register_int(vm,"INPUT_NOTE_ID",FW_VM_CHANNEL_INPUT_NOTE_ID);register_int(vm,"INPUT_FREQUENCY",FW_VM_CHANNEL_INPUT_FREQUENCY);
   register_int(vm,"INPUT_GAIN",FW_VM_CHANNEL_INPUT_GAIN);register_int(vm,"INPUT_GATE",FW_VM_CHANNEL_INPUT_GATE);

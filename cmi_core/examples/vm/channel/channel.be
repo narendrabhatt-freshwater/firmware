@@ -36,10 +36,57 @@ def on_note_on(key, velocity)
     end
 
     # 8 oscillators, + 50hz each
-    for i : 0..2
-        osc(0, pitch + 5 * (i + 1))
-    end
+    # for i : 0..2
+    #     osc(0, pitch + 5 * (i + 1))
+    # end
 
+    # ROUTING REFERENCE
+    # route(source, OUTPUT, output_weight) sends oscillator audio to the output.
+    # modulate(source, target, control, amount) changes a target control.
+    #
+    # Available source:
+    #   An oscillator handle returned by osc(). SAMPLE cannot be a source yet.
+    #
+    # Available targets:
+    #   OUTPUT = the audible voice output
+    #   SAMPLE = this voice's streamed attack/body sample
+    #   another oscillator handle
+    #
+    # Available modulation controls:
+    #   FREQUENCY = source moves target pitch; amount is +/-Hz
+    #   AMPLITUDE = source controls target level; amount is gain 0..1
+    #
+    # All currently valid connections:
+    # route(source, OUTPUT, output_weight)
+    # modulate(source, SAMPLE,  FREQUENCY, deviation_hz)
+    # modulate(source, SAMPLE,  AMPLITUDE, gain)
+    # modulate(source, another, FREQUENCY, deviation_hz)
+    # modulate(source, another, AMPLITUDE, gain)
+    #
+    # Simple tremolo: move the sample between silence and 50% level at 5 Hz.
+    # var tremolo = osc(0, 5)
+    # modulate(tremolo, SAMPLE, AMPLITUDE, 0.5)
+    #
+    # Simple vibrato: move the sample pitch at 5 Hz by +/-10 Hz.
+    var vibrato = osc(0, 5)
+    modulate(vibrato, SAMPLE, FREQUENCY, 10)
+
+    var oscillator_fm = osc(0, pitch)
+
+    var vibrato1 = osc(0, 7)
+    modulate(vibrato1, oscillator_fm, FREQUENCY, 10)
+
+    #
+    # Simple oscillator FM: move a carrier pitch by +/-250 Hz.
+    # var modulator = osc(0, 7000)
+    # var carrier = osc(1, pitch)
+    # modulate(modulator, carrier, FREQUENCY, 250)
+    # modulate(modulator, carrier, AMPLITUDE, 0.5)
+    # route(carrier, OUTPUT, 1.0)
+    #
+    # An oscillator stops going directly to OUTPUT after its first explicit
+    # modulation. Add route(source, OUTPUT, weight) when it should remain
+    # directly audible too.
 
     start_note()                              # standard MIDI pitch
     # start_note(440.0)                       # fixed A4 on every key

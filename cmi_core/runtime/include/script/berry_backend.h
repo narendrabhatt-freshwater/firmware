@@ -28,6 +28,7 @@ typedef struct {
   int (*discard_pending)(void *, uint8_t);
   int (*start_note_at)(void *, uint8_t, float);
   int (*osc)(void *, uint8_t, uint8_t, float, uint32_t *);
+  int (*route)(void *, uint8_t, uint32_t, int32_t, uint8_t, float);
 } ScriptBerryNativeOps;
 
 typedef union {

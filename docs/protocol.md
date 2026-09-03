@@ -154,7 +154,7 @@ until that join. Every `nX on <key> [velocity]` command is a note-on, including 
 
 | Command                    | Meaning                                                          |
 | -------------------------- | ---------------------------------------------------------------- |
-| `vmload <voice> <nbytes>`  | **USB CDC only.** Upload one FWSC ABI1 program to voice 0…7      |
+| `vmload <voice> <nbytes>`  | **USB CDC only.** Upload one FWSC ABI2 program to voice 0…7      |
 | `vm`                       | Query the active-program voice mask                              |
 | `vm <voice>`               | Query active state, ABI target/version, and fault for one voice  |
 | `vm mem`                   | Shared-arena metrics followed by eight per-voice diagnostic lines |
@@ -170,10 +170,15 @@ VM program. The firmware exposes no separate envelope-programming commands.
 See [SCRIPTING.md](../cmi_core/SCRIPTING.md) and `vmload` below.
 
 Each `osc(wave, frequency_hz)` call appends a pending-note oscillator and
-returns an opaque handle that may be assigned or ignored. Logical waves `0..7`
-map to attack-bank IDs `248..255`; repeated calls may reuse a wave. Handles
-remain valid through note promotion for future targeted modulation. The sample
-and enabled oscillators are averaged before the existing filter and envelope.
+returns an opaque handle. ABI2 `route(source, OUTPUT, weight)` sends oscillator
+audio to the voice output. `modulate(source, target, control, amount)` controls
+`FREQUENCY` or `AMPLITUDE` on `SAMPLE` or another oscillator. An oscillator's
+first explicit connection removes
+its legacy implicit mixer route. Output routes use a weighted average;
+frequency gain is signed deviation in Hz. Amplitude gain 0…1 converts the
+source to 0…1 and multiplies the target level; multiple amplitude modulators
+multiply. Routes form an acyclic pending-note graph committed by
+`start_note()` before the existing filter and envelope.
 
 ### CPU-load scope probe
 
@@ -487,7 +492,7 @@ uploaded, note commands return `err:no-program` and the note bank stays silent.
 
 `vmload <voice> <nbytes>` is CDC-only and uses the same line-to-binary
 transition as `al`. Each voice 0..7 owns an independent program. The payload is
-one Berry ABI1 `FWSC` container, up to 16404 bytes (20-byte container header
+one Berry ABI2 `FWSC` container, up to 16404 bytes (20-byte container header
 plus at most 16384 payload bytes). The card writes
 `ok:ready`, receives exactly `nbytes`, validates target/version, CRC, bytecode,
 runtime/configuration, handlers, host calls, and CRC, then replies
@@ -503,7 +508,7 @@ remain voice-local; allocation, GC, watchdog, or uncertain interpreter state
 invalidates the shared VM and silences all voices. Programs are lost on reset.
 `vm mem` reports arena current/peak/free and allocation/GC diagnostics.
 
-ABI1 requires `on_note_on(key, velocity)`, `on_note_off()`, and
+ABI2 requires `on_note_on(key, velocity)`, `on_note_off()`, and
 `on_ramp_end()`. Runtime scripts inspect raw keys and live amplitude through
 `input()`, use allocation-free
 `pow()` for tracking policy, configure wavetable layers with `osc()`, and

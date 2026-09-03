@@ -203,7 +203,7 @@ reply formats.
 
 **Channel Card** — 8 SAMPLE voices (`n0`…`n7`) with automatically allocated,
 script-controlled oscillators using eight reserved logical wavetables
-(`osc0`…`osc7` in the UI, summed on CH1), sample upload/assignment
+(`osc0`…`osc7` in the UI) and ABI2 per-note audio/FM/AM routing, sample upload/assignment
 (`al`/`wl`/`ar`/`aw`/`a`/`vq`), per-voice VM programs (`vmload`/`vm`) and LPF
 (`f`/`fk`) and DAC gain (`g`).
 

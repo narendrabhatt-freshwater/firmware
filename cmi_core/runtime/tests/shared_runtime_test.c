@@ -13,7 +13,11 @@ typedef struct {
   float last_slope[FW_SCRIPT_CHANNEL_VOICE_COUNT];
   float oscillator_frequency[16];
   uint8_t oscillator_wave[16];
-  uint32_t ramps, activations, endings, silences, oscillators, output_hash;
+  uint32_t route_source[16];
+  int32_t route_target[16];
+  float route_gain[16];
+  uint8_t route_parameter[16];
+  uint32_t ramps, activations, endings, silences, oscillators, routes, output_hash;
 } Mock;
 
 static void hash_u32(Mock *m,uint32_t value){m->output_hash=(m->output_hash^value)*UINT32_C(16777619);}
@@ -27,6 +31,7 @@ static int note_end(void *c,uint8_t v){Mock*m=c;hash_u32(m,0x50u|v);m->input[v][
 static int set_led(void *c,uint8_t v,float r,float g,float b,float brightness){Mock*m=c;hash_u32(m,0x60u|v);hash_float(m,r);hash_float(m,g);hash_float(m,b);hash_float(m,brightness);return 0;}
 static void silence(void *c,uint8_t v,FwVmFault f){Mock*m=c;(void)v;(void)f;++m->silences;}
 static int set_osc(void *c,uint8_t v,uint8_t wave,float frequency,uint32_t *handle){Mock*m=c;(void)v;if(m->oscillators>=16u||!handle)return -1;m->oscillator_wave[m->oscillators]=wave;m->oscillator_frequency[m->oscillators]=frequency;*handle=UINT32_C(256)+m->oscillators;++m->oscillators;return 0;}
+static int set_route(void *c,uint8_t v,uint32_t source,int32_t target,uint8_t parameter,float gain){Mock*m=c;(void)v;if(m->routes>=16u)return -1;m->route_source[m->routes]=source;m->route_target[m->routes]=target;m->route_parameter[m->routes]=parameter;m->route_gain[m->routes]=gain;++m->routes;return 0;}
 
 static uint8_t *read_file(const char *path,size_t *size){
   FILE *f=fopen(path,"rb");long n;uint8_t *p;assert(f);assert(fseek(f,0,SEEK_END)==0);n=ftell(f);assert(n>0);rewind(f);
@@ -46,6 +51,8 @@ static void payload_limits(void){
   memcpy(header,"FWSC",4u);put16(header+4u,FW_SCRIPT_CONTAINER_VERSION);header[6]=FW_SCRIPT_RUNTIME_BERRY;header[7]=FW_SCRIPT_CONFIG_FLOAT32_INT32;
   put16(header+8u,FW_SCRIPT_CHANNEL_ABI_VERSION);put16(header+10u,FW_SCRIPT_CONTAINER_HEADER_SIZE);put32(header+12u,FW_SCRIPT_MAX_PAYLOAD);
   assert(script_berry_upload_begin(&runtime,0u)==0);assert(script_berry_upload_feed(&runtime,header,sizeof(header))==0);script_berry_upload_abort(&runtime);
+  put16(header+8u,1u);assert(script_berry_upload_begin(&runtime,0u)==0);assert(script_berry_upload_feed(&runtime,header,sizeof(header))!=0);
+  put16(header+8u,FW_SCRIPT_CHANNEL_ABI_VERSION);
   put32(header+12u,FW_SCRIPT_MAX_PAYLOAD+1u);assert(script_berry_upload_begin(&runtime,0u)==0);assert(script_berry_upload_feed(&runtime,header,sizeof(header))!=0);
 }
 static void fault_matrix(const char *normal_path,const char *bad_path,const char *nonfinite_path,const char *osc_path,const char *allocation_path){
@@ -81,6 +88,16 @@ static void oscillator_config(const char *oscillator_path,const char *two_path,c
   assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_ON,0u)==0);
   assert(runtime.state[0][63]==63.0f);free(program);
 }
+static void routing_config(const char *path){
+  ScriptBerryRuntime runtime;Mock mock={0};ScriptBerryNativeOps ops={0};uint8_t *program;size_t size;
+  ops.context=&mock;ops.read_input=read_input;ops.start_note=activate;ops.note_end=note_end;ops.silence_voice=silence;ops.osc=set_osc;ops.route=set_route;
+  program=read_file(path,&size);script_berry_init(&runtime,&ops);upload(&runtime,0u,program,size);
+  mock.input[0][FW_VM_CHANNEL_INPUT_PENDING_KEY]=69.0f;mock.input[0][FW_VM_CHANNEL_INPUT_PENDING_VELOCITY]=127.0f;
+  assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_ON,0u)==0);
+  assert(mock.oscillators==2u&&mock.routes==2u&&mock.route_source[0]==256u&&mock.route_target[0]==257&&mock.route_parameter[0]==FW_VM_CHANNEL_ROUTE_FREQUENCY&&fabsf(mock.route_gain[0]-250.0f)<0.001f);
+  assert(mock.route_source[1]==257u&&mock.route_target[1]==FW_VM_CHANNEL_TARGET_OUTPUT&&mock.route_parameter[1]==FW_VM_CHANNEL_ROUTE_AUDIO&&fabsf(mock.route_gain[1]-0.5f)<0.001f);
+  free(program);
+}
 static void large_program_capacity(const char *path){
   ScriptBerryRuntime runtime;Mock mock={0};ScriptBerryNativeOps ops={&mock,read_input,set_amplitude,ramp,activate,note_end,silence,set_led};
   uint8_t *program;size_t size;const FwVmMemoryMetrics *memory;program=read_file(path,&size);
@@ -101,7 +118,7 @@ static void exhausted_replacement_preserves(const char *normal_path,const char *
 int main(int argc,char **argv){
   ScriptBerryRuntime runtime;Mock mock={.output_hash=UINT32_C(2166136261)};ScriptBerryNativeOps ops={&mock,read_input,set_amplitude,ramp,activate,note_end,silence,set_led};
   const FwVmMemoryMetrics *mem;uint8_t *program;size_t size;uint32_t i;
-  assert(argc==13);program=read_file(argv[1],&size);script_berry_init(&runtime,&ops);assert(runtime.shared_valid);
+  assert(argc==14);program=read_file(argv[1],&size);script_berry_init(&runtime,&ops);assert(runtime.shared_valid);
   for(i=0;i<FW_SCRIPT_CHANNEL_VOICE_COUNT;++i){upload(&runtime,(uint8_t)i,program,size);}
   assert(script_berry_active_mask(&runtime)==0xffu);mem=script_berry_memory_metrics(&runtime);
   printf("eight_program_peak=%u current=%u largest_free=%u\n",mem->arena_peak,mem->arena_current,mem->arena_largest_free);
@@ -133,5 +150,5 @@ int main(int argc,char **argv){
       (mem->arena_peak/5u>2048u?mem->arena_peak/5u:2048u)+1023u)/1024u)*1024u));
   assert(mock.output_hash==UINT32_C(0x687dca85));
   assert(mock.oscillators==0u);
-  free(program);fault_matrix(argv[1],argv[2],argv[3],argv[4],argv[5]);pitch_tracking(argv[6]);oscillator_config(argv[7],argv[8],argv[9],argv[10]);large_program_capacity(argv[11]);exhausted_replacement_preserves(argv[1],argv[12]);payload_limits();puts("fault_matrix_ok");return 0;
+  free(program);fault_matrix(argv[1],argv[2],argv[3],argv[4],argv[5]);pitch_tracking(argv[6]);oscillator_config(argv[7],argv[8],argv[9],argv[10]);routing_config(argv[11]);large_program_capacity(argv[12]);exhausted_replacement_preserves(argv[1],argv[13]);payload_limits();puts("fault_matrix_ok");return 0;
 }

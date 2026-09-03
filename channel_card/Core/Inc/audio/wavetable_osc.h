@@ -28,6 +28,11 @@ extern "C"
   /** Append an oscillator and return a positive, opaque note-local handle. */
   int WavetableOsc_AddPending(uint8_t voice, uint8_t wave,
                               float frequency_hz, uint32_t *handle_out);
+  int WavetableOsc_AddRoutePending(uint8_t voice, uint32_t source_handle,
+                                   int32_t target, uint8_t parameter,
+                                   float gain);
+  /** Validate the pending graph and establish its deterministic render order. */
+  int WavetableOsc_FinalizePending(uint8_t voice);
 
   void WavetableOsc_ActivatePending(uint8_t voice);
   void WavetableOsc_DiscardPending(uint8_t voice);
@@ -37,6 +42,12 @@ extern "C"
 
   uint8_t WavetableOsc_HandleIsValid(uint8_t voice, uint32_t handle);
   int64_t WavetableOsc_NextSum(uint8_t voice, uint32_t *count_out);
+
+  /** Render all oscillator nodes once and return modulation for SAMPLE. */
+  void WavetableOsc_BeginSample(uint8_t voice, float *sample_frequency_hz,
+                                float *sample_amplitude);
+  /** Apply SAMPLE amplitude and combine it with oscillator OUTPUT routes. */
+  int32_t WavetableOsc_MixSample(uint8_t voice, int32_t sample);
 
 #ifdef __cplusplus
 }

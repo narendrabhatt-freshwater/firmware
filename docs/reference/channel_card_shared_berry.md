@@ -1,6 +1,6 @@
 # Channel Card shared Berry qualification
 
-Measured on 3 September 2026 with ABI1 envelope, oscillator, 64-state, and
+Measured on 3 September 2026 with ABI2 envelope, oscillator, 64-state, and
 large-payload qualification programs:
 
 | Measurement | Result |
@@ -46,6 +46,9 @@ A4 = 440 Hz. `osc(wave, frequency)` appends an oscillator from logical
 wavetable `0..7` (reserved attack-bank ID `248..255`) and returns an opaque
 note-local handle. It does not allocate a Berry object, but it does allocate a
 firmware-side oscillator descriptor.
+`route(source, OUTPUT, weight)` and `modulate(source, target, control, amount)`
+record native pending-note edges;
+Berry does not execute during per-sample graph rendering.
 `start_note()` commits the default pending pitch, while
 `start_note(frequency)` atomically overrides it with a positive Hz value and
 commits the note. Direct frequency selection does not depend on the lookup.

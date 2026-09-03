@@ -72,27 +72,36 @@ int main()
       "def on_note_off()\nend\n"
       "def on_ramp_end()\nend\n";
   cardlink::vm::BerryCompiler compiler;
-  const auto abi1 = compiler.CompileChannel(
+  const auto abi2 = compiler.CompileChannel(
       "def on_note_on(key, velocity)\n    start_note()\nend\n" + handlers);
-  Expect(abi1.ok && abi1.program.size() >= 10u && abi1.program[8] == 1u &&
-             abi1.program[9] == 0u,
-         "zero-argument note-off handler must compile as ABI1");
+  Expect(abi2.ok && abi2.program.size() >= 10u && abi2.program[8] == 2u &&
+             abi2.program[9] == 0u,
+         "zero-argument note-off handler must compile as ABI2");
   const auto legacy_note_on = compiler.CompileChannel(
       "def on_note_on(key)\n    start_note()\nend\n" + handlers);
   Expect(!legacy_note_on.ok,
-         "one-argument note-on handler must be rejected by ABI1 compiler");
+         "one-argument note-on handler must be rejected by ABI2 compiler");
   const auto pending_note_off = compiler.CompileChannel(
       "def on_note_on(key, velocity)\n    start_note()\nend\n"
       "def on_note_off(has_pending)\nend\n"
       "def on_ramp_end()\nend\n");
   Expect(!pending_note_off.ok,
-         "legacy pending argument must be rejected by ABI1 compiler");
+         "legacy pending argument must be rejected by ABI2 compiler");
 
   const auto oscillator = compiler.CompileChannel(
       "def on_note_on(key, velocity)\n"
       "    var handle = osc(7, pitch_for_key(key))\n"
       "    start_note()\nend\n" + handlers);
-  Expect(oscillator.ok, "osc(wave, frequency) handle must compile as ABI1");
+  Expect(oscillator.ok, "osc(wave, frequency) handle must compile as ABI2");
+
+  const auto routing = compiler.CompileChannel(
+      "def on_note_on(key, velocity)\n"
+      "    var modulator = osc(0, 7000)\n"
+      "    var carrier = osc(1, pitch_for_key(key))\n"
+      "    modulate(modulator, carrier, FREQUENCY, 250)\n"
+      "    route(carrier, OUTPUT, 1.0)\n"
+      "    start_note()\nend\n" + handlers);
+  Expect(routing.ok, "route and modulate APIs must compile as ABI2");
 
   const auto oscillator_loop = compiler.CompileChannel(
       "def on_note_on(key, velocity)\n"

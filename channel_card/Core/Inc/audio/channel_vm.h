@@ -22,6 +22,8 @@ typedef struct {
   int (*start_note_at)(void *context, uint8_t note, float frequency_hz);
   int (*osc)(void *context, uint8_t note, uint8_t wave,
              float frequency_hz, uint32_t *handle_out);
+  int (*route)(void *context, uint8_t note, uint32_t source_handle,
+               int32_t target, uint8_t parameter, float gain);
 } ChannelVmNativeOps;
 
 void ChannelVm_Init(const ChannelVmNativeOps *ops);

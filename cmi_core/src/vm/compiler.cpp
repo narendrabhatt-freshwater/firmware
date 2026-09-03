@@ -30,7 +30,7 @@ int NativePow(bvm *vm){
 void GlobalInt(bvm *vm,const char *name,bint value){be_pushint(vm,value);be_setglobal(vm,name);be_pop(vm,1);}
 void GlobalNil(bvm *vm,const char *name){be_pushnil(vm);be_setglobal(vm,name);be_pop(vm,1);}
 void RegisterAbi(bvm *vm){
-  const char *functions[]={"input","state_get","state_set","set_amplitude","ramp","start_note","note_end","discard_pending","pitch_for_key","led","osc"};
+  const char *functions[]={"input","state_get","state_set","set_amplitude","ramp","start_note","note_end","discard_pending","pitch_for_key","led","osc","route","modulate"};
   for(const char *name:functions)be_regfunc(vm,name,Stub);
   be_regfunc(vm,"pow",NativePow);
   GlobalInt(vm,"INPUT_NOTE_ID",FW_VM_CHANNEL_INPUT_NOTE_ID);GlobalInt(vm,"INPUT_FREQUENCY",FW_VM_CHANNEL_INPUT_FREQUENCY);
@@ -40,6 +40,8 @@ void RegisterAbi(bvm *vm){
   GlobalInt(vm,"INPUT_AMPLITUDE",FW_VM_CHANNEL_INPUT_AMPLITUDE);
   GlobalInt(vm,"INPUT_KEY",FW_VM_CHANNEL_INPUT_KEY);GlobalInt(vm,"INPUT_PENDING_KEY",FW_VM_CHANNEL_INPUT_PENDING_KEY);
   GlobalInt(vm,"INPUT_VELOCITY",FW_VM_CHANNEL_INPUT_VELOCITY);GlobalInt(vm,"INPUT_PENDING_VELOCITY",FW_VM_CHANNEL_INPUT_PENDING_VELOCITY);
+  GlobalInt(vm,"OUTPUT",FW_VM_CHANNEL_TARGET_OUTPUT);GlobalInt(vm,"SAMPLE",FW_VM_CHANNEL_TARGET_SAMPLE);
+  GlobalInt(vm,"FREQUENCY",FW_VM_CHANNEL_ROUTE_FREQUENCY);GlobalInt(vm,"AMPLITUDE",FW_VM_CHANNEL_ROUTE_AMPLITUDE);
   GlobalNil(vm,"on_note_on");GlobalNil(vm,"on_note_off");GlobalNil(vm,"on_ramp_end");
 }
 CompileResult Error(const std::string &message){CompileResult r;r.message=message;return r;}
@@ -69,7 +71,7 @@ CompileResult BerryCompiler::CompileChannel(const std::string &source) const {
                                      preprocess_error,sizeof(preprocess_error))!=0)
     return Error(preprocess_error[0]?preprocess_error:"could not preprocess named state");
   std::string lowered(lowered_data,lowered_size);std::free(lowered_data);
-  if(!SourceIsIsolated(lowered))return Error("only ABI1 Channel handlers are allowed at top level");
+  if(!SourceIsIsolated(lowered))return Error("only ABI2 Channel handlers are allowed at top level");
   bvm *vm=be_vm_new();if(!vm)return Error("could not create Berry compiler VM");RegisterAbi(vm);
   if(be_loadbuffer(vm,"channel.be",lowered.data(),lowered.size())!=BE_OK){
     const char *detail=be_tostring(vm,-1);

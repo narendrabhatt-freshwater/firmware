@@ -69,6 +69,7 @@ add_test(NAME shared_berry.runtime
     "${CMAKE_CURRENT_BINARY_DIR}/two_oscillator_event.fwsc"
     "${CMAKE_CURRENT_BINARY_DIR}/many_oscillator_event.fwsc"
     "${CMAKE_CURRENT_BINARY_DIR}/state64_event.fwsc"
+    "${CMAKE_CURRENT_BINARY_DIR}/routing_event.fwsc"
     "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.fwsc"
     "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.fwsc")
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.fwsc"
@@ -85,7 +86,7 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.fwsc
   COMMAND fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/pitch_tracking_event.be"
           -o "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.fwsc"
   DEPENDS fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/pitch_tracking_event.be")
-foreach(PROGRAM oscillator_event two_oscillator_event many_oscillator_event state64_event)
+foreach(PROGRAM oscillator_event two_oscillator_event many_oscillator_event state64_event routing_event)
   add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${PROGRAM}.fwsc"
     COMMAND fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/${PROGRAM}.be"
             -o "${CMAKE_CURRENT_BINARY_DIR}/${PROGRAM}.fwsc"
@@ -130,6 +131,7 @@ add_custom_target(shared_berry_program DEPENDS
   "${CMAKE_CURRENT_BINARY_DIR}/two_oscillator_event.fwsc"
   "${CMAKE_CURRENT_BINARY_DIR}/many_oscillator_event.fwsc"
   "${CMAKE_CURRENT_BINARY_DIR}/state64_event.fwsc"
+  "${CMAKE_CURRENT_BINARY_DIR}/routing_event.fwsc"
   "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.fwsc"
   "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.fwsc")
 add_dependencies(shared_berry_runtime_test shared_berry_program)

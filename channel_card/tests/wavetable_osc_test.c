@@ -1,4 +1,5 @@
 #include "wavetable_osc.h"
+#include "freshwater/vm_channel.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -67,6 +68,8 @@ int main(void)
   uint32_t handle1;
   uint32_t active0;
   uint32_t replacement;
+  uint32_t modulator = 0u;
+  uint32_t carrier = 0u;
   uint32_t handles[STRESS_OSCILLATOR_INSTANCES];
   uint32_t count;
   int64_t sample;
@@ -167,6 +170,122 @@ int main(void)
         "zero frequency must fail");
   Check(WavetableOsc_AddPending(0u, 0u, 24000.1f, &replacement) != 0,
         "frequency above Nyquist must fail");
+
+  WavetableOsc_BeginPending(3u);
+  Check(WavetableOsc_AddPending(3u, 7u, 12000.0f, &modulator) == 0 &&
+            WavetableOsc_AddPending(3u, 2u, 440.0f, &carrier) == 0,
+        "routing graph oscillators must allocate");
+  Check(WavetableOsc_AddRoutePending(
+            3u, modulator, (int32_t)carrier,
+            FW_VM_CHANNEL_ROUTE_FREQUENCY, 0.0f) == 0,
+        "oscillator frequency route must be accepted");
+  Check(WavetableOsc_AddRoutePending(
+            3u, modulator, (int32_t)carrier,
+            FW_VM_CHANNEL_ROUTE_FREQUENCY, 1.0f) != 0,
+        "duplicate route must be rejected");
+  Check(WavetableOsc_FinalizePending(3u) == 0,
+        "acyclic routing graph must finalize");
+  WavetableOsc_ActivatePending(3u);
+  WavetableOsc_BeginSample(3u, NULL, NULL);
+  Check(WavetableOsc_MixSample(3u, 0) ==
+            (5 * 16777216) / 2,
+        "routed modulator must lose its implicit output route");
+  WavetableOsc_Stop(3u);
+
+  WavetableOsc_BeginPending(3u);
+  Check(WavetableOsc_AddPending(3u, 7u, 12000.0f, &modulator) == 0 &&
+            WavetableOsc_AddRoutePending(
+                3u, modulator, FW_VM_CHANNEL_TARGET_OUTPUT,
+                FW_VM_CHANNEL_ROUTE_AUDIO, 0.5f) == 0 &&
+            WavetableOsc_FinalizePending(3u) == 0,
+        "explicit audio route must finalize");
+  WavetableOsc_ActivatePending(3u);
+  WavetableOsc_BeginSample(3u, NULL, NULL);
+  Check(WavetableOsc_MixSample(3u, 0) ==
+            (32 * 16777216) / 3,
+        "explicit audio gain must use weighted averaging");
+  WavetableOsc_Stop(3u);
+
+  WavetableOsc_BeginPending(3u);
+  Check(WavetableOsc_AddPending(3u, 7u, 12000.0f, &modulator) == 0,
+        "invalid-route source must allocate");
+  Check(WavetableOsc_AddRoutePending(
+            3u, modulator, FW_VM_CHANNEL_TARGET_SAMPLE,
+            FW_VM_CHANNEL_ROUTE_AUDIO, 1.0f) != 0 &&
+            WavetableOsc_AddRoutePending(
+                3u, modulator, FW_VM_CHANNEL_TARGET_SAMPLE,
+                FW_VM_CHANNEL_ROUTE_AMPLITUDE, 1.1f) != 0 &&
+            WavetableOsc_AddRoutePending(
+                3u, modulator, (int32_t)modulator,
+                FW_VM_CHANNEL_ROUTE_FREQUENCY, 1.0f) != 0,
+        "invalid target, AM gain, and self-route must be rejected");
+  WavetableOsc_DiscardPending(3u);
+
+  WavetableOsc_BeginPending(3u);
+  Check(WavetableOsc_AddPending(3u, 7u, 12000.0f, &modulator) == 0 &&
+            WavetableOsc_AddRoutePending(
+                3u, modulator, FW_VM_CHANNEL_TARGET_SAMPLE,
+                FW_VM_CHANNEL_ROUTE_AMPLITUDE, 0.5f) == 0 &&
+            WavetableOsc_AddRoutePending(
+                3u, modulator, FW_VM_CHANNEL_TARGET_SAMPLE,
+                FW_VM_CHANNEL_ROUTE_FREQUENCY, 400.0f) == 0 &&
+            WavetableOsc_FinalizePending(3u) == 0,
+        "sample modulation routes must finalize");
+  WavetableOsc_ActivatePending(3u);
+  {
+    float frequency_mod = 0.0f;
+    float amplitude = 0.0f;
+    WavetableOsc_BeginSample(3u, &frequency_mod, &amplitude);
+    Check(frequency_mod == 100.0f && amplitude == 0.3125f,
+          "sample FM and AM controls must use normalized oscillator output");
+  }
+  Check(WavetableOsc_MixSample(3u, 100000) == 31250,
+        "sample AM must apply direct unipolar source times route gain");
+  WavetableOsc_Stop(3u);
+
+  WavetableOsc_BeginPending(3u);
+  Check(WavetableOsc_AddPending(3u, 7u, 12000.0f, &modulator) == 0 &&
+            WavetableOsc_AddPending(3u, 2u, 440.0f, &carrier) == 0 &&
+            WavetableOsc_AddRoutePending(
+                3u, modulator, (int32_t)carrier,
+                FW_VM_CHANNEL_ROUTE_AMPLITUDE, 1.0f) == 0 &&
+            WavetableOsc_FinalizePending(3u) == 0,
+        "oscillator AM graph must finalize");
+  WavetableOsc_ActivatePending(3u);
+  WavetableOsc_BeginSample(3u, NULL, NULL);
+  Check(WavetableOsc_MixSample(3u, 0) == 26214400,
+        "oscillator AM must scale the target before output routing");
+  WavetableOsc_Stop(3u);
+
+  WavetableOsc_BeginPending(3u);
+  Check(WavetableOsc_AddPending(3u, 7u, 12000.0f, &modulator) == 0 &&
+            WavetableOsc_AddPending(3u, 0u, 6000.0f, &carrier) == 0 &&
+            WavetableOsc_AddRoutePending(
+                3u, modulator, (int32_t)carrier,
+                FW_VM_CHANNEL_ROUTE_FREQUENCY, 24000.0f) == 0 &&
+            WavetableOsc_FinalizePending(3u) == 0,
+        "oscillator FM graph must finalize");
+  WavetableOsc_ActivatePending(3u);
+  WavetableOsc_BeginSample(3u, NULL, NULL);
+  Check(WavetableOsc_MixSample(3u, 0) == 0,
+        "FM carrier must begin at phase zero");
+  WavetableOsc_BeginSample(3u, NULL, NULL);
+  Check(WavetableOsc_MixSample(3u, 0) == 32 * 16777216,
+        "FM must change carrier phase while evaluating its source once");
+  WavetableOsc_Stop(3u);
+
+  WavetableOsc_BeginPending(3u);
+  Check(WavetableOsc_AddPending(3u, 0u, 440.0f, &modulator) == 0 &&
+            WavetableOsc_AddPending(3u, 7u, 440.0f, &carrier) == 0 &&
+            WavetableOsc_AddRoutePending(
+                3u, modulator, (int32_t)carrier,
+                FW_VM_CHANNEL_ROUTE_AMPLITUDE, 0.5f) == 0 &&
+            WavetableOsc_AddRoutePending(
+                3u, carrier, (int32_t)modulator,
+                FW_VM_CHANNEL_ROUTE_FREQUENCY, 1.0f) == 0 &&
+            WavetableOsc_FinalizePending(3u) != 0,
+        "cyclic routing graph must be rejected");
+  WavetableOsc_DiscardPending(3u);
 
   WavetableOsc_Init();
   for (i = 0u; i < STRESS_OSCILLATOR_INSTANCES; i++)

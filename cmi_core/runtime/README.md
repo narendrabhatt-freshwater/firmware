@@ -105,7 +105,8 @@ loads and repeatedly replaces eight generated programs larger than the former
 4 KiB cap, runs one million event dispatches, checks the fault-containment
 matrix, and verifies at least 20% heap headroom over the measured peak.
 
-`fw_scriptc` emits an FWSC v1 container carrying ABI1 Berry bytecode:
+`fw_scriptc` emits an FWSC v1 container carrying Channel ABI2 Berry bytecode.
+ABI1 binaries are rejected and must be recompiled from source:
 
 ```sh
 build/shared-berry/fw_scriptc cmi_core/runtime/examples/channel_envelope.be \
