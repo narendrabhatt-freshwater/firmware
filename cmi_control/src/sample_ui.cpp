@@ -265,7 +265,7 @@ int LoadRawBank(App &app, const std::string &folder, std::string &result,
       }
     }
     char msg[72];
-    std::snprintf(msg, sizeof msg, "ok: loaded %d/%d raw bank", loaded,
+    std::snprintf(msg, sizeof msg, "ok: loaded %d/%d signed-8-bit raw bank", loaded,
                   kWaves);
     result = msg;
     app.log.Push(msg);
@@ -602,7 +602,7 @@ void DrawSamplePage(App &app)
 
     ImGui::Spacing();
     ImGui::BeginDisabled(dialog_busy || !cdc_ok || load_busy);
-    if (fw::ui::Btn(load_busy ? "Loading\u2026" : "Load raw bank",
+    if (fw::ui::Btn(load_busy ? "Loading\u2026" : "Load 8-bit raw bank",
                     ImVec2(0, S(24.f)), BtnKind::Primary)) {
       const std::string waves = FindWavesDir();
       if (waves.empty()) {
@@ -625,7 +625,8 @@ void DrawSamplePage(App &app)
       } else if (load_busy) {
         ImGui::SetTooltip("Uploading attack heads over CDC");
       } else {
-        ImGui::SetTooltip("Load w0_*.raw \u2026 w255_*.raw from waves/");
+        ImGui::SetTooltip(
+            "Load signed-int8 w0_*.raw \u2026 w255_*.raw from waves/");
       }
     }
     if (load_busy) {
