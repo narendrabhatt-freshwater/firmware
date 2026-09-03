@@ -22,17 +22,6 @@ extern "C"
 /** Voices available in SAMPLE mode (n0..n7). */
 #define NOTE_BANK_VOICES SAMPLE_VOICES
 
-#if defined(CHANNEL_TEST_WAVETABLE)
-  /** Test-build-only oscillator shapes; absent from production firmware. */
-  typedef enum
-  {
-    NOTE_SHAPE_SINE = 0,
-    NOTE_SHAPE_PULSE = 1,
-    NOTE_SHAPE_TRI = 2,
-    NOTE_SHAPE_SAW = 3
-  } NoteBank_Shape_t;
-#endif
-
   void NoteBank_Init(void);
   void NoteBank_PanicAll(void);
 
@@ -52,10 +41,6 @@ extern "C"
   /** Assign AXI head 0..255 to voice 0..7. Applied on the next note-on. */
   int NoteBank_SetWaveId(uint8_t note, uint16_t wave_id);
   uint16_t NoteBank_GetWaveId(uint8_t note);
-
-#if defined(CHANNEL_TEST_WAVETABLE)
-  int NoteBank_SetShape(NoteBank_Shape_t shape, double param);
-#endif
 
   /** Body FIFO miss counter. Production firmware halts on the first miss. */
   uint32_t NoteBank_HoldCount(void);

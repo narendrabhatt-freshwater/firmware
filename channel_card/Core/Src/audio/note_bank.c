@@ -48,8 +48,6 @@ _Static_assert(STREAM_RING_SAMPLES == 4080u,
 #define BODY_ADVANCE_PHASE ((INTERP_LEFT_TAPS + 1u) * PHASE_ONE)
 #define NOTE_SAMPLE_RATE_HZ 48000u
 #define NOTE_DEFAULT_SCALE 0.125
-#define WAVETABLE_SAMPLES 128u
-#define WAVETABLE_PHASE_ONE (WAVETABLE_SAMPLES * PHASE_ONE)
 
 static double note_freq_hz[NOTE_BANK_VOICES];
 static double note_scale[NOTE_BANK_VOICES];
@@ -79,11 +77,6 @@ static uint8_t note_play_key[NOTE_BANK_VOICES];
 static uint8_t note_play_velocity[NOTE_BANK_VOICES];
 static uint8_t note_next_key[NOTE_BANK_VOICES];
 static uint8_t note_next_velocity[NOTE_BANK_VOICES];
-#if defined(CHANNEL_TEST_WAVETABLE)
-static NoteBank_Shape_t note_shape = NOTE_SHAPE_SINE;
-static int16_t note_sine_table[WAVETABLE_SAMPLES];
-static volatile uint32_t note_shape_split = WAVETABLE_PHASE_ONE / 2u;
-#endif
 static volatile uint32_t note_hold_miss;
 
 #define NOTE_CMD_NONE 0u
@@ -137,75 +130,6 @@ static uint32_t NoteBank_HzToInc(uint16_t wave_id, double freq_hz)
   }
   return (uint32_t)(inc * (double)PHASE_ONE + 0.5);
 }
-
-#if defined(CHANNEL_TEST_WAVETABLE)
-static void NoteBank_WavetableInit(void)
-{
-  uint32_t i;
-  for (i = 0u; i < WAVETABLE_SAMPLES; i++)
-  {
-    double phase = (2.0 * 3.14159265358979323846 * (double)i) /
-                   (double)WAVETABLE_SAMPLES;
-    note_sine_table[i] = (int16_t)(sin(phase) * 32767.0);
-  }
-}
-
-static uint32_t NoteBank_WavetableInc(double freq_hz)
-{
-  double inc = freq_hz * (double)WAVETABLE_PHASE_ONE /
-               (double)NOTE_SAMPLE_RATE_HZ;
-  if (inc < 1.0) inc = 1.0;
-  if (inc > (double)(WAVETABLE_PHASE_ONE - 1u))
-    inc = (double)(WAVETABLE_PHASE_ONE - 1u);
-  return (uint32_t)(inc + 0.5);
-}
-
-static int32_t NoteBank_WavetableSample(uint32_t *phase_io, uint32_t inc)
-{
-  uint32_t phase = *phase_io % WAVETABLE_PHASE_ONE;
-  uint32_t index = phase >> 16;
-  uint32_t frac = phase & 0xFFFFu;
-  int32_t y;
-
-  if (note_shape == NOTE_SHAPE_PULSE)
-  {
-    y = (phase < note_shape_split) ? INT32_MAX : INT32_MIN;
-  }
-  else if (note_shape == NOTE_SHAPE_TRI)
-  {
-    uint32_t split = note_shape_split;
-    if (phase < split)
-    {
-      y = (int32_t)(-2147483647LL +
-          ((4294967294LL * (int64_t)phase) / (int64_t)split));
-    }
-    else
-    {
-      uint32_t falling = WAVETABLE_PHASE_ONE - split;
-      y = (int32_t)(2147483647LL -
-          ((4294967294LL * (int64_t)(phase - split)) /
-           (int64_t)falling));
-    }
-  }
-  else if (note_shape == NOTE_SHAPE_SAW)
-  {
-    y = (int32_t)(-2147483647LL +
-        ((4294967294LL * (int64_t)phase) /
-         (int64_t)WAVETABLE_PHASE_ONE));
-  }
-  else
-  {
-    int32_t s0 = note_sine_table[index];
-    int32_t s1 = note_sine_table[(index + 1u) & (WAVETABLE_SAMPLES - 1u)];
-    y = (int32_t)(((int64_t)s0 << 16) +
-                  ((int64_t)(s1 - s0) * (int64_t)frac));
-  }
-  phase += inc;
-  if (phase >= WAVETABLE_PHASE_ONE) phase %= WAVETABLE_PHASE_ONE;
-  *phase_io = phase;
-  return y;
-}
-#endif
 
 static int32_t NoteBank_InterpAttack(uint16_t wid, uint64_t phase)
 {
@@ -485,11 +409,9 @@ static void NoteBank_DrainCmd(uint8_t note)
       NoteBank_HardOff(note);
       return;
     }
-#if !defined(CHANNEL_TEST_WAVETABLE)
     /* Authority alone cannot change musical state. Wait for one whole BODY
      * frame, retaining the current note indefinitely if transport stalls. */
     if (StreamRing_HasBody(note) == 0u) return;
-#endif
     note_cmd[note] = NOTE_CMD_NONE;
     NoteBank_StartVoice(note, note_cmd_key[note], note_cmd_velocity[note],
                         note_cmd_inc[note],
@@ -539,15 +461,6 @@ static void NoteBank_SlewInc(uint8_t note)
  */
 static int32_t NoteBank_Sample(uint8_t note)
 {
-#if defined(CHANNEL_TEST_WAVETABLE)
-  {
-    uint32_t phase = (uint32_t)note_phase[note];
-    int32_t sample = NoteBank_WavetableSample(&phase, note_inc[note]);
-    note_phase[note] = phase;
-    note_hold[note] = sample;
-    return sample;
-  }
-#endif
   uint16_t wid = note_play_wid[note];
   uint64_t phase = note_phase[note];
   int32_t y;
@@ -767,11 +680,6 @@ void NoteBank_Init(void)
   uint8_t i;
   ChannelVmNativeOps vm_ops = {0};
 
-#if defined(CHANNEL_TEST_WAVETABLE)
-  note_shape = NOTE_SHAPE_SINE;
-  note_shape_split = WAVETABLE_PHASE_ONE / 2u;
-  NoteBank_WavetableInit();
-#endif
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
     note_freq_hz[i] = 0.0;
@@ -886,10 +794,6 @@ static int NoteBank_NoteOnBound(uint8_t note, uint8_t key, uint8_t velocity,
   if (!(freq_hz > 0.0) || !isfinite(freq_hz)) return -1;
 
   inc = NoteBank_HzToInc(note_wave_id[note], freq_hz);
-#if defined(CHANNEL_TEST_WAVETABLE)
-  inc = NoteBank_WavetableInc(freq_hz);
-#endif
-#if !defined(CHANNEL_TEST_WAVETABLE)
   if (inc < PHASE_INC_MIN)
   {
     inc = PHASE_INC_MIN;
@@ -898,7 +802,6 @@ static int NoteBank_NoteOnBound(uint8_t note, uint8_t key, uint8_t velocity,
   {
     inc = PHASE_INC_MAX;
   }
-#endif
 
   note_freq_hz[note] = freq_hz;
   note_scale[note] = scale;
@@ -971,26 +874,6 @@ uint16_t NoteBank_GetWaveId(uint8_t note)
   return note_wave_id[note];
 }
 
-#if defined(CHANNEL_TEST_WAVETABLE)
-int NoteBank_SetShape(NoteBank_Shape_t shape, double param)
-{
-  if (shape != NOTE_SHAPE_SINE && shape != NOTE_SHAPE_PULSE &&
-      shape != NOTE_SHAPE_TRI && shape != NOTE_SHAPE_SAW)
-  {
-    return -1;
-  }
-  note_shape = shape;
-  if (shape == NOTE_SHAPE_PULSE || shape == NOTE_SHAPE_TRI)
-  {
-    double limited = param;
-    if (limited < 0.1) limited = 0.1;
-    if (limited > 0.9) limited = 0.9;
-    note_shape_split = (uint32_t)(limited * (double)WAVETABLE_PHASE_ONE);
-  }
-  return 0;
-}
-#endif
-
 uint32_t NoteBank_HoldCount(void)
 {
   return note_hold_miss;
@@ -1049,9 +932,6 @@ void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out)
     {
       continue;
     }
-#if defined(CHANNEL_TEST_WAVETABLE)
-    continue;
-#endif
     filled = StreamRing_TargetFill(i);
     if (filled >= STREAM_RING_SAMPLES)
     {

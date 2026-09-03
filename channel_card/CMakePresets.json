@@ -6,25 +6,20 @@
             "hidden": true,
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/${presetName}",
-            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
-            "cacheVariables": {
-                "CHANNEL_TEST_WAVETABLE": "OFF"
-            }
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake"
         },
         {
             "name": "Debug",
             "inherits": "default",
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "CHANNEL_TEST_WAVETABLE": "OFF"
+                "CMAKE_BUILD_TYPE": "Debug"
             }
         },
         {
             "name": "Release",
             "inherits": "default",
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "CHANNEL_TEST_WAVETABLE": "OFF"
+                "CMAKE_BUILD_TYPE": "Release"
             }
         }
     ],

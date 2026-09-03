@@ -29,11 +29,7 @@ typedef struct
   __attribute__((used, section(".attack_bank"), aligned(4)))
 #endif
 
-#if defined(CHANNEL_TEST_WAVETABLE)
-static int8_t s_data[1][1]
-#else
 static int8_t s_data[ATTACK_BANK_COUNT][ATTACK_BANK_LEN]
-#endif
     ATTACK_BANK_SECTION;
 
 static uint8_t s_loaded[ATTACK_BANK_COUNT];
@@ -41,12 +37,10 @@ static uint32_t s_len[ATTACK_BANK_COUNT];
 static float s_root_hz[ATTACK_BANK_COUNT];
 static AttackVoice_t s_voices[SAMPLE_VOICES];
 
-#if !defined(CHANNEL_TEST_WAVETABLE)
 static int32_t AttackBank_S8ToQ31(int8_t s)
 {
   return (int32_t)s * 16777216;
 }
-#endif
 
 void AttackBank_Init(void)
 {
@@ -69,12 +63,6 @@ void AttackBank_Init(void)
 
 int AttackBank_Load(uint16_t wave_id, const uint8_t *data, uint32_t nbytes)
 {
-#if defined(CHANNEL_TEST_WAVETABLE)
-  (void)wave_id;
-  (void)data;
-  (void)nbytes;
-  return -1;
-#else
   if (wave_id >= ATTACK_BANK_COUNT || data == NULL ||
       nbytes == 0u || nbytes > ATTACK_BANK_BYTES)
   {
@@ -89,44 +77,28 @@ int AttackBank_Load(uint16_t wave_id, const uint8_t *data, uint32_t nbytes)
   s_len[wave_id] = nbytes;
   s_loaded[wave_id] = 1u;
   return 0;
-#endif
 }
 
 int8_t *AttackBank_WritePtr(uint16_t wave_id)
 {
-#if defined(CHANNEL_TEST_WAVETABLE)
-  (void)wave_id;
-  return NULL;
-#else
   if (wave_id >= ATTACK_BANK_COUNT)
   {
     return NULL;
   }
   return s_data[wave_id];
-#endif
 }
 
 const int8_t *AttackBank_Table(uint16_t wave_id)
 {
-#if defined(CHANNEL_TEST_WAVETABLE)
-  (void)wave_id;
-  return NULL;
-#else
   if (wave_id >= ATTACK_BANK_COUNT)
   {
     return NULL;
   }
   return s_data[wave_id];
-#endif
 }
 
 int AttackBank_Commit(uint16_t wave_id, uint32_t nsamp)
 {
-#if defined(CHANNEL_TEST_WAVETABLE)
-  (void)wave_id;
-  (void)nsamp;
-  return -1;
-#else
   if (wave_id >= ATTACK_BANK_COUNT || nsamp == 0u ||
       nsamp > ATTACK_BANK_LEN)
   {
@@ -135,7 +107,6 @@ int AttackBank_Commit(uint16_t wave_id, uint32_t nsamp)
   s_len[wave_id] = nsamp;
   s_loaded[wave_id] = 1u;
   return 0;
-#endif
 }
 
 uint32_t AttackBank_GetLen(uint16_t wave_id)
@@ -260,10 +231,6 @@ uint8_t AttackBank_IsPlaying(uint8_t voice)
 
 int32_t AttackBank_NextSample(uint8_t voice)
 {
-#if defined(CHANNEL_TEST_WAVETABLE)
-  (void)voice;
-  return 0;
-#else
   AttackVoice_t *v;
   uint16_t wid;
   float ph;
@@ -326,21 +293,14 @@ int32_t AttackBank_NextSample(uint8_t voice)
   }
 
   return (int32_t)lround(y);
-#endif
 }
 
 int32_t AttackBank_SampleAt(uint16_t wave_id, uint32_t index)
 {
-#if defined(CHANNEL_TEST_WAVETABLE)
-  (void)wave_id;
-  (void)index;
-  return 0;
-#else
   if (wave_id >= ATTACK_BANK_COUNT || index >= ATTACK_BANK_LEN ||
       s_loaded[wave_id] == 0u)
   {
     return 0;
   }
   return AttackBank_S8ToQ31(s_data[wave_id][index]);
-#endif
 }

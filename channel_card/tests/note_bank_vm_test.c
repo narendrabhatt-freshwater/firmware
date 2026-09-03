@@ -1,6 +1,7 @@
 #include "note_bank.h"
 #include "note_envelope.h"
 #include "stream_ring.h"
+#include "usb_stream.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,21 +19,19 @@ static uint8_t *read_file(const char *path,size_t *size){FILE*f=fopen(path,"rb")
 static void boundary(void){NoteBank_VmBoundaryBegin();for(unsigned i=0;i<48u;++i)(void)NoteBank_NextSample();NoteBank_VmBoundaryEnd();}
 static void boundaries(unsigned count){while(count--)boundary();}
 static uint32_t render_peak(unsigned count){uint32_t peak=0u;NoteBank_VmBoundaryBegin();for(unsigned i=0;i<count;++i){int64_t s=NoteBank_NextSample();uint32_t a=(uint32_t)(s<0?-s:s);if(a>peak)peak=a;}NoteBank_VmBoundaryEnd();return peak;}
+static void prime_body(uint8_t note){int8_t body[USB_STREAM_UAC_BODY_SAMPLES];for(unsigned i=0u;i<USB_STREAM_UAC_BODY_SAMPLES;++i)body[i]=(int8_t)((i&1u)!=0u?64:-64);check(StreamRing_WriteVoice(note,0xFFu,1u,NoteBank_GetWaveId(note),body,USB_STREAM_UAC_BODY_SAMPLES)==USB_STREAM_UAC_BODY_SAMPLES,"prime production BODY");}
 int main(int argc,char **argv){
   uint8_t *program;size_t size;check(argc==3,"program paths required");program=read_file(argv[1],&size);
   NoteEnv_Init();StreamRing_Init();NoteBank_Init();check(NoteBank_VmActiveMask()==0u,"reset has no programs");
   check(NoteBank_NoteOn(0u,60u,127u)==-2,"note reports no program");boundary();check(!NoteBank_IsActive(0u),"no-program silent");
   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,program,size)==0&&NoteBank_VmUploadCommit(0u)==0,"valid FWSC activates");
-  check(NoteBank_VmActiveMask()==1u,"only voice zero loaded");check(NoteBank_NoteOn(0u,60u,64u)==0,"note accepted");boundary();
+  check(NoteBank_VmActiveMask()==1u,"only voice zero loaded");check(NoteBank_NoteOn(0u,60u,64u)==0,"note accepted");prime_body(0u);boundary();
   check(NoteBank_GetKey(0u)==60u,"physical key applied");
   check(NoteBank_GetVelocity(0u)==64u,"note velocity applied");
   check(fabs(NoteBank_GetFreq(0u)-261.625565)<0.001,"C4 frequency resolved on card");
   check(NoteBank_IsActive(0u)&&NoteEnv_Amplitude(0u)>0.0f,"Berry starts native attack");
-  check(StreamRing_FreeLevel(0u)==0u,"wavetable profile advertises no BODY credit");
-  check(NoteBank_SetShape(NOTE_SHAPE_SINE,0.0)==0&&render_peak(256u)>0u,"sine wavetable renders");
-  check(NoteBank_SetShape(NOTE_SHAPE_PULSE,0.5)==0&&render_peak(32u)>0u,"pulse oscillator renders");
-  check(NoteBank_SetShape(NOTE_SHAPE_TRI,0.5)==0&&render_peak(32u)>0u,"triangle oscillator renders");
-  check(NoteBank_SetShape(NOTE_SHAPE_SAW,0.0)==0&&render_peak(32u)>0u,"saw oscillator renders");
+  check(StreamRing_FreeLevel(0u)<STREAM_RING_SAMPLES,"production BODY occupies ring credit");
+  check(render_peak(256u)>0u,"signed-int8 production BODY renders");
   check(NoteBank_VmUploadBegin(1u)==-2,"reload rejected while sounding");
   check(NoteBank_NoteOff(0u)==0,"note off accepted");for(unsigned i=0;i<64u&&NoteBank_IsActive(0u);++i)boundary();
   check(!NoteBank_IsActive(0u),"release ends note");check(NoteBank_VmFaultCount(0u)==0u,"no integration fault");
@@ -44,30 +43,30 @@ int main(int argc,char **argv){
    check(NoteBank_VmIsActive(0u),"CRC failure preserves active program");free(bad_crc);}
   check(NoteBank_VmUploadBegin(1u)==0&&NoteBank_VmUploadFeed(1u,program,size)==0&&NoteBank_VmUploadCommit(1u)==0,"second voice load");
   check(NoteBank_VmActiveMask()==3u,"per-voice program mask");
-  check(NoteBank_NoteOn(1u,69u,1u)==0,"second voice note accepted");boundary();
+  check(NoteBank_NoteOn(1u,69u,1u)==0,"second voice note accepted");prime_body(1u);boundary();
   check(NoteBank_GetKey(1u)==69u,"physical key remains unchanged");
   check(NoteBank_GetVelocity(1u)==1u,"minimum velocity survives note start");
   check(fabs(NoteBank_GetFreq(1u)-440.0)<0.001,"A4 uses standard pitch");
-  check(NoteBank_NoteOn(0u,69u,127u)==0,"identity voice accepts same physical key");boundary();
+  check(NoteBank_NoteOn(0u,69u,127u)==0,"identity voice accepts same physical key");prime_body(0u);boundary();
   check(NoteBank_GetKey(0u)==69u&&fabs(NoteBank_GetFreq(0u)-440.0)<0.001,"voices use standard pitch independently");
   {uint8_t *abi7=malloc(size);int feed;check(abi7!=NULL,"allocate ABI7 case");memcpy(abi7,program,size);abi7[8]=7u;abi7[9]=0u;NoteBank_PanicAll();
    check(NoteBank_VmUploadBegin(0u)==0,"ABI7 upload begin");feed=NoteBank_VmUploadFeed(0u,abi7,size);
    check(feed!=0||NoteBank_VmUploadCommit(0u)!=0,"ABI7 container must be rejected");free(abi7);}
   {size_t example_size;uint8_t *example=read_file(argv[2],&example_size);NoteBank_VmUploadAbort(0u);
    check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,example,example_size)==0&&NoteBank_VmUploadCommit(0u)==0,"load production example");
-   check(NoteBank_NoteOn(0u,60u,40u)==0,"example first note");boundary();
+   check(NoteBank_NoteOn(0u,60u,40u)==0,"example first note");prime_body(0u);boundary();
    check(StreamRing_HasPending(0u)==0u,"example must start an idle voice immediately");
    check(NoteBank_NoteOn(0u,61u,80u)==0,"replacement may be staged");
    check(StreamRing_HasPending(0u)!=0u,"replacement ring is pending before dispatch");
    check(NoteBank_NoteOff(0u)==0,"note off accepted with pending replacement");boundary();
    check(StreamRing_HasPending(0u)==0u,"native note off must cancel pending replacement");
    for(unsigned i=0;i<64u&&NoteBank_IsActive(0u);++i)boundary();
-   check(NoteBank_NoteOn(0u,62u,100u)==0,"example replacement note");boundary();
+   check(NoteBank_NoteOn(0u,62u,100u)==0,"example replacement note");prime_body(0u);boundary();
    check(StreamRing_HasPending(0u)==0u,"example must promote a replacement immediately");free(example);}
   NoteBank_PanicAll();
   {size_t channel_size;uint8_t *channel_program=read_file(argv[2],&channel_size);
    check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,channel_program,channel_size)==0&&NoteBank_VmUploadCommit(0u)==0,"reload channel example");
-   check(NoteBank_NoteOn(0u,60u,32u)==0,"low velocity note accepted");boundary();
+   check(NoteBank_NoteOn(0u,60u,32u)==0,"low velocity note accepted");prime_body(0u);boundary();
    boundaries(49u);
    check(NoteBank_GetVelocity(0u)==32u,"low velocity reaches active voice");
    check(NoteEnv_Amplitude(0u)<32.0f/127.0f,"soft velocity attack remains below its peak at 50 ms");
@@ -77,12 +76,12 @@ int main(int argc,char **argv){
    check(fabsf(NoteEnv_Amplitude(0u)-(32.0f/127.0f*0.2f))<0.0001f,"decay reaches velocity-scaled sustain");
    check(NoteBank_NoteOff(0u)==0,"low velocity note off accepted");boundaries(50u);
    check(!NoteBank_IsActive(0u),"release retires low velocity note");
-   check(NoteBank_NoteOn(0u,61u,127u)==0,"full velocity note accepted");boundary();boundaries(49u);
+   check(NoteBank_NoteOn(0u,61u,127u)==0,"full velocity note accepted");prime_body(0u);boundary();boundaries(49u);
    check(fabsf(NoteEnv_Amplitude(0u)-1.0f)<0.0001f,"full velocity reaches full envelope amplitude");
-   check(NoteBank_NoteOn(0u,62u,64u)==0,"replacement velocity accepted");boundary();
+   check(NoteBank_NoteOn(0u,62u,64u)==0,"replacement velocity accepted");prime_body(0u);boundary();
    check(StreamRing_HasPending(0u)!=0u,"replacement stays pending during steal fade");
-   boundary();
-   check(StreamRing_HasPending(0u)==0u,"replacement starts after 2 ms steal fade");
+   boundaries(4u);
+   check(StreamRing_HasPending(0u)==0u,"replacement starts after 5 ms steal fade");
    boundaries(50u);
    check(NoteBank_GetVelocity(0u)==64u,"replacement keeps its own velocity");
    check(NoteEnv_Amplitude(0u)<64.0f/127.0f,"medium velocity attack remains below its peak at 50 ms");

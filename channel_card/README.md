@@ -38,17 +38,12 @@ The note bank has no firmware-owned envelope policy. After each reset, upload a
 valid Channel Berry ABI1 program with `cmi::Core` before sending note commands.
 Until then the card stays silent and replies `err:no-program`.
 
-### USB streaming profile (default)
+### USB streaming
 
-Normal Debug and Release builds use USB BODY streaming with a 12,240-sample
-ring per voice. The `fw build` command and the CMake presets explicitly select
-this profile with `CHANNEL_TEST_WAVETABLE=OFF`.
-
-The 128-sample oscillator table is test-build-only. It is absent from normal
-Channel firmware, and there is no public GUI, SDK, or console wavetable mode.
-
-The normal profile keeps two 4,080-sample base banks plus one 4,080-sample tail
-bank per voice (12,240 int16 samples, or 24,480 bytes per voice).
+Debug, Release, and host integration tests all use the same production SAMPLE
+path: signed-int8 attacks plus USB BODY streaming. Each voice has one contiguous
+4,080-sample DTCM ring (85 ms at 48 kHz). This is the only Channel audio build
+profile.
 
 ## Audio signal path
 

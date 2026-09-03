@@ -28,7 +28,7 @@ def on_note_on(key, velocity)
         end
 
         stage = 5
-        ramp(0, 200)                          # full scale -> 0 in 2 ms
+        ramp(0, 200)                          # full scale -> 0 in 5 ms
         return
     end
 

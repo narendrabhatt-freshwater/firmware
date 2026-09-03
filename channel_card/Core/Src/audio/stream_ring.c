@@ -15,11 +15,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#if defined(CHANNEL_TEST_WAVETABLE)
-#define STREAM_RING_STORAGE_SAMPLES 1u
-#else
 #define STREAM_RING_STORAGE_SAMPLES STREAM_RING_SAMPLES
-#endif
 
 typedef struct
 {
@@ -133,12 +129,8 @@ int StreamRing_StartNote(uint8_t voice)
   StreamRing_t *r;
   if (voice >= SAMPLE_VOICES) return -1;
   r = StreamRing_At(voice);
-#if !defined(CHANNEL_TEST_WAVETABLE)
   if (r->pending_armed == 0u ||
       StreamRing_PendingFilled(r) < USB_STREAM_UAC_BODY_SAMPLES) return -1;
-#else
-  if (r->pending_armed == 0u) return -1;
-#endif
   r->generation++;
   r->rd = r->split;
   r->current_session = r->pending_session;
@@ -202,19 +194,6 @@ int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
 {
   StreamRing_t *r;
   uint8_t target_pending = 0u;
-
-#if defined(CHANNEL_TEST_WAVETABLE)
-  (void)voice;
-  (void)session;
-  (void)sof;
-  (void)wave_id;
-  (void)nsamp;
-  if (write != NULL)
-  {
-    memset(write, 0, sizeof *write);
-  }
-  return STREAM_RING_WRITE_ERROR;
-#endif
 
   if (voice >= SAMPLE_VOICES || nsamp == 0u ||
       nsamp > USB_STREAM_NSAMP_MAX || write == NULL)
@@ -487,13 +466,6 @@ int StreamRing_GetRel(uint8_t voice, uint32_t offset, int8_t *out)
   uint32_t rd;
   uint32_t wr;
 
-#if defined(CHANNEL_TEST_WAVETABLE)
-  (void)voice;
-  (void)offset;
-  (void)out;
-  return -1;
-#endif
-
   if (voice >= SAMPLE_VOICES || out == NULL)
   {
     return -1;
@@ -556,10 +528,6 @@ uint32_t StreamRing_PendingFill(uint8_t voice)
 uint32_t StreamRing_FreeLevel(uint8_t voice)
 {
   uint32_t used;
-#if defined(CHANNEL_TEST_WAVETABLE)
-  (void)voice;
-  return 0u;
-#endif
   if (voice >= SAMPLE_VOICES)
   {
     return 0u;
