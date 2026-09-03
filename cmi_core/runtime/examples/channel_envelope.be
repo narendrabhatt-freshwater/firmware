@@ -48,6 +48,5 @@ def on_ramp_end()
         return
     end
 
-    stage = 2  # Attack finished; hold at full amplitude.
-    hold()     # Stay here until note-off.
+    stage = 2  # Attack finished; amplitude stays at the completed target.
 end

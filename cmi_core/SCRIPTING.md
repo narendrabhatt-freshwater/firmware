@@ -95,7 +95,6 @@ actions.
 | `input(id)` | Returns the selected live voice value as a number. |
 | `set_amplitude(value)` | Immediately sets amplitude to `0.0..1.0` and cancels the current ramp. |
 | `ramp(target, slope)` | Ramps to `target` in `0.0..1.0`. `slope` is a positive amplitude change per second. |
-| `hold()` | Stops ramping and holds the current amplitude. It does not emit `on_ramp_end()`. |
 | `start_note()` | Starts the pending note with standard MIDI pitch. Fails when no note is pending. |
 | `start_note(frequency)` | Overrides the pending pitch with a positive frequency in Hz and starts the note. |
 | `discard_pending()` | Removes the pending note without changing the current note; primarily used when `on_note_on()` rejects a transport-ready note. |

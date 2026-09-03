@@ -37,7 +37,6 @@ end
 def on_ramp_end()
     if stage == 1
         stage = 2
-        hold()
         return
     end
     stage = 0

@@ -17,7 +17,6 @@ void ChannelVm_Init(const ChannelVmNativeOps *ops)
     native_ops.read_input = ops->read_input;
     native_ops.set_amplitude = ops->set_amplitude;
     native_ops.ramp = ops->ramp;
-    native_ops.hold = ops->hold;
     native_ops.start_note = ops->start_note;
     native_ops.note_end = ops->note_end;
     native_ops.discard_pending = ops->discard_pending;

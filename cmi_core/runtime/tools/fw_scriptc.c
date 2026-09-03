@@ -164,7 +164,6 @@ int main(int argc, char **argv)
     be_regfunc(vm, "state_set", compile_only_native);
     be_regfunc(vm, "set_amplitude", compile_only_native);
     be_regfunc(vm, "ramp", compile_only_native);
-    be_regfunc(vm, "hold", compile_only_native);
     be_regfunc(vm, "start_note", compile_only_native);
     be_regfunc(vm, "note_end", compile_only_native);
     be_regfunc(vm, "discard_pending", compile_only_native);

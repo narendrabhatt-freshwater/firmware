@@ -30,7 +30,7 @@ int NativePow(bvm *vm){
 void GlobalInt(bvm *vm,const char *name,bint value){be_pushint(vm,value);be_setglobal(vm,name);be_pop(vm,1);}
 void GlobalNil(bvm *vm,const char *name){be_pushnil(vm);be_setglobal(vm,name);be_pop(vm,1);}
 void RegisterAbi(bvm *vm){
-  const char *functions[]={"input","state_get","state_set","set_amplitude","ramp","hold","start_note","note_end","discard_pending","pitch_for_key","led"};
+  const char *functions[]={"input","state_get","state_set","set_amplitude","ramp","start_note","note_end","discard_pending","pitch_for_key","led"};
   for(const char *name:functions)be_regfunc(vm,name,Stub);
   be_regfunc(vm,"pow",NativePow);
   GlobalInt(vm,"INPUT_NOTE_ID",FW_VM_CHANNEL_INPUT_NOTE_ID);GlobalInt(vm,"INPUT_FREQUENCY",FW_VM_CHANNEL_INPUT_FREQUENCY);

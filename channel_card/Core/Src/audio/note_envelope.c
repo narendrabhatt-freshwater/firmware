@@ -59,18 +59,6 @@ int NoteEnv_StartRamp(uint8_t voice, float target, float slope)
   return 0;
 }
 
-int NoteEnv_Hold(uint8_t voice)
-{
-  NoteEnvVoice *envelope;
-  if (voice >= NOTE_ENV_VOICE_COUNT) return -1;
-  envelope = &s_voice[voice];
-  envelope->target = envelope->amplitude;
-  envelope->step = 0.0f;
-  envelope->ramp_active = 0u;
-  envelope->ramp_end_pending = 0u;
-  return 0;
-}
-
 float NoteEnv_Amplitude(uint8_t voice)
 {
   return voice < NOTE_ENV_VOICE_COUNT ? s_voice[voice].amplitude : 0.0f;

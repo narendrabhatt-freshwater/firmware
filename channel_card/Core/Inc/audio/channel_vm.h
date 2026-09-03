@@ -13,7 +13,6 @@ typedef struct {
                     float *value);
   int (*set_amplitude)(void *context, uint8_t note, float amplitude);
   int (*ramp)(void *context, uint8_t note, float target, float slope);
-  int (*hold)(void *context, uint8_t note);
   int (*start_note)(void *context, uint8_t note);
   int (*note_end)(void *context, uint8_t note);
   void (*silence_voice)(void *context, uint8_t voice, FwVmFault fault);

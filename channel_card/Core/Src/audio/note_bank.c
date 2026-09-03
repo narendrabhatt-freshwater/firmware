@@ -702,8 +702,6 @@ static int NoteBank_VmRamp(void *context, uint8_t note, float target, float slop
     return -1;
   return NoteEnv_StartRamp(note, target, slope);
 }
-static int NoteBank_VmHold(void *context, uint8_t note)
-{ (void)context; return NoteEnv_Hold(note); }
 static int NoteBank_VmStartNoteAt(void *context, uint8_t note,
                                   float frequency_hz)
 {
@@ -814,7 +812,6 @@ void NoteBank_Init(void)
   vm_ops.read_input = NoteBank_VmRead;
   vm_ops.set_amplitude = NoteBank_VmSet;
   vm_ops.ramp = NoteBank_VmRamp;
-  vm_ops.hold = NoteBank_VmHold;
   vm_ops.start_note = NoteBank_VmStartNote;
   vm_ops.note_end = NoteBank_VmEnd;
   vm_ops.silence_voice = NoteBank_VmSilence;

@@ -194,7 +194,6 @@ static int native_noarg(bvm *vm,int (*fn)(void *,uint8_t),const char *message) {
     native_error(vm,FW_VM_FAULT_HOST_CALL,message);
   be_pushnil(vm);be_return(vm);
 }
-static int native_hold(bvm *vm){return native_noarg(vm,s_runtime->ops.hold,"hold failed");}
 static int native_start_note(bvm *vm){
   int argc;float value;require_handler(vm);argc=be_top(vm);
   if(argc<0||argc>1)native_error(vm,FW_VM_FAULT_BAD_HOST_ARGUMENT,"start_note expects zero or one argument");
@@ -245,7 +244,7 @@ static int create_vm(ScriptBerryRuntime *r) {
   if(vm->stacktop-vm->stack<BE_STACK_TOTAL_MAX)be_stack_expansion(vm,BE_STACK_TOTAL_MAX-(int)(vm->stacktop-vm->stack));
   be_vector_resize(vm,&vm->callstack,8);be_vector_clear(&vm->callstack);
   be_regfunc(vm,"input",native_input);be_regfunc(vm,"state_get",native_state_get);be_regfunc(vm,"state_set",native_state_set);
-  be_regfunc(vm,"set_amplitude",native_set_amplitude);be_regfunc(vm,"ramp",native_ramp);be_regfunc(vm,"hold",native_hold);
+  be_regfunc(vm,"set_amplitude",native_set_amplitude);be_regfunc(vm,"ramp",native_ramp);
   be_regfunc(vm,"start_note",native_start_note);be_regfunc(vm,"note_end",native_note_end);
   be_regfunc(vm,"discard_pending",native_discard_pending);
   be_regfunc(vm,"led",native_led);
@@ -260,7 +259,7 @@ static int create_vm(ScriptBerryRuntime *r) {
   clear_handler_globals(vm);
   be_newlist(vm);for(i=0u;i<FW_SCRIPT_CHANNEL_VOICE_COUNT;++i){be_pushnil(vm);be_data_push(vm,-2);be_pop(vm,1);}be_setglobal(vm,"_fw_programs");be_pop(vm,1);
   /* Intern all native exception text before handlers become allocation-free. */
-  { static const char *const text[]={"value_error","invalid argument count","integer required","integer out of range","number required","finite number required","handler context required","input failed","set amplitude failed","pow result must be finite","ramp failed","hold failed","start note failed","note end failed","led values must be between zero and one","led failed"};
+  { static const char *const text[]={"value_error","invalid argument count","integer required","integer out of range","number required","finite number required","handler context required","input failed","set amplitude failed","pow result must be finite","ramp failed","start note failed","note end failed","led values must be between zero and one","led failed"};
     for(i=0u;i<sizeof(text)/sizeof(text[0]);++i){be_pushstring(vm,text[i]);be_pop(vm,1);} }
   be_gc_collect(vm);r->phase=PHASE_IDLE;r->shared_valid=1u;r->active_mask=0u;update_memory(r);return 0;
 }

@@ -15,5 +15,4 @@ def on_note_off()
 end
 
 def on_ramp_end()
-    hold()
 end

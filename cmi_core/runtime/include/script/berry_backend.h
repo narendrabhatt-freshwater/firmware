@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* ABI1 eight-program/reload peak 17,336 B + 4 KiB upload scratch + 20% headroom,
+/* ABI1 eight-program/reload peak 17,184 B + 4 KiB upload scratch + 20% headroom,
  * rounded to 1 KiB by the qualification probe. */
 #define SCRIPT_BERRY_ARENA_SIZE (25u * 1024u)
 #define SCRIPT_BERRY_UPLOAD_SIZE FW_SCRIPT_MAX_PAYLOAD
@@ -25,7 +25,6 @@ typedef struct {
   int (*read_input)(void *, uint8_t, FwVmChannelInput, float *);
   int (*set_amplitude)(void *, uint8_t, float);
   int (*ramp)(void *, uint8_t, float, float);
-  int (*hold)(void *, uint8_t);
   int (*start_note)(void *, uint8_t);
   int (*note_end)(void *, uint8_t);
   void (*silence_voice)(void *, uint8_t, FwVmFault);

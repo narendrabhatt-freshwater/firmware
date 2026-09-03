@@ -4,15 +4,15 @@ Measured on 3 September 2026 with the ABI1 event-driven envelope program:
 
 | Measurement | Result |
 | --- | ---: |
-| Eight independently loaded program objects | 15,912 B allocator peak |
-| Atomic replacement peak | 17,336 B |
+| Eight independently loaded program objects | 15,768 B allocator peak |
+| Atomic replacement peak | 17,184 B |
 | Upload scratch | 4,096 B |
 | Formula result (peak + 20% + scratch, 1 KiB rounded) | 25,600 B |
-| Final `ScriptBerryRuntime` linker section | 22,544 B |
+| Final `ScriptBerryRuntime` linker section | 22,536 B |
 | DTCM upload scratch | 4,096 B |
-| Complete ARM firmware flash | 222,600 B |
-| AXI SRAM used / capacity | 322,792 / 327,680 B |
-| AXI SRAM remaining | 4,888 B |
+| Complete ARM firmware flash | 222,408 B |
+| AXI SRAM used / capacity | 322,784 / 327,680 B |
+| AXI SRAM remaining | 4,896 B |
 | DTCM used / capacity | 116,792 / 131,072 B |
 
 The final linker map retains a 2 KiB AXI guard. `.attack_bank` remains 262,144
@@ -37,8 +37,8 @@ A4 = 440 Hz.
 commits the note. Direct frequency selection does not depend on the lookup.
 The linker retains the existing 16 KiB native stack reserve.
 
-All sanctioned envelope transition paths measured at most 50 Berry
-instructions. The handler limit is 64 instructions: 50 plus headroom, rounded up
+All sanctioned envelope transition paths measured at most 47 Berry
+instructions. The handler limit is 64 instructions: 47 plus headroom, rounded up
 to the 32-instruction watchdog quantum. The eight-handler boundary limit is
 512 instructions, alongside the 55,000-cycle aggregate ceiling.
 

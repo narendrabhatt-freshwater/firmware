@@ -7,7 +7,6 @@ def on_note_on(key, velocity)
     start_note()
     set_amplitude(velocity / 127.0)
     stage = 1
-    hold()
 end
 
 def on_note_off()

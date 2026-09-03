@@ -15,7 +15,6 @@ void NoteEnv_Init(void);
 void NoteEnv_Stop(uint8_t voice);
 int NoteEnv_SetAmplitude(uint8_t voice, float amplitude);
 int NoteEnv_StartRamp(uint8_t voice, float target, float slope);
-int NoteEnv_Hold(uint8_t voice);
 float NoteEnv_Amplitude(uint8_t voice);
 float NoteEnv_RenderSample(uint8_t voice);
 uint8_t NoteEnv_TakeRampEnd(uint8_t voice);
