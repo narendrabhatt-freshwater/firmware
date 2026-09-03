@@ -2,8 +2,9 @@
 
 Host ↔ Channel Card and Effect Card over RS485 (and the same command
 set over USB CDC). One ASCII line in, one reply line out. That is the
-protocol — there is no separate binary control frame; the only binary
-payloads are the CDC attack-head uploads (`al`, §4).
+protocol — there is no separate binary control frame. CDC attack-head (`al`)
+and VM program (`vmload`) sessions carry binary payloads after their ASCII
+commands (§4).
 
 Baud on the RS485 UARTs is **921600 8N1**.
 
@@ -32,10 +33,10 @@ Input is folded to lower case. Spaces separate arguments.
 Examples:
 
 ```text
-c:n0 440
+c:n0 on 69
 e:s
 *:h
-n0 440
+n0 on 69
 ```
 
 On a single-card USB CDC link the prefix is optional; the card still
@@ -151,6 +152,7 @@ until that join. `nX > 0` is always a note-on.
 | Command        | Meaning                                           |
 | -------------- | ------------------------------------------------- |
 | `s`            | Sine                                              |
+| `saw`          | Sawtooth                                          |
 | `p <0.1..0.9>` | Pulse; argument is duty                           |
 | `t <0.1..0.9>` | Triangle; argument is asymmetry (0.5 = symmetric) |
 
@@ -231,11 +233,11 @@ and replies `err:unsupported`.
 c:n0
 c:g 1 0
 c:s
-c:n0 440
+c:n0 on 69
 c:p 0.5
 c:f0 300
 c:fk0 1
-c:n0 523.25
+c:n0 on 72
 c:aw 0 0
 c:a
 c:vq

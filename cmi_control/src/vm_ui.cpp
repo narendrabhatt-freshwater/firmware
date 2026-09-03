@@ -40,12 +40,10 @@ struct VmExample
 };
 
 constexpr VmExample kExamples[] = {
-    {"Simple envelope", "simple_envelope", "Immediate start with no crash fade."},
-    {"Simple + 2 ms crash", "simple_crash_envelope", "Simple ADSR with a fixed retrigger fade."},
-    {"Pitch-tracked envelope", "pitch_tracked_envelope", "Independent pitch tracking per segment."},
-    {"Envelope", "current_envelope", "Attack, hold, release, and safe retrigger."},
-    {"Gate", "gate", "Immediate full level with a short click-free release."},
-    {"Pluck", "pluck", "Fast attack followed by an automatic decay."},
+    {"2 ms attack", "attack_2ms", "Two millisecond attack, hold, and release."},
+    {"Gate", "gate", "Immediate full level with a short release."},
+    {"Pluck", "pluck", "Two millisecond attack and automatic decay."},
+    {"Voice steal", "voice_steal", "Two millisecond steal fade and replacement attack."},
 };
 
 void MonoText(const char *text, const ImVec4 &color, ImFont *font)

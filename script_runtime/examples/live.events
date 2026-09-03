@@ -1,5 +1,0 @@
-# tick control name value [ramp_ticks]
-100 control rate 4.0 100
-250 control depth 0.25
-500 control shape 1.0 250
-750 control offset -0.2 50

@@ -30,8 +30,8 @@ over I2S.
 - Console over RS485 (`c:` prefix) and USB CDC
 
 The note bank has no firmware-owned envelope policy. After each reset, upload a
-valid Channel Berry ABI6 program with Protocol's `fw_vmc` tool before sending note
-commands. Until then the card stays silent and replies `err:no-program`.
+valid Channel Berry ABI6 program with `cmi::Core` before sending note commands.
+Until then the card stays silent and replies `err:no-program`.
 
 ### USB streaming profile (default)
 
@@ -135,7 +135,8 @@ surface.
 5. `CPU% ≈ t_low / (t_low + t_high)`.
 6. When done: `cpu 0`.
 
-Smoke: `cpu 1`, `cpu 8`, `cpu 0`, `n0 440 0.5`, `g 1 0` — LED chaser resumes after `cpu 0`.
+Smoke: load scripts, then run `cpu 1`, `cpu 8`, and `cpu 0`. The LED chaser
+resumes after `cpu 0`.
 
 Bare `cpu` starts all **8** voices (220, 260, … Hz). Pass **`1..8`** for count.
 
@@ -229,40 +230,88 @@ There is no USB speaker volume control. BODY samples pass at unity.
 Use **`g <ch> <dB>`** for CS4304 DAC trim.
 
 **`n0`** applies **bypass ON** and **`g 1 0`** (0 dB CH1 DAC trim) at
-boot and on bare `n0`. **`n0`…`n7`** are 8 independent phase-accumulator
-voices summed onto CH1. Optional **`[scale]`** (0.0..1.0, default **0.125**)
-sets that note’s amplitude. When the assigned wave has no loaded attack head,
-**`s`** (sine, default), **`p <0.1..0.9>`** (pulse duty), and
-**`t <0.1..0.9>`** (triangle asymmetry; 0.5 = symmetric) select its fallback
-oscillator. These shape commands do not affect SAMPLE playback from a loaded
-attack head and BODY stream. Frequency, scale, and shape changes do not
-touch gain or bypass.
-**`g`** changes DAC atten on any channel.
+boot and on bare `n0`. **`n0`…`n7`** are eight independent voices summed
+onto CH1. Their uploaded scripts control tuning and amplitude. When an
+assigned wave has no loaded attack head, `s`, `saw`, `p`, and `t` select the
+fallback oscillator. Shape changes do not affect sample playback, gain, or
+bypass. `g` changes DAC attenuation on any channel.
 
-## Console quick reference
+## Console command reference
 
-Type `h` / `help` / `?` on the card for the live list.
+This table matches the parser in
+`Core/Src/console/channel_console.c`. Commands are case-insensitive because
+console input is converted to lowercase. End a command with carriage return.
 
-| Command                                   | Action                                                                                                                                                                                                                             |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `h`                                       | Command list                                                                                                                                                                                                                       |
-| `n0`                                      | Session defaults: bypass on, `g 1 0`                                                                                                                                                                                               |
-| `n0`…`n7 on <key> [@session]`              | Start raw MIDI key 0…127; the loaded script maps and tunes it                                                                                                                                                                   |
-| `n0`…`n7 off`                           | Turn that note off                                                                                                                                                                                                                 |
-| `n off`                                   | Silence all 8 voices                                                                                                                                                                                                               |
-| `s`                                       | Fallback oscillator shape: sine (voices without a loaded attack)                                                                                                                                                                  |
-| `p <0.1..0.9>`                            | Fallback oscillator shape: pulse (duty)                                                                                                                                                                                            |
-| `t <0.1..0.9>`                            | Fallback oscillator shape: triangle (asymmetry)                                                                                                                                                                                    |
-| `f0`…`f7` `<Hz>` `[q]` / `f` `<Hz>` `[q]` | LPF **base** cutoff at C4 on voices **0..7** (20..20000; **`0` or `20000` = bypass**). Optional **`q`** = DF4 **g** **0.5..10** (default **1.0**). See [`docs/reference/note_filter_butterworth.md`](docs/reference/note_filter_butterworth.md). |
-| `fk0`…`fk7` `[k]` / `fk` `[k]`            | Filter pitch-track **k** (0..10, default **0**): `fc = fbase × (note/C4)^k`.                                                                                                                                                         |
-| `al <id> <nbytes>`                        | CDC upload: int16 attack head for wave `<id>` 0…255 (2…1024 bytes; join at committed length)                                                                                                                                        |
-| `vmload <v> <nbytes>` / `vm [v]` / `vm mem` | CDC upload one ABI6 FWSC Berry program (maximum 4 KiB payload) to voice 0…7 / status / shared-arena diagnostics                                                                                                                    |
-| `ar <id> <Hz>` / `aw <v> <id>` / `a`      | Root pitch of head `<id>` / assign head to voice 0…7 / loaded count + hex mask                                                                                                                                                      |
-| `vq`                                      | Active mask + hungriest voice + free-slot codes 0–14; 15 means empty                                                                                                                                                               |
-| `g <ch> <dB>`                             | DAC atten 0..127 dB on ch 1..4                                                                                                                                                                                                     |
-| `cpu` / `cpu N`                           | N voices + LED_Y DMA-callback fill load probe (default 8)                                                                                                                                                                          |
-| `cpu q` `[N]`                             | Soft-queue load probe                                                                                                                                                                                                              |
-| `cpu 0`                                   | Clear notes; resume LED chaser                                                                                                                                                                                                     |
+On shared RS485, prefix commands with `c:`. USB CDC accepts `c:`, `*:`, or no
+prefix. RS485 replies are tagged `[C]`; CDC replies contain only the body.
+Successful setters normally return `ok`. Common failures are `err:syntax`,
+`err:range`, `err:unknown`, `err:no-program`, and `err:vm-busy`.
+
+### Playback and card control
+
+| Command | Action |
+| ------- | ------ |
+| `h` / `help` / `?` | Return the live command list. |
+| `n0` | Apply session defaults: analog bypass on and CH1 trim at 0 dB. It does not start a note. |
+| `n0`…`n7 on <key>` | Start voice 0…7 using MIDI key 0…127. A valid script must already be loaded for that voice. |
+| `n0`…`n7 on <key> @<session>` | Start a streamed note and bind BODY session 0…254 before acknowledging. |
+| `n0`…`n7 off` | Release one voice. |
+| `n off` | Release all eight voices. |
+| `s` | Select the sine fallback oscillator. |
+| `saw` | Select the sawtooth fallback oscillator. |
+| `p <duty>` | Select the pulse fallback oscillator; duty range 0.1…0.9. |
+| `t <asymmetry>` | Select the triangle fallback oscillator; range 0.1…0.9, with 0.5 symmetric. |
+| `g <channel> <dB>` | Set CS4304 attenuation: channel 1…4, attenuation 0…127 dB. |
+
+### Filters
+
+| Command | Action |
+| ------- | ------ |
+| `f` | Query effective cutoff, q, and pitch tracking for voices 0…7. |
+| `f <Hz> [q]` | Set every voice's base cutoff. Range is 20…20000 Hz; `0` and `20000` bypass. Optional q is 0.5…10. |
+| `f0`…`f7` | Query one voice's filter. |
+| `f0`…`f7 <Hz> [q]` | Set one voice's base cutoff and optionally q. |
+| `fk` | Query pitch tracking for every voice. |
+| `fk <k>` | Set pitch tracking for every voice; k range 0…10. |
+| `fk0`…`fk7` | Query one voice's pitch tracking. |
+| `fk0`…`fk7 <k>` | Set one voice's pitch tracking. |
+
+Pitch tracking uses `fc = fbase × (noteHz / 261.625565)^k`. See
+[`docs/reference/note_filter_butterworth.md`](docs/reference/note_filter_butterworth.md).
+
+### Samples, scripts, and streaming
+
+| Command | Transport | Action |
+| ------- | --------- | ------ |
+| `al <id> <nbytes>` | USB CDC only | Begin an attack-head upload for ID 0…255. The byte count must be even and 2…1024. After `ok:ready`, send exactly that many signed int16 little-endian bytes; completion returns `ok:attack <id>`. |
+| `ar <id> <Hz>` | RS485 or CDC | Set the positive root frequency for attack ID 0…255. |
+| `aw <voice> <id>` | RS485 or CDC | Assign attack ID 0…255 to voice 0…7. |
+| `a` | RS485 or CDC | Query loaded attack count and the 256-bit loaded mask. |
+| `vmload <voice> <nbytes>` | USB CDC only | Begin an FWSC ABI6 program upload to voice 0…7. Total container size is 20…4116 bytes. After `ok:ready`, send exactly that many bytes. |
+| `vm` | RS485 or CDC | Query the active-program voice mask. |
+| `vm <voice>` | RS485 or CDC | Query active state, target, ABI version, and fault for voice 0…7. |
+| `vm mem` | RS485 or CDC | Return shared VM arena and per-voice fault/cycle diagnostics. |
+| `vq` | RS485 or CDC | Query active/pending masks, BODY sessions, target fill, and exact writable credit. RS485 uses the fixed binary-compatible `vq7` response. |
+| `usb` | RS485 or CDC | Query BODY transport and underrun counters. |
+| `usb 0` | RS485 or CDC | Clear BODY transport counters and return the new values. |
+
+`al` and `vmload` switch the CDC connection from line parsing to binary input
+until the declared byte count has arrived. Do not send another command during
+that payload. Full upload sequencing and reply fields are documented in
+[`../docs/protocol.md`](../docs/protocol.md).
+
+### Service diagnostics and compatibility responses
+
+| Command | Action |
+| ------- | ------ |
+| `cpu` / `cpu <N>` | Start the DMA load probe with 8 voices or N voices, where N is 1…8. |
+| `cpu q` / `cpu q <N>` | Start the soft-queue load probe with 8 voices or N voices. |
+| `cpu 0` | Stop the probe, release notes, and resume the LED chaser. |
+| `bl ...` | Retired BODY upload command; always returns `err:unsupported`. BODY is streamed over UAC2. |
+| `fb [..]` | Retired asynchronous-feedback command; always returns `err:unsupported`. |
+
+`cpu`, `vm mem`, `usb`, `bl`, and `fb` are service/compatibility commands;
+applications should use the high-level `cmi::Core` operations instead.
 
 Shape smoke with a loaded script for n0 (scope on CH1): `n0 on 69`, then
 `s`, `p 0.5`, `t 0.5`, or `saw`.

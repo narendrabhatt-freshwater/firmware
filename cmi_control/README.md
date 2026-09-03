@@ -11,7 +11,7 @@ from any serial terminal.
 | UI                 | **Dear ImGui** 1.91                                                           |
 | Window / input     | **GLFW** 3.4                                                                  |
 | Graphics           | **OpenGL 3** (macOS Core Profile / Linux / Windows)                           |
-| Host SDK           | [`protocol`](../protocol): card protocol, MIDI, audio, RS485, USB |
+| Core library       | [`cmi_core`](../cmi_core): cards, MIDI, VM, waves, RS485, and USB |
 
 Runs on **macOS, Linux, and Windows** with CMake + a C++17 toolchain.
 Dependencies are pulled by FetchContent on first configure (needs network once).

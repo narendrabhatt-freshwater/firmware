@@ -50,8 +50,8 @@ target_include_directories(imgui_lib PUBLIC
 )
 target_link_libraries(imgui_lib PUBLIC glfw)
 
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../protocol"
-                 "${CMAKE_CURRENT_BINARY_DIR}/cardlink")
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../cmi_core"
+                 "${CMAKE_CURRENT_BINARY_DIR}/cmi_core")
 
 set(CMI_CONTROL_SOURCES
   src/main.cpp
@@ -85,17 +85,15 @@ target_compile_definitions(cmi_control PRIVATE
   FW_FONT_DIR="${imgui_SOURCE_DIR}/misc/fonts"
   CMI_VERSION="${CMI_VERSION}"
   CMI_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
-  CMI_VM_EXAMPLE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../protocol/examples/vm/channel"
+  CMI_VM_EXAMPLE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../cmi_core/examples/vm/channel"
   CMI_VM_EXAMPLE_CACHE_DIR="${CMAKE_CURRENT_BINARY_DIR}/vm_scripts"
 )
 
 set(CMI_VM_EXAMPLE_NAMES
-  simple_envelope
-  simple_crash_envelope
-  pitch_tracked_envelope
-  current_envelope
+  attack_2ms
   gate
-  pluck)
+  pluck
+  voice_steal)
 set(CMI_VM_EXAMPLE_OUTPUTS)
 foreach(CMI_VM_EXAMPLE IN LISTS CMI_VM_EXAMPLE_NAMES)
   set(CMI_VM_EXAMPLE_OUTPUT
@@ -105,10 +103,10 @@ foreach(CMI_VM_EXAMPLE IN LISTS CMI_VM_EXAMPLE_NAMES)
     COMMAND ${CMAKE_COMMAND} -E make_directory
             "${CMAKE_CURRENT_BINARY_DIR}/vm_scripts"
     COMMAND fw_scriptc
-            "${CMAKE_CURRENT_SOURCE_DIR}/../protocol/examples/vm/channel/${CMI_VM_EXAMPLE}.be"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../cmi_core/examples/vm/channel/${CMI_VM_EXAMPLE}.be"
             -o "${CMI_VM_EXAMPLE_OUTPUT}"
     DEPENDS fw_scriptc
-            "${CMAKE_CURRENT_SOURCE_DIR}/../protocol/examples/vm/channel/${CMI_VM_EXAMPLE}.be"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../cmi_core/examples/vm/channel/${CMI_VM_EXAMPLE}.be"
     VERBATIM)
   list(APPEND CMI_VM_EXAMPLE_OUTPUTS "${CMI_VM_EXAMPLE_OUTPUT}")
 endforeach()
@@ -121,7 +119,7 @@ target_include_directories(cmi_control PRIVATE
 
 target_link_libraries(cmi_control PRIVATE
   imgui_lib
-  cardlink::cardlink
+  cmi::core
 )
 
 # OpenGL — portable across Win / macOS / Linux

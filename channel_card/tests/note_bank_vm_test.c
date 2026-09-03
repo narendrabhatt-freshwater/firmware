@@ -54,10 +54,11 @@ int main(int argc,char **argv){
   {uint8_t *abi5=malloc(size);int feed;check(abi5!=NULL,"allocate ABI5 case");memcpy(abi5,program,size);abi5[8]=5u;abi5[9]=0u;NoteBank_PanicAll();
    check(NoteBank_VmUploadBegin(0u)==0,"ABI5 upload begin");feed=NoteBank_VmUploadFeed(0u,abi5,size);
    check(feed!=0||NoteBank_VmUploadCommit(0u)!=0,"ABI5 container must be rejected");free(abi5);}
-  {size_t n2;uint8_t *two_ms=read_file(argv[2],&n2);NoteBank_VmUploadAbort(0u);
-   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,two_ms,n2)==0&&NoteBank_VmUploadCommit(0u)==0,"load actual ABI6 2ms program");
-   check(NoteBank_NoteOn(0u,60u)==0,"2ms first note");for(unsigned i=0u;i<12u;++i)boundary();
-   check(NoteBank_NoteOn(0u,62u)==0,"2ms retrigger");boundary();check(StreamRing_HasPending(0u)!=0u,"2ms fade must retain pending for first 48 frames");
-   boundary();check(StreamRing_HasPending(0u)==0u,"2ms fade must promote after exactly 96 frames");free(two_ms);}
+  {size_t example_size;uint8_t *example=read_file(argv[2],&example_size);NoteBank_VmUploadAbort(0u);
+   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,example,example_size)==0&&NoteBank_VmUploadCommit(0u)==0,"load production example");
+   check(NoteBank_NoteOn(0u,60u)==0,"example first note");boundary();
+   check(StreamRing_HasPending(0u)==0u,"example must start an idle voice immediately");
+   check(NoteBank_NoteOn(0u,62u)==0,"example replacement note");boundary();
+   check(StreamRing_HasPending(0u)==0u,"example must promote a replacement immediately");free(example);}
   free(program);puts("Channel shared Berry VM test passed");return 0;
 }

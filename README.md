@@ -10,10 +10,9 @@ project's own `README.md`; the host↔card wire contract lives in
 | Effect Card  | `effect_card/`  | STM32H743xx | `effect_card` | `effect_card.ioc` |
 
 Both are independently buildable CMake projects. HAL, CMSIS, and TinyUSB are
-vendored inside each card, while both cards intentionally share the portable
-`common/vm` target. Build from this repository layout so that shared source is
-resolved. The C++17 `cardlink` host SDK and its `cmi_control` example application
-are separate from the two firmware projects — see §6.
+vendored inside each card. The VM contract and runtime are shared from
+`cmi_core/` so firmware and host code use the same source. The `cmi_control`
+application also links this core library — see §6.
 
 ---
 
@@ -159,8 +158,9 @@ CODE blocks, but check anyway):
 ## 5. Repository layout (same shape in both projects)
 
 The firmware projects live at the repo root (`channel_card/`,
-`effect_card/`), alongside the C++17 `cardlink` host SDK under `protocol/`, the
-shared interpreter under `common/vm/`, and the `cmi_control` example application.
+`effect_card/`), alongside the C++17 host library under `cmi_core/` and the
+`cmi_control` application. A public-API command-line example lives in
+[`example/`](example/README.md).
 The `fw` CLI wrapping all of this lives in `scripts/` at the repo root.
 
 ```
@@ -194,26 +194,29 @@ Card is recoverable from version-control history.
 
 ## 6. Consoles — how to talk to the boards
 
-Both cards run the same line-based console over RS485 and USB CDC.
-[`docs/protocol.md`](docs/protocol.md) is the normative command
-reference; the summary:
+Both cards run line-based consoles over RS485 and USB CDC. The complete live
+command references are in the
+[`Channel Card README`](channel_card/README.md#console-command-reference) and
+[`Effect Card README`](effect_card/README.md#console-command-reference).
+[`docs/protocol.md`](docs/protocol.md) defines framing, binary uploads, and
+reply formats.
 
 **Channel Card** — 8 SAMPLE voices (`n0`…`n7`, summed on CH1), fallback
 oscillator shape (`s`/`p`/`t`), sample upload/assignment
 (`al`/`ar`/`aw`/`a`/`vq`), per-voice VM programs (`vmload`/`vm`) and LPF
 (`f`/`fk`), DAC gain (`g`), CPU probe (`cpu`).
 
-| Command                        | Meaning                                                         |
-| ------------------------------ | --------------------------------------------------------------- |
-| `n0`                           | Session defaults: **bypass on** + **g 1 0**                     |
-| `n0`…`n7` `0` / `<Hz> [scale]` | Note off/on; optional scale 0..1 (default 0.125); summed on CH1 |
-| `g <ch> <dB>`                  | CS4304 DAC atten on CH1..4, dB 0..127                           |
+| Command | Meaning |
+| ------- | ------- |
+| `n0` | Session defaults: bypass on and `g 1 0`. |
+| `n0`…`n7 on <key> [@session]` | Start one scripted voice with MIDI key 0…127. |
+| `n0`…`n7 off` / `n off` | Release one voice or all voices. |
+| `g <ch> <dB>` | Set CS4304 attenuation on channel 1…4 to 0…127 dB. |
 
-Examples: `n0 440 0.5`, `n1 550` (scale 0.125), `n2 660 0.1`.
+Example: `c:n0 on 69`, followed by `c:n0 off`.
 
 Addressing on the shared RS485 bus: `c:` / `e:` / `*:`. The Effect Card
-console covers 48 V, ADC registers, USB channel select and LEDs — see
-`docs/protocol.md` §3.
+console covers 48 V, ADC registers, USB channel selection, and LEDs.
 
 See [`docs/protocol.md`](docs/protocol.md) (host↔card protocol) and
 [`docs/reference/rs485_console_architecture.md`](docs/reference/rs485_console_architecture.md)
@@ -223,7 +226,7 @@ Per-voice digital LPF: [`docs/reference/note_filter_butterworth.md`](docs/refere
 **USB CDC** — same Channel Card parser on `/dev/cu.usbmodem*`.
 Effect Card CDC runs its own console (`fw console effect`).
 
-**Control GUI** (the supported cardlink example; Dear ImGui + GLFW — MIDI +
+**Control GUI** (Dear ImGui + GLFW — MIDI +
 console + preview scope; macOS / Linux / Windows) —
 
 ```bash
@@ -266,9 +269,8 @@ hardware:
   mono 32-bit 96 kHz), 48 V phantom rail control, RS485 + USB CDC
   consoles.
 - **`cmi_control`** — Dear ImGui + GLFW control surface (MIDI, RS485
-  console, local preview scope) and the supported SDK example. See
+  console, and local preview scope). See
   [`cmi_control/README.md`](cmi_control/README.md).
-- **`protocol`** — Single C++17 host SDK: `cardproto` wire API,
-  shared serial, RS485 tagged bus / `Bus`, USB CDC and sample upload, MIDI
-  input/voice allocation, local speaker output, and UAC2 int16 BODY. See
-  [`protocol/README.md`](protocol/README.md).
+- **`cmi_core`** — Self-contained C++17 host library for card control, VM
+  loading, wave playback, MIDI, and USB BODY streaming. See
+  [`cmi_core/README.md`](cmi_core/README.md).

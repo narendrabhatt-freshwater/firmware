@@ -36,7 +36,7 @@ add_executable(${CMAKE_PROJECT_NAME})
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
-add_subdirectory(../common/vm ${CMAKE_CURRENT_BINARY_DIR}/freshwater_vm)
+add_subdirectory(../cmi_core/shared/vm ${CMAKE_CURRENT_BINARY_DIR}/freshwater_vm)
 
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE

@@ -112,7 +112,7 @@ usage() {
     "SVN publishing (docs/reference/svn_publishing.md)"
     "  fw svn-publish <product> <wc> [--tag vX.Y] [--dry-run]"
     "                                    export a product dir into its SVN trunk"
-    "                                    products: channel_card effect_card protocol cmi_control"
+    "                                    products: channel_card effect_card cmi_core cmi_control"
     ""
     "Cards"
     "  channel    channel_MCU   STM32H725   /dev/cu.usbmodemCHCARD*"

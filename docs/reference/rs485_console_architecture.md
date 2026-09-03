@@ -11,7 +11,7 @@ terminal can type (`screen`, `minicom`, PuTTY at **921600 8N1**).
 | Channel / Effect firmware                           | Product protocol (addressing, commands, `ok`/`err`)       | Yes            |
 | USB↔RS485 adapter + any terminal                    | Maintenance / bring-up                                    | Enough for lab |
 | [`cmi_control`](../../cmi_control)           | Supported example: MIDI + full console + preview scope   | No             |
-| [`protocol`](../../protocol) | C++17 host SDK: wire API, serial/RS485, USB, MIDI, audio | Host apps |
+| [`cmi_core`](../../cmi_core) | C++17 core library: cards, VM, waves, MIDI, and USB audio | Host apps |
 
 **Implication:** do not invent framing a terminal cannot type. Voice commands
 are ASCII (`c:n3 440` + Enter). Compact `[C]ok` replies stay human-readable.
@@ -20,7 +20,7 @@ are ASCII (`c:n3 440` + Enter). Compact `[C]ok` replies stay human-readable.
 flowchart LR
   Term[Any serial terminal]
   Gui[cmi_control]
-  Lib[protocol]
+  Lib[cmi_core]
   Bus[RS485 adapter 921600 8N1]
   CC[Channel Card]
   EC[Effect Card]
@@ -103,11 +103,9 @@ Same command set over USB CDC (no `[C]` tag on CDC).
 
 ## Host library
 
-[`protocol`](../../protocol) contains the
-`cardproto` wire API (`Format*`, `ParseReplyBody`, typed clients), shared
-`SerialPort`, `cardlink::rs485` tagged `Link` / `Bus`, `cardlink::usb`,
-`cardlink::midi`, and `cardlink::audio`. `cmi_control` is its supported
-example application.
+[`cmi_core`](../../cmi_core) exposes the `cmi::Core` host API. Transport,
+wire-format, MIDI, VM, wave, and audio-streaming components remain internal to
+the library. `cmi_control` is the repository application using the same core.
 
 ## Command reference
 

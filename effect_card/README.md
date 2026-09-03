@@ -128,24 +128,38 @@ changes needed.
 `AUDIO_EN` (PA7) releases the ADCs from hardware shutdown and is raised
 at boot; they will not answer on I2C while it is low.
 
-## Console quick reference
+## Console command reference
 
-Type `help` on RS485 (`e:help`) or the USB COM port for the live list.
-Frequently used:
+This table matches the parser in `Core/Src/console/effect_console.c`.
+Commands are case-insensitive because console input is converted to lowercase.
+End a command with carriage return.
+
+On shared RS485, prefix commands with `e:`. USB CDC accepts `e:`, `*:`, or no
+prefix. RS485 replies are tagged `[E]`; CDC replies contain only the body.
+Setters return `ok` on success. Invalid commands return `err:syntax` or
+`err:unknown`; ADC communication failures return an `err:` reply describing
+the chip that did not acknowledge.
 
 | Command | Action |
-|---|---|
-| `s` | Status: 48 V, LEDs, audio domain, USB channel |
-| `u [1..8]` | Select which ADC channel streams to USB (bare = query) |
-| `v 1\|0` / `v` | 48 V phantom rail on/off / query (with power-good) |
-| `a 1\|0` | Audio domain / ADC shutdown (`AUDIO_EN`) |
-| `i2c` | Scan I2C2 (expect `0x4C` and `0x4D`) |
-| `ai` | Re-run ADC bring-up sequence on both chips |
-| `ar <1\|2> <reg>` | Read ADC register (hex) |
-| `aw <1\|2> <reg> <v>` | Write ADC register (hex) |
-| `l 1\|0` / `lr 1\|0` / `ly 1\|0` | LED show / red / yellow |
-| `ec 1\|0` / `ec` | RS485 keystroke echo on/off / query |
+| ------- | ------ |
+| `h` / `help` / `?` | Return the live command list. |
+| `s` | Return 48 V enable, power-good, audio enable, LED-show state, and RS485 echo state. |
+| `v` | Query 48 V enable and power-good. |
+| `v 0` / `v 1` | Disable or enable the 48 V phantom rail. |
+| `a 0` / `a 1` | Hold the ADC audio domain in shutdown or enable it. Enabling waits for ADC wake-up before replying. |
+| `u` | Query the ADC channel currently sent to the USB microphone. |
+| `u <channel>` | Select USB capture channel 1…8. |
+| `l 0` / `l 1` | Disable or enable the automatic LED show. |
+| `lr 0` / `lr 1` | Turn the red LED off or on. Turning it on disables the automatic show. |
+| `ly 0` / `ly 1` | Turn the yellow LED off or on. Turning it on disables the automatic show. |
+| `ec` | Query RS485 keystroke echo. |
+| `ec 0` / `ec 1` | Disable or enable RS485 keystroke echo. Default is off. |
+| `i2c` | Scan legal I2C2 addresses and print every responding device. ADC1 and ADC2 should appear at `0x4C` and `0x4D`. |
+| `ai` | Re-run the standard initialization sequence on both ADCs. |
+| `ar <chip> <reg>` | Read register 0x00…0xFF from ADC chip 1 or 2. Register input is hexadecimal. |
+| `aw <chip> <reg> <value>` | Write value 0x00…0xFF to an ADC register. Register and value inputs are hexadecimal. |
 
-`ar`/`aw` are the fast way to experiment with ADC settings without
-reflashing — e.g. `aw 1 07 3c` flips the BCLK polarity.
-
+The ADC register commands are service operations. Normal applications should
+use the high-level `cmi::Core` effect controls and should not depend on ADC
+register values. For example, `aw 1 07 3c` changes ADC1 register `0x07` to
+`0x3C`.

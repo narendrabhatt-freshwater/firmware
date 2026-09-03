@@ -13,7 +13,7 @@ Each product maps to one SVN repository's trunk content:
 | ------------------ | -------------- | ------ |
 | `channel_card/` | `channel_card` | exists |
 | `effect_card/`  | `effect_card`  | exists |
-| `protocol/` | `cardlink` | create when needed |
+| `cmi_core/` | `cmi_core` | create when needed |
 | `cmi_control/`  | `cmi_control`  | create when needed |
 
 ## Release flow

@@ -6,7 +6,7 @@
 # Usage:
 #   svn_publish.sh <product> <svn-working-copy> [--tag vX.Y] [--dry-run]
 #
-#   <product>            channel_card | effect_card | cardlink | cmi_control
+#   <product>            channel_card | effect_card | cmi_core | cmi_control
 #   <svn-working-copy>   checkout of the SVN repo ROOT (must contain trunk/;
 #                        tags/ is required only when --tag is used)
 #   --tag vX.Y           after committing trunk, svn copy trunk -> tags/vX.Y
@@ -38,17 +38,14 @@ while [ $# -gt 0 ]; do
 done
 
 case "$PRODUCT" in
-  channel_card|effect_card|cardlink|cmi_control) ;;
-  *) err "unknown product '$PRODUCT' (channel_card | effect_card | cardlink | cmi_control)" ;;
+  channel_card|effect_card|cmi_core|cmi_control) ;;
+  *) err "unknown product '$PRODUCT' (channel_card | effect_card | cmi_core | cmi_control)" ;;
 esac
 
 command -v svn   >/dev/null || err "svn not found on PATH"
 command -v rsync >/dev/null || err "rsync not found on PATH"
 
 SOURCE_REL="$PRODUCT"
-if [ "$PRODUCT" = "cardlink" ]; then
-  SOURCE_REL="protocol"
-fi
 SRC="$ROOT/$SOURCE_REL"
 [ -d "$SRC" ] || err "product directory not found: $SRC"
 TRUNK="$WC/trunk"
@@ -126,7 +123,7 @@ case "$PRODUCT" in
     copy_doc README.md firmware_handbook.md
     copy_doc docs/diagrams/card_data_flow.md diagrams/card_data_flow.md
     ;;
-  cardlink|cmi_control)
+  cmi_core|cmi_control)
     copy_doc docs/reference/rs485_console_architecture.md reference/rs485_console_architecture.md
     ;;
 esac
