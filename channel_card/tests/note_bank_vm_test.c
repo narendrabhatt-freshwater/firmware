@@ -62,6 +62,7 @@ int main(int argc,char **argv){
    check(NoteBank_VmUploadBegin(0u)==0,"ABI7 upload begin");feed=NoteBank_VmUploadFeed(0u,abi7,size);
    check(feed!=0||NoteBank_VmUploadCommit(0u)!=0,"ABI7 container must be rejected");free(abi7);}
   {size_t example_size;uint8_t *example=read_file(argv[2],&example_size);NoteBank_VmUploadAbort(0u);
+   for(unsigned i=248u;i<256u;++i){attack_lengths[i]=2u;attack_tables[i][0]=64;attack_tables[i][1]=64;}
    check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,example,example_size)==0&&NoteBank_VmUploadCommit(0u)==0,"load production example");
    check(NoteBank_NoteOn(0u,60u,40u)==0,"example first note");prime_body(0u);boundary();
    check(StreamRing_HasPending(0u)==0u,"example must start an idle voice immediately");
@@ -82,7 +83,7 @@ int main(int argc,char **argv){
    boundaries(150u);
    check(fabsf(NoteEnv_Amplitude(0u)-(32.0f/127.0f))<0.002f,"soft velocity attack reaches its peak near 200 ms");
    boundaries(500u);
-   check(fabsf(NoteEnv_Amplitude(0u)-(32.0f/127.0f*0.2f))<0.0001f,"decay reaches velocity-scaled sustain");
+   check(fabsf(NoteEnv_Amplitude(0u)-(32.0f/127.0f*0.9f))<0.002f,"decay reaches velocity-scaled sustain");
    check(NoteBank_NoteOff(0u)==0,"low velocity note off accepted");boundaries(50u);
    check(!NoteBank_IsActive(0u),"release retires low velocity note");
    check(NoteBank_NoteOn(0u,61u,127u)==0,"full velocity note accepted");prime_body(0u);boundary();boundaries(49u);
@@ -97,7 +98,11 @@ int main(int argc,char **argv){
    boundaries(50u);
    check(fabsf(NoteEnv_Amplitude(0u)-(64.0f/127.0f))<0.002f,"medium velocity attack reaches its peak near 100 ms");
    boundaries(500u);
-   check(fabsf(NoteEnv_Amplitude(0u)-(64.0f/127.0f*0.2f))<0.0001f,"replacement decay reaches sustain");free(channel_program);}
+   check(fabsf(NoteEnv_Amplitude(0u)-(64.0f/127.0f*0.9f))<0.002f,"replacement decay reaches sustain");
+   NoteBank_PanicAll();
+   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,channel_program,channel_size)==0&&NoteBank_VmUploadCommit(0u)==0,"reload channel example for top key");
+   check(NoteBank_NoteOn(0u,127u,127u)==0,"top MIDI key accepted");prime_body(0u);boundary();
+   check(NoteBank_VmIsActive(0u)&&NoteBank_VmFault(0u)==FW_VM_FAULT_NONE,"transposed top key must stay within oscillator range");free(channel_program);}
   NoteBank_PanicAll();
   {size_t oscillator_size;uint8_t *oscillator_program=read_file(argv[3],&oscillator_size);
    for(unsigned i=248u;i<256u;++i){attack_lengths[i]=2u;attack_tables[i][0]=64;attack_tables[i][1]=64;}

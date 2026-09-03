@@ -133,6 +133,14 @@ struct App
       oscillator_wave_paths{};
   std::array<bool, cardlink::audio::kOscillatorWaves>
       oscillator_wave_loaded{};
+  std::array<uint16_t, 128> midi_sample_map = [] {
+    std::array<uint16_t, 128> map{};
+    for (uint16_t key = 0; key < map.size(); ++key) map[key] = key;
+    return map;
+  }();
+  bool quick_start_job = false;
+  bool quick_start_pending_vm = false;
+  bool quick_start_open_midi = false;
 
   bool midi_open = false;
   bool audio_open = false;
@@ -206,6 +214,8 @@ struct App
    * CDC (cu.usbmodem*CHCARD* preferred). Updates attack_cdc_path on success.
    */
   bool EnsureAttackCdc(std::string &err);
+  /** Auto-select an openable USB-to-RS485 adapter when the saved path is not one. */
+  bool EnsureRs485Adapter(std::string &err);
   bool EnsureSampleStream();
   void Tick();
   void Draw();

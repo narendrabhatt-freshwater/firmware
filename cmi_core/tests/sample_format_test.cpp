@@ -1,3 +1,4 @@
+#include "cardlink/audio/builtin_waves.hpp"
 #include "cardlink/audio/wave_loader.hpp"
 #include "cardlink/sample/client.hpp"
 #include "cardlink/usb/stream_proto.hpp"
@@ -39,6 +40,15 @@ int main()
   static_assert(cardlink::usb::kStreamUacRateHz == 48000u);
   static_assert(cardlink::usb::kStreamUacPacketBytes == 1008u);
   static_assert(cardlink::usb::kStreamUacBodySamples == 1004u);
+
+  for (uint8_t index = 0; index < 8u; ++index) {
+    const auto builtin = cardlink::audio::MakeBuiltinWavetable(index);
+    Expect(builtin.size() == 256u,
+           "every built-in oscillator table must contain 256 samples");
+    Expect(std::string(cardlink::audio::BuiltinWavetableName(index)) !=
+               "unknown",
+           "every built-in oscillator slot must have a display name");
+  }
 
   const auto dir = std::filesystem::temp_directory_path() /
                    "cmi_core_sample_format_test";

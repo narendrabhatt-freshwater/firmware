@@ -13,6 +13,8 @@ _fw() {
     'console:Interactive USB CDC console'
     'log:Follow CDC output'
     'send:Send one console command'
+    'cli:Start the automatic interactive CMI session'
+    'play:Upload a performance project and run MIDI'
     'control:Build or run the cmi_control host example'
     'clean:Remove build directories'
     'status:Show toolchain and artifacts'
@@ -83,6 +85,23 @@ _fw() {
         control|gui)
           _arguments '1:sub:(run build)'
           ;;
+        cli|play|perform|session)
+          _arguments \
+            '1:project directory:_directories' \
+            '--rs485[USB-to-RS485 port]:port:_files' \
+            '--cdc[Channel CDC port]:port:_fw_serial_ports' \
+            '--script[Berry script]:script:_files' \
+            '--sample[Single quick sample]:sample:_files' \
+            '--samples[Sample bank directory]:directory:_directories' \
+            '--wavetables[Oscillator wavetable directory]:directory:_directories' \
+            '--midi[MIDI input name]:midi:(auto off)' \
+            '--audio[Channel audio device]:audio:' \
+            '--attenuation[Startup attenuation dB]:db:(0 6 12 24)' \
+            '--baud[RS485 baud]:baud:(921600)' \
+            '--no-watch[Do not reload the script on save]' \
+            '--list-midi[List MIDI inputs]' \
+            '--help[Show play help]'
+          ;;
         status|info)
           _arguments \
             '--debug[Debug preset]' \
@@ -97,7 +116,9 @@ _fw() {
 
 _fw_serial_ports() {
   local -a ports
-  ports=(/dev/cu.usbmodem*(N) /dev/tty.usbmodem*(N) /dev/ttyACM*(N))
+  ports=(/dev/cu.usbmodem*(N) /dev/tty.usbmodem*(N)
+         /dev/cu.usbserial*(N) /dev/tty.usbserial*(N)
+         /dev/ttyACM*(N) /dev/ttyUSB*(N))
   if (( ${#ports} )); then
     _wanted serial-ports expl 'CDC port' compadd -a ports
   else

@@ -1,9 +1,11 @@
 #include "sample_ui.hpp"
 
 #include "app.hpp"
+#include "card_panels.hpp"
 #include "theme.hpp"
 #include "widgets.hpp"
 
+#include "cardlink/audio/builtin_waves.hpp"
 #include "cardlink/sample/client.hpp"
 #include "cardlink/audio/sample_dry.hpp"
 
@@ -192,6 +194,29 @@ std::string FindWavesDir()
   return found;
 }
 
+std::string FindRawWave(const fs::path &root, int wanted)
+{
+  try {
+    for (const auto &ent : fs::directory_iterator(root)) {
+      if (!ent.is_regular_file()) continue;
+      const auto name = ent.path().filename().string();
+      if (name.size() < 6 || name[0] != 'w' ||
+          name.compare(name.size() - 4, 4, ".raw") != 0) continue;
+      size_t at = 1;
+      int id = 0;
+      while (at < name.size() && name[at] >= '0' && name[at] <= '9') {
+        id = id * 10 + (name[at] - '0');
+        ++at;
+      }
+      if (at < name.size() && name[at] == '_' && id == wanted) {
+        return ent.path().string();
+      }
+    }
+  } catch (...) {
+  }
+  return {};
+}
+
 using ProgressFn = std::function<void(float, const char *)>;
 
 void SetProgress(const ProgressFn &fn, float p, const char *status)
@@ -298,6 +323,50 @@ int LoadRawBank(App &app, const std::string &folder, std::string &result,
   return loaded;
 }
 
+bool LoadQuickAssets(App &app, const std::string &folder, std::string &result,
+                     const ProgressFn &on_progress)
+{
+  std::string error;
+  SetProgress(on_progress, 0.03f, "CDC");
+  if (!app.samples.BeginCdc(error)) {
+    result = error;
+    return false;
+  }
+  struct EndCdc {
+    cardlink::sample::Client &client;
+    ~EndCdc() { client.EndCdc(); }
+  } close{app.samples};
+  (void)close;
+
+  const std::string sample = FindRawWave(folder, 0);
+  if (sample.empty()) {
+    result = "err: quick-start sample w0_*.raw not found";
+    return false;
+  }
+  SetProgress(on_progress, 0.10f, "sample 0");
+  if (!app.samples.LoadWave(0u, sample, error) ||
+      !app.samples.SetRootHz(0u, 260.0, error)) {
+    result = error;
+    return false;
+  }
+
+  for (uint8_t wave = 0; wave < cardlink::audio::kOscillatorWaves; ++wave) {
+    char status[24];
+    std::snprintf(status, sizeof status, "built-in osc%u", wave);
+    SetProgress(on_progress, 0.20f + 0.75f * static_cast<float>(wave) / 8.f,
+                status);
+    const auto data = cardlink::audio::MakeBuiltinWavetable(wave);
+    if (!app.samples.LoadWavetable(wave, data.data(), data.size(), error)) {
+      result = error;
+      return false;
+    }
+  }
+  SetProgress(on_progress, 1.f, "script next");
+  result = "ok: quick sample + built-in osc0-7 loaded";
+  app.log.Push(result);
+  return true;
+}
+
 void FinishSampleLoad(App &app)
 {
   SampleLoadJob &job = app.sample_load;
@@ -319,9 +388,31 @@ void FinishSampleLoad(App &app)
   if (msg.empty()) {
     return;
   }
+  const bool quick = app.quick_start_job;
+  app.quick_start_job = false;
   if (ok) {
+    if (quick) {
+      app.midi_sample_map.fill(0u);
+      for (uint8_t wave = 0; wave < cardlink::audio::kOscillatorWaves;
+           ++wave) {
+        app.oscillator_wave_loaded[wave] = true;
+        app.oscillator_wave_paths[wave] =
+            std::string("built-in ") +
+            cardlink::audio::BuiltinWavetableName(wave);
+      }
+    } else {
+      for (uint16_t key = 0; key < app.midi_sample_map.size(); ++key) {
+        app.midi_sample_map[key] = key;
+      }
+    }
     app.PushToastOk(msg);
+    if (quick && app.quick_start_pending_vm) {
+      app.quick_start_pending_vm = false;
+      StartSelectedVmLoad(app);
+    }
   } else {
+    app.quick_start_pending_vm = false;
+    app.quick_start_open_midi = false;
     app.PushToastErr(msg);
   }
 }
@@ -335,6 +426,7 @@ void StartRawBankLoad(App &app, const std::string &folder)
   if (job.worker.joinable()) {
     job.worker.join();
   }
+  app.quick_start_job = false;
   {
     std::lock_guard<std::mutex> lock(job.mu);
     job.ready = false;
@@ -358,6 +450,39 @@ void StartRawBankLoad(App &app, const std::string &folder)
     {
       std::lock_guard<std::mutex> lock(job.mu);
       job.ok = result.rfind("ok:", 0) == 0;
+      job.result = std::move(result);
+      job.ready = true;
+    }
+    job.busy.store(false);
+  });
+}
+
+void StartQuickLoad(App &app, const std::string &folder)
+{
+  SampleLoadJob &job = app.sample_load;
+  if (job.busy.exchange(true)) return;
+  if (job.worker.joinable()) job.worker.join();
+  app.quick_start_job = true;
+  {
+    std::lock_guard<std::mutex> lock(job.mu);
+    job.ready = false;
+    job.ok = false;
+    job.result.clear();
+    job.status = "starting quick setup";
+  }
+  job.progress.store(0.f);
+  job.worker = std::thread([&app, folder] {
+    SampleLoadJob &job = app.sample_load;
+    const auto progress = [&job](float value, const char *status) {
+      job.progress.store(value);
+      std::lock_guard<std::mutex> lock(job.mu);
+      job.status = status ? status : "";
+    };
+    std::string result;
+    const bool ok = LoadQuickAssets(app, folder, result, progress);
+    {
+      std::lock_guard<std::mutex> lock(job.mu);
+      job.ok = ok;
       job.result = std::move(result);
       job.ready = true;
     }
@@ -644,8 +769,8 @@ void DrawSamplePage(App &app)
              fs);
 
     ImGui::Spacing();
-    ImGui::BeginDisabled(dialog_busy || !cdc_ok || load_busy);
-    if (fw::ui::Btn(load_busy ? "Loading\u2026" : "Load 8-bit raw bank",
+    ImGui::BeginDisabled(dialog_busy || load_busy || app.vm_load.busy.load());
+    if (fw::ui::Btn(load_busy ? "SETTING UP\u2026" : "QUICK START",
                     ImVec2(0, S(24.f)), BtnKind::Primary)) {
       const std::string waves = FindWavesDir();
       if (waves.empty()) {
@@ -657,20 +782,45 @@ void DrawSamplePage(App &app)
           app.log.Push(cdc_err);
           app.PushToastErr(cdc_err);
         } else {
-          StartRawBankLoad(app, waves);
+          std::string rs485_err;
+          if (!app.bus.IsOpen() &&
+              !app.EnsureRs485Adapter(rs485_err)) {
+            app.log.Push(rs485_err);
+            app.PushToastErr(rs485_err);
+          } else {
+            if (app.midi_open) app.DisconnectMidi();
+            if (!app.bus.IsOpen() && !app.bus.IsConnecting()) {
+              app.RequestConnectBus();
+            }
+            if (app.bus.IsOpen()) app.bus.RequestSilence();
+            app.quick_start_pending_vm = true;
+            app.quick_start_open_midi = true;
+            StartQuickLoad(app, waves);
+          }
         }
       }
     }
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-      if (!cdc_ok) {
-        ImGui::SetTooltip("Select Channel Card CDC port first");
-      } else if (load_busy) {
-        ImGui::SetTooltip("Uploading attack heads over CDC");
+      if (load_busy) {
+        ImGui::SetTooltip("Quick setup is already running");
       } else {
         ImGui::SetTooltip(
-            "Load signed-int8 w0_*.raw \u2026 w247_*.raw from waves/");
+            "Auto-detect ports, then load sample 0, built-in osc0-7, script, "
+            "bus, and MIDI");
       }
+    }
+    ImGui::SameLine(0.f, S(8.f));
+    ImGui::BeginDisabled(dialog_busy || !cdc_ok || load_busy);
+    if (fw::ui::Btn("Load full 248 bank", ImVec2(0, S(24.f)),
+                    BtnKind::Neutral)) {
+      const std::string waves = FindWavesDir();
+      if (waves.empty()) app.PushToastErr("waves/ not found");
+      else StartRawBankLoad(app, waves);
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Slow: load every w0_*.raw through w247_*.raw");
     }
     if (load_busy) {
       ImGui::SameLine(0.f, S(12.f));

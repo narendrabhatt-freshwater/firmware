@@ -28,6 +28,25 @@ cmake --build cmi_control/build
 ./cmi_control/build/cmi_control
 ```
 
+`fw control` rebuilds automatically when the GUI or `cmi_core` source is newer
+than the installed app binary.
+
+## Quick start
+
+Open the **Channel** view and press **QUICK START**. It auto-detects the Channel
+CDC and USB-to-RS485 ports and uses the selected MIDI device, then performs the
+complete fast setup:
+
+1. Loads the bundled `w0` attack/BODY sample and maps every MIDI key to it.
+2. Uploads eight built-in oscillator tables: sine, triangle, saw, square,
+   pulse, organ, bright, and noise.
+3. Compiles or loads the selected Channel script and uploads it to voices 0–7.
+4. Connects the RS485 bus and opens MIDI.
+
+The `osc0`…`osc7` controls remain available afterward to replace any built-in
+table with a custom raw or WAV file. **Load full 248 bank** is retained as the
+slower library-loading option.
+
 ### Host packages (typical)
 
 | OS      | Notes                                                                                         |
@@ -64,7 +83,8 @@ The Channel page exposes the production sample path only: attack data over CDC
 plus UAC BODY. The GUI opens BODY automatically on the first card note, so
 there is no separate Start BODY step.
 
-The same page provides eight `osc0`…`osc7` wavetable upload buttons. The UI
+The same page provides eight `osc0`…`osc7` wavetable upload buttons. QUICK
+START initially fills these slots with the built-in oscillator bank. The UI
 sends only the logical oscillator wave number; Channel firmware owns and
 resolves its physical bank placement. Wavetable files may contain 2…512
 signed-int8 samples (raw/i8) or a WAV that resolves to that size at 48 kHz.

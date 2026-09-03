@@ -293,8 +293,13 @@ void App::RefreshPortLists()
   midi_ports = cardlink::midi::MidiInput::ListPorts();
   if (serial_path_buf[0] == '\0' && !serial_ports.empty())
   {
-    std::snprintf(serial_path_buf, sizeof(serial_path_buf), "%s",
-                  serial_ports.front().c_str());
+    const auto adapter = std::find_if(
+        serial_ports.begin(), serial_ports.end(), [](const std::string &path) {
+          return cardlink::usb::LooksLikeRs485AdapterPath(path);
+        });
+    const std::string &pick =
+        adapter != serial_ports.end() ? *adapter : serial_ports.front();
+    std::snprintf(serial_path_buf, sizeof(serial_path_buf), "%s", pick.c_str());
   }
 }
 
@@ -377,6 +382,34 @@ bool App::EnsureAttackCdc(std::string &err)
     log.Push(std::string("ok: attack CDC → ") + pick);
   }
   samples.SetCdcPath(attack_cdc_path);
+  return true;
+}
+
+bool App::EnsureRs485Adapter(std::string &err)
+{
+  RefreshPortLists();
+  const std::string current = serial_path_buf;
+  if (PathLooksOpenable(current) &&
+      cardlink::usb::LooksLikeRs485AdapterPath(current))
+  {
+    return true;
+  }
+
+  const auto adapter = std::find_if(
+      serial_ports.begin(), serial_ports.end(), [](const std::string &path) {
+        return PathLooksOpenable(path) &&
+               cardlink::usb::LooksLikeRs485AdapterPath(path);
+      });
+  if (adapter == serial_ports.end())
+  {
+    err = "err: USB-to-RS485 adapter not found";
+    return false;
+  }
+
+  std::snprintf(serial_path_buf, sizeof(serial_path_buf), "%s",
+                adapter->c_str());
+  MarkSettingsDirty();
+  log.Push(std::string("ok: RS485 → ") + *adapter);
   return true;
 }
 
@@ -572,7 +605,8 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
           flush_card_notes();
         }
         pending[npending++] = cardlink::sample::NoteRequest{
-            ev.slot, ev.midi_key, ev.velocity, ev.midi_key, 0xFFu, true};
+            ev.slot, ev.midi_key, ev.velocity,
+            midi_sample_map[ev.midi_key], 0xFFu, true};
         pending_voice[ev.slot] = true;
         break;
       case cardlink::midi::BankEventKind::Steal:

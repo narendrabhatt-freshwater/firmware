@@ -146,8 +146,15 @@ void FinishVmLoad(App &app)
   if (ok) {
     app.ReconcileVmUpload();
     app.PushToastOk(result);
+    if (app.quick_start_open_midi) {
+      app.quick_start_open_midi = false;
+      if (!app.midi_open) (void)app.ConnectMidi();
+    }
   }
-  else app.PushToastErr(result);
+  else {
+    app.quick_start_open_midi = false;
+    app.PushToastErr(result);
+  }
 }
 
 void StartVmLoad(App &app, const VmExample &example)
@@ -221,6 +228,11 @@ void StartVmLoad(App &app, const VmExample &example)
 
 } // namespace
 
+void StartSelectedVmLoad(App &app)
+{
+  StartVmLoad(app, kExamples[app.vm_script_index]);
+}
+
 void DrawVmProgramHeader(App &app)
 {
   FinishVmLoad(app);
@@ -256,7 +268,7 @@ void DrawVmProgramHeader(App &app)
       app.log.Push(LogKind::Tx,
                    "tx VM " + std::string(kExamples[app.vm_script_index].name) +
                    " to voices 0-7");
-      StartVmLoad(app, kExamples[app.vm_script_index]);
+      StartSelectedVmLoad(app);
     }
   }
   ImGui::EndDisabled();

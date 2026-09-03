@@ -71,6 +71,7 @@ add_library(cmi_core STATIC
   src/vm/compiler.cpp
   src/vm/uploader.cpp
   src/audio/sample_dry.cpp
+  src/audio/builtin_waves.cpp
   src/audio/wave_loader.cpp
   src/audio/audio_engine.cpp
   src/audio/sample_bulk.cpp

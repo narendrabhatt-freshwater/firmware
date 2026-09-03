@@ -144,6 +144,42 @@ bool FindStemPairs(const fs::path &dir,
   return n > 0;
 }
 
+bool FindCombinedWaves(
+    const fs::path &dir,
+    std::array<std::string, cardlink::audio::kSampleWaves> &waves)
+{
+  waves.fill({});
+  try {
+    for (const auto &ent : fs::directory_iterator(dir)) {
+      if (!ent.is_regular_file()) {
+        continue;
+      }
+      const std::string name = ent.path().filename().string();
+      int id = -1;
+      if (!ParseWId(name, id) || id < 0 ||
+          id >= static_cast<int>(cardlink::audio::kSampleWaves)) {
+        continue;
+      }
+      if (!HasExtI(name, ".wav") && !HasExtI(name, ".raw") &&
+          !HasExtI(name, ".i8")) {
+        continue;
+      }
+      if (name.find("_head.i8") != std::string::npos ||
+          name.find("_body.i8") != std::string::npos) {
+        continue;
+      }
+      auto &slot = waves[static_cast<size_t>(id)];
+      if (slot.empty()) {
+        slot = ent.path().string();
+      }
+    }
+  } catch (...) {
+    return false;
+  }
+  return std::any_of(waves.begin(), waves.end(),
+                     [](const std::string &path) { return !path.empty(); });
+}
+
 struct CdcHold {
   Client &c;
   bool ok;
@@ -476,13 +512,22 @@ bool Client::LoadWavetable(uint8_t logical_wave, const std::string &path,
     err = "err: wavetable must contain 2..512 samples at 48 kHz";
     return false;
   }
-  if (!BeginCdc(err)) {
+  return LoadWavetable(logical_wave, wave.attack.data(), wave.attack.size(),
+                       err);
+}
+
+bool Client::LoadWavetable(uint8_t logical_wave, const int8_t *samples,
+                           size_t count, std::string &err)
+{
+  if (logical_wave >= cardlink::audio::kOscillatorWaves || samples == nullptr ||
+      count < 2u || count > cardlink::audio::kAttackSamples) {
+    err = "err: wavetable must be logical 0..7 with 2..512 signed int8 samples";
     return false;
   }
+  if (!BeginCdc(err)) return false;
   cardlink::usb::AttackUploader uploader(cdc_port_);
   const auto result = uploader.UploadWavetable(
-      logical_wave, reinterpret_cast<const uint8_t *>(wave.attack.data()),
-      wave.attack.size());
+      logical_wave, reinterpret_cast<const uint8_t *>(samples), count);
   EndCdc();
   if (!result.ok) {
     err = result.message;
@@ -529,19 +574,32 @@ int Client::LoadFolder(const std::string &dir, std::string &err)
   if (!any_named) {
     std::array<std::string, cardlink::audio::kAttackWaves> heads{};
     std::array<std::string, cardlink::audio::kAttackWaves> bodies{};
-    if (!FindStemPairs(root, heads, bodies)) {
-      err = "err: folder has no wN_*_head.i8 / *_body.i8 pairs";
-      return 0;
-    }
-    for (unsigned i = 0; i < cardlink::audio::kSampleWaves; ++i) {
-      if (heads[i].empty()) {
-        continue;
+    if (FindStemPairs(root, heads, bodies)) {
+      for (unsigned i = 0; i < cardlink::audio::kSampleWaves; ++i) {
+        if (heads[i].empty()) {
+          continue;
+        }
+        if (!LoadHead(static_cast<uint16_t>(i), heads[i], err) ||
+            !LoadBody(static_cast<uint16_t>(i), bodies[i], err)) {
+          return loaded;
+        }
+        ++loaded;
       }
-      if (!LoadHead(static_cast<uint16_t>(i), heads[i], err) ||
-          !LoadBody(static_cast<uint16_t>(i), bodies[i], err)) {
-        return loaded;
+    } else {
+      std::array<std::string, cardlink::audio::kSampleWaves> waves{};
+      if (!FindCombinedWaves(root, waves)) {
+        err = "err: folder has no wN_* sample files or attack/BODY pairs";
+        return 0;
       }
-      ++loaded;
+      for (unsigned i = 0; i < cardlink::audio::kSampleWaves; ++i) {
+        if (waves[i].empty()) {
+          continue;
+        }
+        if (!LoadWave(static_cast<uint16_t>(i), waves[i], err)) {
+          return loaded;
+        }
+        ++loaded;
+      }
     }
   }
   const fs::path roots = root / "roots.txt";

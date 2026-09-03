@@ -236,6 +236,28 @@ fw control
 
 See [`cmi_control/README.md`](cmi_control/README.md).
 
+**One-command performance CLI** — arrange a sound as `channel.be`, a
+`samples/` bank, and optional `wavetables/osc0...osc7` files, then run:
+
+```bash
+fw cli
+
+# Or select another project:
+fw play my-sound --rs485 /dev/cu.usbserial-0001
+```
+
+`fw cli` uses the repository's example script and one fast sample mapped across
+the keyboard; `fw play` supports complete banks. Both auto-detect the connected
+RS485 adapter, Channel CDC, and MIDI. The CLI uploads attacks and BODY sources,
+applies `roots.txt`, uploads oscillator wavetables and the script to
+all eight voices, then manages USB BODY streaming as notes play. It leaves an
+interactive `cmi>` prompt for status, reload, sample/wavetable upload, gain,
+filter, root, and silence commands. Saving `channel.be` recompiles and reloads
+it automatically. See [`cmi_cli/README.md`](cmi_cli/README.md).
+
+All eight oscillator slots are always ready: custom `osc0...osc7` files win,
+and any missing slots are filled by the CLI's built-in starter waveforms.
+
 ---
 
 ## 7. USB descriptor changes — bump the PID

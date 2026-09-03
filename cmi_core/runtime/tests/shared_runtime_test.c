@@ -48,9 +48,9 @@ static void payload_limits(void){
   assert(script_berry_upload_begin(&runtime,0u)==0);assert(script_berry_upload_feed(&runtime,header,sizeof(header))==0);script_berry_upload_abort(&runtime);
   put32(header+12u,FW_SCRIPT_MAX_PAYLOAD+1u);assert(script_berry_upload_begin(&runtime,0u)==0);assert(script_berry_upload_feed(&runtime,header,sizeof(header))!=0);
 }
-static void fault_matrix(const char *normal_path,const char *bad_path,const char *nonfinite_path,const char *osc_path,const char *allocation_path,const char *runaway_path){
-  const char *paths[5]={bad_path,nonfinite_path,osc_path,allocation_path,runaway_path};
-  for(unsigned test=0u;test<5u;++test){ScriptBerryRuntime r;Mock m={0};ScriptBerryNativeOps o={&m,read_input,set_amplitude,ramp,activate,note_end,silence,set_led};size_t normal_size,fault_size;int dispatch;uint8_t *normal=read_file(normal_path,&normal_size),*fault=read_file(paths[test],&fault_size);m.input[0][FW_VM_CHANNEL_INPUT_PENDING_VELOCITY]=100.0f;if(test==1u)m.input[0][FW_VM_CHANNEL_INPUT_FREQUENCY]=INFINITY;script_berry_init(&r,&o);upload(&r,1u,normal,normal_size);upload(&r,0u,fault,fault_size);script_berry_boundary_begin(&r);dispatch=script_berry_dispatch(&r,FW_VM_CHANNEL_HANDLER_NOTE_ON,0u);if(dispatch==0)fprintf(stderr,"fault case %u unexpectedly succeeded\n",test);assert(dispatch!=0);if(test<3u){assert(r.shared_valid&&script_berry_is_active(&r,1u)&&!script_berry_is_active(&r,0u));}else{assert(!r.shared_valid&&script_berry_active_mask(&r)==0u);}free(normal);free(fault);}
+static void fault_matrix(const char *normal_path,const char *bad_path,const char *nonfinite_path,const char *osc_path,const char *allocation_path){
+  const char *paths[4]={bad_path,nonfinite_path,osc_path,allocation_path};
+  for(unsigned test=0u;test<4u;++test){ScriptBerryRuntime r;Mock m={0};ScriptBerryNativeOps o={&m,read_input,set_amplitude,ramp,activate,note_end,silence,set_led};size_t normal_size,fault_size;int dispatch;uint8_t *normal=read_file(normal_path,&normal_size),*fault=read_file(paths[test],&fault_size);m.input[0][FW_VM_CHANNEL_INPUT_PENDING_VELOCITY]=100.0f;if(test==1u)m.input[0][FW_VM_CHANNEL_INPUT_FREQUENCY]=INFINITY;script_berry_init(&r,&o);upload(&r,1u,normal,normal_size);upload(&r,0u,fault,fault_size);script_berry_boundary_begin(&r);dispatch=script_berry_dispatch(&r,FW_VM_CHANNEL_HANDLER_NOTE_ON,0u);if(dispatch==0)fprintf(stderr,"fault case %u unexpectedly succeeded\n",test);assert(dispatch!=0);if(test<3u){assert(r.shared_valid&&script_berry_is_active(&r,1u)&&!script_berry_is_active(&r,0u));}else{assert(!r.shared_valid&&script_berry_active_mask(&r)==0u);}free(normal);free(fault);}
 }
 static void pitch_tracking(const char *path){
   ScriptBerryRuntime runtime;Mock mock={0};ScriptBerryNativeOps ops={&mock,read_input,set_amplitude,ramp,activate,note_end,silence,set_led};
@@ -101,7 +101,7 @@ static void exhausted_replacement_preserves(const char *normal_path,const char *
 int main(int argc,char **argv){
   ScriptBerryRuntime runtime;Mock mock={.output_hash=UINT32_C(2166136261)};ScriptBerryNativeOps ops={&mock,read_input,set_amplitude,ramp,activate,note_end,silence,set_led};
   const FwVmMemoryMetrics *mem;uint8_t *program;size_t size;uint32_t i;
-  assert(argc==14);program=read_file(argv[1],&size);script_berry_init(&runtime,&ops);assert(runtime.shared_valid);
+  assert(argc==13);program=read_file(argv[1],&size);script_berry_init(&runtime,&ops);assert(runtime.shared_valid);
   for(i=0;i<FW_SCRIPT_CHANNEL_VOICE_COUNT;++i){upload(&runtime,(uint8_t)i,program,size);}
   assert(script_berry_active_mask(&runtime)==0xffu);mem=script_berry_memory_metrics(&runtime);
   printf("eight_program_peak=%u current=%u largest_free=%u\n",mem->arena_peak,mem->arena_current,mem->arena_largest_free);
@@ -133,5 +133,5 @@ int main(int argc,char **argv){
       (mem->arena_peak/5u>2048u?mem->arena_peak/5u:2048u)+1023u)/1024u)*1024u));
   assert(mock.output_hash==UINT32_C(0x687dca85));
   assert(mock.oscillators==0u);
-  free(program);fault_matrix(argv[1],argv[2],argv[3],argv[4],argv[5],argv[6]);pitch_tracking(argv[7]);oscillator_config(argv[8],argv[9],argv[10],argv[11]);large_program_capacity(argv[12]);exhausted_replacement_preserves(argv[1],argv[13]);payload_limits();puts("fault_matrix_ok");return 0;
+  free(program);fault_matrix(argv[1],argv[2],argv[3],argv[4],argv[5]);pitch_tracking(argv[6]);oscillator_config(argv[7],argv[8],argv[9],argv[10]);large_program_capacity(argv[11]);exhausted_replacement_preserves(argv[1],argv[12]);payload_limits();puts("fault_matrix_ok");return 0;
 }

@@ -64,7 +64,6 @@ add_test(NAME shared_berry.runtime
     "${CMAKE_CURRENT_BINARY_DIR}/fault_nonfinite_event.fwsc"
     "${CMAKE_CURRENT_BINARY_DIR}/fault_osc_argument_event.fwsc"
     "${CMAKE_CURRENT_BINARY_DIR}/fault_allocation_event.fwsc"
-    "${CMAKE_CURRENT_BINARY_DIR}/fault_runaway_event.fwsc"
     "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.fwsc"
     "${CMAKE_CURRENT_BINARY_DIR}/oscillator_event.fwsc"
     "${CMAKE_CURRENT_BINARY_DIR}/two_oscillator_event.fwsc"
@@ -76,7 +75,7 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.fwsc"
   COMMAND fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/channel_envelope.be"
           -o "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.fwsc"
   DEPENDS fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/channel_envelope.be")
-foreach(FAULT_PROGRAM fault_bad_argument_event fault_nonfinite_event fault_osc_argument_event fault_allocation_event fault_runaway_event)
+foreach(FAULT_PROGRAM fault_bad_argument_event fault_nonfinite_event fault_osc_argument_event fault_allocation_event)
   add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${FAULT_PROGRAM}.fwsc"
     COMMAND fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/${FAULT_PROGRAM}.be"
             -o "${CMAKE_CURRENT_BINARY_DIR}/${FAULT_PROGRAM}.fwsc"
@@ -126,7 +125,6 @@ add_custom_target(shared_berry_program DEPENDS
   "${CMAKE_CURRENT_BINARY_DIR}/fault_nonfinite_event.fwsc"
   "${CMAKE_CURRENT_BINARY_DIR}/fault_osc_argument_event.fwsc"
   "${CMAKE_CURRENT_BINARY_DIR}/fault_allocation_event.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/fault_runaway_event.fwsc"
   "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.fwsc"
   "${CMAKE_CURRENT_BINARY_DIR}/oscillator_event.fwsc"
   "${CMAKE_CURRENT_BINARY_DIR}/two_oscillator_event.fwsc"

@@ -114,6 +114,8 @@ public:
   Result loadVoiceScript(uint8_t voice, const std::string &path);
   /** Compile and load source text into one Channel voice slot. */
   Result loadVoiceScriptSource(uint8_t voice, const std::string &source);
+  /** Compile once and load the same source file into all eight voice slots. */
+  Result loadVoiceScriptAll(const std::string &path);
 
   /** Load one validated sample and configure its root pitch. */
   Result loadSample(const SampleDefinition &sample);
@@ -121,6 +123,11 @@ public:
   Result loadSampleBank(const std::vector<SampleDefinition> &samples);
   /** Load the documented wN attack/BODY folder layout. */
   Result loadSampleFolder(const std::string &path);
+  /** Upload one logical oscillator wavetable (0..7) from WAV or signed int8. */
+  Result loadWavetable(uint8_t logical_wave, const std::string &path);
+  /** Upload one logical oscillator wavetable directly from signed int8 data. */
+  Result loadWavetable(uint8_t logical_wave,
+                       const std::vector<int8_t> &samples);
   Result setSampleRoot(uint16_t sample_id, double root_hz);
 
   /** Play a loaded sample with raw MIDI velocity 1..127 on a fixed voice. */

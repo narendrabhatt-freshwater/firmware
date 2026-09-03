@@ -16,7 +16,10 @@ def on_note_on(key, velocity)
     attack_slope = level * level * 20
 
     # Sustain choices (leave only one assignment active).
-    sustain = level * 0.2                    # hold at 20% of the peak
+    sustain = level * 0.9             # hold at 90% of the peak
+
+    var pitch = pitch_for_key(key)
+
     # sustain = level                        # no decay; hold at the peak
     # sustain = level * 0.5                  # hold at 50% of the peak
 
@@ -32,14 +35,11 @@ def on_note_on(key, velocity)
         return
     end
 
-    # Optional wavetable layers. Logical waves 0 and 1 read the reserved
-    # attack-bank IDs 248 and 249. Configure them before start_note().
-    # The returned handle may be saved for future per-oscillator controls or
-    # ignored when no later control is needed.
-    # var fundamental = osc(0, pitch_for_key(key))
-    # osc(1, pitch_for_key(key) * 2.0)
+    # 8 oscillators, + 50hz each
+    for i : 0..2
+        osc(0, pitch + 5 * (i + 1))
+    end
 
-    # var second_harmonic = osc(2, pitch_for_key(key) * 2.0)
 
     start_note()                              # standard MIDI pitch
     # start_note(440.0)                       # fixed A4 on every key

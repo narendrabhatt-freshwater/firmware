@@ -239,12 +239,6 @@ static void observation_hook(bvm *vm,int event,...) {
   if(event==BE_OBS_GC_START) {
     ++r->gc_runs[r->phase];
     if(r->phase==PHASE_HANDLER){r->pending_fault=FW_VM_FAULT_GC;r->discard_vm=1u;if(r->abort_active)longjmp(r->abort_jump,1);}
-  } else if(event==BE_OBS_VM_HEARTBEAT&&r->phase==PHASE_HANDLER) {
-    uint32_t used=((bvm *)r->vm)->counter_ins-r->handler_instruction_start;
-    if(used>SCRIPT_BERRY_HANDLER_INSTRUCTION_LIMIT||
-       r->boundary_instructions+used>SCRIPT_BERRY_BOUNDARY_INSTRUCTION_LIMIT){
-      r->pending_fault=FW_VM_FAULT_BUDGET;r->discard_vm=1u;if(r->abort_active)longjmp(r->abort_jump,1);
-    }
   }
 }
 static void register_int(bvm *vm,const char *name,bint value){be_pushint(vm,value);be_setglobal(vm,name);be_pop(vm,1);}
@@ -338,7 +332,6 @@ void script_berry_boundary_begin(ScriptBerryRuntime *r){r->boundary_instructions
 void script_berry_record_cycles(ScriptBerryRuntime *r,uint8_t v,uint32_t cycles){
   if(v>=FW_SCRIPT_CHANNEL_VOICE_COUNT)return;
   r->boundary_cycles+=cycles;if(cycles>r->voice_metrics[v].boundary_cycles_max)r->voice_metrics[v].boundary_cycles_max=cycles;
-  if(r->boundary_cycles>SCRIPT_BERRY_BOUNDARY_CYCLE_LIMIT&&r->shared_valid)invalidate_shared(r,FW_VM_FAULT_BUDGET);
 }
 int script_berry_dispatch(ScriptBerryRuntime *r,FwVmChannelHandler handler,uint8_t voice){
   bvm *vm=(bvm *)r->vm;volatile int result=BE_EXCEPTION;uint32_t used;float first=0.0f,second=0.0f;

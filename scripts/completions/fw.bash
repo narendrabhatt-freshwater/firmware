@@ -5,7 +5,7 @@ _fw_complete() {
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-  local cmds="build flash list console log send control clean status help"
+  local cmds="build flash list console log send cli play control clean status help"
   local cards_all="channel effect all"
   local cards_one="channel effect"
   local kinds="usb stlink uart all"
@@ -25,9 +25,9 @@ _fw_complete() {
     --port|-p)
       if [[ "${cmd}" == flash ]]; then
         COMPREPLY=( $(compgen -W "USB1 USB2 USB3" -- "${cur}") )
-        COMPREPLY+=( $(compgen -W "$(ls /dev/cu.usbmodem* /dev/ttyACM* 2>/dev/null)" -- "${cur}") )
+        COMPREPLY+=( $(compgen -W "$(ls /dev/cu.usbmodem* /dev/cu.usbserial* /dev/ttyACM* /dev/ttyUSB* 2>/dev/null)" -- "${cur}") )
       else
-        COMPREPLY=( $(compgen -W "$(ls /dev/cu.usbmodem* /dev/ttyACM* 2>/dev/null)" -- "${cur}") )
+        COMPREPLY=( $(compgen -W "$(ls /dev/cu.usbmodem* /dev/cu.usbserial* /dev/ttyACM* /dev/ttyUSB* 2>/dev/null)" -- "${cur}") )
       fi
       return
       ;;
@@ -75,6 +75,19 @@ _fw_complete() {
       ;;
     control|gui)
       COMPREPLY=( $(compgen -W "run build" -- "${cur}") )
+      ;;
+    cli|play|perform|session)
+      case "${prev}" in
+        --midi) COMPREPLY=( $(compgen -W "auto off" -- "${cur}") ) ;;
+        --attenuation) COMPREPLY=( $(compgen -W "0 6 12 24" -- "${cur}") ) ;;
+        --baud) COMPREPLY=( $(compgen -W "921600" -- "${cur}") ) ;;
+        --rs485|--cdc|--script|--sample|--samples|--wavetables|--audio)
+          COMPREPLY=( $(compgen -f -- "${cur}") ) ;;
+        *)
+          COMPREPLY=( $(compgen -W "build --rs485 --cdc --script --sample --samples --wavetables --midi --audio --attenuation --baud --no-watch --list-midi --help" -- "${cur}") )
+          COMPREPLY+=( $(compgen -d -- "${cur}") )
+          ;;
+      esac
       ;;
   esac
 }

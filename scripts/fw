@@ -80,6 +80,8 @@ usage() {
     "  fw console  [channel|effect] [--port PATH]"
     "  fw log      [channel|effect] [--port PATH]"
     "  fw send     [channel|effect] <command...> [--port PATH]"
+    "  fw cli                              automatic interactive session"
+    "  fw play     [PROJECT] [--rs485 PORT] [options]"
     "  fw control  [run] | build"
     "  fw clean    [channel|effect|all]"
     "  fw status   [--debug|--release]"
@@ -104,6 +106,12 @@ usage() {
     "  fw log effect           follow CDC output (Ctrl-C to stop)"
     "  fw send channel help    send one command, print reply"
     "  fw send channel status"
+    ""
+    "Performance CLI (uploads everything, opens MIDI, watches channel.be)"
+    "  fw cli                              use repo defaults + detected devices"
+    "  fw play my-sound --rs485 /dev/cu.usbserial-0001"
+    "  fw play build                       build the performance CLI"
+    "  fw play --help                      project layout and all options"
     ""
     "Control GUI (cmi_control — Dear ImGui + GLFW, macOS/Linux/Windows)"
     "  fw control build                  build cmi_control (FetchContent once)"
@@ -530,7 +538,9 @@ summarize_cube_probe() {
       # Only show likely MCU serial ports, not Bluetooth / debug-console noise
       local ports=()
       shopt -s nullglob
-      ports=(/dev/cu.usbmodem* /dev/tty.usbmodem* /dev/ttyACM* /dev/serial/by-id/*)
+      ports=(/dev/cu.usbmodem* /dev/tty.usbmodem* /dev/cu.usbserial* \
+             /dev/tty.usbserial* /dev/ttyACM* /dev/ttyUSB* \
+             /dev/serial/by-id/*)
       shopt -u nullglob
       if [[ ${#ports[@]} -eq 0 ]]; then
         row "uart" "none"
@@ -885,7 +895,8 @@ cmd_flash() {
 list_cdc_ports() {
   local ports=()
   shopt -s nullglob
-  ports=(/dev/cu.usbmodem* /dev/tty.usbmodem* /dev/ttyACM*)
+  ports=(/dev/cu.usbmodem* /dev/tty.usbmodem* /dev/cu.usbserial* \
+         /dev/tty.usbserial* /dev/ttyACM* /dev/ttyUSB* /dev/serial/by-id/*)
   shopt -u nullglob
   printf '%s\n' "${ports[@]+"${ports[@]}"}"
 }
@@ -928,6 +939,18 @@ resolve_serial_port() {
         matches+=("$p")
       fi
     done
+  fi
+
+  # Older Channel descriptors can enumerate as a generic usbmodem name. It is
+  # safe to use when exactly one callout usbmodem device is present.
+  if [[ ${#matches[@]} -eq 0 && "$card" == "channel" ]]; then
+    local modems=()
+    for p in "${ports[@]+"${ports[@]}"}"; do
+      [[ "$p" == /dev/cu.usbmodem* || "$p" == /dev/ttyACM* ]] && modems+=("$p")
+    done
+    if [[ ${#modems[@]} -eq 1 ]]; then
+      matches+=("${modems[0]}")
+    fi
   fi
 
   if [[ ${#matches[@]} -eq 0 ]]; then
@@ -1197,10 +1220,17 @@ cmd_control_build() {
 }
 
 ensure_control_built() {
-  local bin
+  local bin changed
   bin="$(control_bin)"
-  if [[ ! -x "$bin" ]]; then
-    warn "CMI Control not built yet — building"
+  changed=""
+  if [[ -x "$bin" ]]; then
+    changed="$(find "$ROOT/cmi_control" "$ROOT/cmi_core" \
+      -path '*/build/*' -prune -o -type f \
+      \( -name '*.cpp' -o -name '*.hpp' -o -name '*.c' -o -name '*.h' \
+         -o -name 'CMakeLists.txt' \) -newer "$bin" -print -quit)"
+  fi
+  if [[ ! -x "$bin" || -n "$changed" ]]; then
+    warn "CMI Control is missing or changed — building"
     cmd_control_build
   fi
 }
@@ -1230,6 +1260,100 @@ cmd_control() {
   exec "$(control_bin)" "$@"
 }
 
+# ── Performance CLI (automatic assets + MIDI) ───────────────────────────────
+
+play_dir() { echo "$ROOT/cmi_cli"; }
+play_bin() { echo "$(play_dir)/build/cmi_play"; }
+
+cmd_play_build() {
+  need_cmd cmake
+  info "build CMI Play CLI (Release)"
+  cmake -S "$(play_dir)" -B "$(play_dir)/build" \
+    -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+  cmake --build "$(play_dir)/build" --config Release --parallel
+  ok "$(relpath "$(play_bin)")"
+}
+
+ensure_play_built() {
+  local bin changed
+  bin="$(play_bin)"
+  changed=""
+  if [[ -x "$bin" ]]; then
+    changed="$(find "$ROOT/cmi_cli" "$ROOT/cmi_core" \
+      -path '*/build/*' -prune -o -type f \
+      \( -name '*.cpp' -o -name '*.hpp' -o -name '*.c' -o -name '*.h' \
+         -o -name 'CMakeLists.txt' \) -newer "$bin" -print -quit)"
+  fi
+  if [[ ! -x "$bin" || -n "$changed" ]]; then
+    warn "CMI Play CLI is missing or changed — building"
+    cmd_play_build
+  fi
+}
+
+resolve_rs485_adapter() {
+  if [[ -n "${FW_RS485_PORT:-}" ]]; then
+    [[ -e "$FW_RS485_PORT" ]] || die "RS485 port not found: $FW_RS485_PORT"
+    echo "$FW_RS485_PORT"
+    return
+  fi
+  local candidates=() p
+  shopt -s nullglob
+  candidates=(/dev/cu.usbserial* /dev/cu.SLAB_USBtoUART* /dev/cu.wchusbserial* \
+              /dev/ttyUSB* /dev/serial/by-id/*)
+  shopt -u nullglob
+  local usable=()
+  for p in "${candidates[@]+"${candidates[@]}"}"; do
+    [[ "$p" =~ CHCARD|EFCARD ]] || usable+=("$p")
+  done
+  if [[ ${#usable[@]} -eq 1 ]]; then
+    echo "${usable[0]}"
+    return
+  fi
+  if [[ ${#usable[@]} -gt 1 ]]; then
+    warn "multiple possible RS485 adapters"
+    for p in "${usable[@]}"; do printf '\r  %s\n' "$p" >&2; done
+  fi
+  die "cannot auto-select RS485 adapter; pass --rs485 PORT (or set FW_RS485_PORT)"
+}
+
+cmd_play() {
+  if [[ "${1:-}" == "build" ]]; then
+    shift
+    [[ $# -eq 0 ]] || die "usage: fw play build"
+    cmd_play_build
+    return
+  fi
+  ensure_play_built
+
+  local args=("$@") have_rs485=0 have_cdc=0 informational=0 i
+  for ((i = 0; i < ${#args[@]}; ++i)); do
+    case "${args[$i]}" in
+      --rs485) have_rs485=1 ;;
+      --cdc) have_cdc=1 ;;
+      --help|-h|--list-midi) informational=1 ;;
+    esac
+  done
+  if [[ "$informational" -eq 0 ]]; then
+    if [[ "$have_rs485" -eq 0 ]]; then
+      local detected_rs485
+      detected_rs485="$(resolve_rs485_adapter)"
+      args+=(--rs485 "$detected_rs485")
+    fi
+    if [[ "$have_cdc" -eq 0 ]]; then
+      local detected_cdc
+      detected_cdc="$(resolve_serial_port channel)"
+      args+=(--cdc "$detected_cdc")
+    fi
+  fi
+  exec "$(play_bin)" "${args[@]}"
+}
+
+cmd_cli() {
+  cmd_play "$ROOT/cmi_core/examples/vm/channel" \
+    --sample "$ROOT/cmi_control/waves/w0_sine_c4.raw" \
+    --sample-id 0 --root-hz 260 "$@"
+}
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 main() {
@@ -1248,6 +1372,8 @@ main() {
     console|shell|repl) cmd_console "$@" ;;
     log|logs|follow|tail) cmd_log "$@" ;;
     send|cmd) cmd_send "$@" ;;
+    cli) cmd_cli "$@" ;;
+    play|perform|session) cmd_play "$@" ;;
     control|gui) cmd_control "$@" ;;
     svn-publish) exec "$ROOT/scripts/svn_publish.sh" "$@" ;;
     clean)  cmd_clean "$@" ;;

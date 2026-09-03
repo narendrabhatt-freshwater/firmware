@@ -10,6 +10,17 @@
 
 namespace cmi {
 
+namespace {
+
+bool IsNoProgram(const cardproto::Result &result)
+{
+  return result.status == cardproto::Status::Err &&
+         (std::string(result.err_code) == "no-program" ||
+          std::string(result.raw).find("err:no-program") != std::string::npos);
+}
+
+} // namespace
+
 using detail::Fail;
 using detail::FromCard;
 using detail::Ok;
@@ -46,7 +57,21 @@ Core::Impl::Impl(CoreParams initial) : params(std::move(initial))
             card = bus.Channel().NoteOff(note.voice);
           }
         }
-        last_sample_result = FromCard(card);
+        if (IsNoProgram(card)) {
+          loaded_programs.fetch_and(
+              static_cast<uint8_t>(~static_cast<uint8_t>(1u << note.voice)));
+          if (midi) {
+            midi->Close();
+          }
+          midi_open.store(false);
+          last_sample_result = Fail(
+              ErrorCode::VmError,
+              "voice " + std::to_string(static_cast<unsigned>(note.voice)) +
+                  " lost its VM program after a runtime fault; reload the script");
+          last_sample_result.reply = card.raw;
+        } else {
+          last_sample_result = FromCard(card);
+        }
         done(card.ok());
         return card.ok();
       });
@@ -200,6 +225,41 @@ Result Core::Impl::UploadProgram(
              ? Ok("VM program loaded for voice " +
                   std::to_string(static_cast<unsigned>(voice)))
              : midi_result;
+}
+
+Result Core::Impl::UploadProgramAll(
+    const cardlink::vm::CompileResult &compiled)
+{
+  if (!compiled.ok) {
+    return Fail(ErrorCode::VmError, compiled.message);
+  }
+
+  const Result silence = SilenceAndWaitForIdle();
+  if (!silence) {
+    return silence;
+  }
+  if (midi) {
+    midi->Close();
+  }
+  midi_open.store(false);
+
+  cardlink::SerialPort port;
+  std::string error;
+  if (!cardlink::usb::OpenCdcPort(port, params.channel_cdc_port, error)) {
+    (void)StartMidi();
+    return Fail(ErrorCode::IoError, error);
+  }
+  cardlink::vm::VmUploader uploader(port);
+  const auto uploaded = uploader.UploadAll(
+      compiled.program.data(), compiled.program.size());
+  port.Close();
+  if (!uploaded.ok) {
+    (void)StartMidi();
+    return Fail(ErrorCode::VmError, uploaded.message);
+  }
+  loaded_programs.store(0xFFu);
+  const Result midi_result = StartMidi();
+  return midi_result ? Ok("VM program loaded for voices 0-7") : midi_result;
 }
 
 void Core::Impl::WorkerMain()

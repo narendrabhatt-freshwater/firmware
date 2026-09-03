@@ -74,6 +74,8 @@ public:
   bool LoadBody(uint16_t wave_id, const std::string &path, std::string &err);
   /** Upload logical oscillator wave 0..7; firmware chooses bank placement. */
   bool LoadWavetable(uint8_t wave, const std::string &path, std::string &err);
+  bool LoadWavetable(uint8_t wave, const int8_t *samples, size_t count,
+                     std::string &err);
   /** wN_*_head.i8 + wN_*_body.i8, or matching stems. Optional roots.txt. */
   int LoadFolder(const std::string &dir, std::string &err);
 

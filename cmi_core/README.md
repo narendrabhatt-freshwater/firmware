@@ -148,13 +148,10 @@ int main()
     return 1;
   }
 
-  for (uint8_t voice = 0; voice < 8; ++voice) {
-    const cmi::Result loaded =
-        core.loadVoiceScript(voice, "channel.be");
-    if (!loaded) {
-      std::cerr << loaded.message << '\n';
-      return 1;
-    }
+  const cmi::Result program = core.loadVoiceScriptAll("channel.be");
+  if (!program) {
+    std::cerr << program.message << '\n';
+    return 1;
   }
 
   cmi::SampleDefinition sample;
@@ -207,6 +204,11 @@ if (loaded) {
 
 Combined raw input is signed 8-bit. Set
 `raw_sample_rate_hz` when it is not 48 kHz.
+
+`loadSampleFolder()` accepts both `wN_*_head.i8` / `wN_*_body.i8` pairs and
+combined `wN_*.wav`, `wN_*.raw`, or `wN_*.i8` files. It applies a colocated
+`roots.txt` automatically. `loadWavetable(0..7, path)` uploads logical
+oscillator wavetables separately.
 
 Already separated assets can be loaded instead:
 

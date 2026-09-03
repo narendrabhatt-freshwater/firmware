@@ -38,6 +38,7 @@ struct Core::Impl {
   Result SilenceAndWaitForIdle();
   Result UploadProgram(uint8_t voice,
                        const cardlink::vm::CompileResult &compiled);
+  Result UploadProgramAll(const cardlink::vm::CompileResult &compiled);
 
   Result RefreshAttackSamples();
   Result LoadSample(const SampleDefinition &sample);

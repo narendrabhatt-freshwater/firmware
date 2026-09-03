@@ -94,6 +94,16 @@ int main()
       "    start_note()\nend\n" + handlers);
   Expect(oscillator.ok, "osc(wave, frequency) handle must compile as ABI1");
 
+  const auto oscillator_loop = compiler.CompileChannel(
+      "def on_note_on(key, velocity)\n"
+      "    var pitch = pitch_for_key(key)\n"
+      "    for i in 0..7\n"
+      "        osc(i, pitch + 50 * (i + 1))\n"
+      "    end\n"
+      "    start_note()\nend\n" + handlers);
+  Expect(oscillator_loop.ok,
+         "constant for-in loops must compile to allocation-free handlers");
+
   std::string state64 = "def on_note_on(key, velocity)\n";
   for (unsigned i = 0u; i < 64u; ++i)
     state64 += "    state value" + std::to_string(i) + "\n";
@@ -143,6 +153,13 @@ int main()
   const cmi::Result connect = core.connect();
   Expect(connect.code == cmi::ErrorCode::InvalidArgument,
          "connect must reject missing hardware ports");
+
+  const cmi::Result all_scripts = core.loadVoiceScriptAll("missing.be");
+  Expect(all_scripts.code == cmi::ErrorCode::NotConnected,
+         "all-voice program loading must reject disconnected use");
+  const cmi::Result wavetable = core.loadWavetable(8u, "missing.wav");
+  Expect(wavetable.code == cmi::ErrorCode::InvalidArgument,
+         "wavetable loading must reject an invalid logical id");
 
   cmi::SampleDefinition invalid_sample;
   invalid_sample.sample_file = "missing.wav";

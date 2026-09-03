@@ -104,6 +104,11 @@ Result Core::connect()
   options.atten_db = impl_->params.attenuation_db;
   options.effect_echo = cardlink::rs485::EffectEcho::Off;
   options.allow_missing_effect = true;
+  // Tagged replies delimit MIDI commands; do not add generic console idle
+  // waits to every note transaction.
+  options.idle_gap_ms = 0;
+  options.rx_idle_ms = 0;
+  options.rx_idle_max_ms = 0;
   const cardproto::Result opened =
       impl_->bus.Open(impl_->params.rs485_port, options);
   if (!opened.ok()) {
@@ -181,6 +186,20 @@ Result Core::loadVoiceScriptSource(uint8_t voice, const std::string &source)
   }
   cardlink::vm::BerryCompiler compiler;
   return impl_->UploadProgram(voice, compiler.CompileChannel(source));
+}
+
+Result Core::loadVoiceScriptAll(const std::string &path)
+{
+  std::lock_guard<std::mutex> lock(impl_->operation_mutex);
+  const Result connection = impl_->RequireConnected();
+  if (!connection) {
+    return connection;
+  }
+  if (path.empty()) {
+    return Fail(ErrorCode::InvalidArgument, "VM program path is required");
+  }
+  cardlink::vm::BerryCompiler compiler;
+  return impl_->UploadProgramAll(compiler.CompileChannelFile(path));
 }
 
 } // namespace cmi

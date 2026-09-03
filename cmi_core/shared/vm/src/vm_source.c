@@ -179,6 +179,130 @@ static int buffer_add_slot_call(Buffer *buffer, const char *function, int slot)
     return buffer_add(buffer, call, (size_t)length);
 }
 
+static int add_with_loop_value(Buffer *output, const char *text, size_t length,
+                               const char *name, int value)
+{
+    size_t i = 0u, copy_from = 0u;
+    const size_t name_length = strlen(name);
+    char number[24];
+    const int number_length = snprintf(number, sizeof(number), "%d", value);
+    char quote = 0;
+    int escaped = 0;
+    if (number_length < 0 || (size_t)number_length >= sizeof(number)) return -1;
+    while (i < length) {
+        const char c = text[i];
+        if (quote) {
+            if (escaped) escaped = 0;
+            else if (c == '\\') escaped = 1;
+            else if (c == quote) quote = 0;
+            ++i;
+        } else if (c == '\'' || c == '"') {
+            quote = c;
+            ++i;
+        } else if (c == '#') {
+            while (i < length && text[i] != '\n') ++i;
+        } else if (is_identifier_start(c)) {
+            size_t end = i + 1u;
+            while (end < length && is_identifier_char(text[end])) ++end;
+            if (end - i == name_length && memcmp(text + i, name, name_length) == 0) {
+                if (buffer_add(output, text + copy_from, i - copy_from) ||
+                    buffer_add(output, number, (size_t)number_length)) return -1;
+                copy_from = end;
+            }
+            i = end;
+        } else {
+            ++i;
+        }
+    }
+    return buffer_add(output, text + copy_from, length - copy_from);
+}
+
+/* Constant Channel loops are unrolled before Berry bytecode generation. This
+ * keeps handler execution allocation-free while accepting `for i in 0..7`
+ * and Berry's native `for i : 0..7` spelling. */
+static int expand_constant_loops(const char *source, size_t source_size,
+                                 Buffer *output, char *error,
+                                 size_t error_size)
+{
+    size_t offset = 0u, line_number = 1u;
+    while (offset < source_size) {
+        size_t end = offset, content_end, indent = 0u;
+        char name[64];
+        int lower, upper, used = 0, matched;
+        while (end < source_size && source[end] != '\n') ++end;
+        if (end < source_size) ++end;
+        content_end = end - offset;
+        while (content_end && (source[offset + content_end - 1u] == '\n' ||
+                               source[offset + content_end - 1u] == '\r')) --content_end;
+        while (indent < content_end &&
+               (source[offset + indent] == ' ' || source[offset + indent] == '\t')) ++indent;
+        matched = sscanf(source + offset + indent,
+                         "for %63[_A-Za-z0-9] in %d..%d %n",
+                         name, &lower, &upper, &used);
+        if (matched != 3) {
+            used = 0;
+            matched = sscanf(source + offset + indent,
+                             "for %63[_A-Za-z0-9] : %d..%d %n",
+                             name, &lower, &upper, &used);
+        }
+        if (matched == 3 && is_identifier_start(name[0])) {
+            const char *tail = source + offset + indent + (size_t)used;
+            const char *line_limit = source + offset + content_end;
+            size_t body_start = end, body_end = end, scan = end;
+            size_t scan_line = line_number + 1u;
+            int found_end = 0;
+            while (tail < line_limit && isspace((unsigned char)*tail)) ++tail;
+            if (tail < line_limit && *tail != '#')
+                return fail(error, error_size, line_number,
+                            "constant for loop must end after its range");
+            if (upper < lower || upper - lower > 31)
+                return fail(error, error_size, line_number,
+                            "constant for loop range must contain 1..32 values");
+            while (scan < source_size) {
+                size_t scan_end = scan, scan_content, scan_indent = 0u;
+                size_t p, code_end;
+                while (scan_end < source_size && source[scan_end] != '\n') ++scan_end;
+                if (scan_end < source_size) ++scan_end;
+                scan_content = scan_end - scan;
+                while (scan_content && (source[scan + scan_content - 1u] == '\n' ||
+                                        source[scan + scan_content - 1u] == '\r')) --scan_content;
+                while (scan_indent < scan_content &&
+                       (source[scan + scan_indent] == ' ' || source[scan + scan_indent] == '\t')) ++scan_indent;
+                code_end = comment_start(source + scan, scan_content);
+                while (code_end && isspace((unsigned char)source[scan + code_end - 1u])) --code_end;
+                p = scan_indent;
+                if (scan_indent == indent && code_end - p == 3u &&
+                    memcmp(source + scan + p, "end", 3u) == 0) {
+                    body_end = scan;
+                    offset = scan_end;
+                    line_number = scan_line + 1u;
+                    found_end = 1;
+                    break;
+                }
+                scan = scan_end;
+                ++scan_line;
+            }
+            if (!found_end)
+                return fail(error, error_size, line_number,
+                            "constant for loop is missing end");
+            {
+                int value;
+                for (value = lower; value <= upper; ++value) {
+                    if (add_with_loop_value(output, source + body_start,
+                                            body_end - body_start, name, value))
+                        return fail(error, error_size, line_number, "out of memory");
+                }
+            }
+            continue;
+        }
+        if (buffer_add(output, source + offset, end - offset))
+            return fail(error, error_size, line_number, "out of memory");
+        offset = end;
+        ++line_number;
+    }
+    return 0;
+}
+
 static int transform_expression(Buffer *output, const char *text, size_t length,
                                 const StateName *states, size_t state_count)
 {
@@ -315,9 +439,9 @@ static int transform_line(Buffer *output, const char *line, size_t line_length,
     return 0;
 }
 
-int fw_vm_preprocess_channel_source(const char *source, size_t source_size,
-                                    char **output, size_t *output_size,
-                                    char *error, size_t error_size)
+static int preprocess_channel_source(const char *source, size_t source_size,
+                                     char **output, size_t *output_size,
+                                     char *error, size_t error_size)
 {
     StateName states[FW_SCRIPT_CHANNEL_STATE_VALUES];
     size_t state_count = 0u, offset = 0u, line_number = 1u;
@@ -435,4 +559,21 @@ int fw_vm_preprocess_channel_source(const char *source, size_t source_size,
     *output = result.data;
     *output_size = result.size;
     return 0;
+}
+
+int fw_vm_preprocess_channel_source(const char *source, size_t source_size,
+                                    char **output, size_t *output_size,
+                                    char *error, size_t error_size)
+{
+    Buffer expanded = {0};
+    int result;
+    if (!source || !output || !output_size) return -1;
+    if (expand_constant_loops(source, source_size, &expanded, error, error_size)) {
+        free(expanded.data);
+        return -1;
+    }
+    result = preprocess_channel_source(expanded.data, expanded.size, output,
+                                       output_size, error, error_size);
+    free(expanded.data);
+    return result;
 }

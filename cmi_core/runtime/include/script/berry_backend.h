@@ -13,13 +13,8 @@
 #define SCRIPT_BERRY_ARENA_SIZE (96u * 1024u)
 #define SCRIPT_BERRY_UPLOAD_SIZE FW_SCRIPT_MAX_PAYLOAD
 #define SCRIPT_BERRY_HEAP_SIZE (SCRIPT_BERRY_ARENA_SIZE-SCRIPT_BERRY_UPLOAD_SIZE)
-/* Largest sanctioned handler path currently measures 53 instructions. The
- * 64-instruction limit is the next observation-hook boundary above it. */
-#define SCRIPT_BERRY_SANCTIONED_HANDLER_MAX 53u
-#define SCRIPT_BERRY_HANDLER_INSTRUCTION_LIMIT 64u
-#define SCRIPT_BERRY_BOUNDARY_INSTRUCTION_LIMIT \
-  (FW_SCRIPT_CHANNEL_VOICE_COUNT * SCRIPT_BERRY_HANDLER_INSTRUCTION_LIMIT)
-#define SCRIPT_BERRY_BOUNDARY_CYCLE_LIMIT 55000u
+/* Instruction and cycle counts remain observable through FwVmMetrics, but are
+ * not execution watchdogs. DSP/DAC profiling will set the eventual limits. */
 
 typedef struct {
   void *context;

@@ -223,6 +223,47 @@ Result Core::loadSampleFolder(const std::string &path)
   return Ok("loaded " + std::to_string(loaded) + " samples");
 }
 
+Result Core::loadWavetable(uint8_t logical_wave, const std::string &path)
+{
+  if (logical_wave >= cardlink::audio::kOscillatorWaves || path.empty()) {
+    return Fail(ErrorCode::InvalidArgument,
+                "logical wavetable must be 0..7 and path is required");
+  }
+  std::lock_guard<std::mutex> lock(impl_->operation_mutex);
+  const Result connection = impl_->RequireConnected();
+  if (!connection) {
+    return connection;
+  }
+  const Result idle = impl_->SilenceAndWaitForIdle();
+  if (!idle) {
+    return idle;
+  }
+  std::string error;
+  return impl_->samples.LoadWavetable(logical_wave, path, error)
+             ? Ok("wavetable " + std::to_string(logical_wave) + " loaded")
+             : Fail(ErrorCode::SampleError, error);
+}
+
+Result Core::loadWavetable(uint8_t logical_wave,
+                           const std::vector<int8_t> &samples)
+{
+  if (logical_wave >= cardlink::audio::kOscillatorWaves || samples.size() < 2u ||
+      samples.size() > cardlink::audio::kAttackSamples) {
+    return Fail(ErrorCode::InvalidArgument,
+                "wavetable must be logical 0..7 with 2..512 samples");
+  }
+  std::lock_guard<std::mutex> lock(impl_->operation_mutex);
+  const Result connection = impl_->RequireConnected();
+  if (!connection) return connection;
+  const Result idle = impl_->SilenceAndWaitForIdle();
+  if (!idle) return idle;
+  std::string error;
+  return impl_->samples.LoadWavetable(logical_wave, samples.data(),
+                                      samples.size(), error)
+             ? Ok("wavetable " + std::to_string(logical_wave) + " loaded")
+             : Fail(ErrorCode::SampleError, error);
+}
+
 Result Core::setSampleRoot(uint16_t sample_id, double root_hz)
 {
   std::lock_guard<std::mutex> lock(impl_->operation_mutex);
