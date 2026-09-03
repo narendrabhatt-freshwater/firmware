@@ -90,11 +90,7 @@ target_compile_definitions(cmi_control PRIVATE
 )
 
 set(CMI_VM_EXAMPLE_NAMES
-  attack_2ms
-  gate
-  pluck
-  velocity_gate
-  voice_steal)
+  channel)
 set(CMI_VM_EXAMPLE_OUTPUTS)
 foreach(CMI_VM_EXAMPLE IN LISTS CMI_VM_EXAMPLE_NAMES)
   set(CMI_VM_EXAMPLE_OUTPUT

@@ -49,7 +49,7 @@ cmi::Core core(params);
 if (!core.connect()) return 1;
 
 for (uint8_t voice = 0; voice < 8; ++voice) {
-    if (!core.loadVoiceScript(voice, "attack_2ms.be")) return 1;
+    if (!core.loadVoiceScript(voice, "channel.be")) return 1;
 }
 ```
 

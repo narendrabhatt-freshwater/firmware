@@ -16,9 +16,10 @@ void NoteFilter_Reset(uint8_t note){(void)note;} void NoteFilter_OnNoteFreq(uint
 int ChannelLed_Set(float red,float green,float blue,float brightness){(void)red;(void)green;(void)blue;(void)brightness;return 0;}
 static uint8_t *read_file(const char *path,size_t *size){FILE*f=fopen(path,"rb");long n;uint8_t*p;check(f!=NULL,"open FWSC");fseek(f,0,SEEK_END);n=ftell(f);rewind(f);p=malloc((size_t)n);check(p!=NULL&&fread(p,1,(size_t)n,f)==(size_t)n,"read FWSC");fclose(f);*size=(size_t)n;return p;}
 static void boundary(void){NoteBank_VmBoundaryBegin();for(unsigned i=0;i<48u;++i)(void)NoteBank_NextSample();NoteBank_VmBoundaryEnd();}
+static void boundaries(unsigned count){while(count--)boundary();}
 static uint32_t render_peak(unsigned count){uint32_t peak=0u;NoteBank_VmBoundaryBegin();for(unsigned i=0;i<count;++i){int64_t s=NoteBank_NextSample();uint32_t a=(uint32_t)(s<0?-s:s);if(a>peak)peak=a;}NoteBank_VmBoundaryEnd();return peak;}
 int main(int argc,char **argv){
-  uint8_t *program;size_t size;check(argc==4,"program paths required");program=read_file(argv[1],&size);
+  uint8_t *program;size_t size;check(argc==3,"program paths required");program=read_file(argv[1],&size);
   NoteEnv_Init();StreamRing_Init();NoteBank_Init();check(NoteBank_VmActiveMask()==0u,"reset has no programs");
   check(NoteBank_NoteOn(0u,60u,127u)==-2,"note reports no program");boundary();check(!NoteBank_IsActive(0u),"no-program silent");
   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,program,size)==0&&NoteBank_VmUploadCommit(0u)==0,"valid FWSC activates");
@@ -64,13 +65,22 @@ int main(int argc,char **argv){
    check(NoteBank_NoteOn(0u,62u,100u)==0,"example replacement note");boundary();
    check(StreamRing_HasPending(0u)==0u,"example must promote a replacement immediately");free(example);}
   NoteBank_PanicAll();
-  {size_t velocity_size;uint8_t *velocity_program=read_file(argv[3],&velocity_size);
-   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,velocity_program,velocity_size)==0&&NoteBank_VmUploadCommit(0u)==0,"load velocity example");
+  {size_t channel_size;uint8_t *channel_program=read_file(argv[2],&channel_size);
+   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,channel_program,channel_size)==0&&NoteBank_VmUploadCommit(0u)==0,"reload channel example");
    check(NoteBank_NoteOn(0u,60u,32u)==0,"low velocity note accepted");boundary();
+   boundaries(49u);
    check(NoteBank_GetVelocity(0u)==32u,"low velocity reaches active voice");
-   check(fabsf(NoteEnv_Amplitude(0u)-(32.0f/127.0f))<0.0001f,"velocity example scales amplitude");
-   check(NoteBank_NoteOn(0u,62u,127u)==0,"replacement velocity accepted");boundary();
-   check(NoteBank_GetVelocity(0u)==127u,"replacement keeps its own velocity");
-   check(fabsf(NoteEnv_Amplitude(0u)-1.0f)<0.0001f,"full velocity reaches full envelope amplitude");free(velocity_program);}
+   check(fabsf(NoteEnv_Amplitude(0u)-(32.0f/127.0f))<0.0001f,"50 ms attack reaches velocity amplitude");
+   check(NoteBank_NoteOff(0u)==0,"low velocity note off accepted");boundaries(50u);
+   check(!NoteBank_IsActive(0u),"release retires low velocity note");
+   check(NoteBank_NoteOn(0u,61u,127u)==0,"full velocity note accepted");boundary();boundaries(49u);
+   check(fabsf(NoteEnv_Amplitude(0u)-1.0f)<0.0001f,"full velocity reaches full envelope amplitude");
+   check(NoteBank_NoteOn(0u,62u,64u)==0,"replacement velocity accepted");boundary();
+   check(StreamRing_HasPending(0u)!=0u,"replacement stays pending during 2 ms steal fade");
+   boundary();
+   check(StreamRing_HasPending(0u)==0u,"replacement starts after 2 ms steal fade");
+   boundaries(50u);
+   check(NoteBank_GetVelocity(0u)==64u,"replacement keeps its own velocity");
+   check(fabsf(NoteEnv_Amplitude(0u)-(64.0f/127.0f))<0.0001f,"replacement attack reaches velocity amplitude");free(channel_program);}
   free(program);puts("Channel shared Berry VM test passed");return 0;
 }

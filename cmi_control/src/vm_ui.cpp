@@ -40,11 +40,7 @@ struct VmExample
 };
 
 constexpr VmExample kExamples[] = {
-    {"2 ms attack", "attack_2ms", "Two millisecond attack, hold, and release."},
-    {"Gate", "gate", "Immediate full level with a short release."},
-    {"Pluck", "pluck", "Two millisecond attack and automatic decay."},
-    {"Velocity gate", "velocity_gate", "Gate level controlled by MIDI velocity."},
-    {"Voice steal", "voice_steal", "Two millisecond steal fade and replacement attack."},
+    {"Channel", "channel", "Velocity level, 50 ms attack, and up to 2 ms voice steal."},
 };
 
 void MonoText(const char *text, const ImVec4 &color, ImFont *font)

@@ -1,19 +1,13 @@
-# Channel script examples
+# Channel script example
 
-These programs are small production-ready examples of one behavior each. They
-use handlers, persistent stage state, ramps, and voice cleanup without using
-`input()` or any low-level input constants.
+`channel.be` is the single production-ready example. Its active configuration
+uses MIDI velocity, a fixed 50 ms attack, an at-most 2 ms voice-steal fade, and
+an at-most 50 ms release. Commented alternatives in the file show the available
+amplitude, pitch, and LED choices.
 
-- `attack_2ms.be` — 2 ms attack, held level, and 50 ms release.
-- `gate.be` — immediate full-level gate with a 20 ms release.
-- `pluck.be` — 2 ms attack followed by a 500 ms automatic decay.
-- `voice_steal.be` — fade the current note for at most 2 ms, promote the
-  pending note, and start it with a 2 ms attack.
-- `velocity_gate.be` — use raw MIDI velocity to set the held envelope level.
-
-Load `voice_steal.be` into all eight voices to use it with automatic MIDI voice
-allocation. When a ninth note arrives, the oldest allocated voice performs the
-documented steal transition.
+Load `channel.be` into all eight voices to use it with automatic MIDI voice
+allocation. When a ninth note arrives, the oldest allocated voice fades for at
+most 2 ms before promoting the pending note.
 
 Load each Channel Card voice independently with
 `cmi::Core::loadVoiceScript(voice, path)`. Voices may use different programs;

@@ -150,7 +150,7 @@ int main()
 
   for (uint8_t voice = 0; voice < 8; ++voice) {
     const cmi::Result loaded =
-        core.loadVoiceScript(voice, "attack_2ms.be");
+        core.loadVoiceScript(voice, "channel.be");
     if (!loaded) {
       std::cerr << loaded.message << '\n';
       return 1;

@@ -23,7 +23,7 @@ example/build/cmi_core_example --list-midi
 example/build/cmi_core_example \
   --rs485 /dev/cu.usbserial-0001 \
   --cdc /dev/cu.usbmodemCHCARD_0123456789ABCDEF012345673 \
-  --script cmi_core/examples/vm/channel/attack_2ms.be \
+  --script cmi_core/examples/vm/channel/channel.be \
   --sample samples/piano_c4.wav \
   --sample-id 60 \
   --root-hz 261.625565 \
