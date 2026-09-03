@@ -3,8 +3,8 @@
  * @file    attack_bank.h
  * @brief   AXI signed-int8 attack heads (256 × ATTACK_BANK_LEN).
  *
- * Eight voices assign any loaded wave_id. Played on note-on before USB
- * stream_ring sustain.
+ * Eight voices assign loaded sample IDs 0..247. IDs 248..255 are reserved
+ * for script oscillators. Sample heads play before USB stream_ring sustain.
  ******************************************************************************
  */
 
@@ -23,6 +23,10 @@ extern "C"
 
 /** Stored heads (MIDI-sized bank). Independent of SAMPLE_VOICES. */
 #define ATTACK_BANK_COUNT 256u
+#define ATTACK_BANK_WAVETABLE_COUNT 8u
+#define ATTACK_BANK_WAVETABLE_FIRST \
+  (ATTACK_BANK_COUNT - ATTACK_BANK_WAVETABLE_COUNT)
+#define ATTACK_BANK_SAMPLE_COUNT ATTACK_BANK_WAVETABLE_FIRST
 /** ~10.7 ms @ 48 kHz. 256 × 512 int8 = 128 KB AXI. */
 #define ATTACK_BANK_LEN 512u
 #define ATTACK_BANK_BYTES ATTACK_BANK_LEN
@@ -42,6 +46,10 @@ extern "C"
 
   /** Direct write pointer for CDC upload (ATTACK_BANK_LEN int8). */
   int8_t *AttackBank_WritePtr(uint16_t wave_id);
+
+  /** Prevent note admission while CDC is modifying shared bank storage. */
+  void AttackBank_SetWriteActive(uint8_t active);
+  uint8_t AttackBank_WriteIsActive(void);
 
   /** Mark head present; nsamp is the real table length (not a hold-pad). */
   int AttackBank_Commit(uint16_t wave_id, uint32_t nsamp);

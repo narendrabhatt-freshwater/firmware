@@ -1,6 +1,6 @@
 /**
  * @file attack_upload.hpp
- * @brief USB CDC binary attack-head upload (`al` session, ≤ kAttackSamples int8).
+ * @brief USB CDC binary sample (`al`) and logical wavetable (`wl`) uploads.
  */
 
 #ifndef CARDLINK_USB_ATTACK_UPLOAD_HPP
@@ -35,7 +35,16 @@ public:
       const std::string &file_path,
       const std::function<void(float)> &on_progress = {});
 
+  /** Upload logical oscillator wave 0..7; the card owns physical placement. */
+  AttackUploadResult UploadWavetable(
+      uint8_t wave, const uint8_t *data, size_t nbytes,
+      const std::function<void(float)> &on_progress = {});
+
 private:
+  AttackUploadResult UploadCommand(
+      const char *command, const char *completion, uint16_t result_id,
+      const uint8_t *data, size_t nbytes,
+      const std::function<void(float)> &on_progress);
   cardlink::SerialPort &port_;
 };
 

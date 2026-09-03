@@ -94,6 +94,27 @@ bool ApplyWaveFile(App &app, int voice, const std::string &path)
                     err, msg);
 }
 
+bool ApplyWavetableFile(App &app, int wave, const std::string &path)
+{
+  std::string cdc_err;
+  if (!app.EnsureAttackCdc(cdc_err)) {
+    app.log.Push(cdc_err);
+    app.PushToastErr(cdc_err);
+    return false;
+  }
+  std::string err;
+  char msg[72];
+  std::snprintf(msg, sizeof msg, "ok: oscillator wave %u uploaded",
+                static_cast<unsigned>(wave));
+  const bool ok = app.samples.LoadWavetable(static_cast<uint8_t>(wave), path,
+                                            err);
+  if (ok) {
+    app.oscillator_wave_paths[static_cast<size_t>(wave)] = path;
+    app.oscillator_wave_loaded[static_cast<size_t>(wave)] = true;
+  }
+  return CallSample(app, ok, err, msg);
+}
+
 bool DirHasRawBank(const fs::path &dir)
 {
   std::error_code ec;
@@ -180,7 +201,7 @@ void SetProgress(const ProgressFn &fn, float p, const char *status)
   }
 }
 
-/** Load w0_*.raw … w255_*.raw. Holds CDC open for the whole bank. */
+/** Load sample w0_*.raw … w247_*.raw. Holds CDC open for the whole bank. */
 int LoadRawBank(App &app, const std::string &folder, std::string &result,
                 const ProgressFn &on_progress)
 {
@@ -198,7 +219,7 @@ int LoadRawBank(App &app, const std::string &folder, std::string &result,
   (void)end_cdc;
 
   const fs::path root(folder);
-  constexpr int kWaves = static_cast<int>(cardlink::audio::kAttackWaves);
+  constexpr int kWaves = static_cast<int>(cardlink::audio::kSampleWaves);
   int loaded = 0;
   for (int v = 0; v < kWaves; ++v) {
     char st[16];
@@ -270,7 +291,7 @@ int LoadRawBank(App &app, const std::string &folder, std::string &result,
     result = msg;
     app.log.Push(msg);
   } else {
-    result = "err: raw bank not found (w0_*.raw … w255_*.raw)";
+    result = "err: raw bank not found (w0_*.raw … w247_*.raw)";
     app.log.Push(result);
   }
   SetProgress(on_progress, 1.f, "done");
@@ -352,15 +373,22 @@ void DrainPending(App &app)
   const std::string pending = std::move(app.pending_sample_folder);
   app.pending_sample_folder.clear();
 
-  if (pending.rfind("wave:", 0) != 0) {
+  const bool sample = pending.rfind("wave:", 0) == 0;
+  const bool oscillator = pending.rfind("osc:", 0) == 0;
+  if (!sample && !oscillator) {
     return;
   }
-  const auto c1 = pending.find(':', 5);
+  const size_t prefix = sample ? 5u : 4u;
+  const auto c1 = pending.find(':', prefix);
   if (c1 == std::string::npos) {
     return;
   }
-  const int voice = std::atoi(pending.c_str() + 5);
-  ApplyWaveFile(app, voice, pending.substr(c1 + 1));
+  const int index = std::atoi(pending.c_str() + prefix);
+  if (sample) {
+    ApplyWaveFile(app, index, pending.substr(c1 + 1));
+  } else {
+    ApplyWavetableFile(app, index, pending.substr(c1 + 1));
+  }
 }
 
 void NoteOn(App &app, int voice, uint8_t key)
@@ -383,6 +411,21 @@ void BeginPickWave(App &app, int voice)
   }
   app.sample_file_pick = SampleFilePick::Wave;
   app.sample_file_voice = voice;
+  if (!app.file_dialog.BeginPickFile()) {
+    app.sample_file_pick = SampleFilePick::None;
+    app.sample_file_voice = -1;
+    app.PushToastErr("file dialog busy");
+  }
+}
+
+void BeginPickWavetable(App &app, int wave)
+{
+  if (app.file_dialog.Busy()) {
+    app.PushToastErr("file dialog busy");
+    return;
+  }
+  app.sample_file_pick = SampleFilePick::Wavetable;
+  app.sample_file_voice = wave;
   if (!app.file_dialog.BeginPickFile()) {
     app.sample_file_pick = SampleFilePick::None;
     app.sample_file_voice = -1;
@@ -591,13 +634,13 @@ void DrawSamplePage(App &app)
   // ── Library / actions
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kPalette.bg);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, S2(16.f, 12.f));
-  ImGui::BeginChild("sample_actions", ImVec2(0, S(76.f)),
+  ImGui::BeginChild("sample_actions", ImVec2(0, S(124.f)),
                     ImGuiChildFlags_AlwaysUseWindowPadding);
   ImGui::PopStyleVar();
   {
     MonoText("LIBRARY", kPalette.text_dim, fs);
     ImGui::SameLine(0.f, S(12.f));
-    MonoText("wav/raw per wave_id 0..255 · SDK splits attack + body", kPalette.muted,
+    MonoText("wav/raw sample IDs 0..247 · SDK splits attack + body", kPalette.muted,
              fs);
 
     ImGui::Spacing();
@@ -626,7 +669,7 @@ void DrawSamplePage(App &app)
         ImGui::SetTooltip("Uploading attack heads over CDC");
       } else {
         ImGui::SetTooltip(
-            "Load signed-int8 w0_*.raw \u2026 w255_*.raw from waves/");
+            "Load signed-int8 w0_*.raw \u2026 w247_*.raw from waves/");
       }
     }
     if (load_busy) {
@@ -673,6 +716,37 @@ void DrawSamplePage(App &app)
     } else {
       MonoText("card owns env · filter · mix", kPalette.muted, fs);
     }
+
+    ImGui::Spacing();
+    MonoText("OSC WAVETABLES", kPalette.text_dim, fs);
+    ImGui::SameLine(0.f, S(10.f));
+    MonoText("logical 0..7 · card owns physical placement · 2..512 samples",
+             kPalette.muted, fs);
+    ImGui::SameLine(0.f, S(12.f));
+    ImGui::BeginDisabled(dialog_busy || !cdc_ok || load_busy);
+    for (int wave = 0;
+         wave < static_cast<int>(cardlink::audio::kOscillatorWaves); ++wave) {
+      if (wave != 0) {
+        ImGui::SameLine(0.f, S(4.f));
+      }
+      ImGui::PushID(1000 + wave);
+      char label[16];
+      std::snprintf(label, sizeof label, "osc%d%s", wave,
+                    app.oscillator_wave_loaded[static_cast<size_t>(wave)]
+                        ? " *"
+                        : "");
+      if (fw::ui::ChipBtn(label, false, BtnKind::Neutral)) {
+        BeginPickWavetable(app, wave);
+      }
+      if (ImGui::IsItemHovered()) {
+        const auto &path =
+            app.oscillator_wave_paths[static_cast<size_t>(wave)];
+        ImGui::SetTooltip("%s", path.empty() ? "Upload wav/raw waveform"
+                                             : path.c_str());
+      }
+      ImGui::PopID();
+    }
+    ImGui::EndDisabled();
   }
   ImGui::EndChild();
   ImGui::PopStyleColor();
@@ -717,13 +791,13 @@ void DrawSamplePage(App &app)
   fw::ui::BeginSection("sample_help", "SIGNAL PATH", ImVec2(0, S(100.f)));
   ImGui::NewLine();
   ImGui::Spacing();
-  MonoText("Attack on card (CDC)  ·  Body via UAC2 int16 (card pitches)",
+  MonoText("Attack on card (CDC)  ·  Body via UAC2 int8 (card pitches)",
            kPalette.text, fw::theme::g_fonts.mono);
   ImGui::Spacing();
   MonoText("RS485 note + concurrent BODY prefill  ·  env / filter on card.",
            kPalette.text_dim, fs);
   ImGui::Spacing();
-  MonoText("Pass wav/raw per wave_id 0..255; SDK splits attack (CDC) + body (USB).",
+  MonoText("Sample IDs 0..247 use attack + BODY; osc0..7 upload logical wavetables.",
            kPalette.text_dim, fs);
   fw::ui::EndSection();
 

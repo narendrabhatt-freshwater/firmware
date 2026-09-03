@@ -29,9 +29,9 @@ int HexNibble(char value)
 
 Result ValidateSample(const SampleDefinition &sample)
 {
-  if (sample.id >= 256u || !(sample.root_hz > 0.0)) {
+  if (sample.id >= cardlink::audio::kSampleWaves || !(sample.root_hz > 0.0)) {
     return Fail(ErrorCode::InvalidArgument,
-                "sample id must be 0..255 and root_hz must be positive");
+                "sample id must be 0..247 and root_hz must be positive");
   }
   const bool combined = !sample.sample_file.empty();
   const bool split = !sample.attack_file.empty() || !sample.body_file.empty();
@@ -230,9 +230,9 @@ Result Core::setSampleRoot(uint16_t sample_id, double root_hz)
   if (!connection) {
     return connection;
   }
-  if (sample_id >= 256u || !(root_hz > 0.0)) {
+  if (sample_id >= cardlink::audio::kSampleWaves || !(root_hz > 0.0)) {
     return Fail(ErrorCode::InvalidArgument,
-                "sample id must be 0..255 and root_hz must be positive");
+                "sample id must be 0..247 and root_hz must be positive");
   }
   std::string error;
   return impl_->samples.SetRootHz(sample_id, root_hz, error)

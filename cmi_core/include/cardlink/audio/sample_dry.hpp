@@ -32,6 +32,11 @@ namespace audio {
 
 constexpr unsigned kSampleVoices = 8;
 constexpr unsigned kAttackWaves = 256;
+constexpr unsigned kOscillatorWaves = 8;
+/* The host knows how many IDs remain assignable to samples, but deliberately
+ * has no oscillator-bank base address. `wl` carries a logical 0..7 value and
+ * Channel firmware alone resolves its physical storage. */
+constexpr unsigned kSampleWaves = kAttackWaves - kOscillatorWaves;
 constexpr unsigned kSampleRateHz = 48000;
 constexpr unsigned kAttackSamples = 512;
 constexpr unsigned kCrossfadeSamples = 32;

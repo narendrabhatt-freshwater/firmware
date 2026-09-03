@@ -30,7 +30,7 @@ int NativePow(bvm *vm){
 void GlobalInt(bvm *vm,const char *name,bint value){be_pushint(vm,value);be_setglobal(vm,name);be_pop(vm,1);}
 void GlobalNil(bvm *vm,const char *name){be_pushnil(vm);be_setglobal(vm,name);be_pop(vm,1);}
 void RegisterAbi(bvm *vm){
-  const char *functions[]={"input","state_get","state_set","set_amplitude","ramp","start_note","note_end","discard_pending","pitch_for_key","led"};
+  const char *functions[]={"input","state_get","state_set","set_amplitude","ramp","start_note","note_end","discard_pending","pitch_for_key","led","osc"};
   for(const char *name:functions)be_regfunc(vm,name,Stub);
   be_regfunc(vm,"pow",NativePow);
   GlobalInt(vm,"INPUT_NOTE_ID",FW_VM_CHANNEL_INPUT_NOTE_ID);GlobalInt(vm,"INPUT_FREQUENCY",FW_VM_CHANNEL_INPUT_FREQUENCY);
@@ -85,7 +85,7 @@ CompileResult BerryCompiler::CompileChannel(const std::string &source) const {
   const bbyte arities[]={2u,0u,0u};
   for(unsigned i=0u;i<3u;++i)if(!HandlerHasArity(vm,handlers[i],arities[i])){std::remove(temp.c_str());be_vm_delete(vm);return Error(std::string("missing handler or invalid signature: ")+handlers[i]);}
   be_vm_delete(vm);std::ifstream in(temp,std::ios::binary);std::vector<uint8_t> payload((std::istreambuf_iterator<char>(in)),{});in.close();std::remove(temp.c_str());
-  if(payload.empty()||payload.size()>FW_SCRIPT_MAX_PAYLOAD)return Error("Berry bytecode exceeds 4096-byte limit");
+  if(payload.empty()||payload.size()>FW_SCRIPT_MAX_PAYLOAD)return Error("Berry bytecode exceeds 16384-byte limit");
   CompileResult out;out.ok=true;out.message="ok: compiled";out.program.resize(FW_SCRIPT_CONTAINER_HEADER_SIZE+payload.size());
   std::memcpy(out.program.data(),"FWSC",4u);Put16(out.program.data()+4u,FW_SCRIPT_CONTAINER_VERSION);
   out.program[6]=FW_SCRIPT_RUNTIME_BERRY;out.program[7]=FW_SCRIPT_CONFIG_FLOAT32_INT32;

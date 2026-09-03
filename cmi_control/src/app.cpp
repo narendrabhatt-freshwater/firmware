@@ -942,6 +942,14 @@ void App::Tick()
         pending_sample_folder = std::string("wave:") +
                                 std::to_string(sample_file_voice) + ":" + path;
       }
+      else if (sample_file_pick == SampleFilePick::Wavetable &&
+               sample_file_voice >= 0 &&
+               sample_file_voice <
+                   static_cast<int>(cardlink::audio::kOscillatorWaves))
+      {
+        pending_sample_folder = std::string("osc:") +
+                                std::to_string(sample_file_voice) + ":" + path;
+      }
       sample_file_pick = SampleFilePick::None;
       sample_file_voice = -1;
     }

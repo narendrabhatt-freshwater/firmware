@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 
 namespace {
 
@@ -87,6 +88,47 @@ int main()
   Expect(!pending_note_off.ok,
          "legacy pending argument must be rejected by ABI1 compiler");
 
+  const auto oscillator = compiler.CompileChannel(
+      "def on_note_on(key, velocity)\n"
+      "    var handle = osc(7, pitch_for_key(key))\n"
+      "    start_note()\nend\n" + handlers);
+  Expect(oscillator.ok, "osc(wave, frequency) handle must compile as ABI1");
+
+  std::string state64 = "def on_note_on(key, velocity)\n";
+  for (unsigned i = 0u; i < 64u; ++i)
+    state64 += "    state value" + std::to_string(i) + "\n";
+  state64 += "    value63 = key\n    start_note()\nend\n" + handlers;
+  Expect(compiler.CompileChannel(state64).ok,
+         "64 persistent state variables must compile");
+  state64.insert(state64.find("    value63"), "    state overflow\n");
+  Expect(!compiler.CompileChannel(state64).ok,
+         "a 65th persistent state variable must be rejected");
+
+  std::string large = "def on_note_on(key, velocity)\n";
+  for (unsigned i = 0u; i < 256u; ++i)
+    large += "    if key == " + std::to_string(i) +
+             "\n        set_amplitude(" + std::to_string(i % 2u) +
+             ")\n    end\n";
+  large += "    start_note()\nend\n" + handlers;
+  const auto large_program = compiler.CompileChannel(large);
+  if (!large_program.ok || large_program.program.size() <= 4116u)
+    std::cerr << "large compiler fixture: " << large_program.message
+              << " size=" << large_program.program.size() << '\n';
+  Expect(large_program.ok && large_program.program.size() > 4116u &&
+             large_program.program.size() <= 16404u,
+         "compiler must accept programs beyond the former 4 KiB limit");
+
+  std::string oversized = "def on_note_on(key, velocity)\n";
+  for (unsigned i = 0u; i < 700u; ++i)
+    oversized += "    if key == " + std::to_string(i) +
+                 "\n        set_amplitude(" + std::to_string(i % 2u) +
+                 ")\n    end\n";
+  oversized += "    start_note()\nend\n" + handlers;
+  const auto oversized_program = compiler.CompileChannel(oversized);
+  Expect(!oversized_program.ok &&
+             oversized_program.message.find("16384") != std::string::npos,
+         "compiler must reject payloads beyond the 16 KiB limit");
+
   cmi::Core core({});
   Expect(!core.isConnected(), "a new Core must be disconnected");
   Expect(!core.isReady(), "a new Core must not be ready");
@@ -111,10 +153,13 @@ int main()
          "loadSample must reject mixed combined and split inputs");
 
   std::array<uint16_t, 128> map{};
-  map.fill(256u);
+  map.fill(247u);
+  Expect(core.setMidiSampleMap(map).ok(),
+         "MIDI mappings must accept the last sample attack ID");
+  map.fill(248u);
   const cmi::Result midi_map = core.setMidiSampleMap(map);
   Expect(midi_map.code == cmi::ErrorCode::InvalidArgument,
-         "MIDI mappings must reject invalid sample IDs");
+         "MIDI mappings must reject reserved wavetable IDs");
 
   const cmi::Result note = core.sampleNoteOn(0u, 60u, 0u);
   Expect(note.code == cmi::ErrorCode::NotConnected,

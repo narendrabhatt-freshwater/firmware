@@ -167,6 +167,7 @@ int main(int argc, char **argv)
     be_regfunc(vm, "start_note", compile_only_native);
     be_regfunc(vm, "note_end", compile_only_native);
     be_regfunc(vm, "discard_pending", compile_only_native);
+    be_regfunc(vm, "osc", compile_only_native);
     be_regfunc(vm, "led", compile_only_native);
     be_regfunc(vm, "pitch_for_key", compile_only_native);
     be_regfunc(vm, "pow", pow_native);
@@ -207,7 +208,7 @@ int main(int argc, char **argv)
     if (fseek(file, 0, SEEK_END) || (length = ftell(file)) < 0 ||
         length > FW_SCRIPT_MAX_PAYLOAD || fseek(file, 0, SEEK_SET)) {
         fclose(file); remove(temporary);
-        return fail("bytecode exceeds 4096-byte limit", input);
+        return fail("bytecode exceeds 16384-byte limit", input);
     }
     payload = (uint8_t *)malloc((size_t)length);
     if (!payload || fread(payload, 1, (size_t)length, file) != (size_t)length) {

@@ -107,6 +107,13 @@ extern "C"
   uint32_t Audio_Bridge_MaxFill(void);
   uint32_t Audio_Bridge_FillLate(void);
 
+  /**
+   * Drive LED_Y low for the complete SPI1 DMA refill and high while idle.
+   * This produces a 1 kHz scope signal whose low-duty fraction is refill load.
+   */
+  void Audio_Bridge_CpuLoadProbeSet(uint8_t enabled);
+  uint8_t Audio_Bridge_CpuLoadProbeGet(void);
+
 #ifdef __cplusplus
 }
 #endif

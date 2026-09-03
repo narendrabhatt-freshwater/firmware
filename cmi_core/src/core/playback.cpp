@@ -17,7 +17,7 @@ Result Core::Impl::SampleNoteOn(uint8_t voice, uint8_t key, uint16_t sample_id,
   if (!ready) {
     return ready;
   }
-  if (!ValidKey(key) || sample_id >= 256u || velocity == 0u ||
+  if (!ValidKey(key) || sample_id >= cardlink::audio::kSampleWaves || velocity == 0u ||
       velocity > 127u) {
     return Fail(ErrorCode::InvalidArgument,
                 "invalid MIDI key, velocity, or sample id");
@@ -174,9 +174,9 @@ Result Core::allNotesOff()
 Result Core::setMidiSampleMap(const std::array<uint16_t, 128> &sample_ids)
 {
   for (const uint16_t id : sample_ids) {
-    if (id >= 256u) {
+    if (id >= cardlink::audio::kSampleWaves) {
       return Fail(ErrorCode::InvalidArgument,
-                  "MIDI sample ids must be 0..255");
+                  "MIDI sample ids must be 0..247");
     }
   }
   std::lock_guard<std::mutex> lock(impl_->operation_mutex);

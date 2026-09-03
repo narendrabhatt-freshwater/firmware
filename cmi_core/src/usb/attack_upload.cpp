@@ -97,25 +97,53 @@ AttackUploadResult AttackUploader::Upload(
     size_t nbytes,
     const std::function<void(float)> &on_progress)
 {
-  if (!port_.IsOpen()) {
-    return Fail("err: CDC session not open");
-  }
-  if (wave_id >= cardlink::audio::kAttackWaves) {
-    return Fail("err: wave_id 0..255");
+  if (wave_id >= cardlink::audio::kSampleWaves) {
+    return Fail("err: sample wave_id 0..247");
   }
   if (data == nullptr || nbytes == 0u || nbytes > kAttackBytes) {
     return Fail("err: attack head must be 1..kAttackSamples signed int8");
+  }
+  char command[32];
+  std::snprintf(command, sizeof(command), "al %u",
+                static_cast<unsigned>(wave_id));
+  return UploadCommand(command, "ok:attack", wave_id, data, nbytes,
+                       on_progress);
+}
+
+AttackUploadResult AttackUploader::UploadWavetable(
+    uint8_t wave, const uint8_t *data, size_t nbytes,
+    const std::function<void(float)> &on_progress)
+{
+  if (wave >= cardlink::audio::kOscillatorWaves) {
+    return Fail("err: logical wavetable 0..7");
+  }
+  if (data == nullptr || nbytes < 2u || nbytes > kAttackBytes) {
+    return Fail("err: wavetable must be 2..512 signed int8 samples");
+  }
+  char command[32];
+  std::snprintf(command, sizeof(command), "wl %u",
+                static_cast<unsigned>(wave));
+  return UploadCommand(command, "ok:wavetable", wave, data, nbytes,
+                       on_progress);
+}
+
+AttackUploadResult AttackUploader::UploadCommand(
+    const char *command, const char *completion, uint16_t result_id,
+    const uint8_t *data, size_t nbytes,
+    const std::function<void(float)> &on_progress)
+{
+  if (!port_.IsOpen()) {
+    return Fail("err: CDC session not open");
   }
 
   DrainRx(port_);
   port_.FlushInput();
 
   char cmd[64];
-  std::snprintf(cmd, sizeof(cmd), "c:al %u %zu\r",
-                static_cast<unsigned>(wave_id), nbytes);
+  std::snprintf(cmd, sizeof(cmd), "c:%s %zu\r", command, nbytes);
   if (!port_.Write(reinterpret_cast<const uint8_t *>(cmd),
                    std::strlen(cmd))) {
-    return Fail("err: CDC write al");
+    return Fail("err: CDC write upload command");
   }
   port_.DrainOutput();
 
@@ -148,9 +176,9 @@ AttackUploadResult AttackUploader::Upload(
   }
   port_.DrainOutput();
 
-  if (rx.find("ok:attack") == std::string::npos) {
-    if (!WaitForSubstring(port_, "ok:attack", rx, 3000, true)) {
-      return Fail("err: no ok:attack (" + SanitizeRx(rx) + ")");
+  if (rx.find(completion) == std::string::npos) {
+    if (!WaitForSubstring(port_, completion, rx, 3000, true)) {
+      return Fail("err: no upload completion (" + SanitizeRx(rx) + ")");
     }
   }
 
@@ -160,8 +188,8 @@ AttackUploadResult AttackUploader::Upload(
 
   AttackUploadResult out;
   out.ok = true;
-  out.wave_id = wave_id;
-  out.message = "ok:attack uploaded";
+  out.wave_id = result_id;
+  out.message = std::string(completion) + " uploaded";
   return out;
 }
 

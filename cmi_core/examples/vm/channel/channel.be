@@ -32,7 +32,15 @@ def on_note_on(key, velocity)
         return
     end
 
-    # Pitch choices (leave only one start_note call active).
+    # Optional wavetable layers. Logical waves 0 and 1 read the reserved
+    # attack-bank IDs 248 and 249. Configure them before start_note().
+    # The returned handle may be saved for future per-oscillator controls or
+    # ignored when no later control is needed.
+    # var fundamental = osc(0, pitch_for_key(key))
+    # osc(1, pitch_for_key(key) * 2.0)
+
+    # var second_harmonic = osc(2, pitch_for_key(key) * 2.0)
+
     start_note()                              # standard MIDI pitch
     # start_note(440.0)                       # fixed A4 on every key
     # start_note(pitch_for_key(key) * 2.0)    # one octave up

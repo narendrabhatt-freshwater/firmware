@@ -76,7 +76,7 @@ return `ok: …` with the value.
 | `err:syntax`                            | Could not parse the line                      |
 | `err:range`                             | Number or slot out of allowed range (Channel) |
 | `err:unknown`                           | No such command                               |
-| `err:usb`                               | CDC-only command (`al` or `vmload`) sent on RS485 |
+| `err:usb`                               | CDC-only command (`al`, `wl`, or `vmload`) sent on RS485 |
 | `err:rxdrop`                            | Channel UART RX overrun between lines         |
 | `err:no-program`                        | Channel voice has no active VM program        |
 | `err:vm-busy`                           | Note/program operation conflicts with VM upload or active playback |
@@ -92,8 +92,9 @@ but reply `err:range`. All voices mix onto DAC channel 1.
 Each voice is a **SAMPLE voice**: note-on plays the assigned attack head
 from AXI RAM, then the USB BODY slots, through one on-card playhead
 (pitch, filter, and VM-controlled amplitude). Host streams unpitched body; the
-card rate-scales (`note_Hz / root_Hz`). Production firmware has no internal
-oscillator source; a playable voice requires sample BODY data.
+card rate-scales (`note_Hz / root_Hz`). A script may layer eight looped
+attack-bank wavetable oscillators onto that source, but a playable voice still
+requires sample BODY data.
 
 At boot the card turns the analog bypass path on and sets CH1 DAC trim to
 0 dB. Note commands do not touch gain or bypass.
@@ -120,18 +121,20 @@ Success reply for sets: `ok`.
 Fractional Hz is intentional (e.g. `261.625565` for C4). Do not round
 to integers if you care about equal temperament.
 
-### Sample bank (256 AXI attack heads)
+### Shared bank (248 sample attacks + 8 oscillator wavetables)
 
-Eight voices (`n0`…`n7`) assign any stored head (`aw <voice> <id>`).
+Eight voices (`n0`…`n7`) assign sample heads `0..247` (`aw <voice> <id>`).
 The bank holds **256** signed-int8 heads of up to **512** samples (~10.7 ms @
-48 kHz). Upload is USB CDC only (§4). Contents survive while powered
-and are lost on reset.
+48 kHz); IDs `248..255` are reserved for logical oscillator wavetables
+`0..7`. Upload is USB CDC only (§4). Contents survive while powered and are
+lost on reset.
 
 | Command             | Meaning                                                             |
 | ------------------- | ------------------------------------------------------------------- |
-| `al <id> <nbytes>`  | **USB CDC only.** Load head `<id>` 0…255 (1…512 signed-int8 bytes)  |
+| `al <id> <nbytes>`  | **USB CDC only.** Load sample head `<id>` 0…247 (1…512 signed-int8 bytes) |
+| `wl <wave> <nbytes>` | **USB CDC only.** Load logical oscillator wave 0…7 (2…512 signed-int8 bytes) |
 | `ar <id> <Hz>`      | Set head `<id>`'s root pitch (Hz > 0)                               |
-| `aw <v> <id>`       | Assign head `<id>` to voice `<v>` 0…7                               |
+| `aw <v> <id>`       | Assign sample head `<id>` 0…247 to voice `<v>` 0…7                  |
 | `a`                 | Loaded count + 256-bit hex mask (bit 0 = wave 0)                    |
 | `vq`                | ABI1 active/pending generations + exact runtime ring credit             |
 | `usb`               | BODY counters: drop/hold/fill, RS-485 `vq`, rx/bytes/bad              |
@@ -155,8 +158,9 @@ until that join. Every `nX on <key> [velocity]` command is a note-on, including 
 | `vm`                       | Query the active-program voice mask                              |
 | `vm <voice>`               | Query active state, ABI target/version, and fault for one voice  |
 | `vm mem`                   | Shared-arena metrics followed by eight per-voice diagnostic lines |
+| `cpuload [0\|1]`           | Query or enable LED_Y/PB9 DMA-refill duty-cycle probe              |
 
-`vmload` accepts a complete 20…4116-byte FWSC container and then switches CDC
+`vmload` accepts a complete 20…16404-byte FWSC container and then switches CDC
 from line parsing to binary input. The full transaction is specified in §4.
 
 ### VM-controlled amplitude envelope
@@ -164,6 +168,22 @@ from line parsing to binary input. The full transaction is specified in §4.
 Amplitude ramps and note lifecycle are controlled only by the uploaded per-voice
 VM program. The firmware exposes no separate envelope-programming commands.
 See [SCRIPTING.md](../cmi_core/SCRIPTING.md) and `vmload` below.
+
+Each `osc(wave, frequency_hz)` call appends a pending-note oscillator and
+returns an opaque handle that may be assigned or ignored. Logical waves `0..7`
+map to attack-bank IDs `248..255`; repeated calls may reuse a wave. Handles
+remain valid through note promotion for future targeted modulation. The sample
+and enabled oscillators are averaged before the existing filter and envelope.
+
+### CPU-load scope probe
+
+`cpuload 1` assigns LED_Y/PB9 to the SPI1 DMA refill probe. The pin is low
+from entry to each half/full callback until all 48 frames have been refilled,
+and high for the remaining part of the 1 ms audio period. Therefore
+`CPU load = low pulse width / 1 ms`. This includes USB callback work, pending
+Berry event handlers, and all sample/oscillator/filter/envelope rendering.
+`cpuload 0` disables the probe and restores normal fixed-LED behavior;
+`cpuload` reports its current state.
 
 ### Digital low-pass filter
 
@@ -393,7 +413,7 @@ Typical host path on macOS / Linux: Channel `cu.usbmodem*` / `ttyACM*`.
 USB–UART adapters (`cu.usbserial*`, `ttyUSB*`) are the RS485 dongle — wrong
 port for uploads.
 
-### Upload session (`al`)
+### Upload sessions (`al` and `wl`)
 
 Binary payload rides on the **same** CDC pipe as ASCII. After `ok:ready`,
 the console leaves line mode: CDC RX bytes go to the upload sink only
@@ -402,11 +422,16 @@ is met.
 
 Constraints:
 
-| Command            | Payload                                               |
-| ------------------ | ----------------------------------------------------- |
-| `al <id> <nbytes>` | 1…512 bytes = 1…512 × signed int8 (real length, no hold-pad) |
+| Command                 | Payload                                               |
+| ----------------------- | ----------------------------------------------------- |
+| `al <id> <nbytes>`      | Sample ID 0…247; 1…512 signed-int8 bytes              |
+| `wl <wave> <nbytes>`    | Logical oscillator wave 0…7; 2…512 signed-int8 bytes  |
 
-Wave `<id>` is **0…255**. Voice assign is `aw <voice> <id>`.
+The host never supplies a physical bank ID for an oscillator. Channel firmware
+maps `wl 0..7` into its reserved storage and returns the same logical number.
+`al` cannot write reserved wavetable storage. Uploads are rejected while
+active, pending, or queued notes may reference the bank. Oscillator tables
+must contain 2…512 periodic samples.
 
 **Console reply API (what the card writes):** exactly two success lines
 for a full transfer — nothing in between, even if USB delivers the
@@ -414,9 +439,10 @@ payload in many reads.
 
 | When                                  | Card writes                                     |
 | ------------------------------------- | ----------------------------------------------- |
-| `al` accepted                         | `ok:ready\r\n`                                  |
+| `al` or `wl` accepted                 | `ok:ready\r\n`                                  |
 | During the `nbytes` of payload        | *(no console reply)*                            |
-| Last byte received and bank committed | `ok:attack <id>\r\n`                            |
+| Last `al` byte committed              | `ok:attack <id>\r\n`                            |
+| Last `wl` byte committed              | `ok:wavetable <wave>\r\n`                      |
 
 There is no per-chunk ACK. Mid-payload console traffic would serialize
 Full-Speed CDC and is intentionally omitted.
@@ -424,17 +450,22 @@ Full-Speed CDC and is intentionally omitted.
 Sequence:
 
 ```text
-Host →  al 0 1024\r
+Host →  al 0 512\r
 Card →  ok:ready\r\n          ← console write #1
-Host →  <1024 raw bytes>      ← opaque to the console parser
+Host →  <512 raw bytes>       ← opaque to the console parser
 Card →  ok:attack 0\r\n       ← console write #2
+
+Host →  wl 0 512\r
+Card →  ok:ready\r\n
+Host →  <512 periodic raw bytes>
+Card →  ok:wavetable 0\r\n
 ```
 
-Errors you may see instead of `ok:ready` / `ok:attack`:
+Errors you may see instead of the ready/completion replies:
 
 | Body         | Meaning                                          |
 | ------------ | ------------------------------------------------ |
-| `err:usb`    | `al` sent on RS485                               |
+| `err:usb`    | `al` or `wl` sent on RS485                       |
 | `err:syntax` | Bad command line                                 |
 | `err:range`  | Id / size / concurrent upload / commit failure   |
 
@@ -456,8 +487,8 @@ uploaded, note commands return `err:no-program` and the note bank stays silent.
 
 `vmload <voice> <nbytes>` is CDC-only and uses the same line-to-binary
 transition as `al`. Each voice 0..7 owns an independent program. The payload is
-one Berry ABI1 `FWSC` container, up to 4116 bytes (20-byte container header
-plus at most 4096 payload bytes). The card writes
+one Berry ABI1 `FWSC` container, up to 16404 bytes (20-byte container header
+plus at most 16384 payload bytes). The card writes
 `ok:ready`, receives exactly `nbytes`, validates target/version, CRC, bytecode,
 runtime/configuration, handlers, host calls, and CRC, then replies
 `ok:vm <voice> <target> <version>`. `vm` reports the active voice mask;
@@ -465,7 +496,7 @@ runtime/configuration, handlers, host calls, and CRC, then replies
 `ok:vm <voice> active <target> <version> <fault>`.
 
 One fixed-arena Berry VM roots eight independent program objects and gives each
-voice 16 native float state slots. Upload is accepted only while no voice is
+voice 64 native float state slots. Upload is accepted only while no voice is
 sounding; note-ons during transfer return `err:vm-busy`. Invalid or interrupted
 replacement preserves the selected program. Protected native-argument faults
 remain voice-local; allocation, GC, watchdog, or uncertain interpreter state
@@ -475,7 +506,8 @@ invalidates the shared VM and silences all voices. Programs are lost on reset.
 ABI1 requires `on_note_on(key, velocity)`, `on_note_off()`, and
 `on_ramp_end()`. Runtime scripts inspect raw keys and live amplitude through
 `input()`, use allocation-free
-`pow()` for tracking policy, and call only `ramp(target, slope)`.
+`pow()` for tracking policy, configure wavetable layers with `osc()`, and
+control the common envelope with `ramp(target, slope)`.
 
 ---
 

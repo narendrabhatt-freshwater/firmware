@@ -36,6 +36,7 @@ static uint8_t s_loaded[ATTACK_BANK_COUNT];
 static uint32_t s_len[ATTACK_BANK_COUNT];
 static float s_root_hz[ATTACK_BANK_COUNT];
 static AttackVoice_t s_voices[SAMPLE_VOICES];
+static volatile uint8_t s_write_active;
 
 static int32_t AttackBank_S8ToQ31(int8_t s)
 {
@@ -48,6 +49,7 @@ void AttackBank_Init(void)
 
   memset(s_loaded, 0, sizeof(s_loaded));
   memset(s_len, 0, sizeof(s_len));
+  s_write_active = 0u;
   for (i = 0u; i < ATTACK_BANK_COUNT; i++)
   {
     s_root_hz[i] = ATTACK_DEFAULT_ROOT_HZ;
@@ -59,6 +61,16 @@ void AttackBank_Init(void)
     s_voices[i].phase_inc = 1.0f;
     s_voices[i].wave_id = 0u;
   }
+}
+
+void AttackBank_SetWriteActive(uint8_t active)
+{
+  s_write_active = active != 0u ? 1u : 0u;
+}
+
+uint8_t AttackBank_WriteIsActive(void)
+{
+  return s_write_active;
 }
 
 int AttackBank_Load(uint16_t wave_id, const uint8_t *data, uint32_t nbytes)

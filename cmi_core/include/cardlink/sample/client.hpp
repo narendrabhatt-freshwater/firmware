@@ -4,7 +4,7 @@
  *
  * Owns wave split, CDC attack upload, BODY mixer, and note commands.
  * The UI supplies a console sink (RS485 or CDC ASCII). Attack heads are
- * wave_id 0..255; eight voices assign any loaded head (`aw`). MIDI NoteOn
+ * sample wave_id 0..247; IDs 248..255 are reserved wavetables. MIDI NoteOn
  * maps key → wave_id. Body streaming is SampleBulkOut, not this class.
  */
 
@@ -72,6 +72,8 @@ public:
                 uint32_t raw_rate_hz, std::string &err);
   bool LoadHead(uint16_t wave_id, const std::string &path, std::string &err);
   bool LoadBody(uint16_t wave_id, const std::string &path, std::string &err);
+  /** Upload logical oscillator wave 0..7; firmware chooses bank placement. */
+  bool LoadWavetable(uint8_t wave, const std::string &path, std::string &err);
   /** wN_*_head.i8 + wN_*_body.i8, or matching stems. Optional roots.txt. */
   int LoadFolder(const std::string &dir, std::string &err);
 

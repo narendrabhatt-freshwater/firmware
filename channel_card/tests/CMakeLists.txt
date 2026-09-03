@@ -36,9 +36,29 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(attack_bank_s8_test PRIVATE -Wall -Wextra -Werror)
 endif()
 
+add_executable(wavetable_osc_test
+  wavetable_osc_test.c
+  ../Core/Src/audio/wavetable_osc.c)
+target_include_directories(wavetable_osc_test PRIVATE ../Core/Inc/audio)
+target_link_libraries(wavetable_osc_test PRIVATE m)
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+  target_compile_options(wavetable_osc_test PRIVATE -Wall -Wextra -Werror)
+endif()
+
+add_executable(attack_upload_guard_test
+  attack_upload_guard_test.c
+  ../Core/Src/console/attack_upload.c)
+target_include_directories(attack_upload_guard_test PRIVATE
+  ../Core/Inc/audio ../Core/Inc/console ../USB_APP
+  ../../cmi_core/shared/vm/include)
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+  target_compile_options(attack_upload_guard_test PRIVATE -Wall -Wextra -Werror)
+endif()
+
 add_executable(note_bank_vm_test
   note_bank_vm_test.c
   ../Core/Src/audio/note_bank.c
+  ../Core/Src/audio/wavetable_osc.c
   ../Core/Src/audio/channel_vm.c
   ../Core/Src/audio/note_envelope.c
   ../Core/Src/audio/stream_ring.c)
@@ -65,6 +85,9 @@ add_test(NAME channel_card.stream_ring_handoff
   COMMAND stream_ring_handoff_test)
 add_test(NAME channel_card.note_envelope COMMAND note_envelope_test)
 add_test(NAME channel_card.attack_bank_s8 COMMAND attack_bank_s8_test)
+add_test(NAME channel_card.wavetable_osc COMMAND wavetable_osc_test)
+add_test(NAME channel_card.attack_upload_guard COMMAND attack_upload_guard_test)
 add_test(NAME channel_card.note_bank_vm COMMAND note_bank_vm_test
   "${CMAKE_CURRENT_BINARY_DIR}/script_runtime/channel_envelope.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/channel.fwsc")
+  "${CMAKE_CURRENT_BINARY_DIR}/channel.fwsc"
+  "${CMAKE_CURRENT_BINARY_DIR}/script_runtime/oscillator_event.fwsc")

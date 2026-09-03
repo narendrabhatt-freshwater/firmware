@@ -64,6 +64,11 @@ The Channel page exposes the production sample path only: attack data over CDC
 plus UAC BODY. The GUI opens BODY automatically on the first card note, so
 there is no separate Start BODY step.
 
+The same page provides eight `osc0`…`osc7` wavetable upload buttons. The UI
+sends only the logical oscillator wave number; Channel firmware owns and
+resolves its physical bank placement. Wavetable files may contain 2…512
+signed-int8 samples (raw/i8) or a WAV that resolves to that size at 48 kHz.
+
 ## Shell
 
 - Left 56 px icon rail: view switcher, Recover (on fault), shortcuts

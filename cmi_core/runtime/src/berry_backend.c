@@ -16,7 +16,12 @@ typedef struct { uint32_t size, used; } ArenaBlock;
 typedef struct { const uint8_t *data; size_t size, position; } MemoryFile;
 static ScriptBerryRuntime *s_runtime;
 static MemoryFile s_file;
-static uint8_t s_upload_scratch[SCRIPT_BERRY_UPLOAD_SIZE];
+#if defined(__arm__) || defined(__thumb__)
+#define SCRIPT_VM_SECTION __attribute__((used, section(".vm_arena"), aligned(8)))
+#else
+#define SCRIPT_VM_SECTION
+#endif
+static uint8_t s_upload_scratch[SCRIPT_BERRY_UPLOAD_SIZE] SCRIPT_VM_SECTION;
 
 static size_t align8(size_t n) { return (n+7u)&~(size_t)7u; }
 static ArenaBlock *first_block(ScriptBerryRuntime *r) {
@@ -219,6 +224,15 @@ static int native_led(bvm *vm) {
     native_error(vm,FW_VM_FAULT_HOST_CALL,"led failed");
   be_pushnil(vm);be_return(vm);
 }
+static int native_osc(bvm *vm) {
+  bint wave;float frequency;uint32_t handle=0u;require_handler(vm);require_count(vm,2);
+  wave=checked_int(vm,1,0,7);frequency=checked_float(vm,2);
+  if(frequency<=0.0f||frequency>24000.0f)
+    native_error(vm,FW_VM_FAULT_BAD_HOST_ARGUMENT,"osc frequency must be greater than 0 and at most 24000 Hz");
+  if(!s_runtime->ops.osc||s_runtime->ops.osc(s_runtime->ops.context,s_runtime->current_voice,(uint8_t)wave,frequency,&handle)!=0||handle==0u||handle>INT32_MAX)
+    native_error(vm,FW_VM_FAULT_HOST_CALL,"osc configuration failed");
+  be_pushint(vm,(bint)handle);be_return(vm);
+}
 
 static void observation_hook(bvm *vm,int event,...) {
   ScriptBerryRuntime *r=s_runtime;(void)vm;if(!r)return;
@@ -248,6 +262,7 @@ static int create_vm(ScriptBerryRuntime *r) {
   be_regfunc(vm,"start_note",native_start_note);be_regfunc(vm,"note_end",native_note_end);
   be_regfunc(vm,"discard_pending",native_discard_pending);
   be_regfunc(vm,"led",native_led);
+  be_regfunc(vm,"osc",native_osc);
   be_regfunc(vm,"pitch_for_key",native_pitch_for_key);be_regfunc(vm,"pow",native_pow);
   register_int(vm,"INPUT_NOTE_ID",FW_VM_CHANNEL_INPUT_NOTE_ID);register_int(vm,"INPUT_FREQUENCY",FW_VM_CHANNEL_INPUT_FREQUENCY);
   register_int(vm,"INPUT_GAIN",FW_VM_CHANNEL_INPUT_GAIN);register_int(vm,"INPUT_GATE",FW_VM_CHANNEL_INPUT_GATE);
@@ -259,7 +274,7 @@ static int create_vm(ScriptBerryRuntime *r) {
   clear_handler_globals(vm);
   be_newlist(vm);for(i=0u;i<FW_SCRIPT_CHANNEL_VOICE_COUNT;++i){be_pushnil(vm);be_data_push(vm,-2);be_pop(vm,1);}be_setglobal(vm,"_fw_programs");be_pop(vm,1);
   /* Intern all native exception text before handlers become allocation-free. */
-  { static const char *const text[]={"value_error","invalid argument count","integer required","integer out of range","number required","finite number required","handler context required","input failed","set amplitude failed","pow result must be finite","ramp failed","start note failed","note end failed","led values must be between zero and one","led failed"};
+  { static const char *const text[]={"value_error","invalid argument count","integer required","integer out of range","number required","finite number required","handler context required","input failed","set amplitude failed","pow result must be finite","ramp failed","start note failed","note end failed","led values must be between zero and one","led failed","osc frequency must be greater than 0 and at most 24000 Hz","osc configuration failed"};
     for(i=0u;i<sizeof(text)/sizeof(text[0]);++i){be_pushstring(vm,text[i]);be_pop(vm,1);} }
   be_gc_collect(vm);r->phase=PHASE_IDLE;r->shared_valid=1u;r->active_mask=0u;update_memory(r);return 0;
 }

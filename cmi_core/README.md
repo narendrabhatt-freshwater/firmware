@@ -254,7 +254,8 @@ for (uint16_t id = 0; id < files.size(); ++id) {
 const cmi::Result loaded = core.loadSampleBank(bank);
 ```
 
-Samples are card-wide assets identified by IDs `0..255`; they do not belong to a
+Samples are card-wide assets identified by IDs `0..247`; IDs `248..255` are
+reserved for oscillator wavetables. Samples do not belong to a
 specific voice. `sampleNoteOn(voice, key, sample_id, velocity)` selects a loaded
 sample when starting that voice. Velocity defaults to 127 when omitted and is
 passed to `on_note_on(key, velocity)`. Sample files are therefore loaded

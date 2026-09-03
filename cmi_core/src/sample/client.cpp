@@ -327,8 +327,8 @@ bool Client::LoadWave(uint16_t wave_id, const std::string &path, std::string &er
 bool Client::LoadWave(uint16_t wave_id, const std::string &path,
                       uint32_t raw_rate_hz, std::string &err)
 {
-  if (wave_id >= cardlink::audio::kAttackWaves || path.empty()) {
-    err = "err: wave_id 0..255";
+  if (wave_id >= cardlink::audio::kSampleWaves || path.empty()) {
+    err = "err: sample wave_id 0..247";
     return false;
   }
   cardlink::audio::LoadedWave wave;
@@ -371,8 +371,8 @@ bool Client::LoadWave(uint16_t wave_id, const std::string &path,
 
 bool Client::LoadHead(uint16_t wave_id, const std::string &path, std::string &err)
 {
-  if (wave_id >= cardlink::audio::kAttackWaves || path.empty()) {
-    err = "err: wave_id 0..255";
+  if (wave_id >= cardlink::audio::kSampleWaves || path.empty()) {
+    err = "err: sample wave_id 0..247";
     return false;
   }
   if (IsWavFile(path)) {
@@ -404,8 +404,8 @@ bool Client::LoadHead(uint16_t wave_id, const std::string &path, std::string &er
 
 bool Client::LoadBody(uint16_t wave_id, const std::string &path, std::string &err)
 {
-  if (wave_id >= cardlink::audio::kAttackWaves || path.empty()) {
-    err = "err: wave_id 0..255";
+  if (wave_id >= cardlink::audio::kSampleWaves || path.empty()) {
+    err = "err: sample wave_id 0..247";
     return false;
   }
   if (IsWavFile(path)) {
@@ -459,9 +459,41 @@ bool Client::LoadBody(uint16_t wave_id, const std::string &path, std::string &er
   return true;
 }
 
+bool Client::LoadWavetable(uint8_t logical_wave, const std::string &path,
+                           std::string &err)
+{
+  if (logical_wave >= cardlink::audio::kOscillatorWaves || path.empty()) {
+    err = "err: logical wavetable 0..7";
+    return false;
+  }
+  cardlink::audio::LoadedWave wave;
+  if (!cardlink::audio::LoadWaveFile(path, cardlink::audio::kSampleRateHz,
+                                     wave, err)) {
+    return false;
+  }
+  if (wave.attack.size() < 2u ||
+      wave.body.size() > cardlink::audio::kCrossfadeSamples) {
+    err = "err: wavetable must contain 2..512 samples at 48 kHz";
+    return false;
+  }
+  if (!BeginCdc(err)) {
+    return false;
+  }
+  cardlink::usb::AttackUploader uploader(cdc_port_);
+  const auto result = uploader.UploadWavetable(
+      logical_wave, reinterpret_cast<const uint8_t *>(wave.attack.data()),
+      wave.attack.size());
+  EndCdc();
+  if (!result.ok) {
+    err = result.message;
+    return false;
+  }
+  return true;
+}
+
 bool Client::SetRootHz(uint16_t wave_id, double hz, std::string &err)
 {
-  if (wave_id >= cardlink::audio::kAttackWaves || !(hz > 0.0)) {
+  if (wave_id >= cardlink::audio::kSampleWaves || !(hz > 0.0)) {
     err = "err: range";
     return false;
   }
@@ -481,7 +513,7 @@ int Client::LoadFolder(const std::string &dir, std::string &err)
   const fs::path root(dir);
   int loaded = 0;
   bool any_named = false;
-  for (unsigned i = 0; i < cardlink::audio::kAttackWaves; ++i) {
+  for (unsigned i = 0; i < cardlink::audio::kSampleWaves; ++i) {
     std::string head;
     std::string body;
     if (!FindNamedPair(root, static_cast<int>(i), head, body)) {
@@ -501,7 +533,7 @@ int Client::LoadFolder(const std::string &dir, std::string &err)
       err = "err: folder has no wN_*_head.i8 / *_body.i8 pairs";
       return 0;
     }
-    for (unsigned i = 0; i < cardlink::audio::kAttackWaves; ++i) {
+    for (unsigned i = 0; i < cardlink::audio::kSampleWaves; ++i) {
       if (heads[i].empty()) {
         continue;
       }
@@ -525,7 +557,7 @@ int Client::LoadFolder(const std::string &dir, std::string &err)
       unsigned id = 0;
       double hz = 0.0;
       if (std::sscanf(line.c_str(), "%u %lf", &id, &hz) == 2 &&
-          id < cardlink::audio::kAttackWaves && hz > 0.0) {
+          id < cardlink::audio::kSampleWaves && hz > 0.0) {
         std::string ignore;
         (void)SetRootHz(static_cast<uint16_t>(id), hz, ignore);
       }
@@ -559,10 +591,10 @@ bool Client::NoteOnBatch(const NoteRequest *notes, size_t count)
     }
     seen[note.voice] = true;
     uint16_t wave = note.wave_id;
-    if (wave >= cardlink::audio::kAttackWaves) {
+    if (wave >= cardlink::audio::kSampleWaves) {
       wave = note.voice;
       if (!slots_[note.voice].body_ready) {
-        for (uint16_t i = 0; i < cardlink::audio::kAttackWaves; ++i) {
+        for (uint16_t i = 0; i < cardlink::audio::kSampleWaves; ++i) {
           if (mixer_.HasBody(i)) {
             wave = i;
             break;
@@ -570,7 +602,7 @@ bool Client::NoteOnBatch(const NoteRequest *notes, size_t count)
         }
       }
     } else if (!mixer_.HasBody(wave)) {
-      for (uint16_t i = 0; i < cardlink::audio::kAttackWaves; ++i) {
+      for (uint16_t i = 0; i < cardlink::audio::kSampleWaves; ++i) {
         if (mixer_.HasBody(i)) {
           wave = i;
           break;

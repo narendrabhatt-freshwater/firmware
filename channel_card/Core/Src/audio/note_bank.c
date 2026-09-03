@@ -19,6 +19,7 @@
 #include "note_envelope.h"
 #include "note_filter.h"
 #include "stream_ring.h"
+#include "wavetable_osc.h"
 
 #if defined(__arm__) || defined(__thumb__)
 #include "main.h"
@@ -289,6 +290,7 @@ static void NoteBank_ActivateReplacement(uint8_t note)
   note_play_wid[note] = note_next_wid[note];
   note_play_alen[note] = (uint16_t)AttackBank_GetLen(note_play_wid[note]);
   note_body_only[note] = (note_play_alen[note] == 0u) ? 1u : 0u;
+  WavetableOsc_ActivatePending(note);
   NoteFilter_Reset(note);
   NoteFilter_OnNoteFreq(note, (double)note_next_hz[note]);
   note_next_pending[note] = 0u;
@@ -352,7 +354,7 @@ static void NoteBank_StartVoice(uint8_t note, uint8_t key, uint8_t velocity,
   note_next_amp_q15[note] = note_amp_q15[note];
   note_next_wid[note] = note_wave_id[note];
   note_next_pending[note] = 1u;
-
+  WavetableOsc_BeginPending(note);
 }
 
 static void NoteBank_PostOn(uint8_t note, uint8_t key, uint8_t velocity,
@@ -377,6 +379,7 @@ static void NoteBank_HardOff(uint8_t note)
   NoteBank_ClearPlayhead(note);
   StreamRing_Release(note);
   AttackBank_Stop(note);
+  WavetableOsc_Stop(note);
   NoteFilter_Reset(note);
   NoteEnv_Stop(note);
 }
@@ -390,6 +393,7 @@ static void NoteBank_EndCurrent(uint8_t note)
   NoteBank_ClearPlayhead(note);
   StreamRing_EndCurrent(note);
   AttackBank_Stop(note);
+  WavetableOsc_StopActive(note);
   NoteFilter_Reset(note);
   NoteEnv_Stop(note);
 }
@@ -425,6 +429,7 @@ static void NoteBank_DrainCmd(uint8_t note)
     /* Note-off always cancels a not-yet-started replacement. Pending BODY is
      * transport state, so envelope scripts do not need to manage it. */
     StreamRing_DiscardPending(note);
+    WavetableOsc_DiscardPending(note);
     note_next_pending[note] = 0u;
     note_next_key[note] = 0u;
     note_next_velocity[note] = 0u;
@@ -536,13 +541,18 @@ static int32_t NoteBank_Sample(uint8_t note)
 static inline int32_t NoteBank_VoiceSample(uint8_t note)
 {
   int32_t s;
+  int64_t source_sum;
   float env;
   int32_t env_q15;
   int32_t gain_q15;
   int32_t amp;
+  uint32_t oscillator_count;
 
   NoteBank_SlewInc(note);
   s = NoteBank_Sample(note);
+  source_sum = (int64_t)s +
+               WavetableOsc_NextSum(note, &oscillator_count);
+  s = (int32_t)(source_sum / (int64_t)(1u + oscillator_count));
   s = NoteFilter_Process(note, s);
 
   env = NoteEnv_RenderSample(note);
@@ -649,6 +659,7 @@ static int NoteBank_VmDiscardPending(void *context, uint8_t note)
   (void)context;
   if (note >= NOTE_BANK_VOICES) return -1;
   StreamRing_DiscardPending(note);
+  WavetableOsc_DiscardPending(note);
   note_next_pending[note] = 0u;
   note_next_key[note] = 0u;
   note_next_velocity[note] = 0u;
@@ -661,6 +672,16 @@ static int NoteBank_VmLed(void *context, uint8_t note, float red, float green,
 {
   (void)context; (void)note;
   return ChannelLed_Set(red, green, blue, brightness);
+}
+static int NoteBank_VmOsc(void *context, uint8_t note, uint8_t wave,
+                          float frequency_hz, uint32_t *handle_out)
+{
+  (void)context;
+  if (note >= NOTE_BANK_VOICES || note_next_pending[note] == 0u)
+  {
+    return -1;
+  }
+  return WavetableOsc_AddPending(note, wave, frequency_hz, handle_out);
 }
 
 static int NoteBank_VmDispatch(FwVmChannelHandler handler, uint8_t note)
@@ -724,12 +745,14 @@ void NoteBank_Init(void)
   vm_ops.set_led = NoteBank_VmLed;
   vm_ops.discard_pending = NoteBank_VmDiscardPending;
   vm_ops.start_note_at = NoteBank_VmStartNoteAt;
+  vm_ops.osc = NoteBank_VmOsc;
 #if defined(__arm__) || defined(__thumb__)
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
   DWT->CYCCNT = 0u;
   DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 #endif
   ChannelVm_Init(&vm_ops);
+  WavetableOsc_Init();
 }
 
 void NoteBank_PanicAll(void)
@@ -737,6 +760,7 @@ void NoteBank_PanicAll(void)
   uint8_t i;
 
   AttackBank_StopAll();
+  WavetableOsc_StopAll();
   StreamRing_ResetAll();
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
@@ -782,6 +806,10 @@ static int NoteBank_NoteOnBound(uint8_t note, uint8_t key, uint8_t velocity,
     return -1;
   }
   if (ChannelVm_UploadIsBusy() != 0u)
+  {
+    return -3;
+  }
+  if (AttackBank_WriteIsActive() != 0u)
   {
     return -3;
   }
@@ -857,7 +885,7 @@ double NoteBank_GetFreq(uint8_t note)
 
 int NoteBank_SetWaveId(uint8_t note, uint16_t wave_id)
 {
-  if (note >= NOTE_BANK_VOICES || wave_id >= ATTACK_BANK_COUNT)
+  if (note >= NOTE_BANK_VOICES || wave_id >= ATTACK_BANK_SAMPLE_COUNT)
   {
     return -1;
   }
@@ -903,6 +931,20 @@ uint8_t NoteBank_AnyActive(void)
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
     if (NoteBank_IsActive(i) != 0u)
+    {
+      return 1u;
+    }
+  }
+  return 0u;
+}
+
+uint8_t NoteBank_AnyBankReferences(void)
+{
+  uint8_t note;
+  for (note = 0u; note < NOTE_BANK_VOICES; note++)
+  {
+    if (note_active[note] != 0u || note_next_pending[note] != 0u ||
+        note_cmd[note] == NOTE_CMD_ON)
     {
       return 1u;
     }

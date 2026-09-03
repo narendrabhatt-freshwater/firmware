@@ -8,11 +8,17 @@
 #include <string.h>
 
 static void check(int ok,const char *message){if(!ok){fprintf(stderr,"%s\n",message);exit(1);}}
+static int8_t attack_tables[ATTACK_BANK_COUNT][ATTACK_BANK_LEN];
+static uint32_t attack_lengths[ATTACK_BANK_COUNT];
+static uint8_t attack_write_active;
+static int32_t last_filter_sample;
 float AttackBank_GetRootHz(uint16_t id){(void)id;return 260.0f;}
-uint32_t AttackBank_GetLen(uint16_t id){(void)id;return 0u;}
-const int8_t *AttackBank_Table(uint16_t id){(void)id;return NULL;}
+uint32_t AttackBank_GetLen(uint16_t id){return id<ATTACK_BANK_COUNT?attack_lengths[id]:0u;}
+const int8_t *AttackBank_Table(uint16_t id){return id<ATTACK_BANK_COUNT?attack_tables[id]:NULL;}
+void AttackBank_SetWriteActive(uint8_t active){attack_write_active=active;}
+uint8_t AttackBank_WriteIsActive(void){return attack_write_active;}
 void AttackBank_Stop(uint8_t note){(void)note;} void AttackBank_StopAll(void){}
-int32_t NoteFilter_Process(uint8_t note,int32_t sample){(void)note;return sample;}
+int32_t NoteFilter_Process(uint8_t note,int32_t sample){(void)note;last_filter_sample=sample;return sample;}
 void NoteFilter_Reset(uint8_t note){(void)note;} void NoteFilter_OnNoteFreq(uint8_t note,double hz){(void)note;(void)hz;}
 int ChannelLed_Set(float red,float green,float blue,float brightness){(void)red;(void)green;(void)blue;(void)brightness;return 0;}
 static uint8_t *read_file(const char *path,size_t *size){FILE*f=fopen(path,"rb");long n;uint8_t*p;check(f!=NULL,"open FWSC");fseek(f,0,SEEK_END);n=ftell(f);rewind(f);p=malloc((size_t)n);check(p!=NULL&&fread(p,1,(size_t)n,f)==(size_t)n,"read FWSC");fclose(f);*size=(size_t)n;return p;}
@@ -20,12 +26,15 @@ static void boundary(void){NoteBank_VmBoundaryBegin();for(unsigned i=0;i<48u;++i
 static void boundaries(unsigned count){while(count--)boundary();}
 static uint32_t render_peak(unsigned count){uint32_t peak=0u;NoteBank_VmBoundaryBegin();for(unsigned i=0;i<count;++i){int64_t s=NoteBank_NextSample();uint32_t a=(uint32_t)(s<0?-s:s);if(a>peak)peak=a;}NoteBank_VmBoundaryEnd();return peak;}
 static void prime_body(uint8_t note){int8_t body[USB_STREAM_UAC_BODY_SAMPLES];for(unsigned i=0u;i<USB_STREAM_UAC_BODY_SAMPLES;++i)body[i]=(int8_t)((i&1u)!=0u?64:-64);check(StreamRing_WriteVoice(note,0xFFu,1u,NoteBank_GetWaveId(note),body,USB_STREAM_UAC_BODY_SAMPLES)==USB_STREAM_UAC_BODY_SAMPLES,"prime production BODY");}
+static void prime_silent_body(uint8_t note){int8_t body[USB_STREAM_UAC_BODY_SAMPLES]={0};check(StreamRing_WriteVoice(note,0xFFu,1u,NoteBank_GetWaveId(note),body,USB_STREAM_UAC_BODY_SAMPLES)==USB_STREAM_UAC_BODY_SAMPLES,"prime silent BODY");}
 int main(int argc,char **argv){
-  uint8_t *program;size_t size;check(argc==3,"program paths required");program=read_file(argv[1],&size);
+  uint8_t *program;size_t size;check(argc==4,"program paths required");program=read_file(argv[1],&size);
   NoteEnv_Init();StreamRing_Init();NoteBank_Init();check(NoteBank_VmActiveMask()==0u,"reset has no programs");
   check(NoteBank_NoteOn(0u,60u,127u)==-2,"note reports no program");boundary();check(!NoteBank_IsActive(0u),"no-program silent");
   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,program,size)==0&&NoteBank_VmUploadCommit(0u)==0,"valid FWSC activates");
-  check(NoteBank_VmActiveMask()==1u,"only voice zero loaded");check(NoteBank_NoteOn(0u,60u,64u)==0,"note accepted");prime_body(0u);boundary();
+  check(NoteBank_VmActiveMask()==1u,"only voice zero loaded");
+  AttackBank_SetWriteActive(1u);check(NoteBank_NoteOn(0u,60u,64u)==-3,"note rejected while attack-bank upload can tear tables");AttackBank_SetWriteActive(0u);
+  check(NoteBank_NoteOn(0u,60u,64u)==0,"note accepted");prime_body(0u);boundary();
   check(NoteBank_GetKey(0u)==60u,"physical key applied");
   check(NoteBank_GetVelocity(0u)==64u,"note velocity applied");
   check(fabs(NoteBank_GetFreq(0u)-261.625565)<0.001,"C4 frequency resolved on card");
@@ -89,5 +98,17 @@ int main(int argc,char **argv){
    check(fabsf(NoteEnv_Amplitude(0u)-(64.0f/127.0f))<0.002f,"medium velocity attack reaches its peak near 100 ms");
    boundaries(500u);
    check(fabsf(NoteEnv_Amplitude(0u)-(64.0f/127.0f*0.2f))<0.0001f,"replacement decay reaches sustain");free(channel_program);}
+  NoteBank_PanicAll();
+  {size_t oscillator_size;uint8_t *oscillator_program=read_file(argv[3],&oscillator_size);
+   for(unsigned i=248u;i<256u;++i){attack_lengths[i]=2u;attack_tables[i][0]=64;attack_tables[i][1]=64;}
+   check(NoteBank_SetWaveId(0u,247u)==0&&NoteBank_SetWaveId(0u,248u)!=0,"last eight attack IDs must be reserved for oscillators");
+   check(NoteBank_SetWaveId(0u,8u)==0,"sample may use a non-oscillator wave ID");
+   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,oscillator_program,oscillator_size)==0&&NoteBank_VmUploadCommit(0u)==0,"load oscillator program");
+   check(NoteBank_NoteOn(0u,69u,127u)==0,"oscillator note accepted");prime_silent_body(0u);boundary();
+   {uint32_t peak=render_peak(64u);check(NoteBank_IsActive(0u)&&peak>110000000u&&peak<125000000u,"sample and eight oscillators must be averaged before voice gain");
+    check(last_filter_sample>900000000&&last_filter_sample<1000000000,"averaged source mix must feed the existing filter");}
+   check(NoteBank_NoteOff(0u)==0,"oscillator note off accepted");boundary();check(!NoteBank_IsActive(0u),"oscillator note end clears the voice");free(oscillator_program);}
+  attack_lengths[255]=0u;check(NoteBank_NoteOn(0u,69u,127u)==0,"invalid oscillator note posts");prime_silent_body(0u);boundary();
+  check(!NoteBank_IsActive(0u)&&!NoteBank_VmIsActive(0u)&&NoteBank_VmFault(0u)==FW_VM_FAULT_HOST_CALL,"unloaded oscillator table must fault and silence only its voice");
   free(program);puts("Channel shared Berry VM test passed");return 0;
 }

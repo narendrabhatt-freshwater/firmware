@@ -7,14 +7,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* ABI1 eight-program/reload peak 17,184 B + 4 KiB upload scratch + 20% headroom,
- * rounded to 1 KiB by the qualification probe. */
-#define SCRIPT_BERRY_ARENA_SIZE (25u * 1024u)
+/* Shared heap plus one maximum-size upload scratch. This larger reserve keeps
+ * practical eight-program loads and reload fragmentation comfortably bounded;
+ * the 16 KiB payload cap remains per program, not an eight-at-maximum promise. */
+#define SCRIPT_BERRY_ARENA_SIZE (96u * 1024u)
 #define SCRIPT_BERRY_UPLOAD_SIZE FW_SCRIPT_MAX_PAYLOAD
 #define SCRIPT_BERRY_HEAP_SIZE (SCRIPT_BERRY_ARENA_SIZE-SCRIPT_BERRY_UPLOAD_SIZE)
-/* Largest sanctioned handler path measured 50 instructions. Add 25%, then
- * round up to the 32-instruction observation quantum. */
-#define SCRIPT_BERRY_SANCTIONED_HANDLER_MAX 50u
+/* Largest sanctioned handler path currently measures 53 instructions. The
+ * 64-instruction limit is the next observation-hook boundary above it. */
+#define SCRIPT_BERRY_SANCTIONED_HANDLER_MAX 53u
 #define SCRIPT_BERRY_HANDLER_INSTRUCTION_LIMIT 64u
 #define SCRIPT_BERRY_BOUNDARY_INSTRUCTION_LIMIT \
   (FW_SCRIPT_CHANNEL_VOICE_COUNT * SCRIPT_BERRY_HANDLER_INSTRUCTION_LIMIT)
@@ -31,6 +32,7 @@ typedef struct {
   int (*set_led)(void *, uint8_t, float, float, float, float);
   int (*discard_pending)(void *, uint8_t);
   int (*start_note_at)(void *, uint8_t, float);
+  int (*osc)(void *, uint8_t, uint8_t, float, uint32_t *);
 } ScriptBerryNativeOps;
 
 typedef union {

@@ -201,8 +201,10 @@ command references are in the
 [`docs/protocol.md`](docs/protocol.md) defines framing, binary uploads, and
 reply formats.
 
-**Channel Card** — 8 SAMPLE voices (`n0`…`n7`, summed on CH1), sample upload/assignment
-(`al`/`ar`/`aw`/`a`/`vq`), per-voice VM programs (`vmload`/`vm`) and LPF
+**Channel Card** — 8 SAMPLE voices (`n0`…`n7`) with automatically allocated,
+script-controlled oscillators using eight reserved logical wavetables
+(`osc0`…`osc7` in the UI, summed on CH1), sample upload/assignment
+(`al`/`wl`/`ar`/`aw`/`a`/`vq`), per-voice VM programs (`vmload`/`vm`) and LPF
 (`f`/`fk`) and DAC gain (`g`).
 
 | Command | Meaning |
@@ -258,8 +260,9 @@ If a device behaves strangely after a firmware change: Device Manager →
 Both cards currently build clean (no warnings) and are working on
 hardware:
 
-- **Channel Card** — 8 SAMPLE voices: 10-channel, 48 kHz signed-int16 UAC2
-  carries packed BODY data (960 B / 1 ms) into per-voice sustain rings; attack heads
+- **Channel Card** — 8 SAMPLE voices: 10-channel, 48 kHz signed-int8 UAC2
+  carries packed BODY data (1004 B per tagged packet) into per-voice sustain
+  rings; attack heads
   uploaded over CDC; CS4304 DAC out; DC control voltages on CH2–CH4 (0 V
   at boot); RS485 + USB CDC consoles.
 - **Effect Card** — 8-channel capture from two TLV320ADC6140 ADCs over

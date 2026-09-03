@@ -4,8 +4,8 @@
  * @brief   USB audio / note-bank → I2S bridge for the CS4304 4-channel DAC.
  *
  * Owns I2S DMA ring buffers, USB packet ingest, CH1 note-bank refill,
- * and the TIM7 I2S2 underrun pump. Tone/DC and CPU-load probe live in
- * audio_tone_dc.c.
+ * and the TIM7 I2S2 underrun pump. Tone/DC generation lives in
+ * audio_tone_dc.c; the LED_Y DMA-load scope probe is implemented here.
  ******************************************************************************
  */
 
@@ -71,6 +71,18 @@ static int32_t i2s1_tx_buf[AUDIO_I2S_BUF_SIZE] __attribute__((aligned(4), sectio
 static int32_t i2s2_tx_buf[AUDIO_I2S_BUF_SIZE] __attribute__((aligned(4), section(".dma_buffer")));
 
 static volatile uint8_t i2s_started = 0;
+static volatile uint8_t s_cpu_load_probe = 0u;
+
+static inline void Audio_CpuLoadProbeBusy(uint8_t busy)
+{
+  if (s_cpu_load_probe != 0u)
+  {
+    /* Direct BSRR keeps probe overhead deterministic. Low=busy, high=idle. */
+    LED_Y_GPIO_Port->BSRR = busy != 0u
+                               ? (uint32_t)LED_Y_Pin << 16u
+                               : (uint32_t)LED_Y_Pin;
+  }
+}
 
 void Audio_SetUSBMute(uint8_t mute) { (void)mute; }
 
@@ -461,6 +473,19 @@ uint32_t Audio_Bridge_FillLate(void)
   return g_i2s1_fill_late;
 }
 
+void Audio_Bridge_CpuLoadProbeSet(uint8_t enabled)
+{
+  s_cpu_load_probe = enabled != 0u ? 1u : 0u;
+  LED_Y_GPIO_Port->BSRR = s_cpu_load_probe != 0u
+                             ? (uint32_t)LED_Y_Pin
+                             : (uint32_t)LED_Y_Pin << 16u;
+}
+
+uint8_t Audio_Bridge_CpuLoadProbeGet(void)
+{
+  return s_cpu_load_probe;
+}
+
 /**
  * @brief  I2S1 DMA half transfer complete callback.
  *         DMA now plays the second half → refill the first.
@@ -469,8 +494,10 @@ void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 {
   if (hi2s->Instance == SPI1)
   {
+    Audio_CpuLoadProbeBusy(1u);
     HalfTransfer_CallBack_HS();
     Audio_I2S1_FillHalf(0u);
+    Audio_CpuLoadProbeBusy(0u);
   }
   else if (hi2s->Instance == SPI2)
   {
@@ -486,8 +513,10 @@ void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s)
 {
   if (hi2s->Instance == SPI1)
   {
+    Audio_CpuLoadProbeBusy(1u);
     TransferComplete_CallBack_HS();
     Audio_I2S1_FillHalf(1u);
+    Audio_CpuLoadProbeBusy(0u);
   }
   else if (hi2s->Instance == SPI2)
   {

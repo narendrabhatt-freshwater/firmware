@@ -1,9 +1,9 @@
 # Channel scripting
 
 Channel programs define pitch, amplitude envelope, retrigger behavior, and
-optional RGB feedback for each voice. Sources use a restricted,
-allocation-free subset of Berry and are compiled before upload to the Channel
-Card.
+optional RGB feedback for each voice. Sources use a restricted Berry subset
+that does not create Berry heap objects while handlers run and are compiled
+before upload to the Channel Card.
 
 ## Limits at a glance
 
@@ -12,9 +12,9 @@ Card.
 | Channel voices | 8, numbered `0..7` |
 | Programs | One independently loaded program per voice |
 | Editable `.be` source size | No fixed byte limit; source remains on the host and must compile within the limits below |
-| Serialized Berry bytecode / FWSC payload | 4,096 bytes maximum |
-| Complete FWSC container | 4,116 bytes maximum, including the 20-byte header |
-| Persistent state | 16 float32 values per voice program |
+| Serialized Berry bytecode / FWSC payload | 16,384 bytes maximum |
+| Complete FWSC container | 16,404 bytes maximum, including the 20-byte header |
+| Persistent state | 64 float32 values per voice program |
 | Runtime stack | 128 VM values, including arguments, locals, expression temporaries, and call overhead |
 | Runtime handler budget | 64 VM instructions per handler invocation |
 | Whole-boundary budget | 512 VM instructions across all eight voices |
@@ -22,7 +22,7 @@ Card.
 | Numeric representation | Signed 32-bit integers and 32-bit floating point |
 | MIDI keys | 128 values, numbered `0..127` |
 | Source parser nesting | 25 nested parser levels on the host compiler |
-| VM memory arena | 25 KiB total, including a 4 KiB upload scratch region |
+| Berry heap / upload scratch | 80 KiB / 16 KiB in the explicitly placed VM arena |
 
 Comments and whitespace in the `.be` source do not consume card storage, but
 executable code, constants, and handler structures
@@ -33,7 +33,7 @@ is too large.
 There is no separate supported count for handler-local `var` declarations.
 They share the 128-value runtime stack with handler parameters, expression
 temporaries, and native-call overhead. Persistent values have the clear API
-limit: at most 16 named `state` values, or 16 numeric state slots, per voice
+limit: at most 64 named `state` values, or 64 numeric state slots, per voice
 program. Keep locals to the few scalar values needed by the current handler.
 
 ## Loading a program
@@ -98,15 +98,16 @@ actions.
 | `start_note()` | Starts the pending note with standard MIDI pitch. Fails when no note is pending. |
 | `start_note(frequency)` | Overrides the pending pitch with a positive frequency in Hz and starts the note. |
 | `discard_pending()` | Removes the pending note without changing the current note; primarily used when `on_note_on()` rejects a transport-ready note. |
+| `osc(wave, frequency)` | Appends a pending-note oscillator using logical wavetable `0..7` at an absolute frequency greater than 0 and no greater than 24,000 Hz, and returns an opaque note-local handle. |
 | `pitch_for_key(key)` | Returns the standard MIDI frequency for key `0..127` (A4 = 440 Hz). Using it is optional. |
 | `note_end()` | Retires the current note and releases its playback resources. It does not promote a pending note. |
 | `pow(base, exponent)` | Returns an allocation-free floating-point power calculation. |
 | `led(red, green, blue, brightness)` | Sets the card RGB LED until the next `led()` call. Every argument is `0.0..1.0`; use `led(0, 0, 0, 0)` to turn it off. |
-| `state_get(slot)` | Returns persistent state slot `0..15`. Prefer named state. |
-| `state_set(slot, value)` | Stores a finite number in persistent state slot `0..15`. Prefer named state. |
+| `state_get(slot)` | Returns persistent state slot `0..63`. Prefer named state. |
+| `state_set(slot, value)` | Stores a finite number in persistent state slot `0..63`. Prefer named state. |
 
-Native functions other than `input()`, `pitch_for_key()`, `pow()`, and
-`state_get()` return no value. Invalid argument counts, types, ranges, or
+Native functions other than `input()`, `pitch_for_key()`, `pow()`, `osc()`,
+and `state_get()` return no value. Invalid argument counts, types, ranges, or
 non-finite results fault the voice.
 
 Each pending note starts with standard MIDI pitch. `on_note_on()` may replace
@@ -121,6 +122,44 @@ end
 A script may ignore the lookup entirely and call, for example,
 `start_note(440.0)`. The physical key remains event metadata; changing pitch
 does not rewrite it.
+
+## Wavetable oscillators
+
+Each `osc()` call appends an independent oscillator to the pending note.
+Logical wavetable IDs `0..7` map to the eight reserved attack-bank entries
+`248..255`. A table may be reused by multiple oscillators at different
+frequencies. Tables should contain periodic signed-int8 data with at least two
+and at most 512 samples and are interpolated cyclically from last to first.
+Upload them with `wl <logical-wave> <nbytes>` over Channel USB CDC. The host
+supplies only logical wave `0..7`; Channel firmware owns physical placement.
+
+The pending oscillator declaration is cleared before every `on_note_on`.
+Calling `osc()` returns a positive opaque handle, which may be assigned or
+ignored. Handles are exactly representable in persistent float32 state.
+They survive pending promotion but become invalid on discard,
+note end, replacement, fault, or panic. The declaration and zeroed phases
+become active when `start_note()` promotes the pending note. An older note
+keeps its own oscillators while a replacement waits for a voice-steal fade.
+There is no predefined oscillator-count constant in the Berry ABI or the
+firmware implementation. Each `osc()` call dynamically allocates one small
+descriptor, so any number of instances may reuse the same wavetable until card
+RAM is actually exhausted. Allocation failure faults only the calling voice
+instead of silently dropping a requested oscillator.
+
+```berry
+def on_note_on(key, velocity)
+    var fundamental = pitch_for_key(key)
+    var carrier = osc(0, fundamental)
+    osc(1, fundamental * 2) # ignoring the handle is valid
+    start_note()
+end
+```
+
+The sample and enabled oscillators have equal source gain and are averaged
+before the existing per-voice filter and common envelope. Filter pitch
+tracking continues to use the primary note frequency. There is no
+per-oscillator gain, envelope, phase, or modulation control yet; returned
+handles establish the identity those future calls will use.
 
 ## Inputs
 
@@ -159,7 +198,7 @@ def on_note_off()
 end
 ```
 
-A program may declare up to 16 named states. A declaration or assignment must
+A program may declare up to 64 named states. A declaration or assignment must
 occupy a complete line. Named state cannot be mixed with direct
 `state_get()`/`state_set()` calls. Ordinary `var` values are local to one
 handler invocation.
@@ -178,12 +217,15 @@ invalidates the shared VM.
   functions are rejected.
 - The target provides no filesystem, REPL, source compiler, bytecode saver, or
   optional Berry modules.
-- Handler code must not allocate memory or trigger garbage collection. Keep it
+- Handler code must not allocate Berry objects or trigger Berry garbage
+  collection. The native `osc()` implementation allocates its firmware-side
+  descriptor and reports runtime heap exhaustion as a voice-local fault. Keep it
   to numeric expressions, local scalar values, state, conditionals, and native
   calls.
-- Each compiled program payload is limited to 4 KiB and each handler is limited
+- Each compiled program payload is limited to 16 KiB and each handler is limited
   to 64 VM instructions.
-- The eight voice programs share one 25 KiB fixed-arena VM. A bad native call
+- The eight voice programs share one 96 KiB fixed-arena reserve, including the
+  16 KiB upload scratch. A bad native call
   or ordinary exception silences the affected voice. Allocation, garbage
   collection, watchdog, or interpreter-integrity faults invalidate all eight
   programs.

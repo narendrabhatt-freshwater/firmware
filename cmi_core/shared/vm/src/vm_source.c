@@ -65,7 +65,7 @@ static int reserved_name(const char *text, size_t length)
         "class", "break", "continue", "return", "true", "false", "nil",
         "var", "do", "import", "as", "try", "except", "raise", "static",
         "input", "state_get", "state_set", "set_amplitude", "ramp",
-        "start_note", "note_end", "discard_pending", "pitch_for_key",
+        "start_note", "note_end", "discard_pending", "pitch_for_key", "osc",
         "led", "pow", "on_note_on", "on_note_off", "on_ramp_end",
         "INPUT_NOTE_ID", "INPUT_FREQUENCY", "INPUT_GAIN", "INPUT_GATE",
         "INPUT_ACTIVE", "INPUT_HAS_PENDING", "INPUT_PENDING_FREQUENCY",

@@ -58,6 +58,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/audio/note_bank.c
     Core/Src/audio/note_envelope.c
     Core/Src/audio/attack_bank.c
+    Core/Src/audio/wavetable_osc.c
     Core/Src/audio/stream_ring.c
     Core/Src/audio/audio_tone_dc.c
     Core/Src/filters/butterworth_four_pole.c

@@ -29,7 +29,8 @@ plays the 8-voice SAMPLE / note bank out of a **CS4304 4-channel DAC**
 over I2S.
 
 - **CH1** — SAMPLE note-bank mix (`n0..n7`). UAC2 BODY transport fills the
-  per-voice rings used for sustain; it is not mixed onto CH1 as PCM.
+  per-voice rings used for sustain. Berry may append oscillators sourced from
+  eight looping wavetables reserved at attack-bank IDs 248…255.
 - **CH2–CH4** — firmware-generated DC control voltages, clocked purely
   by I2S with no USB involvement (0 V at boot)
 - Console over RS485 (`c:` prefix) and USB CDC
@@ -221,19 +222,21 @@ Pitch tracking uses `fc = fbase × (noteHz / 261.625565)^k`. See
 
 | Command | Transport | Action |
 | ------- | --------- | ------ |
-| `al <id> <nbytes>` | USB CDC only | Begin an attack-head upload for ID 0…255. The byte count must be 1…512. After `ok:ready`, send exactly that many signed-int8 bytes; completion returns `ok:attack <id>`. |
+| `al <id> <nbytes>` | USB CDC only | Upload sample attack ID 0…247 using 1…512 signed-int8 bytes. |
+| `wl <wave> <nbytes>` | USB CDC only | Upload logical oscillator wave 0…7 using 2…512 signed-int8 bytes. Firmware owns its physical bank placement. |
 | `ar <id> <Hz>` | RS485 or CDC | Set the positive root frequency for attack ID 0…255. |
-| `aw <voice> <id>` | RS485 or CDC | Assign attack ID 0…255 to voice 0…7. |
+| `aw <voice> <id>` | RS485 or CDC | Assign sample attack ID 0…247 to voice 0…7. IDs 248…255 are reserved wavetables. |
 | `a` | RS485 or CDC | Query loaded attack count and the 256-bit loaded mask. |
-| `vmload <voice> <nbytes>` | USB CDC only | Begin an FWSC ABI1 program upload to voice 0…7. Total container size is 20…4116 bytes. After `ok:ready`, send exactly that many bytes. |
+| `vmload <voice> <nbytes>` | USB CDC only | Begin an FWSC ABI1 program upload to voice 0…7. Total container size is 20…16404 bytes. After `ok:ready`, send exactly that many bytes. |
 | `vm` | RS485 or CDC | Query the active-program voice mask. |
 | `vm <voice>` | RS485 or CDC | Query active state, target, ABI version, and fault for voice 0…7. |
 | `vm mem` | RS485 or CDC | Return shared VM arena and per-voice fault/cycle diagnostics. |
 | `vq` | RS485 or CDC | Query active/pending masks, BODY sessions, target fill, and exact writable credit. RS485 uses the fixed binary-compatible `vq7` response. |
 | `usb` | RS485 or CDC | Query BODY transport and underrun counters. |
 | `usb 0` | RS485 or CDC | Clear BODY transport counters and return the new values. |
+| `cpuload [0\|1]` | RS485 or CDC | Query or enable the LED_Y DMA-refill scope probe. Low is busy; high is idle. |
 
-`al` and `vmload` switch the CDC connection from line parsing to binary input
+`al`, `wl`, and `vmload` switch the CDC connection from line parsing to binary input
 until the declared byte count has arrived. Do not send another command during
 that payload. Full upload sequencing and reply fields are documented in
 [`../docs/protocol.md`](../docs/protocol.md).
@@ -243,8 +246,14 @@ that payload. Full upload sequencing and reply fields are documented in
 | Command | Action |
 | ------- | ------ |
 
-`vm mem` and `usb` are service diagnostics;
+`vm mem`, `usb`, and `cpuload` are service diagnostics;
 applications should use the high-level `cmi::Core` operations instead.
+
+With `cpuload 1`, LED_Y/PB9 goes low on entry to each SPI1 DMA half-buffer
+callback and high after its 48-frame refill completes. At 48 kHz the period is
+1 ms, so scope duty cycle is `low_time / 1 ms`. The pulse includes USB callback
+work, pending Berry handlers, and sample/oscillator/filter/envelope mixing.
+Use `cpuload 0` to return the fixed LEDs to normal operation.
 
 Pitch-track smoke with a loaded sample: `f0 300`, `fk0 1`, `n0 on 60` then
 `n0 on 72` — corner should roughly double with the octave (query `f0`).

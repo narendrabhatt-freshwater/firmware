@@ -17,6 +17,8 @@ extern "C"
 
   uint8_t AttackUpload_IsActive(void);
   int AttackUpload_Begin(uint16_t wave_id, uint32_t nbytes);
+  /** Resolve logical wavetable 0..7 to card-owned attack-bank storage. */
+  int AttackUpload_BeginWavetable(uint8_t wave, uint32_t nbytes);
   uint32_t AttackUpload_Feed(const uint8_t *buf, uint32_t len);
   void AttackUpload_Abort(void);
 

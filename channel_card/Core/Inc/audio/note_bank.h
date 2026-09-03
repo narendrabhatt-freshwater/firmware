@@ -38,7 +38,7 @@ extern "C"
   uint8_t NoteBank_GetVelocity(uint8_t note);
   double NoteBank_GetFreq(uint8_t note);
 
-  /** Assign AXI head 0..255 to voice 0..7. Applied on the next note-on. */
+  /** Assign sample attack 0..247 to voice 0..7. Applied on next note-on. */
   int NoteBank_SetWaveId(uint8_t note, uint16_t wave_id);
   uint16_t NoteBank_GetWaveId(uint8_t note);
 
@@ -49,6 +49,8 @@ extern "C"
   /** True while attack/sustain/release still sounds (incl. env release). */
   uint8_t NoteBank_IsActive(uint8_t note);
   uint8_t NoteBank_AnyActive(void);
+  /** True when active, pending, or queued note state may reference the bank. */
+  uint8_t NoteBank_AnyBankReferences(void);
   int32_t NoteBank_NextSample(void);
 
   /** VM hooks bracketing one 48-sample DMA refill. */

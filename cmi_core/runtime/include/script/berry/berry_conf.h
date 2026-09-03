@@ -11,7 +11,7 @@ void *script_berry_realloc(void *ptr, size_t size);
 #define BE_DEBUG 0
 #define BE_INTGER_TYPE 0
 #define BE_USE_SINGLE_FLOAT 1
-#define BE_BYTES_MAX_SIZE 4096
+#define BE_BYTES_MAX_SIZE 16384
 #define BE_USE_PRECOMPILED_OBJECT 1
 #define BE_DEBUG_SOURCE_FILE 0
 #define BE_DEBUG_RUNTIME_INFO 0

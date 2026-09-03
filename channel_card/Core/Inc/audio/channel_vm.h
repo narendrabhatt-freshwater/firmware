@@ -20,6 +20,8 @@ typedef struct {
                  float blue, float brightness);
   int (*discard_pending)(void *context, uint8_t note);
   int (*start_note_at)(void *context, uint8_t note, float frequency_hz);
+  int (*osc)(void *context, uint8_t note, uint8_t wave,
+             float frequency_hz, uint32_t *handle_out);
 } ChannelVmNativeOps;
 
 void ChannelVm_Init(const ChannelVmNativeOps *ops);

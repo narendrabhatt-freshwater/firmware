@@ -81,9 +81,11 @@ flowchart TB
   subgraph store [Storage]
     File["48 kHz stream"]
     Atk["Attack AXI: 256 heads x 512 int8"]
+    Osc["Auto-allocated looped oscillators<br/>logical 0..7 = attack IDs 248..255"]
     Body["Host body: file (len-32)..end int8"]
     File --> Atk
     File --> Body
+    Atk --> Osc
   end
 
   subgraph usb [USB FS]
@@ -99,6 +101,7 @@ flowchart TB
     AtkOnly["attack lerp"]
     Xfade["overlap: attack out, body consume"]
     BodyOnly["body lerp from ring rd"]
+    SourceMix["average sample + enabled oscillators"]
     Lpf["note_filter DF4"]
     Env["native amplitude ramp"]
     Ph --> Join
@@ -110,9 +113,11 @@ flowchart TB
     Join -->|lt len-32| AtkOnly
     Join -->|overlap| Xfade
     Join -->|ge len| BodyOnly
-    AtkOnly --> Lpf
-    Xfade --> Lpf
-    BodyOnly --> Lpf
+    AtkOnly --> SourceMix
+    Xfade --> SourceMix
+    BodyOnly --> SourceMix
+    Osc --> SourceMix
+    SourceMix --> Lpf
     Lpf --> Env
   end
 

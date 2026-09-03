@@ -336,11 +336,13 @@ static const SwitchDef_t switches[] = {
  *   n0..n7 on <key> [velocity] [@session] / off — MIDI gate
  *   n off             — release all 8 voices
  *   al <id> <len>     — CDC signed-int8 attack upload (1..ATTACK_BANK_BYTES)
+ *   wl <wave> <len>   — CDC logical wavetable upload (wave 0..7, len 2..512)
  *   vmload <v> <len>  — CDC Berry ABI1 upload; vm [v|mem] — status
- *   ar <id> <Hz>      — sample root pitch (id = wave 0..255); a — loaded mask
+ *   ar <id> <Hz>      — attack-bank root pitch (id 0..255); a — loaded mask
  *   a / vq            — loaded heads per voice / hungriest + exact credit
  *   usb               — BODY counters: drop/hold/min/fill/z/sof/rx/bytes/bad
  *   usb 0             — clear those counters, then same reply
+ *   cpuload [0|1]     — query/enable LED_Y DMA-refill scope probe
  *   f0..f7 <Hz> [q] / f <Hz> [q] — LPF on the 8 voices (0 or 20000 = bypass;
  *                        q = DF4 g 0.5..10, default 1.0; higher = more peak)
  *   fk0..fk7 / fk     — filter pitch-track k (0..10, fc = fbase*(f/C4)^k)
@@ -422,8 +424,8 @@ static void Console_Help(void)
   snprintf(b, sizeof b,
            "ok: SAMPLE n0..n7 on key [velocity] [@session] | off | "
            "aw v id | "
-           "al id n | vmload v n | vm [v] | ar id Hz | a | vq | "
-           "usb | "
+           "al id n | wl wave n | vmload v n | vm [v] | ar id Hz | a | vq | "
+           "usb | cpuload [0|1] | "
            "f0..f7 Hz [q] | fk0..fk7 k | g ch dB\r\n");
   RS485_Reply(b);
 }
@@ -843,7 +845,7 @@ static void Console_CmdNoteSlot(char *line)
                  (uint16_t)session);
 }
 
-/** aw <voice> <id> — assign AXI head 0..255 to voice 0..7. */
+/** aw <voice> <id> — assign sample head 0..247 to voice 0..7. */
 static void Console_CmdAssignWave(char *line)
 {
   unsigned int voice;
@@ -905,6 +907,30 @@ static void Console_CmdAttackLoad(char *line)
     return;
   }
   if (AttackUpload_Begin((uint16_t)wid, (uint32_t)nbytes) != 0)
+  {
+    RS485_Reply("err:range\r\n");
+    return;
+  }
+  RS485_Reply("ok:ready\r\n");
+}
+
+/** wl <logical-wave> <nbytes> — card resolves logical 0..7 to bank storage. */
+static void Console_CmdWavetableLoad(char *line)
+{
+  unsigned int wave;
+  unsigned long nbytes;
+  if (!console_via_usb)
+  {
+    RS485_Reply("err:usb\r\n");
+    return;
+  }
+  if (sscanf(line, "wl %u %lu", &wave, &nbytes) != 2 ||
+      wave >= ATTACK_BANK_WAVETABLE_COUNT)
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
+  if (AttackUpload_BeginWavetable((uint8_t)wave, (uint32_t)nbytes) != 0)
   {
     RS485_Reply("err:range\r\n");
     return;
@@ -1045,10 +1071,41 @@ static void Console_Exec(char *line)
     return;
   }
 
+  if (strcmp(line, "cpuload") == 0)
+  {
+    (void)snprintf(b, sizeof b, "ok: cpuload %u\r\n",
+                   (unsigned)Audio_Bridge_CpuLoadProbeGet());
+    RS485_Reply(b);
+    return;
+  }
+
+  if (strncmp(line, "cpuload ", 8) == 0)
+  {
+    unsigned int enabled;
+    char extra;
+    if (sscanf(line + 8, "%u %c", &enabled, &extra) != 1 || enabled > 1u)
+    {
+      RS485_Reply("err:syntax\r\n");
+      return;
+    }
+    Audio_Bridge_CpuLoadProbeSet((uint8_t)enabled);
+    led_show_on = enabled == 0u ? 1u : 0u;
+    (void)snprintf(b, sizeof b, "ok: cpuload %u\r\n", enabled);
+    RS485_Reply(b);
+    return;
+  }
+
   /* ---- al <id> nbytes: CDC attack head upload ---- */
   if (strncmp(line, "al ", 3) == 0)
   {
     Console_CmdAttackLoad(line);
+    return;
+  }
+
+  /* ---- wl <logical-wave> nbytes: card-placed oscillator wavetable ---- */
+  if (strncmp(line, "wl ", 3) == 0)
+  {
+    Console_CmdWavetableLoad(line);
     return;
   }
 
@@ -1299,6 +1356,11 @@ static void LED_Task(void)
   static uint8_t step = 0;
 
   ChannelLed_Task();
+  if (Audio_Bridge_CpuLoadProbeGet() != 0u)
+  {
+    HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_RESET);
+    return;
+  }
   if (!led_show_on)
   {
     for (uint8_t i = 0; i < 2; i++)

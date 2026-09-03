@@ -46,6 +46,7 @@ enum class SampleFilePick : int8_t
 {
   None = 0,
   Wave = 1,
+  Wavetable = 2,
 };
 
 /** Background w0..w7 raw-bank load. Declared last on App so join runs first. */
@@ -127,7 +128,11 @@ struct App
   AsyncFileDialog file_dialog;
   SampleFilePick sample_file_pick = SampleFilePick::None;
   int sample_file_voice = -1;
-  std::string pending_sample_folder; /**< Pending wave pick: `wave:<v>:<path>`. */
+  std::string pending_sample_folder; /**< Pending `wave:` or `osc:` file pick. */
+  std::array<std::string, cardlink::audio::kOscillatorWaves>
+      oscillator_wave_paths{};
+  std::array<bool, cardlink::audio::kOscillatorWaves>
+      oscillator_wave_loaded{};
 
   bool midi_open = false;
   bool audio_open = false;

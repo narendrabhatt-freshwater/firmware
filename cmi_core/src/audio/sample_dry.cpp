@@ -832,7 +832,7 @@ uint8_t SampleDryMixer::NoteOnSession(uint8_t voice, uint16_t wave_id,
                                       double attack_elapsed_ms,
                                       double source_hz)
 {
-  if (voice >= kSampleVoices || wave_id >= bodies_.size()) {
+  if (voice >= kSampleVoices || wave_id >= kSampleWaves) {
     return 0xFFu;
   }
   if (session >= kStreamSessionMod) {
