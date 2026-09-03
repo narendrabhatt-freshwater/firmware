@@ -335,7 +335,7 @@ static const SwitchDef_t switches[] = {
  *   h / help / ?      — command list
  *   n0..n7 on <key> [velocity] [@session] / off — MIDI gate
  *   n off             — release all 8 voices
- *   al <id> <len>     — CDC attack-head upload (2..ATTACK_BANK_BYTES)
+ *   al <id> <len>     — CDC signed-int8 attack upload (1..ATTACK_BANK_BYTES)
  *   vmload <v> <len>  — CDC Berry ABI1 upload; vm [v|mem] — status
  *   ar <id> <Hz>      — sample root pitch (id = wave 0..255); a — loaded mask
  *   a / vq            — loaded heads per voice / hungriest + exact credit
@@ -888,7 +888,7 @@ static void Console_CmdAttackQuery(void)
   RS485_Reply(b);
 }
 
-/** al <wave_id> <nbytes> — CDC binary load (2..ATTACK_BANK_BYTES). */
+/** al <wave_id> <nbytes> — CDC signed-int8 load (1..ATTACK_BANK_BYTES). */
 static void Console_CmdAttackLoad(char *line)
 {
   unsigned int wid;

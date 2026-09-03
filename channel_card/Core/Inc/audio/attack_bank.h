@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    attack_bank.h
- * @brief   AXI int16 attack heads (256 × ATTACK_BANK_LEN).
+ * @brief   AXI signed-int8 attack heads (256 × ATTACK_BANK_LEN).
  *
  * Eight voices assign any loaded wave_id. Played on note-on before USB
  * stream_ring sustain.
@@ -23,9 +23,9 @@ extern "C"
 
 /** Stored heads (MIDI-sized bank). Independent of SAMPLE_VOICES. */
 #define ATTACK_BANK_COUNT 256u
-/** ~10.7 ms @ 48 kHz. 256 × 512 int16 = 256 KB AXI. */
+/** ~10.7 ms @ 48 kHz. 256 × 512 int8 = 128 KB AXI. */
 #define ATTACK_BANK_LEN 512u
-#define ATTACK_BANK_BYTES (ATTACK_BANK_LEN * 2u)
+#define ATTACK_BANK_BYTES ATTACK_BANK_LEN
 /** Source-index overlap of attack tail with body head. */
 #define SAMPLE_CROSSFADE_LEN 32u
 /** Join index when the head is committed at full length. */
@@ -34,14 +34,14 @@ extern "C"
   void AttackBank_Init(void);
 
   /**
-   * @brief Replace one head with int16 LE bytes (2..ATTACK_BANK_BYTES).
+   * @brief Replace one head with signed int8 bytes (1..ATTACK_BANK_BYTES).
    * @retval 0 ok
    * @retval -1 bad id / size / null
    */
   int AttackBank_Load(uint16_t wave_id, const uint8_t *data, uint32_t nbytes);
 
-  /** Direct write pointer for CDC upload (ATTACK_BANK_LEN int16). */
-  int16_t *AttackBank_WritePtr(uint16_t wave_id);
+  /** Direct write pointer for CDC upload (ATTACK_BANK_LEN int8). */
+  int8_t *AttackBank_WritePtr(uint16_t wave_id);
 
   /** Mark head present; nsamp is the real table length (not a hold-pad). */
   int AttackBank_Commit(uint16_t wave_id, uint32_t nsamp);
@@ -81,8 +81,8 @@ extern "C"
   /** Table sample as Q31; 0 if id/index invalid or unloaded. */
   int32_t AttackBank_SampleAt(uint16_t wave_id, uint32_t index);
 
-  /** Contiguous Q15 head (ATTACK_BANK_LEN). NULL if id invalid. */
-  const int16_t *AttackBank_Table(uint16_t wave_id);
+  /** Contiguous signed-int8 head (ATTACK_BANK_LEN). NULL if id invalid. */
+  const int8_t *AttackBank_Table(uint16_t wave_id);
 
 #ifdef __cplusplus
 }

@@ -9,7 +9,7 @@
 static void check(int ok,const char *message){if(!ok){fprintf(stderr,"%s\n",message);exit(1);}}
 float AttackBank_GetRootHz(uint16_t id){(void)id;return 260.0f;}
 uint32_t AttackBank_GetLen(uint16_t id){(void)id;return 0u;}
-const int16_t *AttackBank_Table(uint16_t id){(void)id;return NULL;}
+const int8_t *AttackBank_Table(uint16_t id){(void)id;return NULL;}
 void AttackBank_Stop(uint8_t note){(void)note;} void AttackBank_StopAll(void){}
 int32_t NoteFilter_Process(uint8_t note,int32_t sample){(void)note;return sample;}
 void NoteFilter_Reset(uint8_t note){(void)note;} void NoteFilter_OnNoteFreq(uint8_t note,double hz){(void)note;(void)hz;}

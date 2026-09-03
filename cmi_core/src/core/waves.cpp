@@ -59,7 +59,7 @@ Result ValidateSample(const SampleDefinition &sample)
     return Fail(ErrorCode::InvalidArgument,
                 "both attack_file and body_file are required");
   }
-  std::vector<int16_t> body;
+  std::vector<int8_t> body;
   if (!cardlink::audio::BodyWithHeadOverlap(
           sample.attack_file, sample.body_file, body, error)) {
     return Fail(ErrorCode::SampleError, error);

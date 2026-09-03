@@ -56,11 +56,11 @@ struct MidiPort {
 
 struct SampleDefinition {
   uint16_t id = 0;
-  /** Combined WAV or signed 16-bit little-endian raw recording. */
+  /** Combined WAV or signed 8-bit raw recording. */
   std::string sample_file;
-  /** Pre-split signed 16-bit or 32-bit little-endian attack. */
+  /** Pre-split signed 8-bit attack. */
   std::string attack_file;
-  /** Pre-split signed 16-bit little-endian BODY at 48 kHz. */
+  /** Pre-split signed 8-bit BODY at 48 kHz. */
   std::string body_file;
   double root_hz = 261.625565;
   /** Sample rate for raw sample_file input; ignored for WAV input. */

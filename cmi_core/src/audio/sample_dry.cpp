@@ -56,19 +56,13 @@ bool SampleDryMixer::LoadBodyFile(uint16_t wave_id,
     err = "cannot open " + path;
     return false;
   }
-  std::vector<char> raw((std::istreambuf_iterator<char>(in)),
-                        std::istreambuf_iterator<char>());
-  if (raw.size() < 2 || (raw.size() & 1u) != 0u) {
-    err = "body must be even int16 LE bytes";
+  std::vector<int8_t> raw((std::istreambuf_iterator<char>(in)),
+                          std::istreambuf_iterator<char>());
+  if (raw.empty()) {
+    err = "body must contain signed int8 samples";
     return false;
   }
-  std::vector<int16_t> tmp(raw.size() / 2);
-  for (size_t i = 0; i < tmp.size(); ++i) {
-    tmp[i] = static_cast<int16_t>(
-        static_cast<uint8_t>(raw[i * 2]) |
-        (static_cast<uint16_t>(static_cast<uint8_t>(raw[i * 2 + 1])) << 8));
-  }
-  return SetBody(wave_id, tmp.data(), tmp.size(), err);
+  return SetBody(wave_id, raw.data(), raw.size(), err);
 }
 
 bool SampleDryMixer::WaveInUse(uint16_t wave_id) const
@@ -82,7 +76,7 @@ bool SampleDryMixer::WaveInUse(uint16_t wave_id) const
   return false;
 }
 
-bool SampleDryMixer::SetBody(uint16_t wave_id, const int16_t *data, size_t nsamp,
+bool SampleDryMixer::SetBody(uint16_t wave_id, const int8_t *data, size_t nsamp,
                              std::string &err)
 {
   if (wave_id >= bodies_.size()) {
@@ -555,7 +549,7 @@ unsigned SampleDryMixer::SourceDemandSamples(double interval_ms) const
   return static_cast<unsigned>(std::ceil(total));
 }
 
-unsigned SampleDryMixer::FillBurst(uint8_t voice, int16_t *dst, unsigned max_n,
+unsigned SampleDryMixer::FillBurst(uint8_t voice, int8_t *dst, unsigned max_n,
                                    bool &sof, uint8_t &session)
 {
   sof = false;
@@ -597,7 +591,7 @@ unsigned SampleDryMixer::FillBurst(uint8_t voice, int16_t *dst, unsigned max_n,
   return n;
 }
 
-unsigned SampleDryMixer::FillUacFrame(uint8_t voice, int16_t *dst,
+unsigned SampleDryMixer::FillUacFrame(uint8_t voice, int8_t *dst,
                                       unsigned max_n, bool &sof,
                                       uint8_t &session)
 {
@@ -972,7 +966,7 @@ uint16_t SampleDryMixer::LiveWave(uint8_t voice) const
   return live_wave_[voice].load(std::memory_order_acquire);
 }
 
-int16_t SampleDryMixer::NextBody(Voice &v)
+int8_t SampleDryMixer::NextBody(Voice &v)
 {
   auto &body = bodies_[v.wave_id];
   const size_t n = body.size();
@@ -998,7 +992,7 @@ int16_t SampleDryMixer::NextBody(Voice &v)
     ph = 0.0;
   }
   const size_t i0 = std::min(static_cast<size_t>(ph), n - 1u);
-  const int16_t s = body[i0];
+  const int8_t s = body[i0];
   ph += 1.0;
   if (oneshot) {
     if (ph > n_d) {

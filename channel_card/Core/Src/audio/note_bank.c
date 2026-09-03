@@ -35,9 +35,9 @@ _Static_assert(NOTE_FILTER_VOICES >= NOTE_BANK_VOICES,
                "note_filter voice count must cover note_bank");
 _Static_assert(NOTE_ENV_VOICE_COUNT == NOTE_BANK_VOICES,
                "note_envelope voice count must match note_bank");
-_Static_assert(STREAM_BANK_LEN == 4080u,
+_Static_assert(STREAM_BANK_LEN == 1360u,
                "Berry integration must not resize a USB BODY bank");
-_Static_assert(STREAM_RING_SAMPLES == 12240u,
+_Static_assert(STREAM_RING_SAMPLES == 4080u,
                "normal streaming profile must keep three BODY banks");
 
 #define NOTE_AMP_Q15_MAX 32767
@@ -211,7 +211,7 @@ static int32_t NoteBank_WavetableSample(uint32_t *phase_io, uint32_t inc)
 
 static int32_t NoteBank_InterpAttack(uint16_t wid, uint64_t phase)
 {
-  const int16_t *tab = AttackBank_Table(wid);
+  const int8_t *tab = AttackBank_Table(wid);
   uint32_t len = AttackBank_GetLen(wid);
   uint32_t phase_q16;
   uint32_t i0;
@@ -233,8 +233,8 @@ static int32_t NoteBank_InterpAttack(uint16_t wid, uint64_t phase)
   }
   i1 = (i0 + 1u < len) ? i0 + 1u : i0;
   frac = phase_q16 & 0xFFFFu;
-  s0 = ((int32_t)tab[i0]) << 16;
-  s1 = ((int32_t)tab[i1]) << 16;
+  s0 = (int32_t)tab[i0] * 16777216;
+  s1 = (int32_t)tab[i1] * 16777216;
   return (int32_t)((int64_t)s0 +
                    (((int64_t)s1 - (int64_t)s0) * frac >> 16));
 }
@@ -242,7 +242,7 @@ static int32_t NoteBank_InterpAttack(uint16_t wid, uint64_t phase)
 static int NoteBank_InterpAttackBody(uint8_t note, uint16_t wid,
                                     uint64_t phase, int32_t *out)
 {
-  const int16_t *attack = AttackBank_Table(wid);
+  const int8_t *attack = AttackBank_Table(wid);
   uint32_t alen = AttackBank_GetLen(wid);
   int32_t source_i0 = (int32_t)(phase >> 16);
   int32_t body_i0 = (int32_t)(note_body_frac[note] >> 16);
@@ -262,18 +262,18 @@ static int NoteBank_InterpAttackBody(uint8_t note, uint16_t wid,
     }
     if ((uint32_t)source < alen)
     {
-      taps[t] = ((int32_t)attack[source]) << 16;
+      taps[t] = (int32_t)attack[source] * 16777216;
     }
     else
     {
       int32_t offset = body_i0 + source - source_i0;
-      int16_t sample;
+      int8_t sample;
       if (offset < 0 ||
           StreamRing_GetRel(note, (uint32_t)offset, &sample) != 0)
       {
         return -1;
       }
-      taps[t] = (int32_t)sample * 65536;
+      taps[t] = (int32_t)sample * 16777216;
     }
   }
   *out = (int32_t)((int64_t)taps[0] +
@@ -302,8 +302,8 @@ static int NoteBank_InterpBody(uint8_t note, int32_t *out)
   uint32_t phase = note_body_frac[note];
   uint32_t i0 = phase >> 16;
   uint32_t filled = StreamRing_FillLevel(note);
-  int16_t s0;
-  int16_t s1;
+  int8_t s0;
+  int8_t s1;
 
   if (out == NULL || filled == 0u || i0 >= filled)
   {
@@ -322,8 +322,8 @@ static int NoteBank_InterpBody(uint8_t note, int32_t *out)
     StreamRing_ObserveFill(note);
     return -1;
   }
-  *out = (int32_t)((((int64_t)s0) << 16) +
-                   ((int64_t)(s1 - s0) * (phase & 0xFFFFu)));
+  *out = (int32_t)((int64_t)s0 * 16777216 +
+                   (int64_t)(s1 - s0) * (phase & 0xFFFFu) * 256);
   return 0;
 }
 

@@ -38,7 +38,7 @@ typedef struct
   uint16_t current_wave_id;
   volatile uint16_t pending_wave_id;
   uint32_t generation;
-  int16_t data[STREAM_RING_STORAGE_SAMPLES];
+  int8_t data[STREAM_RING_STORAGE_SAMPLES];
 } StreamRing_t;
 
 #if defined(__APPLE__)
@@ -56,7 +56,7 @@ static StreamRing_t s_rings_d2[2]
     STREAM_RING_SECTION(".ring_d2");
 static StreamRing_t s_rings_d3[1]
     STREAM_RING_SECTION(".ring_d3");
-static int16_t s_ring_tail[SAMPLE_VOICES][STREAM_RING_TAIL_STORAGE_SAMPLES]
+static int8_t s_ring_tail[SAMPLE_VOICES][STREAM_RING_TAIL_STORAGE_SAMPLES]
     STREAM_RING_SECTION(".ring_itcm");
 
 static StreamRing_t *StreamRing_At(uint8_t voice)
@@ -83,8 +83,8 @@ static volatile uint16_t s_last_uac_sequence;
 /* 0xFFFFFFFF = no consume sample since last clear. */
 static volatile uint32_t s_min_fill = 0xFFFFFFFFu;
 
-static int16_t *StreamRing_DataAt(StreamRing_t *r, uint8_t voice,
-                                  uint32_t index);
+static int8_t *StreamRing_DataAt(StreamRing_t *r, uint8_t voice,
+                                 uint32_t index);
 
 static uint32_t StreamRing_CurrentFilled(const StreamRing_t *r)
 {
@@ -216,8 +216,8 @@ void StreamRing_ResetAll(void)
   }
 }
 
-static int16_t *StreamRing_DataAt(StreamRing_t *r, uint8_t voice,
-                                  uint32_t index)
+static int8_t *StreamRing_DataAt(StreamRing_t *r, uint8_t voice,
+                                 uint32_t index)
 {
   if (index < STREAM_RING_BASE_SAMPLES)
   {
@@ -337,8 +337,8 @@ uint8_t StreamRing_WriteIsCurrent(const StreamRing_Write_t *write)
              : 0u;
 }
 
-int16_t *StreamRing_WriteSpan(StreamRing_Write_t *write,
-                              uint32_t *nsamp_out)
+int8_t *StreamRing_WriteSpan(StreamRing_Write_t *write,
+                             uint32_t *nsamp_out)
 {
   StreamRing_t *r;
   uint32_t idx;
@@ -428,7 +428,7 @@ void StreamRing_WriteAbort(StreamRing_Write_t *write)
 }
 
 uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
-                               uint16_t wave_id, const int16_t *samples,
+                               uint16_t wave_id, const int8_t *samples,
                                uint32_t nsamp)
 {
   StreamRing_Write_t write;
@@ -446,13 +446,13 @@ uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
   while (copied < nsamp)
   {
     uint32_t span_n = 0u;
-    int16_t *span = StreamRing_WriteSpan(&write, &span_n);
+    int8_t *span = StreamRing_WriteSpan(&write, &span_n);
     if (span == NULL || span_n == 0u)
     {
       StreamRing_WriteAbort(&write);
       return 0u;
     }
-    memcpy(span, samples + copied, span_n * sizeof(int16_t));
+    memcpy(span, samples + copied, span_n * sizeof(int8_t));
     if (StreamRing_WriteAdvance(&write, span_n) != 0)
     {
       StreamRing_WriteAbort(&write);
@@ -463,9 +463,9 @@ uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
   return StreamRing_WriteCommit(&write);
 }
 
-uint32_t StreamRing_WriteUac(const int16_t *packet)
+uint32_t StreamRing_WriteUac(const int8_t *packet)
 {
-  uint16_t tag;
+  uint8_t tag;
   uint8_t voice;
   uint8_t session;
   uint8_t sof;
@@ -476,7 +476,7 @@ uint32_t StreamRing_WriteUac(const int16_t *packet)
   {
     return 0u;
   }
-  tag = (uint16_t)packet[0];
+  tag = (uint8_t)packet[0];
   if (tag == USB_STREAM_TAG_IDLE ||
       (tag & USB_STREAM_TAG_MASK) != USB_STREAM_TAG_BASE)
   {
@@ -487,20 +487,21 @@ uint32_t StreamRing_WriteUac(const int16_t *packet)
   {
     return 0u;
   }
-  sequence = (uint16_t)packet[1];
+  session = (uint8_t)packet[1];
+  sequence = (uint16_t)(uint8_t)packet[2] |
+             (uint16_t)((uint16_t)(uint8_t)packet[3] << 8u);
   /* vq snapshots this after every well-routed frame, whether its BODY was
    * accepted or rejected. The accompanying free count therefore describes
    * all frames through this sequence exactly. */
   s_last_uac_sequence = sequence;
-  session = (uint8_t)((tag >> USB_STREAM_TAG_SESSION_SHIFT) &
-                      USB_STREAM_TAG_SESSION_MASK);
   sof = (tag & USB_STREAM_TAG_SOF) != 0u ? 1u : 0u;
   r = StreamRing_At(voice);
   wave_id = (r->pending_armed != 0u &&
              (sof != 0u || session == r->pending_session))
                 ? r->pending_wave_id
                 : r->current_wave_id;
-  return StreamRing_WriteVoice(voice, session, sof, wave_id, packet + 2,
+  return StreamRing_WriteVoice(voice, session, sof, wave_id,
+                               packet + USB_STREAM_UAC_HEADER_BYTES,
                                USB_STREAM_UAC_BODY_SAMPLES) ==
                  USB_STREAM_UAC_BODY_SAMPLES
              ? 1u
@@ -512,7 +513,7 @@ uint16_t StreamRing_LastUacSequence(void)
   return s_last_uac_sequence;
 }
 
-int StreamRing_GetRel(uint8_t voice, uint32_t offset, int16_t *out)
+int StreamRing_GetRel(uint8_t voice, uint32_t offset, int8_t *out)
 {
   StreamRing_t *r;
   uint32_t rd;

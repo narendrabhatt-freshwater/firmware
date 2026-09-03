@@ -205,7 +205,7 @@ if (loaded) {
 }
 ```
 
-Combined raw input is signed 16-bit little-endian. Set
+Combined raw input is signed 8-bit. Set
 `raw_sample_rate_hz` when it is not 48 kHz.
 
 Already separated assets can be loaded instead:
@@ -213,20 +213,20 @@ Already separated assets can be loaded instead:
 ```cpp
 cmi::SampleDefinition piano;
 piano.id = 60;
-piano.attack_file = "samples/w60_piano_head.i32";
-piano.body_file = "samples/w60_piano_body.i16";
+piano.attack_file = "samples/w60_piano_head.i8";
+piano.body_file = "samples/w60_piano_body.i8";
 piano.root_hz = 261.625565;
 
 const cmi::Result loaded = core.loadSample(piano);
 ```
 
-An attack may be signed 16-bit or signed 32-bit little-endian. A separate BODY
-is signed 16-bit little-endian at 48 kHz. `loadSample()` validates the files,
+An attack and separate BODY are signed 8-bit PCM; BODY is at 48 kHz.
+`loadSample()` validates the files,
 uploads the attack, configures root pitch, and commits the BODY in the required
 order. A failed load never marks the sample available for playback.
 
 `loadSampleBank()` accepts explicit sample definitions. `loadSampleFolder()` accepts
-the existing `wN_*_head.i16` or `.i32`, `wN_*_body.i16`, and optional
+the `wN_*_head.i8`, `wN_*_body.i8`, and optional
 `roots.txt` layout.
 
 Eight raw recordings can be loaded as one validated bank:

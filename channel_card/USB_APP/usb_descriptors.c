@@ -1,8 +1,8 @@
 /* USB descriptors — Channel Card composite
- *   ITF0/1: synchronous UAC2 output (10ch int16, 51 kHz)
+ *   ITF0/1: synchronous UAC2 output (21ch int8, 48 kHz)
  *   ITF2/3: CDC-ACM console
  *
- * PID 0x4030 identifies the hardware-unique serial descriptor revision.
+ * PID 0x4031 identifies the signed-8-bit descriptor revision.
  */
 #include "stm32h7xx_hal.h"
 #include "tusb.h"
@@ -11,7 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define TUD_AUDIO_SPEAKER_10CH_SYNC_DESC_LEN                               \
+#define TUD_AUDIO_SPEAKER_MULTICH_SYNC_DESC_LEN                            \
   (TUD_AUDIO_SPEAKER_MONO_FB_DESC_LEN -                                   \
    (TUD_AUDIO_DESC_FEATURE_UNIT_ONE_CHANNEL_LEN) -                         \
    TUD_AUDIO_DESC_STD_AS_ISO_FB_EP_LEN)
@@ -26,7 +26,7 @@ tusb_desc_device_t const desc_device = {
     .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
     .idVendor = USB_STREAM_VID,
     .idProduct = USB_STREAM_PID,
-    .bcdDevice = 0x0100,
+    .bcdDevice = 0x0200,
     .iManufacturer = 0x01,
     .iProduct = 0x02,
     .iSerialNumber = 0x03,
@@ -47,7 +47,7 @@ enum {
 };
 
 #define CONFIG_TOTAL_LEN                                                   \
-  (TUD_CONFIG_DESC_LEN + TUD_AUDIO_SPEAKER_10CH_SYNC_DESC_LEN +            \
+  (TUD_CONFIG_DESC_LEN + TUD_AUDIO_SPEAKER_MULTICH_SYNC_DESC_LEN +         \
    TUD_CDC_DESC_LEN)
 #define EPNUM_AUDIO_OUT 0x01
 #define EPNUM_CDC_NOTIF 0x82
@@ -67,14 +67,14 @@ uint8_t const desc_configuration[] = {
                            (AUDIO_CTRL_R << AUDIO_CLOCK_SOURCE_CTRL_CLK_FRQ_POS),
                            0x01, 0x00),
     TUD_AUDIO_DESC_INPUT_TERM(0x01, AUDIO_TERM_TYPE_USB_STREAMING, 0x00, 0x04,
-                              0x0A, AUDIO_CHANNEL_CONFIG_NON_PREDEFINED, 0x00,
+                              0x15, AUDIO_CHANNEL_CONFIG_NON_PREDEFINED, 0x00,
                               0, 0x00),
     TUD_AUDIO_DESC_OUTPUT_TERM(0x03, AUDIO_TERM_TYPE_OUT_DESKTOP_SPEAKER, 0x01,
                                0x01, 0x04, 0x0000, 0x00),
     TUD_AUDIO_DESC_STD_AS_INT((uint8_t)(_SPK_ITF + 1), 0x00, 0x00, 0x00),
     TUD_AUDIO_DESC_STD_AS_INT((uint8_t)(_SPK_ITF + 1), 0x01, 0x01, 0x00),
     TUD_AUDIO_DESC_CS_AS_INT(0x01, AUDIO_CTRL_NONE, AUDIO_FORMAT_TYPE_I,
-                             AUDIO_DATA_FORMAT_TYPE_I_PCM, 0x0A,
+                             AUDIO_DATA_FORMAT_TYPE_I_PCM, 0x15,
                              AUDIO_CHANNEL_CONFIG_NON_PREDEFINED, 0x00),
     TUD_AUDIO_DESC_TYPE_I_FORMAT(CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX,
                                  CFG_TUD_AUDIO_FUNC_1_RESOLUTION_RX),
@@ -93,14 +93,14 @@ uint8_t const desc_configuration[] = {
 
 TU_VERIFY_STATIC(sizeof(desc_configuration) == CONFIG_TOTAL_LEN,
                  "CONFIG_TOTAL_LEN mismatch");
-TU_VERIFY_STATIC(TUD_AUDIO_SPEAKER_10CH_SYNC_DESC_LEN ==
+TU_VERIFY_STATIC(TUD_AUDIO_SPEAKER_MULTICH_SYNC_DESC_LEN ==
                      CFG_TUD_AUDIO_FUNC_1_DESC_LEN,
                  "audio desc mismatch");
 TU_VERIFY_STATIC(USB_STREAM_UAC_PACKET_BYTES ==
                      CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX *
                          CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX *
                          USB_STREAM_UAC_FRAMES_PER_MS,
-                 "nominal UAC packet must be 1020 bytes");
+                 "nominal UAC packet must be 1008 bytes");
 TU_VERIFY_STATIC(CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX >=
                      USB_STREAM_UAC_PACKET_BYTES,
                  "UAC endpoint must hold the nominal packet");

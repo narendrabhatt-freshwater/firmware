@@ -1,12 +1,12 @@
 /**
  * @file sample_dry.hpp
- * @brief Host body feeder: unpitched int16 → direct UAC2 BODY frames.
+ * @brief Host body feeder: unpitched int8 → direct UAC2 BODY frames.
  *
  * Card owns pitch / env / filter. The host binds one session to nX and waits
  * for matching ABI1 `vq` authority before emitting BODY. SOF repeats until a
  * later status confirms that session and its first complete BODY frame.
  * Thereafter each status grants exact runtime-capacity credit.
- * Every 1 ms UAC packet carries routing/sequence metadata and 508 raw samples.
+ * Every 1 ms UAC packet carries routing/sequence metadata and 1004 raw samples.
  * Packets are assigned by source consumption rate so a fast voice cannot
  * consume another voice's share before the next status.
  *
@@ -51,9 +51,9 @@ public:
 
   bool LoadBodyFile(uint16_t wave_id, const std::string &path, std::string &err);
 
-  /** Replace body samples (48 kHz int16, from head_len − overlap).
+  /** Replace body samples (48 kHz int8, from head_len − overlap).
    *  Rejected while a voice is playing this id (the BODY thread reads the table). */
-  bool SetBody(uint16_t wave_id, const int16_t *data, size_t nsamp,
+  bool SetBody(uint16_t wave_id, const int8_t *data, size_t nsamp,
                std::string &err);
 
   bool HasBody(uint16_t wave_id) const;
@@ -136,12 +136,12 @@ public:
   unsigned SourceDemandSamples(double interval_ms) const;
 
   /** Copy up to max_n body samples. Sets sof/session. */
-  unsigned FillBurst(uint8_t voice, int16_t *dst, unsigned max_n, bool &sof,
+  unsigned FillBurst(uint8_t voice, int8_t *dst, unsigned max_n, bool &sof,
                      uint8_t &session);
 
   /** Fill one direct UAC packet. Urgent packets repeat SOF until vq confirms
    * that the card accepted BODY for the session. */
-  unsigned FillUacFrame(uint8_t voice, int16_t *dst, unsigned max_n,
+  unsigned FillUacFrame(uint8_t voice, int8_t *dst, unsigned max_n,
                         bool &sof, uint8_t &session);
 
   /** Record one routed UAC frame and return its wrapping wire sequence.
@@ -207,7 +207,7 @@ private:
   bool Post(const Cmd &c);
   void DrainCmds();
   void ApplyCmd(const Cmd &c);
-  int16_t NextBody(Voice &v);
+  int8_t NextBody(Voice &v);
   double IncOf(const Voice &v) const;
   static double Fade0Of(unsigned attack_len);
   static bool BodyDraining(const Voice &v);
@@ -246,7 +246,7 @@ private:
   std::atomic<uint32_t> note_epoch_{0u};
   std::atomic<unsigned> urgent_ready_{0u};
 
-  std::array<std::vector<int16_t>, 256> bodies_{};
+  std::array<std::vector<int8_t>, 256> bodies_{};
   std::array<std::atomic<double>, 256> root_hz_{};
   std::array<std::atomic<bool>, 256> oneshot_{};
   std::array<std::atomic<unsigned>, 256> attack_len_{};

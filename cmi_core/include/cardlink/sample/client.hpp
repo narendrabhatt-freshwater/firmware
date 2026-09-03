@@ -72,7 +72,7 @@ public:
                 uint32_t raw_rate_hz, std::string &err);
   bool LoadHead(uint16_t wave_id, const std::string &path, std::string &err);
   bool LoadBody(uint16_t wave_id, const std::string &path, std::string &err);
-  /** wN_*_head.i32/.i16 + wN_*_body.i16, or matching stems. Optional roots.txt. */
+  /** wN_*_head.i8 + wN_*_body.i8, or matching stems. Optional roots.txt. */
   int LoadFolder(const std::string &dir, std::string &err);
 
   bool SetRootHz(uint16_t wave_id, double hz, std::string &err);
@@ -90,7 +90,7 @@ public:
   const Slot &GetSlot(uint8_t voice) const;
 
 private:
-  bool UploadAttack(uint16_t wave_id, const int16_t *q15, size_t nsamp,
+  bool UploadAttack(uint16_t wave_id, const int8_t *pcm, size_t nsamp,
                     std::string &err);
   bool UploadAttackFile(uint16_t wave_id, const std::string &path,
                         std::string &err);

@@ -44,7 +44,7 @@ void PrintUsage(const char *program)
       << "  --voice N          Hardware voice 0..7 (default 0)\n"
       << "  --key N            MIDI key 0..127 (default 60)\n"
       << "  --duration-ms N    Playback time 1..600000 (default 2000)\n"
-      << "  --sample FILE      Combined WAV or signed 16-bit raw file (required)\n"
+      << "  --sample FILE      Combined WAV or signed 8-bit raw file (required)\n"
       << "  --sample-id N      Sample ID 0..255 (default 60)\n"
       << "  --root-hz HZ       Sample root frequency (default 261.625565)\n"
       << "  --raw-rate HZ      Raw-file sample rate (default 48000)\n"

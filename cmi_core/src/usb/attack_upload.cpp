@@ -2,6 +2,7 @@
 #include "cardlink/audio/sample_dry.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -81,7 +82,7 @@ AttackUploadResult Fail(const std::string &msg)
   return r;
 }
 
-constexpr size_t kAttackBytes = cardlink::audio::kAttackSamples * 2u;
+constexpr size_t kAttackBytes = cardlink::audio::kAttackSamples;
 
 } // namespace
 
@@ -102,9 +103,8 @@ AttackUploadResult AttackUploader::Upload(
   if (wave_id >= cardlink::audio::kAttackWaves) {
     return Fail("err: wave_id 0..255");
   }
-  if (data == nullptr || nbytes < 2u || nbytes > kAttackBytes ||
-      (nbytes & 1u) != 0u) {
-    return Fail("err: attack head must be 1..kAttackSamples int16 LE");
+  if (data == nullptr || nbytes == 0u || nbytes > kAttackBytes) {
+    return Fail("err: attack head must be 1..kAttackSamples signed int8");
   }
 
   DrainRx(port_);
@@ -170,30 +170,19 @@ AttackUploadResult AttackUploader::UploadFile(
     const std::string &file_path,
     const std::function<void(float)> &on_progress)
 {
+  if (file_path.size() < 3u || file_path[file_path.size() - 3u] != '.' ||
+      std::tolower(static_cast<unsigned char>(file_path[file_path.size() - 2u])) != 'i' ||
+      file_path.back() != '8') {
+    return Fail("err: split attack must be signed .i8");
+  }
   std::ifstream in(file_path, std::ios::binary);
   if (!in) {
     return Fail("err: cannot open " + file_path);
   }
   std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)),
                             std::istreambuf_iterator<char>());
-  if (data.empty() || (data.size() & 1u) != 0u) {
-    return Fail("err: head must be even int16 or int32 LE");
-  }
-  const bool i32 = (data.size() & 3u) == 0u &&
-                   (data.size() > kAttackBytes ||
-                    file_path.find(".i32") != std::string::npos);
-  if (i32) {
-    const size_t nsamp = std::min(data.size() / 4u,
-                                  static_cast<size_t>(kAttackBytes / 2u));
-    std::vector<uint8_t> i16(nsamp * 2u);
-    for (size_t i = 0; i < nsamp; ++i) {
-      int32_t q = 0;
-      std::memcpy(&q, data.data() + i * 4u, 4);
-      const int16_t s = static_cast<int16_t>(q >> 16);
-      i16[i * 2u] = static_cast<uint8_t>(s & 0xff);
-      i16[i * 2u + 1u] = static_cast<uint8_t>((s >> 8) & 0xff);
-    }
-    return Upload(wave_id, i16.data(), i16.size(), on_progress);
+  if (data.empty()) {
+    return Fail("err: empty signed int8 head");
   }
   if (data.size() > kAttackBytes) {
     return Fail("err: head longer than kAttackSamples");

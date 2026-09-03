@@ -580,7 +580,7 @@ void DrawSamplePage(App &app)
 
     ImGui::SameLine(0.f, S(10.f));
     ImGui::SetCursorPosY(mid_y + S(5.f));
-    MonoText(stream_on ? "51 kHz UAC · 48 kHz BODY"
+    MonoText(stream_on ? "21ch 48 kHz UAC · 48 kHz BODY"
                        : "starts automatically with the first card note",
              kPalette.muted, fs);
   }

@@ -7,7 +7,7 @@
  * the write (never unread samples). An empty FIFO is an underrun.
  *
  * Every 1 ms UAC packet carries a route/session tag, transport sequence, and
- * 508 int16 samples.
+ * 1004 signed-int8 samples.
  * Note-on arms the replacement origin; only its matching session may start
  * the body. Repeated SOF tags for that session append normally.
  ******************************************************************************
@@ -26,7 +26,7 @@ extern "C"
 #include "attack_bank.h" /* SAMPLE_VOICES, SAMPLE_CROSSFADE_LEN */
 
 /** Three physical banks form one FIFO split into current/pending spans. */
-#define STREAM_BANK_LEN 4080u
+#define STREAM_BANK_LEN 1360u
 #define STREAM_BASE_BANKS 2u
 #define STREAM_TAIL_BANKS 1u
 #define STREAM_BANKS (STREAM_BASE_BANKS + STREAM_TAIL_BANKS)
@@ -83,11 +83,11 @@ extern "C"
    * @return nsamp accepted, or 0 if the whole burst would overflow / bad args.
    */
   uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
-                                 uint16_t wave_id, const int16_t *samples,
+                                 uint16_t wave_id, const int8_t *samples,
                                  uint32_t nsamp);
 
   /** Route one direct tagged 1 ms UAC packet into its voice ring. */
-  uint32_t StreamRing_WriteUac(const int16_t *packet);
+  uint32_t StreamRing_WriteUac(const int8_t *packet);
 
   /** Last routed UAC sequence processed, including rejected routed frames. */
   uint16_t StreamRing_LastUacSequence(void);
@@ -105,8 +105,8 @@ extern "C"
   uint8_t StreamRing_WriteIsCurrent(const StreamRing_Write_t *write);
 
   /** Contiguous writable portion of a reservation, bounded by bank/wrap. */
-  int16_t *StreamRing_WriteSpan(StreamRing_Write_t *write,
-                                uint32_t *nsamp_out);
+  int8_t *StreamRing_WriteSpan(StreamRing_Write_t *write,
+                               uint32_t *nsamp_out);
 
   /** Record samples placed in the current writable span. */
   int StreamRing_WriteAdvance(StreamRing_Write_t *write, uint32_t nsamp);
@@ -122,7 +122,7 @@ extern "C"
    * @retval 0 ok, *out set
    * @retval -1 offset past wr (underrun / not yet written)
    */
-  int StreamRing_GetRel(uint8_t voice, uint32_t offset, int16_t *out);
+  int StreamRing_GetRel(uint8_t voice, uint32_t offset, int8_t *out);
 
   /** Drop up to n unread samples from rd (playhead consumed them). */
   void StreamRing_Advance(uint8_t voice, uint32_t n);

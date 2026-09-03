@@ -211,7 +211,7 @@ SECTIONS
     . = ALIGN(32);
   } >RAM_D3
 
-  /* Third 4080-sample segment for all eight BODY rings. Keep address zero
+  /* Third 1360-sample segment for all eight BODY rings. Keep address zero
      unused so no C object has the null-pointer representation. */
   .ring_itcm (NOLOAD) :
   {
@@ -288,7 +288,7 @@ SECTIONS
     . = ALIGN(4);
   } >RAM_D1
 
-  /* Attack heads (256 × 512 int16) in AXI — not DTCM. */
+  /* Attack heads (256 × 512 int8) in AXI — not DTCM. */
   .attack_bank (NOLOAD) : ALIGN(4)
   {
     *(.attack_bank)

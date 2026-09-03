@@ -22,8 +22,8 @@ static uint32_t s_rx_msg;
 static uint32_t s_rx_bytes;
 static uint32_t s_uac_windows;
 static uint8_t s_uac_packet[USB_STREAM_UAC_PACKET_BYTES]
-    __attribute__((aligned(2)));
-static int16_t s_uac_logical[USB_STREAM_UAC_PACKET_WORDS];
+    __attribute__((aligned(4)));
+static int8_t s_uac_logical[USB_STREAM_UAC_PACKET_BYTES];
 static uint16_t s_uac_logical_got;
 static uint8_t s_uac_synced;
 #define USB_PACKET_LENGTH_QUEUE 16u
@@ -39,17 +39,17 @@ static void USB_App_ResetUacAlignment(void)
   s_uac_synced = 0u;
 }
 
-static void USB_App_ConsumeUacWords(const int16_t *words, uint16_t nwords)
+static void USB_App_ConsumeUacBytes(const int8_t *bytes, uint16_t nbytes)
 {
   uint16_t at = 0u;
   if (s_uac_synced == 0u)
   {
     /* CoreAudio begins on an audio-frame boundary, but not necessarily on
      * the endpoint's millisecond boundary. Find the existing tag once; from
-     * there the 510-word period is exact and no further scanning is needed. */
-    for (at = 0u; at < nwords; at = (uint16_t)(at + USB_STREAM_UAC_CHANNELS))
+     * there the 1008-byte period is exact and no further scanning is needed. */
+    for (at = 0u; at < nbytes; at = (uint16_t)(at + USB_STREAM_UAC_CHANNELS))
     {
-      const uint16_t tag = (uint16_t)words[at];
+      const uint8_t tag = (uint8_t)bytes[at];
       if (tag == USB_STREAM_TAG_IDLE ||
           (tag & USB_STREAM_TAG_MASK) == USB_STREAM_TAG_BASE)
       {
@@ -60,17 +60,16 @@ static void USB_App_ConsumeUacWords(const int16_t *words, uint16_t nwords)
     if (s_uac_synced == 0u)
       return;
   }
-  while (at < nwords)
+  while (at < nbytes)
   {
-    uint16_t copy_n = (uint16_t)(USB_STREAM_UAC_PACKET_WORDS -
+    uint16_t copy_n = (uint16_t)(USB_STREAM_UAC_PACKET_BYTES -
                                  s_uac_logical_got);
-    if (copy_n > (uint16_t)(nwords - at))
-      copy_n = (uint16_t)(nwords - at);
-    memcpy(s_uac_logical + s_uac_logical_got, words + at,
-           copy_n * sizeof(int16_t));
+    if (copy_n > (uint16_t)(nbytes - at))
+      copy_n = (uint16_t)(nbytes - at);
+    memcpy(s_uac_logical + s_uac_logical_got, bytes + at, copy_n);
     s_uac_logical_got = (uint16_t)(s_uac_logical_got + copy_n);
     at = (uint16_t)(at + copy_n);
-    if (s_uac_logical_got == USB_STREAM_UAC_PACKET_WORDS)
+    if (s_uac_logical_got == USB_STREAM_UAC_PACKET_BYTES)
     {
       s_rx_msg += StreamRing_WriteUac(s_uac_logical);
       s_uac_windows++;
@@ -220,9 +219,9 @@ static void USB_App_DrainUac(void)
         Error_Handler();
       }
       s_rx_bytes += n;
-      USB_App_ConsumeUacWords(
-          (const int16_t *)(const void *)s_uac_packet,
-          USB_STREAM_UAC_PACKET_WORDS);
+      USB_App_ConsumeUacBytes(
+          (const int8_t *)(const void *)s_uac_packet,
+          USB_STREAM_UAC_PACKET_BYTES);
     }
     else
     {

@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    attack_upload.h
- * @brief   CDC binary load of one attack head (up to ATTACK_BANK_BYTES).
+ * @brief   CDC binary load of one signed-int8 attack head.
  ******************************************************************************
  */
 

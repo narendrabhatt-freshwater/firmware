@@ -1,4 +1,4 @@
-/* Direct tagged BODY samples over the class-compliant 10ch UAC2 output. */
+/* Direct tagged BODY samples over the class-compliant 21ch UAC2 output. */
 #include "cardlink/audio/sample_bulk.hpp"
 
 #include "cardlink/usb/stream_proto.hpp"
@@ -12,14 +12,12 @@
 namespace cardlink::audio {
 namespace {
 
-int16_t EncodeTag(uint8_t voice, uint8_t session, bool sof)
+int8_t EncodeTag(uint8_t voice, bool sof)
 {
-  const uint16_t tag = cardlink::usb::kStreamTagBase |
-      (static_cast<uint16_t>(session) <<
-       cardlink::usb::kStreamTagSessionShift) |
+  const uint8_t tag = cardlink::usb::kStreamTagBase |
       (sof ? cardlink::usb::kStreamTagSof : 0u) |
-      (static_cast<uint16_t>(voice) & cardlink::usb::kStreamTagVoiceMask);
-  return static_cast<int16_t>(tag);
+      (voice & cardlink::usb::kStreamTagVoiceMask);
+  return static_cast<int8_t>(tag);
 }
 
 bool NameMatches(const std::string &name, const std::string &requested)
@@ -43,8 +41,8 @@ struct SampleBulkOut::Impl {
   std::atomic<double> urgent_demand{0.0};
   std::atomic<double> urgent_attack_ms{0.0};
   std::atomic<double> urgent_quantum_ms{0.0};
-  std::array<int16_t, cardlink::usb::kStreamUacPacketWords> packet{};
-  unsigned packet_words_used = cardlink::usb::kStreamUacPacketWords;
+  std::array<int8_t, cardlink::usb::kStreamUacPacketBytes> packet{};
+  unsigned packet_bytes_used = cardlink::usb::kStreamUacPacketBytes;
 };
 
 SampleBulkOut::SampleBulkOut() : impl_(std::make_unique<Impl>()) {}
@@ -80,7 +78,7 @@ bool SampleBulkOut::Start(const std::string &device_name, std::string &err)
     }
   }
   if (!found) {
-    err = "no 10-channel Channel Card UAC output";
+    err = "no 21-channel Channel Card UAC output";
     if (!seen.empty()) {
       err += " (seen: " + seen + ")";
     }
@@ -90,7 +88,7 @@ bool SampleBulkOut::Start(const std::string &device_name, std::string &err)
   impl_->xruns.store(0u, std::memory_order_relaxed);
   impl_->render_frames.store(0u, std::memory_order_relaxed);
   mixer_->DrainPendingCommands();
-  impl_->packet_words_used = cardlink::usb::kStreamUacPacketWords;
+  impl_->packet_bytes_used = cardlink::usb::kStreamUacPacketBytes;
   RtAudio::StreamParameters params;
   params.deviceId = device;
   params.nChannels = cardlink::usb::kStreamUacChannels;
@@ -100,12 +98,12 @@ bool SampleBulkOut::Start(const std::string &device_name, std::string &err)
    * callback plus command acknowledgement can expose the boundary. */
   unsigned buffer_frames = cardlink::usb::kStreamUacFramesPerMs;
   RtAudioErrorType rc = impl_->dac.openStream(
-      &params, nullptr, RTAUDIO_SINT16, cardlink::usb::kStreamUacRateHz,
+      &params, nullptr, RTAUDIO_SINT8, cardlink::usb::kStreamUacRateHz,
       &buffer_frames,
       [](void *output, void *, unsigned nframes, double,
          RtAudioStreamStatus status, void *user) -> int {
         auto *self = static_cast<SampleBulkOut *>(user);
-        auto *dst = static_cast<int16_t *>(output);
+        auto *dst = static_cast<int8_t *>(output);
         if (self == nullptr || dst == nullptr) {
           return 0;
         }
@@ -120,15 +118,15 @@ bool SampleBulkOut::Start(const std::string &device_name, std::string &err)
             static_cast<double>(kSampleRateHz) /
             static_cast<double>(cardlink::usb::kStreamUacRateHz));
 
-        const unsigned output_words =
+        const unsigned output_bytes =
             nframes * cardlink::usb::kStreamUacChannels;
         unsigned written = 0u;
-        while (written < output_words) {
-          if (state.packet_words_used ==
-              cardlink::usb::kStreamUacPacketWords) {
+        while (written < output_bytes) {
+          if (state.packet_bytes_used ==
+              cardlink::usb::kStreamUacPacketBytes) {
             auto &packet = state.packet;
             std::fill(packet.begin(), packet.end(), 0);
-            packet[0] = static_cast<int16_t>(cardlink::usb::kStreamTagIdle);
+            packet[0] = static_cast<int8_t>(cardlink::usb::kStreamTagIdle);
             const uint8_t voice = mixer.HungriestUacWant(
                 cardlink::usb::kStreamUacBodySamples);
             if (voice < kSampleVoices) {
@@ -136,13 +134,15 @@ bool SampleBulkOut::Start(const std::string &device_name, std::string &err)
               uint8_t session = 0u;
               const uint16_t wave_id = mixer.LiveWave(voice);
               const unsigned got = mixer.FillUacFrame(
-                  voice, packet.data() + 2u,
+                  voice, packet.data() + cardlink::usb::kStreamUacHeaderBytes,
                   cardlink::usb::kStreamUacBodySamples, sof, session);
               if (got == cardlink::usb::kStreamUacBodySamples) {
-                packet[0] = EncodeTag(voice, session, sof);
-                packet[1] = static_cast<int16_t>(
-                    mixer.RecordUacSubmission(voice,
-                                              static_cast<uint16_t>(got)));
+                const uint16_t sequence = mixer.RecordUacSubmission(
+                    voice, static_cast<uint16_t>(got));
+                packet[0] = EncodeTag(voice, sof);
+                packet[1] = static_cast<int8_t>(session);
+                packet[2] = static_cast<int8_t>(sequence & 0xffu);
+                packet[3] = static_cast<int8_t>(sequence >> 8u);
                 mixer.CommitBurst(voice, session, wave_id, got, sof);
                 if (sof) {
                   uint8_t order[kSampleVoices]{};
@@ -168,15 +168,15 @@ bool SampleBulkOut::Start(const std::string &device_name, std::string &err)
                 mixer.AbortBurst(voice, session, wave_id, got, sof);
               }
             }
-            state.packet_words_used = 0u;
+            state.packet_bytes_used = 0u;
           }
-          const unsigned available = cardlink::usb::kStreamUacPacketWords -
-                                     state.packet_words_used;
+          const unsigned available = cardlink::usb::kStreamUacPacketBytes -
+                                     state.packet_bytes_used;
           const unsigned copy_n =
-              std::min(available, output_words - written);
-          std::copy_n(state.packet.data() + state.packet_words_used, copy_n,
+              std::min(available, output_bytes - written);
+          std::copy_n(state.packet.data() + state.packet_bytes_used, copy_n,
                       dst + written);
-          state.packet_words_used += copy_n;
+          state.packet_bytes_used += copy_n;
           written += copy_n;
         }
         return 0;

@@ -27,6 +27,15 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(note_envelope_test PRIVATE -Wall -Wextra -Werror)
 endif()
 
+add_executable(attack_bank_s8_test
+  attack_bank_s8_test.c
+  ../Core/Src/audio/attack_bank.c)
+target_include_directories(attack_bank_s8_test PRIVATE ../Core/Inc/audio)
+target_link_libraries(attack_bank_s8_test PRIVATE m)
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+  target_compile_options(attack_bank_s8_test PRIVATE -Wall -Wextra -Werror)
+endif()
+
 add_executable(note_bank_vm_test
   note_bank_vm_test.c
   ../Core/Src/audio/note_bank.c
@@ -56,6 +65,7 @@ enable_testing()
 add_test(NAME channel_card.stream_ring_handoff
   COMMAND stream_ring_handoff_test)
 add_test(NAME channel_card.note_envelope COMMAND note_envelope_test)
+add_test(NAME channel_card.attack_bank_s8 COMMAND attack_bank_s8_test)
 add_test(NAME channel_card.note_bank_vm COMMAND note_bank_vm_test
   "${CMAKE_CURRENT_BINARY_DIR}/script_runtime/channel_envelope.fwsc"
   "${CMAKE_CURRENT_BINARY_DIR}/channel.fwsc")

@@ -11,8 +11,8 @@ If this document and the firmware disagree, trust the firmware.
 ## 1. Host interfaces (both cards)
 
 One RS485 multi-drop bus (`c:` / `e:` / `*:`). USB is per-card: Channel
-is Full-Speed **UAC2 BODY OUT** (10-channel signed int16 carrier at 51 kHz,
-1020 B / 1 ms; BODY/DAC remain 48 kHz) plus CDC. Sequential
+is Full-Speed **UAC2 BODY OUT** (21-channel signed int8 carrier at 48 kHz,
+1008 B / 1 ms; BODY/DAC are 48 kHz) plus CDC. Sequential
 RS485 `vq` request/reply cycles every 5 ms provide exact refill credit and a processed-UAC acknowledgement;
 Effect is a Full-Speed **UAC2 microphone** (mono int32 @ 96 kHz) plus CDC.
 
@@ -21,7 +21,7 @@ flowchart TB
   subgraph host [Host]
     RS485[RS485 921600 8N1]
     CDC[USB CDC ACM]
-    BodyOut[UAC2 OUT 10ch int16 51 kHz carrier]
+    BodyOut[UAC2 OUT 21ch int8 48 kHz carrier]
     UacIn[UAC2 IN mono int32 96 kHz]
   end
 
@@ -43,10 +43,10 @@ flowchart TB
 
   RS485 -->|"c: nX en f vq"| ChCon
   RS485 -->|"e: u echo"| FxCon
-  CDC -->|"al nbytes int16"| ChAtk
+  CDC -->|"al nbytes int8"| ChAtk
   CDC --> ChCon
   CDC --> FxCon
-  BodyOut -->|"voice session SOF int16"| ChRing
+  BodyOut -->|"voice session SOF int8"| ChRing
   ChAtk --> ChMix
   ChRing --> ChMix
   ChCon --> ChMix
@@ -63,7 +63,7 @@ Q16.16 interpolation. `nX on <key> [velocity]` is a note-on. A new BODY session
 (`SOF` + session 0–254) starts a new body FIFO; a repeated burst with
 the same session does not.
 The host packs the hungriest wanting voices into each UAC window (fair share
-of a 5062-sample 10 ms OUT budget for eight voices). The host reserves the BODY
+of a 10040-sample 10 ms OUT budget for eight voices). The host reserves the BODY
 session, launches sequential pitch-neutral SOF BODY, then immediately queues
 RS485 `aw` and `nX on <key> <velocity> @<session>` without waiting for USB. Tagged `nX`
 binds the wave/session; the card maps/tunes the key and starts pitch/attack. An
@@ -80,15 +80,15 @@ reset or power-cycle. The producer never overwrites unread FIFO samples.
 flowchart TB
   subgraph store [Storage]
     File["48 kHz stream"]
-    Atk["Attack AXI: 256 heads x 512 int16"]
-    Body["Host body: file (len-32)..end int16"]
+    Atk["Attack AXI: 256 heads x 512 int8"]
+    Body["Host body: file (len-32)..end int8"]
     File --> Atk
     File --> Body
   end
 
   subgraph usb [USB FS]
-    Tag["BODY: hdr + voice/session/SOF + int16"]
-    Slots["12240 int16 per voice · current/pending spans · DTCM/D2/D3/ITCM SRAM"]
+    Tag["BODY: 4-byte metadata + signed int8 samples"]
+    Slots["4080 int8 per voice · current/pending spans · DTCM/D2/D3/ITCM SRAM"]
     Body --> Tag --> Slots
   end
 
@@ -125,7 +125,7 @@ flowchart TB
 RS485 `vq` returns a 56-byte ABI1 frame containing active/pending masks,
 runtime capacity, target session/fill, exact credit, and the last processed UAC
 sequence. It is the only live refill authority. Each UAC window carries one
-voice/session tag, one sequence, and 508 BODY samples. The host subtracts the
+voice/session tag, one sequence, and 1004 BODY samples. The host subtracts the
 exact sequenced frames not yet reflected by `vq`; it never guesses USB
 headroom. Playing voices are scheduled by depletion deadline. A silent voice
 is admitted only when its exact 1 ms service cost fits before that deadline.

@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    attack_upload.c
- * @brief   CDC session: al → 2..ATTACK_BANK_BYTES raw int16 LE → Commit.
+ * @brief   CDC session: al → 1..ATTACK_BANK_BYTES signed int8 → Commit.
  ******************************************************************************
  */
 
@@ -15,7 +15,7 @@ static uint8_t s_active;
 static uint16_t s_id;
 static uint32_t s_need;
 static uint32_t s_got;
-static int16_t *s_dst;
+static int8_t *s_dst;
 
 uint8_t AttackUpload_IsActive(void)
 {
@@ -32,8 +32,8 @@ void AttackUpload_Abort(void)
 
 int AttackUpload_Begin(uint16_t wave_id, uint32_t nbytes)
 {
-  if (wave_id >= ATTACK_BANK_COUNT || nbytes < 2u ||
-      nbytes > ATTACK_BANK_BYTES || (nbytes & 1u) != 0u)
+  if (wave_id >= ATTACK_BANK_COUNT || nbytes == 0u ||
+      nbytes > ATTACK_BANK_BYTES)
   {
     return -1;
   }
@@ -92,7 +92,7 @@ uint32_t AttackUpload_Feed(const uint8_t *buf, uint32_t len)
 
   if (s_got >= s_need)
   {
-    if (AttackBank_Commit(s_id, s_need / 2u) != 0)
+    if (AttackBank_Commit(s_id, s_need) != 0)
     {
       USB_CDC_WriteStr("err:range\r\n");
     }

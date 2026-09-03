@@ -17,7 +17,7 @@ struct UrgentScheduleStats {
   double quantum_ms = 0.0;
 };
 
-/** Packed BODY over the class-compliant 10ch int16 UAC2 output. */
+/** Packed BODY over the class-compliant 21ch signed-int8 UAC2 output. */
 class SampleBulkOut {
 public:
   SampleBulkOut();

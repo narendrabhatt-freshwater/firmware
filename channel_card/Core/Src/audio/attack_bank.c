@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    attack_bank.c
- * @brief   AXI int16 attack heads; rate-scaled playheads (n0 pitch).
+ * @brief   AXI signed-int8 attack heads; rate-scaled playheads (n0 pitch).
  ******************************************************************************
  */
 
@@ -22,12 +22,19 @@ typedef struct
   uint8_t playing;
 } AttackVoice_t;
 
-#if defined(CHANNEL_TEST_WAVETABLE)
-static int16_t s_data[1][1]
+#if defined(__APPLE__)
+#define ATTACK_BANK_SECTION __attribute__((used, aligned(4)))
 #else
-static int16_t s_data[ATTACK_BANK_COUNT][ATTACK_BANK_LEN]
+#define ATTACK_BANK_SECTION \
+  __attribute__((used, section(".attack_bank"), aligned(4)))
 #endif
-    __attribute__((used, section(".attack_bank"), aligned(4)));
+
+#if defined(CHANNEL_TEST_WAVETABLE)
+static int8_t s_data[1][1]
+#else
+static int8_t s_data[ATTACK_BANK_COUNT][ATTACK_BANK_LEN]
+#endif
+    ATTACK_BANK_SECTION;
 
 static uint8_t s_loaded[ATTACK_BANK_COUNT];
 static uint32_t s_len[ATTACK_BANK_COUNT];
@@ -35,9 +42,9 @@ static float s_root_hz[ATTACK_BANK_COUNT];
 static AttackVoice_t s_voices[SAMPLE_VOICES];
 
 #if !defined(CHANNEL_TEST_WAVETABLE)
-static int32_t AttackBank_S16ToQ31(int16_t s)
+static int32_t AttackBank_S8ToQ31(int8_t s)
 {
-  return ((int32_t)s) << 16;
+  return (int32_t)s * 16777216;
 }
 #endif
 
@@ -69,7 +76,7 @@ int AttackBank_Load(uint16_t wave_id, const uint8_t *data, uint32_t nbytes)
   return -1;
 #else
   if (wave_id >= ATTACK_BANK_COUNT || data == NULL ||
-      nbytes < 2u || nbytes > ATTACK_BANK_BYTES || (nbytes & 1u) != 0u)
+      nbytes == 0u || nbytes > ATTACK_BANK_BYTES)
   {
     return -1;
   }
@@ -79,13 +86,13 @@ int AttackBank_Load(uint16_t wave_id, const uint8_t *data, uint32_t nbytes)
     memset((uint8_t *)s_data[wave_id] + nbytes, 0,
            ATTACK_BANK_BYTES - nbytes);
   }
-  s_len[wave_id] = nbytes / 2u;
+  s_len[wave_id] = nbytes;
   s_loaded[wave_id] = 1u;
   return 0;
 #endif
 }
 
-int16_t *AttackBank_WritePtr(uint16_t wave_id)
+int8_t *AttackBank_WritePtr(uint16_t wave_id)
 {
 #if defined(CHANNEL_TEST_WAVETABLE)
   (void)wave_id;
@@ -99,7 +106,7 @@ int16_t *AttackBank_WritePtr(uint16_t wave_id)
 #endif
 }
 
-const int16_t *AttackBank_Table(uint16_t wave_id)
+const int8_t *AttackBank_Table(uint16_t wave_id)
 {
 #if defined(CHANNEL_TEST_WAVETABLE)
   (void)wave_id;
@@ -289,21 +296,21 @@ int32_t AttackBank_NextSample(uint8_t voice)
   {
     v->playing = 0u;
     v->phase = 0.0f;
-    return AttackBank_S16ToQ31(s_data[wid][n - 1u]);
+    return AttackBank_S8ToQ31(s_data[wid][n - 1u]);
   }
 
   i0 = (uint32_t)ph;
   if (i0 >= n)
   {
     v->playing = 0u;
-    return AttackBank_S16ToQ31(s_data[wid][n - 1u]);
+    return AttackBank_S8ToQ31(s_data[wid][n - 1u]);
   }
   i1 = i0 + 1u;
   frac = ph - (float)i0;
-  a = (double)AttackBank_S16ToQ31(s_data[wid][i0]);
+  a = (double)AttackBank_S8ToQ31(s_data[wid][i0]);
   if (i1 < n)
   {
-    b = (double)AttackBank_S16ToQ31(s_data[wid][i1]);
+    b = (double)AttackBank_S8ToQ31(s_data[wid][i1]);
     y = a + (b - a) * (double)frac;
   }
   else
@@ -334,6 +341,6 @@ int32_t AttackBank_SampleAt(uint16_t wave_id, uint32_t index)
   {
     return 0;
   }
-  return AttackBank_S16ToQ31(s_data[wave_id][index]);
+  return AttackBank_S8ToQ31(s_data[wave_id][index]);
 #endif
 }

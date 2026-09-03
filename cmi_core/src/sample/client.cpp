@@ -39,9 +39,9 @@ bool HasExtI(const std::string &path, const char *ext)
   return true;
 }
 
-bool IsWaveFile(const std::string &path)
+bool IsWavFile(const std::string &path)
 {
-  return HasExtI(path, ".wav") || HasExtI(path, ".raw");
+  return HasExtI(path, ".wav");
 }
 
 std::string Basename(const std::string &path)
@@ -92,10 +92,9 @@ bool FindNamedPair(const fs::path &dir, int id, std::string &head,
       if (!ParseWId(name, wid) || wid != id) {
         continue;
       }
-      if (name.find("_head.i32") != std::string::npos ||
-          name.find("_head.i16") != std::string::npos) {
+      if (name.find("_head.i8") != std::string::npos) {
         head = ent.path().string();
-      } else if (name.find("_body.i16") != std::string::npos) {
+      } else if (name.find("_body.i8") != std::string::npos) {
         body = ent.path().string();
       }
     }
@@ -118,9 +117,8 @@ bool FindStemPairs(const fs::path &dir,
         continue;
       }
       const auto name = ent.path().filename().string();
-      if (name.size() > 9 &&
-          (name.compare(name.size() - 9, 9, "_head.i32") == 0 ||
-           name.compare(name.size() - 9, 9, "_head.i16") == 0)) {
+      if (name.size() > 8 &&
+          name.compare(name.size() - 8, 8, "_head.i8") == 0) {
         head_files.push_back(ent.path());
       }
     }
@@ -134,8 +132,8 @@ bool FindStemPairs(const fs::path &dir,
       break;
     }
     const std::string name = hp.filename().string();
-    const std::string stem = name.substr(0, name.size() - 9);
-    const fs::path bp = hp.parent_path() / (stem + "_body.i16");
+    const std::string stem = name.substr(0, name.size() - 8);
+    const fs::path bp = hp.parent_path() / (stem + "_body.i8");
     if (!fs::exists(bp)) {
       continue;
     }
@@ -239,20 +237,19 @@ bool Client::SendCdcLine(const std::string &line, std::string &err)
   return wrote;
 }
 
-bool Client::UploadAttack(uint16_t wave_id, const int16_t *q15, size_t nsamp,
+bool Client::UploadAttack(uint16_t wave_id, const int8_t *pcm, size_t nsamp,
                           std::string &err)
 {
-  if (wave_id >= cardlink::audio::kAttackWaves || q15 == nullptr ||
+  if (wave_id >= cardlink::audio::kAttackWaves || pcm == nullptr ||
       nsamp == 0 || nsamp > cardlink::audio::kAttackSamples) {
-    err = "err: attack must be 1..512 int16 samples";
+    err = "err: attack must be 1..512 signed int8 samples";
     return false;
   }
   if (!BeginCdc(err)) {
     return false;
   }
   cardlink::usb::AttackUploader up(cdc_port_);
-  auto r = up.Upload(wave_id, reinterpret_cast<const uint8_t *>(q15),
-                     nsamp * sizeof(int16_t));
+  auto r = up.Upload(wave_id, reinterpret_cast<const uint8_t *>(pcm), nsamp);
   EndCdc();
   if (!r.ok) {
     err = r.message;
@@ -278,11 +275,7 @@ bool Client::UploadAttackFile(uint16_t wave_id, const std::string &path,
   std::error_code ec;
   const auto bytes = fs::file_size(path, ec);
   if (!ec) {
-    const bool i32 = (bytes % 4u) == 0u &&
-                     (bytes > cardlink::audio::kAttackSamples * 2u ||
-                      path.find(".i32") != std::string::npos);
-    const unsigned nsamp = i32 ? static_cast<unsigned>(bytes / 4u)
-                               : static_cast<unsigned>(bytes / 2u);
+    const unsigned nsamp = static_cast<unsigned>(bytes);
     mixer_.SetAttackLen(
         wave_id, std::min(nsamp, cardlink::audio::kAttackSamples));
   }
@@ -307,7 +300,7 @@ void Client::SetLabel(uint16_t wave_id)
     }
   }
   for (const char *suf :
-       {"_head.i32", "_head.i16", "_body.i16", ".i32", ".i16", ".wav", ".raw"}) {
+       {"_head.i8", "_body.i8", ".i8", ".wav", ".raw"}) {
     const size_t n = std::strlen(suf);
     if (base.size() > n && base.compare(base.size() - n, n, suf) == 0) {
       base.resize(base.size() - n);
@@ -382,8 +375,12 @@ bool Client::LoadHead(uint16_t wave_id, const std::string &path, std::string &er
     err = "err: wave_id 0..255";
     return false;
   }
-  if (IsWaveFile(path)) {
+  if (IsWavFile(path)) {
     return LoadWave(wave_id, path, err);
+  }
+  if (!HasExtI(path, ".i8")) {
+    err = "err: split attack must be signed .i8";
+    return false;
   }
   if (wave_id < cardlink::audio::kSampleVoices) {
     slots_[static_cast<size_t>(wave_id)].head_path = path;
@@ -411,8 +408,12 @@ bool Client::LoadBody(uint16_t wave_id, const std::string &path, std::string &er
     err = "err: wave_id 0..255";
     return false;
   }
-  if (IsWaveFile(path)) {
+  if (IsWavFile(path)) {
     return LoadWave(wave_id, path, err);
+  }
+  if (!HasExtI(path, ".i8")) {
+    err = "err: split BODY must be signed .i8";
+    return false;
   }
   std::string head_path;
   if (wave_id < cardlink::audio::kSampleVoices) {
@@ -423,7 +424,7 @@ bool Client::LoadBody(uint16_t wave_id, const std::string &path, std::string &er
     }
     head_path = slot.head_path;
   }
-  std::vector<int16_t> body;
+  std::vector<int8_t> body;
   if (!head_path.empty() &&
       cardlink::audio::BodyWithHeadOverlap(head_path, path, body, err)) {
     if (!mixer_.SetBody(wave_id, body.data(), body.size(), err)) {
@@ -435,12 +436,8 @@ bool Client::LoadBody(uint16_t wave_id, const std::string &path, std::string &er
     {
       std::error_code ec;
       const auto bytes = fs::file_size(head_path, ec);
-      if (!ec && bytes >= 2u) {
-        const bool i32 = (bytes % 4u) == 0u &&
-                         (bytes > cardlink::audio::kAttackSamples * 2u ||
-                          head_path.find(".i32") != std::string::npos);
-        const unsigned nsamp = i32 ? static_cast<unsigned>(bytes / 4u)
-                                   : static_cast<unsigned>(bytes / 2u);
+      if (!ec && bytes >= 1u) {
+        const unsigned nsamp = static_cast<unsigned>(bytes);
         mixer_.SetAttackLen(
             wave_id, std::min(nsamp, cardlink::audio::kAttackSamples));
       }
@@ -501,7 +498,7 @@ int Client::LoadFolder(const std::string &dir, std::string &err)
     std::array<std::string, cardlink::audio::kAttackWaves> heads{};
     std::array<std::string, cardlink::audio::kAttackWaves> bodies{};
     if (!FindStemPairs(root, heads, bodies)) {
-      err = "err: folder has no wN_*_head.i32/.i16 / *_body.i16 pairs";
+      err = "err: folder has no wN_*_head.i8 / *_body.i8 pairs";
       return 0;
     }
     for (unsigned i = 0; i < cardlink::audio::kAttackWaves; ++i) {

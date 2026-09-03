@@ -123,13 +123,13 @@ to integers if you care about equal temperament.
 ### Sample bank (256 AXI attack heads)
 
 Eight voices (`n0`…`n7`) assign any stored head (`aw <voice> <id>`).
-The bank holds **256** int16 heads of up to **512** samples (~10.7 ms @
+The bank holds **256** signed-int8 heads of up to **512** samples (~10.7 ms @
 48 kHz). Upload is USB CDC only (§4). Contents survive while powered
 and are lost on reset.
 
 | Command             | Meaning                                                             |
 | ------------------- | ------------------------------------------------------------------- |
-| `al <id> <nbytes>`  | **USB CDC only.** Load head `<id>` 0…255 (2…1024 bytes int16 LE)    |
+| `al <id> <nbytes>`  | **USB CDC only.** Load head `<id>` 0…255 (1…512 signed-int8 bytes)  |
 | `ar <id> <Hz>`      | Set head `<id>`'s root pitch (Hz > 0)                               |
 | `aw <v> <id>`       | Assign head `<id>` to voice `<v>` 0…7                               |
 | `a`                 | Loaded count + 256-bit hex mask (bit 0 = wave 0)                    |
@@ -277,7 +277,7 @@ Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 
 | Interface                    | Role                                                                |
 | ---------------------------- | ------------------------------------------------------------------- |
-| **UAC2 output** (ITF0/1)     | 10-channel signed 16-bit, synchronous 51 kHz carrier; every 1 ms packet carries a tag, sequence, and 508 raw 48 kHz BODY samples (1020 B). |
+| **UAC2 output** (ITF0/1)     | 21-channel signed 8-bit, synchronous 48 kHz carrier; every 1 ms packet carries four metadata bytes and 1004 raw 48 kHz BODY samples (1008 B). |
 | **CDC ACM** (serial)         | Same ASCII console as RS485, plus binary attack-head upload (`al`). |
 
 The Channel device is class-compliant UAC2 so the operating system owns the
@@ -287,37 +287,39 @@ BODY underrun increments `hold`, resets/mutes the DAC, latches the fault LEDs,
 and halts the Channel Card. A ring-capacity rejection does the same after
 incrementing `drop`. Reset or power-cycle the card after either fault.
 The UAC topology has no Feature Unit and exposes no mute or volume controls.
-Each complete 10-channel int16 frame is independently routable. The host audio
+Each complete 21-channel int8 frame is independently routable. The host audio
 callback may produce multiple milliseconds at once, but USB transmits fixed
-51-frame, 1020-byte windows every millisecond.
+48-frame, 1008-byte windows every millisecond.
 
 CDC is a separate function. `al` still uses CDC. Keep that port closed during
 BODY streaming unless console or attack-head traffic is required.
 
 Effect Card still has CDC and a UAC2 microphone (mono, 32-bit, 96 kHz).
 
-### BODY stream (UAC2 iso OUT, signed 16-bit)
+### BODY stream (UAC2 iso OUT, signed 8-bit)
 
-Little-endian. The first int16 word is a routing tag, the second is a wrapping
-transport sequence, and the remaining 508 words are raw BODY samples. `vq`
+The first byte is a routing tag, the second is the session, the next two are a
+little-endian wrapping transport sequence, and the remaining 1004 bytes are
+raw signed-int8 BODY samples. `vq`
 reports the last routed sequence processed by the card, whether accepted or
 rejected, alongside an atomic ring-credit snapshot. The host ledger subtracts
 exactly the later submitted frames; it never estimates in-flight occupancy.
 
 ```text
-UAC carrier: 51 kHz × 10 channels × int16 = 1020000 bytes/s
+UAC carrier: 48 kHz × 21 channels × int8 = 1008000 bytes/s
 BODY/DAC:    48 kHz (pitch and playback rate are unchanged)
-packet word 0      tag = 0xA000 | session[11:4] | SOF[3] | voice[2:0]
-packet word 1      wrapping uint16 transport sequence
-packet words 2..509  508 consecutive int16 LE unpitched BODY samples
-idle tag      0xAFFF (remaining words are zero)
+packet byte 0       tag = 0xA0 | SOF[3] | voice[2:0]
+packet byte 1       session
+packet bytes 2..3   wrapping uint16 LE transport sequence
+packet bytes 4..1007  1004 consecutive signed-int8 unpitched BODY samples
+idle tag      0xFF (remaining bytes are zero)
 session       0..254 (255 is reserved for idle/unarmed)
 ```
 
-VID `0xCafe`, PID `0x4030`. The host opens the 10-channel UAC output through
+VID `0xCafe`, PID `0x4031`. The host opens the 21-channel UAC output through
 RtAudio/CoreAudio; CDC stays a serial port.
 
-The direct carrier supplies 508 BODY samples/ms (508 ksample/s aggregate).
+The direct carrier supplies 1004 BODY samples/ms (1004 ksample/s aggregate).
 Workloads above that source-consumption ceiling cannot be lossless; `hold`
 records missing playback samples while control remains alive. Each fresh `vq`
 uses exact safe ring credit up to that wire ceiling.
@@ -334,7 +336,7 @@ offset  size  field
 5       1     pending voice mask
 6       1     best refill voice, or 255
 7       1     reserved
-8       2     runtime ring capacity (uint16 LE; normally 12240)
+8       2     runtime ring capacity (uint16 LE; normally 4080)
 10      2     status sequence (uint16 LE)
 12      2     last processed UAC sequence
 14      40    eight records: session u8, target fill u16 LE, total writable u16 LE
@@ -343,7 +345,7 @@ offset  size  field
 ```
 
 RS485 `vq` is the sole refill permission. The host sends only complete
-508-sample UAC frames within its reported credit. A streamed `nX` first arms a
+1004-sample UAC frames within its reported credit. A streamed `nX` first arms a
 pending generation; matching SOF data fills it, and Berry receives
 `on_note_on` only after a complete BODY frame exists. Berry then decides when
 to call `start_note()`, which atomically promotes pending. No native crash
@@ -364,8 +366,8 @@ deadline. A silent voice is admitted only when its exact one-packet (1 ms)
 service cost finishes before the earliest playing deadline.
 The controller targets one `vq` every 5 ms (200 Hz) and requests an immediate
 one after successful Channel commands; single-flight RS485 traffic can stretch
-the observed interval. The direct UAC capacity is 508 BODY samples/ms: one tag
-word, one sequence word, and 508 sample words in each 1020-byte packet.
+the observed interval. The direct UAC capacity is 1004 BODY samples/ms: four
+metadata bytes and 1004 sample bytes in each 1008-byte packet.
 If note-off or a newer generation retires a ring while a prior-session frame is in
 flight, the card acknowledges the routed sequence but rejects its stale
 session instead of publishing it into the new ring.
@@ -402,7 +404,7 @@ Constraints:
 
 | Command            | Payload                                               |
 | ------------------ | ----------------------------------------------------- |
-| `al <id> <nbytes>` | 2…1024 bytes = 1…512 × int16 LE (real length, no hold-pad) |
+| `al <id> <nbytes>` | 1…512 bytes = 1…512 × signed int8 (real length, no hold-pad) |
 
 Wave `<id>` is **0…255**. Voice assign is `aw <voice> <id>`.
 

@@ -14,7 +14,7 @@ those same files live at the repository root (`README.md`,
 | CubeMX project | `channel_MCU.ioc`                                            |
 | Linker script  | `STM32H725xG_flash.ld`                                       |
 | USB stack      | TinyUSB 0.17 (`ThirdParty/tinyusb`)                          |
-| USB device     | UAC2 BODY OUT (10ch int16) + CDC console                     |
+| USB device     | UAC2 BODY OUT (21ch int8 at 48 kHz) + CDC console             |
 | RS485 address  | `c:`                                                         |
 
 Each board exposes a stable USB serial number derived from its 96-bit STM32
@@ -150,17 +150,17 @@ Hand-written modules live under `Core/Src/<domain>/` (and matching
 | `Core/Src/filters/note_filter.c`           | Per-voice LPF wrapper (base/effective cutoff, pitch-k, q/Q31)     |
 | `Core/Src/filters/butterworth_four_pole.c` | Reusable 4-pole DF4 Butterworth kernel                            |
 | `Core/Src/drivers/cs4304.c`                | CS4304 DAC driver (I2C)                                           |
-| `USB_APP/`                                 | TinyUSB descriptors, 10ch int16 UAC2 BODY + CDC                   |
+| `USB_APP/`                                 | TinyUSB descriptors, 21ch int8 UAC2 BODY + CDC                    |
 
 ### `audio_bridge.c` — handle with care
 
 This file holds the playback path as measured on the board. Notable
 parts, all commented in-place:
 
-- **BODY stream** is class-compliant synchronous UAC2 OUT: a 10-channel
-  signed-int16 51 kHz carrier (1020 bytes/ms) for 48 kHz BODY/DAC data. PACKs
-  form one continuous CRC32-protected byte stream; exact free-space `vq`
-  permission arrives every 5 ms. A primed BODY underrun or ring-capacity drop
+- **BODY stream** is class-compliant synchronous UAC2 OUT: a 21-channel
+  signed-int8 48 kHz carrier (1008 bytes/ms) for 48 kHz BODY/DAC data. Each
+  millisecond has four routing/sequence bytes and 1004 BODY samples; exact
+  free-space `vq` permission arrives every 5 ms. A primed BODY underrun or ring-capacity drop
   fails closed: the DAC is held in reset, both fixed LEDs plus RGB red latch
   solid, and the CPU halts until reset/power-cycle. Malformed UAC transfers and
   missed I2S1 refill deadlines use the same fault path. CH1 I2S is always the
@@ -226,7 +226,7 @@ Pitch tracking uses `fc = fbase × (noteHz / 261.625565)^k`. See
 
 | Command | Transport | Action |
 | ------- | --------- | ------ |
-| `al <id> <nbytes>` | USB CDC only | Begin an attack-head upload for ID 0…255. The byte count must be even and 2…1024. After `ok:ready`, send exactly that many signed int16 little-endian bytes; completion returns `ok:attack <id>`. |
+| `al <id> <nbytes>` | USB CDC only | Begin an attack-head upload for ID 0…255. The byte count must be 1…512. After `ok:ready`, send exactly that many signed-int8 bytes; completion returns `ok:attack <id>`. |
 | `ar <id> <Hz>` | RS485 or CDC | Set the positive root frequency for attack ID 0…255. |
 | `aw <voice> <id>` | RS485 or CDC | Assign attack ID 0…255 to voice 0…7. |
 | `a` | RS485 or CDC | Query loaded attack count and the 256-bit loaded mask. |

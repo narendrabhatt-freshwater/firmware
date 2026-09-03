@@ -179,6 +179,10 @@ if(BUILD_TESTING)
   target_link_libraries(cmi_core_api_tests PRIVATE cmi::core)
   add_test(NAME cmi_core.api COMMAND cmi_core_api_tests)
 
+  add_executable(cmi_core_sample_format_tests tests/sample_format_test.cpp)
+  target_link_libraries(cmi_core_sample_format_tests PRIVATE cmi::core)
+  add_test(NAME cmi_core.sample_format COMMAND cmi_core_sample_format_tests)
+
   add_test(
     NAME cmi_core.public_api_contract
     COMMAND ${CMAKE_COMMAND}

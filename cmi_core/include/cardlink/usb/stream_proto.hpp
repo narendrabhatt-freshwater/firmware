@@ -7,40 +7,35 @@
 namespace cardlink::usb {
 
 constexpr uint16_t kStreamVid = 0xCafe;
-constexpr uint16_t kStreamPid = 0x4030;
+constexpr uint16_t kStreamPid = 0x4031;
 /** Full 8-bit session sequence; 0xFF remains the card's unarmed sentinel. */
 constexpr unsigned kStreamSessionMod = 255;
 
-constexpr unsigned kStreamUacChannels = 10;
-constexpr unsigned kStreamUacSampleBytes = 2;
+constexpr unsigned kStreamUacChannels = 21;
+constexpr unsigned kStreamUacSampleBytes = 1;
 constexpr unsigned kStreamUacAudioFrameBytes =
     kStreamUacChannels * kStreamUacSampleBytes;
-/* USB carrier only. BODY files, pitch demand, and card playback stay 48 kHz. */
-constexpr unsigned kStreamUacRateHz = 51000;
+/* 21 is the most whole signed-int8 channels that fit at 48 frames/ms. */
+constexpr unsigned kStreamUacRateHz = 48000;
 constexpr unsigned kStreamUacFramesPerMs = kStreamUacRateHz / 1000u;
 constexpr unsigned kStreamUacPacketBytes =
     kStreamUacAudioFrameBytes * kStreamUacFramesPerMs;
-constexpr unsigned kStreamUacPacketWords =
-    kStreamUacPacketBytes / kStreamUacSampleBytes;
-constexpr unsigned kStreamUacSequenceWords = 1u;
+constexpr unsigned kStreamUacHeaderBytes = 4u;
 constexpr unsigned kStreamUacBodySamples =
-    kStreamUacPacketWords - 1u - kStreamUacSequenceWords;
-constexpr uint16_t kStreamTagMask = 0xF000u;
-constexpr uint16_t kStreamTagBase = 0xA000u;
-constexpr uint16_t kStreamTagIdle = 0xAFFFu;
-constexpr uint16_t kStreamTagSof = 0x0008u;
-constexpr uint16_t kStreamTagVoiceMask = 0x0007u;
-constexpr unsigned kStreamTagSessionShift = 4u;
-constexpr uint16_t kStreamTagSessionMask = 0x00FFu;
+    kStreamUacPacketBytes - kStreamUacHeaderBytes;
+constexpr uint8_t kStreamTagMask = 0xF0u;
+constexpr uint8_t kStreamTagBase = 0xA0u;
+constexpr uint8_t kStreamTagIdle = 0xFFu;
+constexpr uint8_t kStreamTagSof = 0x08u;
+constexpr uint8_t kStreamTagVoiceMask = 0x07u;
 constexpr unsigned kStreamBodySamplesPerMs = kStreamUacBodySamples;
-static_assert(kStreamUacAudioFrameBytes == 20, "10ch signed-int16 frame");
+static_assert(kStreamUacAudioFrameBytes == 21, "21ch signed-int8 frame");
 static_assert(kStreamUacRateHz % 1000u == 0u,
               "fixed Full-Speed carrier needs whole frames per millisecond");
-static_assert(kStreamUacPacketBytes == 1020u,
-              "maximum complete-frame 10ch int16 carrier packet");
+static_assert(kStreamUacPacketBytes == 1008u,
+              "maximum 48 kHz whole-frame int8 carrier packet");
 static_assert(kStreamUacPacketBytes <= 1023u, "Full-Speed ISO packet limit");
-static_assert(kStreamUacPacketWords == 510u, "1020-byte packet as int16 words");
-static_assert(kStreamBodySamplesPerMs == 508u,
-              "one tag, one sequence, then 508 BODY samples per millisecond");
+static_assert(kStreamBodySamplesPerMs == 1004u,
+              "four metadata bytes then 1004 BODY samples per millisecond");
 
 } // namespace cardlink::usb

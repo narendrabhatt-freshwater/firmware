@@ -104,8 +104,8 @@ int main()
 
   cmi::SampleDefinition invalid_sample;
   invalid_sample.sample_file = "missing.wav";
-  invalid_sample.attack_file = "attack.i16";
-  invalid_sample.body_file = "body.i16";
+  invalid_sample.attack_file = "attack.i8";
+  invalid_sample.body_file = "body.i8";
   const cmi::Result sample = core.loadSample(invalid_sample);
   Expect(sample.code == cmi::ErrorCode::InvalidArgument,
          "loadSample must reject mixed combined and split inputs");

@@ -31,7 +31,7 @@ example/build/cmi_core_example \
   --key 60
 ```
 
-For signed 16-bit little-endian raw input, add `--raw-rate HZ`. WAV input is
+For signed 8-bit raw input, add `--raw-rate HZ`. WAV input is
 converted to mono and resampled automatically.
 
 Pass `--script` exactly eight times when each voice needs a different script.
