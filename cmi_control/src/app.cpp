@@ -574,7 +574,7 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
           flush_card_notes();
         }
         pending[npending++] = cardlink::sample::NoteRequest{
-            ev.slot, ev.midi_key, ev.midi_key, 0xFFu, true};
+            ev.slot, ev.midi_key, ev.velocity, ev.midi_key, 0xFFu, true};
         pending_voice[ev.slot] = true;
         break;
       case cardlink::midi::BankEventKind::Steal:
@@ -679,7 +679,8 @@ void App::HandleKeyboardPiano()
     }
     if (ImGui::IsKeyPressed(m.key, false))
     {
-      ApplyBankEvents(bank.NoteOn(static_cast<uint8_t>(note)));
+      ApplyBankEvents(bank.NoteOn(static_cast<uint8_t>(note),
+                                  static_cast<uint8_t>(piano_velocity)));
     }
     if (ImGui::IsKeyReleased(m.key))
     {
@@ -826,7 +827,7 @@ void App::Tick()
         {
           const uint8_t slot =
               static_cast<uint8_t>(std::clamp(p.note_slot, 0, 7));
-          evs = p.note_on ? bank.SetSlotKey(slot, p.note_key)
+          evs = p.note_on ? bank.SetSlotKey(slot, p.note_key, p.note_velocity)
                           : bank.ClearSlot(slot);
           if (p.note_on) bus.AcknowledgeSlotKey(slot, p.note_key);
           else bus.AcknowledgeSlotOff(slot);
@@ -874,7 +875,7 @@ void App::Tick()
       std::vector<cardlink::midi::BankEvent> evs;
       if (n.action == cardlink::midi::NoteAction::On)
       {
-        evs = bank.NoteOn(n.key);
+        evs = bank.NoteOn(n.key, n.velocity);
       }
       else if (n.action == cardlink::midi::NoteAction::AllOff)
       {
@@ -2123,7 +2124,7 @@ void App::DrawPerform()
                 ImVec2(wp.x + wsz.x, wp.y + S(26.f)),
                 fw::theme::U32(kPalette.border));
 
-    // 4×2 grid — id / note / Hz when active
+    // 4×2 grid — id / note / velocity when active
     const float gap = S(4.f);
     const float pad = S(8.f);
     const int nvoices = static_cast<int>(cardlink::midi::kVoiceCount);
@@ -2175,33 +2176,20 @@ void App::DrawPerform()
                   id);
       if (s.active)
       {
-        const uint8_t mapped = channel_program_metadata.keymap[s.midi_key];
-        const double display_hz = cardlink::midi::MidiNoteToHz(mapped) *
-                                  channel_program_metadata.tuning_scale;
         const std::string note = cardlink::midi::MidiNoteName(s.midi_key);
         const ImVec2 nw =
             fs->CalcTextSizeA(fs->FontSize, FLT_MAX, 0.f, note.c_str());
         dl->AddText(fs, fs->FontSize,
                     ImVec2(p0.x + (cell_w - nw.x) * 0.5f, p0.y + S(13.f)),
                     fw::theme::U32(kPalette.accent_bright), note.c_str());
-        char hz[12];
-        if (display_hz >= 1000.0)
-        {
-          std::snprintf(hz, sizeof(hz), "%.2fk", display_hz / 1000.0);
-        }
-        else if (display_hz >= 100.0)
-        {
-          std::snprintf(hz, sizeof(hz), "%.0f", display_hz);
-        }
-        else
-        {
-          std::snprintf(hz, sizeof(hz), "%.1f", display_hz);
-        }
-        const ImVec2 hw =
-            fcap->CalcTextSizeA(fcap->FontSize, FLT_MAX, 0.f, hz);
+        char velocity[8];
+        std::snprintf(velocity, sizeof(velocity), "VEL %u",
+                      static_cast<unsigned>(s.velocity));
+        const ImVec2 vw =
+            fcap->CalcTextSizeA(fcap->FontSize, FLT_MAX, 0.f, velocity);
         dl->AddText(fcap, fcap->FontSize,
-                    ImVec2(p0.x + (cell_w - hw.x) * 0.5f, p0.y + S(24.f)),
-                    fw::theme::U32(kPalette.text_dim), hz);
+                    ImVec2(p0.x + (cell_w - vw.x) * 0.5f, p0.y + S(24.f)),
+                    fw::theme::U32(kPalette.text_dim), velocity);
       }
       else
       {
@@ -2225,9 +2213,11 @@ void App::DrawPerform()
       char info[64];
       if (s.active)
       {
-        std::snprintf(info, sizeof(info), "n%x — %s %.2f Hz", selected_voice,
+        std::snprintf(info, sizeof(info), "n%x — %s %.2f Hz · VEL %u",
+                      selected_voice,
                       cardlink::midi::MidiNoteName(s.midi_key).c_str(),
-                      cardlink::midi::MidiNoteToHz(s.midi_key));
+                      cardlink::midi::MidiNoteToHz(s.midi_key),
+                      static_cast<unsigned>(s.velocity));
       }
       else
       {
@@ -2335,7 +2325,8 @@ void App::DrawPerform()
       }
       if (on)
       {
-        ApplyBankEvents(bank.NoteOn(static_cast<uint8_t>(midi_key)));
+        ApplyBankEvents(bank.NoteOn(static_cast<uint8_t>(midi_key),
+                                    static_cast<uint8_t>(piano_velocity)));
       }
       else
       {

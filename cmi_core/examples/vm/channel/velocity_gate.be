@@ -1,10 +1,11 @@
-# Immediate note start with a 20 ms click-free release.
+# Velocity-controlled gate with a 20 ms click-free release.
+# MIDI velocity is an integer from 1 through 127.
 # stage: 1=hold, 2=release
 
 def on_note_on(key, velocity)
     state stage
     start_note()
-    set_amplitude(1)
+    set_amplitude(velocity / 127.0)
     stage = 1
     hold()
 end

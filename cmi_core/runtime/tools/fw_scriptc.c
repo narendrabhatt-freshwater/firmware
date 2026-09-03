@@ -106,6 +106,19 @@ static void compiler_nil(bvm *vm, const char *name)
     be_pushnil(vm); be_setglobal(vm, name); be_pop(vm, 1);
 }
 
+static int handler_has_arity(bvm *vm, const char *name, bbyte argc)
+{
+    bbool found = be_getglobal(vm, name);
+    int valid = 0;
+    if (found && be_isfunction(vm, -1)) {
+        bvalue *value = be_indexof(vm, -1);
+        valid = var_isclosure(value) &&
+                ((bclosure *)var_toobj(value))->proto->argc == argc;
+    }
+    be_pop(vm, 1);
+    return valid;
+}
+
 static int source_line_allowed(const char *line)
 {
     const char *p = line;
@@ -114,8 +127,8 @@ static int source_line_allowed(const char *line)
     while (*p == ' ' || *p == '\t') ++p;
     if (p != line || *p == '\0' || *p == '\n' || *p == '#') return 1;
     return strncmp(p, "def on_init()", sizeof("def on_init()") - 1u) == 0 ||
-           strncmp(p, "def on_note_on(key)",
-                   sizeof("def on_note_on(key)") - 1u) == 0 ||
+           strncmp(p, "def on_note_on(key, velocity)",
+                   sizeof("def on_note_on(key, velocity)") - 1u) == 0 ||
            strncmp(p, "def on_note_off(has_pending)",
                    sizeof("def on_note_off(has_pending)") - 1u) == 0 ||
            strncmp(p, "def on_ramp_end()", sizeof("def on_ramp_end()") - 1u) == 0 ||
@@ -192,7 +205,7 @@ int main(int argc, char **argv)
     while (fgets(line, sizeof(line), source)) {
         if (!source_line_allowed(line)) {
             fclose(source); fclose(wrapper); remove(wrapped);
-            return fail("only ABI6 Channel handlers are allowed at top level", input);
+            return fail("only ABI7 Channel handlers are allowed at top level", input);
         }
         fputs(line, wrapper);
     }
@@ -229,6 +242,8 @@ int main(int argc, char **argv)
     compiler_int(vm, "INPUT_MAPPED_KEY", FW_VM_CHANNEL_INPUT_MAPPED_KEY);
     compiler_int(vm, "INPUT_PENDING_KEY", FW_VM_CHANNEL_INPUT_PENDING_KEY);
     compiler_int(vm, "INPUT_PENDING_MAPPED_KEY", FW_VM_CHANNEL_INPUT_PENDING_MAPPED_KEY);
+    compiler_int(vm, "INPUT_VELOCITY", FW_VM_CHANNEL_INPUT_VELOCITY);
+    compiler_int(vm, "INPUT_PENDING_VELOCITY", FW_VM_CHANNEL_INPUT_PENDING_VELOCITY);
     compiler_nil(vm, "on_init");
     compiler_nil(vm, "on_note_on");
     compiler_nil(vm, "on_note_off");
@@ -236,6 +251,12 @@ int main(int argc, char **argv)
     result = be_loadmode(vm, wrapped, 0);
     if (result == BE_OK) result = be_savecode(vm, temporary);
     if (result == BE_OK) result = be_pcall(vm, 0);
+    if (result == BE_OK &&
+        (!handler_has_arity(vm, "on_note_on", 2u) ||
+         !handler_has_arity(vm, "on_note_off", 1u) ||
+         !handler_has_arity(vm, "on_ramp_end", 0u))) {
+        result = BE_EXCEPTION;
+    }
     memset(&metadata, 0, sizeof(metadata));
     metadata.reference_key = 60u;
     metadata.reference_hz = 261.625565f;

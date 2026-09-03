@@ -90,7 +90,7 @@ sequenceDiagram
     end
     Core-->>App: Result
     alt Direct playback
-        App->>Core: sampleNoteOn(voice, key, sample_id)
+        App->>Core: sampleNoteOn(voice, key, sample_id, velocity)
     else Automatic MIDI playback
         MIDI->>Core: Note On / Note Off
         Core->>Core: Allocate or release a voice
@@ -255,9 +255,10 @@ const cmi::Result loaded = core.loadSampleBank(bank);
 ```
 
 Samples are card-wide assets identified by IDs `0..255`; they do not belong to a
-specific voice. `sampleNoteOn(voice, key, sample_id)` selects a loaded sample
-when starting that voice. Sample files are therefore loaded explicitly after
-`connect()`, never through `CoreParams`.
+specific voice. `sampleNoteOn(voice, key, sample_id, velocity)` selects a loaded
+sample when starting that voice. Velocity defaults to 127 when omitted and is
+passed to `on_note_on(key, velocity)`. Sample files are therefore loaded
+explicitly after `connect()`, never through `CoreParams`.
 
 MIDI key `N` selects sample ID `N` by default. Load those samples before use;
 `setMidiSampleMap()` replaces that mapping.

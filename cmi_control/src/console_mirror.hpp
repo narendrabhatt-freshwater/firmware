@@ -56,6 +56,7 @@ struct UiMirrorPatch
   int note_slot = -1;
   bool note_on = false;
   uint8_t note_key = 0u;
+  uint8_t note_velocity = 127u;
 
   bool Any() const;
 };

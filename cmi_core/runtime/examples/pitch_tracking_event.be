@@ -1,4 +1,4 @@
-def on_note_on(key)
+def on_note_on(key, velocity)
     state pitch_ratio
     var color = (keymap_get(key) - 36) / 48.0
     if color < 0 color = 0 end

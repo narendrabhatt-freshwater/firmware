@@ -35,12 +35,13 @@ static void upload(ScriptBerryRuntime *r,uint8_t voice,const uint8_t *p,size_t n
 }
 static void fault_matrix(const char *normal_path,const char *bad_path,const char *nonfinite_path,const char *allocation_path,const char *runaway_path){
   const char *paths[4]={bad_path,nonfinite_path,allocation_path,runaway_path};
-  for(unsigned test=0u;test<4u;++test){ScriptBerryRuntime r;Mock m={0};ScriptBerryNativeOps o={&m,read_input,set_amplitude,ramp,hold,activate,note_end,silence,set_led};size_t normal_size,fault_size;int dispatch;uint8_t *normal=read_file(normal_path,&normal_size),*fault=read_file(paths[test],&fault_size);if(test==1u)m.input[0][FW_VM_CHANNEL_INPUT_FREQUENCY]=INFINITY;script_berry_init(&r,&o);upload(&r,1u,normal,normal_size);upload(&r,0u,fault,fault_size);script_berry_boundary_begin(&r);dispatch=script_berry_dispatch(&r,FW_VM_CHANNEL_HANDLER_NOTE_ON,0u);if(dispatch==0)fprintf(stderr,"fault case %u unexpectedly succeeded\n",test);assert(dispatch!=0);if(test<2u){assert(r.shared_valid&&script_berry_is_active(&r,1u)&&!script_berry_is_active(&r,0u));}else{assert(!r.shared_valid&&script_berry_active_mask(&r)==0u);}free(normal);free(fault);}
+  for(unsigned test=0u;test<4u;++test){ScriptBerryRuntime r;Mock m={0};ScriptBerryNativeOps o={&m,read_input,set_amplitude,ramp,hold,activate,note_end,silence,set_led};size_t normal_size,fault_size;int dispatch;uint8_t *normal=read_file(normal_path,&normal_size),*fault=read_file(paths[test],&fault_size);m.input[0][FW_VM_CHANNEL_INPUT_PENDING_VELOCITY]=100.0f;if(test==1u)m.input[0][FW_VM_CHANNEL_INPUT_FREQUENCY]=INFINITY;script_berry_init(&r,&o);upload(&r,1u,normal,normal_size);upload(&r,0u,fault,fault_size);script_berry_boundary_begin(&r);dispatch=script_berry_dispatch(&r,FW_VM_CHANNEL_HANDLER_NOTE_ON,0u);if(dispatch==0)fprintf(stderr,"fault case %u unexpectedly succeeded\n",test);assert(dispatch!=0);if(test<2u){assert(r.shared_valid&&script_berry_is_active(&r,1u)&&!script_berry_is_active(&r,0u));}else{assert(!r.shared_valid&&script_berry_active_mask(&r)==0u);}free(normal);free(fault);}
 }
 static void pitch_tracking(const char *path){
   ScriptBerryRuntime runtime;Mock mock={0};ScriptBerryNativeOps ops={&mock,read_input,set_amplitude,ramp,hold,activate,note_end,silence,set_led};
   uint8_t *program;size_t size;program=read_file(path,&size);script_berry_init(&runtime,&ops);upload(&runtime,0u,program,size);
   mock.input[0][FW_VM_CHANNEL_INPUT_PENDING_KEY]=72.0f;
+  mock.input[0][FW_VM_CHANNEL_INPUT_PENDING_VELOCITY]=64.0f;
   script_berry_boundary_begin(&runtime);assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_ON,0u)==0);
   assert(fabsf(mock.last_slope[0]-40.0f)<0.0001f);
   assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_OFF,0u)==0);
@@ -59,6 +60,7 @@ int main(int argc,char **argv){
     assert(script_berry_upload_commit(&runtime)!=0);assert(script_berry_is_active(&runtime,3u));free(corrupt); }
   mem=script_berry_memory_metrics(&runtime);
   printf("reload_peak=%u current=%u largest_free=%u\n",mem->arena_peak,mem->arena_current,mem->arena_largest_free);
+  for(i=0;i<FW_SCRIPT_CHANNEL_VOICE_COUNT;++i)mock.input[i][FW_VM_CHANNEL_INPUT_PENDING_VELOCITY]=(float)(1u+i*18u);
   script_berry_boundary_begin(&runtime);for(i=0;i<FW_SCRIPT_CHANNEL_VOICE_COUNT;++i)assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_ON,(uint8_t)i)==0);
   assert(mock.activations==FW_SCRIPT_CHANNEL_VOICE_COUNT&&mock.ramps==FW_SCRIPT_CHANNEL_VOICE_COUNT);
   for(i=0;i<FW_SCRIPT_CHANNEL_VOICE_COUNT;++i){

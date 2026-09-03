@@ -71,7 +71,8 @@ static int reserved_name(const char *text, size_t length)
         "INPUT_ACTIVE", "INPUT_HAS_PENDING", "INPUT_PENDING_FREQUENCY",
         "INPUT_PENDING_GAIN", "INPUT_AMPLITUDE",
         "INPUT_KEY", "INPUT_MAPPED_KEY", "INPUT_PENDING_KEY",
-        "INPUT_PENDING_MAPPED_KEY", "key", "has_pending"
+        "INPUT_PENDING_MAPPED_KEY", "INPUT_VELOCITY",
+        "INPUT_PENDING_VELOCITY", "key", "velocity", "has_pending"
     };
     size_t i;
     for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {

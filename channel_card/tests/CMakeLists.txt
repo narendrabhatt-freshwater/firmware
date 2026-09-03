@@ -48,6 +48,15 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/attack_2ms.fwsc"
 add_custom_target(channel_attack_2ms_program DEPENDS
   "${CMAKE_CURRENT_BINARY_DIR}/attack_2ms.fwsc")
 add_dependencies(note_bank_vm_test channel_attack_2ms_program)
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/velocity_gate.fwsc"
+  COMMAND fw_scriptc
+          "${CMAKE_CURRENT_SOURCE_DIR}/../../cmi_core/examples/vm/channel/velocity_gate.be"
+          -o "${CMAKE_CURRENT_BINARY_DIR}/velocity_gate.fwsc"
+  DEPENDS fw_scriptc
+          "${CMAKE_CURRENT_SOURCE_DIR}/../../cmi_core/examples/vm/channel/velocity_gate.be")
+add_custom_target(channel_velocity_gate_program DEPENDS
+  "${CMAKE_CURRENT_BINARY_DIR}/velocity_gate.fwsc")
+add_dependencies(note_bank_vm_test channel_velocity_gate_program)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(note_bank_vm_test PRIVATE -Wall -Wextra -Werror)
 endif()
@@ -58,4 +67,5 @@ add_test(NAME channel_card.stream_ring_handoff
 add_test(NAME channel_card.note_envelope COMMAND note_envelope_test)
 add_test(NAME channel_card.note_bank_vm COMMAND note_bank_vm_test
   "${CMAKE_CURRENT_BINARY_DIR}/script_runtime/channel_envelope.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/attack_2ms.fwsc")
+  "${CMAKE_CURRENT_BINARY_DIR}/attack_2ms.fwsc"
+  "${CMAKE_CURRENT_BINARY_DIR}/velocity_gate.fwsc")

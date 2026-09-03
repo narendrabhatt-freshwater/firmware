@@ -1,4 +1,4 @@
-def on_note_on(key)
+def on_note_on(key, velocity)
     def recurse()
         recurse()
     end

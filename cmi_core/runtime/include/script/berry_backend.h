@@ -7,14 +7,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* ABI6 eight-program/reload peak 17,120 B + 4 KiB upload scratch + 20% headroom,
+/* ABI7 eight-program/reload peak 18,272 B + 4 KiB upload scratch + 20% headroom,
  * rounded to 1 KiB by the qualification probe. */
-#define SCRIPT_BERRY_ARENA_SIZE (25u * 1024u)
+#define SCRIPT_BERRY_ARENA_SIZE (26u * 1024u)
 #define SCRIPT_BERRY_UPLOAD_SIZE FW_SCRIPT_MAX_PAYLOAD
 #define SCRIPT_BERRY_HEAP_SIZE (SCRIPT_BERRY_ARENA_SIZE-SCRIPT_BERRY_UPLOAD_SIZE)
-/* Largest sanctioned handler path measured 36 instructions. Add 25%, then
+/* Largest sanctioned handler path measured 50 instructions. Add 25%, then
  * round up to the 32-instruction observation quantum. */
-#define SCRIPT_BERRY_SANCTIONED_HANDLER_MAX 36u
+#define SCRIPT_BERRY_SANCTIONED_HANDLER_MAX 50u
 #define SCRIPT_BERRY_HANDLER_INSTRUCTION_LIMIT 64u
 #define SCRIPT_BERRY_BOUNDARY_INSTRUCTION_LIMIT \
   (FW_SCRIPT_CHANNEL_VOICE_COUNT * SCRIPT_BERRY_HANDLER_INSTRUCTION_LIMIT)

@@ -1,7 +1,7 @@
 # A 2 ms attack followed by a 500 ms automatic decay.
 # stage: 1=attack, 2=decay, 3=release
 
-def on_note_on(key)
+def on_note_on(key, velocity)
     state stage
     start_note()
     set_amplitude(0)

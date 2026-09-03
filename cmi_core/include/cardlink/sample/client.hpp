@@ -34,6 +34,7 @@ struct Slot {
 struct NoteRequest {
   uint8_t voice = 0u;
   uint8_t key = 0u;
+  uint8_t velocity = 127u;
   uint16_t wave_id = 0xFFFFu;
   uint8_t session = 0xFFu;
   bool note_on = true;
@@ -41,7 +42,7 @@ struct NoteRequest {
 
 class Client {
 public:
-  /** Bare Channel command, e.g. `n3 on 60` — no `c:` prefix. */
+  /** Bare Channel command, e.g. `n3 on 60 127` — no `c:` prefix. */
   using ConsoleFn = std::function<void(const std::string &cmd)>;
   using NoteGateStart = std::function<void()>;
   using NoteGateDone = std::function<void(bool applied)>;
@@ -77,7 +78,8 @@ public:
   bool SetRootHz(uint16_t wave_id, double hz, std::string &err);
 
   /** Reserve/launch matching USB SOF, then queue authoritative RS485 aw/nX. */
-  void NoteOn(uint8_t voice, uint8_t key, uint16_t wave_id = 0xFFFFu);
+  void NoteOn(uint8_t voice, uint8_t key, uint16_t wave_id = 0xFFFFu,
+              uint8_t velocity = 127u);
   /** Queue RS485 note starts; each worker launches its matching BODY session
    *  immediately before aw/nX so the attack bridges into the first samples. */
   bool NoteOnBatch(const NoteRequest *notes, size_t count);

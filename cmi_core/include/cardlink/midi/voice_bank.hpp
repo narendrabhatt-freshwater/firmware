@@ -24,6 +24,7 @@ struct BankEvent
   BankEventKind kind = BankEventKind::Off;
   uint8_t slot = 0;
   uint8_t midi_key = 0;
+  uint8_t velocity = 0;
   uint8_t active_count = 0;
 };
 
@@ -31,6 +32,7 @@ struct VoiceSlot
 {
   bool active = false;
   uint8_t midi_key = 0;
+  uint8_t velocity = 0;
 };
 
 /**
@@ -45,8 +47,8 @@ public:
   std::vector<BankEvent> SetVoiceLimit(uint8_t voices);
   uint8_t VoiceLimit() const { return voice_limit_; }
 
-  /** Apply Note On for key. Returns one or more events (steal then on). */
-  std::vector<BankEvent> NoteOn(uint8_t midi_key);
+  /** Apply Note On for key/velocity. Returns events (steal then on). */
+  std::vector<BankEvent> NoteOn(uint8_t midi_key, uint8_t velocity = 127u);
 
   /** Apply Note Off for key. Empty if key was not active. */
   std::vector<BankEvent> NoteOff(uint8_t midi_key);
@@ -58,11 +60,13 @@ public:
    * Force one slot from console `nX <hz>` (hz≤0 clears). Updates FIFO and
    * nearest-MIDI label for Perform; does not allocate by key.
    */
-  std::vector<BankEvent> SetSlotKey(uint8_t slot, uint8_t midi_key);
+  std::vector<BankEvent> SetSlotKey(uint8_t slot, uint8_t midi_key,
+                                    uint8_t velocity = 127u);
   std::vector<BankEvent> ClearSlot(uint8_t slot);
 
   /** Force all kVoiceCount slots to one raw key, or clear them. */
-  std::vector<BankEvent> SetAllKey(uint8_t midi_key);
+  std::vector<BankEvent> SetAllKey(uint8_t midi_key,
+                                   uint8_t velocity = 127u);
 
   uint8_t ActiveCount() const;
   const std::array<VoiceSlot, kVoiceCount>& Slots() const { return slots_; }

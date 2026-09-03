@@ -3,7 +3,7 @@
  * @brief Host body feeder: unpitched int16 → direct UAC2 BODY frames.
  *
  * Card owns pitch / env / filter. The host binds one session to nX and waits
- * for matching ABI6 `vq` authority before emitting BODY. SOF repeats until a
+ * for matching ABI7 `vq` authority before emitting BODY. SOF repeats until a
  * later status confirms that session and its first complete BODY frame.
  * Thereafter each status grants exact runtime-capacity credit.
  * Every 1 ms UAC packet carries routing/sequence metadata and 508 raw samples.

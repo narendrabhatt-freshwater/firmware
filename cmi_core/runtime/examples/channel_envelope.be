@@ -1,7 +1,7 @@
 # Event-driven attack and release envelope with retrigger protection.
 # stage: 1=attack, 2=holding, 3=release, 4=crash release
 
-def on_note_on(key)
+def on_note_on(key, velocity)
     state stage
     var color = (keymap_get(key) - 36) / 48.0
     if color < 0 color = 0 end

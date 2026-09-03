@@ -36,21 +36,25 @@ namespace cardproto
     return static_cast<char>('a' + (slot - 10u));
   }
 
-  std::string FormatNoteOn(uint8_t slot, uint8_t key)
+  std::string FormatNoteOn(uint8_t slot, uint8_t key, uint8_t velocity)
   {
     char cmd[48];
     const char hex = NoteSlotHex(slot);
-    std::snprintf(cmd, sizeof(cmd), "n%c on %u", hex,
-                  static_cast<unsigned>(key));
+    std::snprintf(cmd, sizeof(cmd), "n%c on %u %u", hex,
+                  static_cast<unsigned>(key),
+                  static_cast<unsigned>(velocity));
     return cmd;
   }
 
-  std::string FormatStreamNoteOn(uint8_t slot, uint8_t key, uint8_t session)
+  std::string FormatStreamNoteOn(uint8_t slot, uint8_t key, uint8_t velocity,
+                                 uint8_t session)
   {
     char cmd[64];
     const char hex = NoteSlotHex(slot);
-    std::snprintf(cmd, sizeof(cmd), "n%c on %u @%u", hex,
-                  static_cast<unsigned>(key), static_cast<unsigned>(session));
+    std::snprintf(cmd, sizeof(cmd), "n%c on %u %u @%u", hex,
+                  static_cast<unsigned>(key),
+                  static_cast<unsigned>(velocity),
+                  static_cast<unsigned>(session));
     return cmd;
   }
 
@@ -59,25 +63,38 @@ namespace cardproto
     return std::string("n") + NoteSlotHex(slot) + " off";
   }
 
-  Result ChannelClient::NoteOn(uint8_t slot, uint8_t key)
+  Result ChannelClient::NoteOn(uint8_t slot, uint8_t key, uint8_t velocity)
   {
-    if (!ValidSlot(slot) || key >= 128u)
+    if (!ValidSlot(slot) || key >= 128u || velocity == 0u || velocity >= 128u)
     {
-      return Result::LocalErr("range", "note slot/key");
+      return Result::LocalErr("range", "note slot/key/velocity");
     }
-    return Send(FormatNoteOn(slot, key));
+    return Send(FormatNoteOn(slot, key, velocity));
   }
 
   Result ChannelClient::NoteOff(uint8_t slot) { return ValidSlot(slot)?Send(FormatNoteOff(slot)):Result::LocalErr("range","note slot"); }
 
   Result ChannelClient::StreamNoteOn(uint8_t slot, uint8_t key,
+                                     uint8_t velocity, uint8_t session)
+  {
+    if (!ValidSlot(slot) || key >= 128u || velocity == 0u ||
+        velocity >= 128u || session >= 255u)
+    {
+      return Result::LocalErr("range",
+                              "stream note slot/key/velocity/session");
+    }
+    return Send(FormatStreamNoteOn(slot, key, velocity, session));
+  }
+
+  Result ChannelClient::StreamNoteOn(uint8_t slot, uint8_t key,
                                      uint8_t session)
   {
-    if (!ValidSlot(slot) || key >= 128u || session >= 255u)
-    {
-      return Result::LocalErr("range", "stream note slot/key/session");
-    }
-    return Send(FormatStreamNoteOn(slot, key, session));
+    return StreamNoteOn(slot, key, 127u, session);
+  }
+
+  std::string FormatStreamNoteOn(uint8_t slot, uint8_t key, uint8_t session)
+  {
+    return FormatStreamNoteOn(slot, key, 127u, session);
   }
 
   Result ChannelClient::AllNotesOff() { return Send("n off"); }

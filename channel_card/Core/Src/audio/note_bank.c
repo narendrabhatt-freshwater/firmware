@@ -79,8 +79,10 @@ static uint8_t note_next_pending[NOTE_BANK_VOICES];
 static float note_play_hz[NOTE_BANK_VOICES];
 static uint8_t note_play_key[NOTE_BANK_VOICES];
 static uint8_t note_play_mapped_key[NOTE_BANK_VOICES];
+static uint8_t note_play_velocity[NOTE_BANK_VOICES];
 static uint8_t note_next_key[NOTE_BANK_VOICES];
 static uint8_t note_next_mapped_key[NOTE_BANK_VOICES];
+static uint8_t note_next_velocity[NOTE_BANK_VOICES];
 #if defined(CHANNEL_TEST_WAVETABLE)
 static NoteBank_Shape_t note_shape = NOTE_SHAPE_SINE;
 static int16_t note_sine_table[WAVETABLE_SAMPLES];
@@ -97,6 +99,7 @@ static volatile uint32_t note_hold_miss;
 static volatile uint8_t note_cmd[NOTE_BANK_VOICES];
 static volatile uint8_t note_cmd_key[NOTE_BANK_VOICES];
 static volatile uint8_t note_cmd_mapped_key[NOTE_BANK_VOICES];
+static volatile uint8_t note_cmd_velocity[NOTE_BANK_VOICES];
 static volatile uint32_t note_cmd_inc[NOTE_BANK_VOICES];
 static volatile float note_cmd_hz[NOTE_BANK_VOICES];
 /* An explicit nX off must win over a late BODY session-start. */
@@ -364,6 +367,7 @@ static void NoteBank_ActivateReplacement(uint8_t note)
   note_play_hz[note] = note_next_hz[note];
   note_play_key[note] = note_next_key[note];
   note_play_mapped_key[note] = note_next_mapped_key[note];
+  note_play_velocity[note] = note_next_velocity[note];
   note_play_wid[note] = note_next_wid[note];
   note_play_alen[note] = (uint16_t)AttackBank_GetLen(note_play_wid[note]);
   note_body_only[note] = (note_play_alen[note] == 0u) ? 1u : 0u;
@@ -372,6 +376,7 @@ static void NoteBank_ActivateReplacement(uint8_t note)
   note_next_pending[note] = 0u;
   note_next_key[note] = 0u;
   note_next_mapped_key[note] = 0u;
+  note_next_velocity[note] = 0u;
   note_active[note] = 1u;
 }
 
@@ -421,12 +426,13 @@ static void NoteBank_CatchUpBody(uint8_t note)
 }
 
 static void NoteBank_StartVoice(uint8_t note, uint8_t key, uint8_t mapped_key,
-                                uint32_t inc, float hz)
+                                uint8_t velocity, uint32_t inc, float hz)
 {
   note_next_inc[note] = inc;
   note_next_hz[note] = hz;
   note_next_key[note] = key;
   note_next_mapped_key[note] = mapped_key;
+  note_next_velocity[note] = velocity;
   note_next_amp_q15[note] = note_amp_q15[note];
   note_next_wid[note] = note_wave_id[note];
   note_next_pending[note] = 1u;
@@ -434,10 +440,11 @@ static void NoteBank_StartVoice(uint8_t note, uint8_t key, uint8_t mapped_key,
 }
 
 static void NoteBank_PostOn(uint8_t note, uint8_t key, uint8_t mapped_key,
-                            uint32_t inc, float hz)
+                            uint8_t velocity, uint32_t inc, float hz)
 {
   note_cmd_key[note] = key;
   note_cmd_mapped_key[note] = mapped_key;
+  note_cmd_velocity[note] = velocity;
   note_cmd_inc[note] = inc;
   note_cmd_hz[note] = hz;
   note_cmd[note] = NOTE_CMD_ON;
@@ -450,8 +457,10 @@ static void NoteBank_HardOff(uint8_t note)
   note_next_pending[note] = 0u;
   note_play_key[note] = 0u;
   note_play_mapped_key[note] = 0u;
+  note_play_velocity[note] = 0u;
   note_next_key[note] = 0u;
   note_next_mapped_key[note] = 0u;
+  note_next_velocity[note] = 0u;
   NoteBank_ClearPlayhead(note);
   StreamRing_Release(note);
   AttackBank_Stop(note);
@@ -465,6 +474,7 @@ static void NoteBank_EndCurrent(uint8_t note)
   note_active[note] = 0u;
   note_play_key[note] = 0u;
   note_play_mapped_key[note] = 0u;
+  note_play_velocity[note] = 0u;
   NoteBank_ClearPlayhead(note);
   StreamRing_EndCurrent(note);
   AttackBank_Stop(note);
@@ -494,7 +504,8 @@ static void NoteBank_DrainCmd(uint8_t note)
 #endif
     note_cmd[note] = NOTE_CMD_NONE;
     NoteBank_StartVoice(note, note_cmd_key[note], note_cmd_mapped_key[note],
-                        note_cmd_inc[note], note_cmd_hz[note]);
+                        note_cmd_velocity[note], note_cmd_inc[note],
+                        note_cmd_hz[note]);
     (void)NoteBank_VmDispatch(FW_VM_CHANNEL_HANDLER_NOTE_ON, note);
     return;
   }
@@ -681,6 +692,8 @@ static int NoteBank_VmRead(void *context, uint8_t note,
   case FW_VM_CHANNEL_INPUT_MAPPED_KEY: *out = (float)note_play_mapped_key[note]; break;
   case FW_VM_CHANNEL_INPUT_PENDING_KEY: *out = (float)note_next_key[note]; break;
   case FW_VM_CHANNEL_INPUT_PENDING_MAPPED_KEY: *out = (float)note_next_mapped_key[note]; break;
+  case FW_VM_CHANNEL_INPUT_VELOCITY: *out = (float)note_play_velocity[note]; break;
+  case FW_VM_CHANNEL_INPUT_PENDING_VELOCITY: *out = (float)note_next_velocity[note]; break;
   default: return -1;
   }
   return 0;
@@ -716,6 +729,7 @@ static int NoteBank_VmDiscardPending(void *context, uint8_t note)
   note_next_pending[note] = 0u;
   note_next_key[note] = 0u;
   note_next_mapped_key[note] = 0u;
+  note_next_velocity[note] = 0u;
   return 0;
 }
 static void NoteBank_VmSilence(void *context, uint8_t note, FwVmFault fault)
@@ -775,11 +789,14 @@ void NoteBank_Init(void)
     note_play_hz[i] = 0.0f;
     note_play_key[i] = 0u;
     note_play_mapped_key[i] = 0u;
+    note_play_velocity[i] = 0u;
     note_next_key[i] = 0u;
     note_next_mapped_key[i] = 0u;
+    note_next_velocity[i] = 0u;
     note_cmd[i] = NOTE_CMD_NONE;
     note_cmd_inc[i] = PHASE_ONE;
     note_cmd_hz[i] = 0.0f;
+    note_cmd_velocity[i] = 0u;
     note_gate_requested[i] = 0u;
   }
   vm_ops.context = NULL;
@@ -829,21 +846,26 @@ void NoteBank_PanicAll(void)
     note_gate_requested[i] = 0u;
     note_play_key[i] = 0u;
     note_play_mapped_key[i] = 0u;
+    note_play_velocity[i] = 0u;
     note_next_key[i] = 0u;
     note_next_mapped_key[i] = 0u;
+    note_next_velocity[i] = 0u;
+    note_cmd_velocity[i] = 0u;
     NoteFilter_Reset(i);
     NoteEnv_Stop(i);
   }
 }
 
-static int NoteBank_NoteOnBound(uint8_t note, uint8_t key, uint8_t session)
+static int NoteBank_NoteOnBound(uint8_t note, uint8_t key, uint8_t velocity,
+                                uint8_t session)
 {
   uint8_t mapped_key;
   double freq_hz;
   double scale = NOTE_DEFAULT_SCALE;
   uint32_t inc;
 
-  if (note >= NOTE_BANK_VOICES)
+  if (note >= NOTE_BANK_VOICES || key >= FW_SCRIPT_CHANNEL_KEY_COUNT ||
+      velocity == 0u || velocity > 127u)
   {
     return -1;
   }
@@ -882,22 +904,23 @@ static int NoteBank_NoteOnBound(uint8_t note, uint8_t key, uint8_t session)
   note_inc_tgt[note] = inc;
   note_gate_requested[note] = 1u;
   StreamRing_ArmPending(note, note_wave_id[note], session);
-  NoteBank_PostOn(note, key, mapped_key, inc, (float)freq_hz);
+  NoteBank_PostOn(note, key, mapped_key, velocity, inc, (float)freq_hz);
   return 0;
 }
 
-int NoteBank_NoteOn(uint8_t note, uint8_t key)
+int NoteBank_NoteOn(uint8_t note, uint8_t key, uint8_t velocity)
 {
-  return NoteBank_NoteOnBound(note, key, 0xFFu);
+  return NoteBank_NoteOnBound(note, key, velocity, 0xFFu);
 }
 
-int NoteBank_NoteOnSession(uint8_t note, uint8_t key, uint8_t session)
+int NoteBank_NoteOnSession(uint8_t note, uint8_t key, uint8_t velocity,
+                           uint8_t session)
 {
   if (session == 0xFFu)
   {
     return -1;
   }
-  return NoteBank_NoteOnBound(note, key, session);
+  return NoteBank_NoteOnBound(note, key, velocity, session);
 }
 
 int NoteBank_NoteOff(uint8_t note)
@@ -920,6 +943,13 @@ uint8_t NoteBank_GetMappedKey(uint8_t note)
   if (note >= NOTE_BANK_VOICES) return 0u;
   return note_next_pending[note] != 0u ? note_next_mapped_key[note]
                                        : note_play_mapped_key[note];
+}
+
+uint8_t NoteBank_GetVelocity(uint8_t note)
+{
+  if (note >= NOTE_BANK_VOICES) return 0u;
+  return note_next_pending[note] != 0u ? note_next_velocity[note]
+                                       : note_play_velocity[note];
 }
 
 double NoteBank_GetFreq(uint8_t note)

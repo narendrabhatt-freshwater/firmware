@@ -59,7 +59,7 @@ void MirrorChannel(const std::string &cmd, const cardproto::Result &result,
     return;
   }
 
-  /* n0..n7 on <key> [@session] / off — single SAMPLE voice */
+  /* n0..n7 on <key> [velocity] [@session] / off — one SAMPLE voice */
   if (cmd.size() >= 2 && cmd[0] == 'n') {
     int slot = -1;
     if (cmd[1] >= '0' && cmd[1] <= '9') {
@@ -72,15 +72,20 @@ void MirrorChannel(const std::string &cmd, const cardproto::Result &result,
         /* A bare slot token is a syntax error; ignore it. */
         return;
       }
-      unsigned key = 0, session = 0;
+      unsigned key = 0, velocity = 127u, session = 0;
       int consumed = 0;
       if (cmd.substr(3) == "off") {
         p.has_note=true;p.note_slot=slot;p.note_on=false;
-      } else if ((std::sscanf(cmd.c_str()+3,"on %u @%u%n",&key,&session,&consumed)==2&&
+      } else if ((std::sscanf(cmd.c_str()+3,"on %u %u @%u%n",&key,&velocity,&session,&consumed)==3&&
+                  cmd.c_str()[3+consumed]=='\0'&&session<255u&&key<128u&&velocity>0u&&velocity<128u) ||
+                 (std::sscanf(cmd.c_str()+3,"on %u %u%n",&key,&velocity,&consumed)==2&&
+                  cmd.c_str()[3+consumed]=='\0'&&key<128u&&velocity>0u&&velocity<128u) ||
+                 (std::sscanf(cmd.c_str()+3,"on %u @%u%n",&key,&session,&consumed)==2&&
                   cmd.c_str()[3+consumed]=='\0'&&session<255u&&key<128u) ||
                  (std::sscanf(cmd.c_str()+3,"on %u%n",&key,&consumed)==1&&
                   cmd.c_str()[3+consumed]=='\0'&&key<128u)) {
         p.has_note=true;p.note_slot=slot;p.note_on=true;p.note_key=(uint8_t)key;
+        p.note_velocity=(uint8_t)velocity;
       }
       return;
     }

@@ -2,7 +2,7 @@
 # The replacement also uses a 2 ms attack.
 # stage: 0=idle, 1=attack, 2=hold, 3=release, 4=steal
 
-def on_note_on(key)
+def on_note_on(key, velocity)
     state stage
     if stage != 0
         stage = 4

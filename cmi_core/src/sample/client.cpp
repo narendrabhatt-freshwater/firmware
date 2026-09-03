@@ -537,9 +537,10 @@ int Client::LoadFolder(const std::string &dir, std::string &err)
   return loaded;
 }
 
-void Client::NoteOn(uint8_t voice, uint8_t key, uint16_t wave_id)
+void Client::NoteOn(uint8_t voice, uint8_t key, uint16_t wave_id,
+                    uint8_t velocity)
 {
-  const NoteRequest note{voice, key, wave_id, 0xFFu, true};
+  const NoteRequest note{voice, key, velocity, wave_id, 0xFFu, true};
   (void)NoteOnBatch(&note, 1u);
 }
 
@@ -556,7 +557,7 @@ bool Client::NoteOnBatch(const NoteRequest *notes, size_t count)
   for (size_t ni = 0u; ni < count; ++ni) {
     const auto &note = notes[ni];
     if (note.voice >= cardlink::audio::kSampleVoices || !note.note_on ||
-        seen[note.voice]) {
+        note.velocity == 0u || note.velocity > 127u || seen[note.voice]) {
       continue;
     }
     seen[note.voice] = true;
@@ -583,7 +584,8 @@ bool Client::NoteOnBatch(const NoteRequest *notes, size_t count)
       continue;
     }
     prepared[nprepared++] = NoteRequest{
-        note.voice, note.key, wave, mixer_.ReserveSession(note.voice), true};
+        note.voice, note.key, note.velocity, wave,
+        mixer_.ReserveSession(note.voice), true};
   }
   if (nprepared == 0u) {
     return false;
@@ -621,7 +623,7 @@ void Client::NoteOff(uint8_t voice)
   if (!note_gate_) {
     return;
   }
-  const NoteRequest note{voice, 0u, 0xFFFFu, 0xFFu, false};
+  const NoteRequest note{voice, 0u, 0u, 0xFFFFu, 0xFFu, false};
   (void)note_gate_(note, []() {}, [this, voice](bool applied) {
     if (applied) {
       mixer_.NoteOff(voice);

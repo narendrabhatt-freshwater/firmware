@@ -18,6 +18,10 @@ struct MidiPortInfo
   std::string name;
 };
 
+/** Decode a MIDI note/all-notes-off message; returns empty for other input. */
+std::optional<NoteEvent>
+DecodeNoteMessage(const std::vector<unsigned char>& message);
+
 /**
  * RtMidiIn wrapper: open Launchkey (or --port), queue NoteEvents.
  * MIDI callback only enqueues; main thread drains via Poll().

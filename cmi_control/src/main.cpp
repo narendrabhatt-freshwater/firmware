@@ -133,7 +133,8 @@ int main(int argc, char **argv)
                             static_cast<unsigned>(note.wave_id));
               auto result = ch.Exec(aw);
               if (result.ok()) {
-                result = ch.StreamNoteOn(note.voice, note.key, note.session);
+                result = ch.StreamNoteOn(note.voice, note.key, note.velocity,
+                                         note.session);
               }
               if (result.ok()) app.bus.AcknowledgeSlotKey(note.voice, note.key);
               done(result.ok());
@@ -146,7 +147,7 @@ int main(int argc, char **argv)
       app.samples.Silence(slot);
     }
   });
-  /* The RS485 worker binds the session to nX; ABI6 vq then grants exact
+  /* The RS485 worker binds the session to nX; ABI7 vq then grants exact
    * credit for the repeated SOF and steady-state BODY frames. */
   app.bus.SetVqHandler(
       [&app](const cardproto::VoiceQuery &status) {

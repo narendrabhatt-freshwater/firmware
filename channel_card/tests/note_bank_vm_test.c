@@ -20,12 +20,13 @@ static void refresh_crc(uint8_t *program,size_t size){uint32_t crc=fw_vm_crc32(p
 static void boundary(void){NoteBank_VmBoundaryBegin();for(unsigned i=0;i<48u;++i)(void)NoteBank_NextSample();NoteBank_VmBoundaryEnd();}
 static uint32_t render_peak(unsigned count){uint32_t peak=0u;NoteBank_VmBoundaryBegin();for(unsigned i=0;i<count;++i){int64_t s=NoteBank_NextSample();uint32_t a=(uint32_t)(s<0?-s:s);if(a>peak)peak=a;}NoteBank_VmBoundaryEnd();return peak;}
 int main(int argc,char **argv){
-  uint8_t *program;size_t size;check(argc==3,"program paths required");program=read_file(argv[1],&size);
+  uint8_t *program;size_t size;check(argc==4,"program paths required");program=read_file(argv[1],&size);
   NoteEnv_Init();StreamRing_Init();NoteBank_Init();check(NoteBank_VmActiveMask()==0u,"reset has no programs");
-  check(NoteBank_NoteOn(0u,60u)==-2,"note reports no program");boundary();check(!NoteBank_IsActive(0u),"no-program silent");
+  check(NoteBank_NoteOn(0u,60u,127u)==-2,"note reports no program");boundary();check(!NoteBank_IsActive(0u),"no-program silent");
   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,program,size)==0&&NoteBank_VmUploadCommit(0u)==0,"valid FWSC activates");
-  check(NoteBank_VmActiveMask()==1u,"only voice zero loaded");check(NoteBank_NoteOn(0u,60u)==0,"note accepted");boundary();
+  check(NoteBank_VmActiveMask()==1u,"only voice zero loaded");check(NoteBank_NoteOn(0u,60u,64u)==0,"note accepted");boundary();
   check(NoteBank_GetKey(0u)==60u&&NoteBank_GetMappedKey(0u)==60u,"identity key map applied");
+  check(NoteBank_GetVelocity(0u)==64u,"note velocity applied");
   check(fabs(NoteBank_GetFreq(0u)-261.625565)<0.001,"C4 frequency resolved on card");
   check(NoteBank_IsActive(0u)&&NoteEnv_Amplitude(0u)>0.0f,"Berry starts native attack");
   check(StreamRing_FreeLevel(0u)==0u,"wavetable profile advertises no BODY credit");
@@ -36,7 +37,7 @@ int main(int argc,char **argv){
   check(NoteBank_VmUploadBegin(1u)==-2,"reload rejected while sounding");
   check(NoteBank_NoteOff(0u)==0,"note off accepted");for(unsigned i=0;i<64u&&NoteBank_IsActive(0u);++i)boundary();
   check(!NoteBank_IsActive(0u),"release ends note");check(NoteBank_VmFaultCount(0u)==0u,"no integration fault");
-  check(NoteBank_VmUploadBegin(0u)==0,"replacement begins idle");check(NoteBank_NoteOn(0u,60u)==-3,"note-on rejected while uploading");NoteBank_VmUploadAbort(0u);
+  check(NoteBank_VmUploadBegin(0u)==0,"replacement begins idle");check(NoteBank_NoteOn(0u,60u,127u)==-3,"note-on rejected while uploading");NoteBank_VmUploadAbort(0u);
   check(NoteBank_VmIsActive(0u),"abort preserves program");
   {uint8_t bad[FW_SCRIPT_CONTAINER_HEADER_SIZE]={0};check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,bad,sizeof(bad))!=0,"bad FWSC rejected");check(NoteBank_VmIsActive(0u),"bad replacement preserved");}
   {uint8_t *bad_crc=malloc(size);check(bad_crc!=NULL,"allocate CRC case");memcpy(bad_crc,program,size);bad_crc[size-1u]^=1u;
@@ -46,19 +47,29 @@ int main(int argc,char **argv){
    metadata[FW_SCRIPT_CHANNEL_METADATA_REFERENCE_KEY_OFFSET]=69u;memcpy(metadata+FW_SCRIPT_CHANNEL_METADATA_REFERENCE_HZ_OFFSET,&reference,sizeof(reference));metadata[FW_SCRIPT_CHANNEL_METADATA_KEYMAP_OFFSET+69u]=33u;refresh_crc(mapped,size);
    check(NoteBank_VmUploadBegin(1u)==0&&NoteBank_VmUploadFeed(1u,mapped,size)==0&&NoteBank_VmUploadCommit(1u)==0,"mapped second voice load");free(mapped);}
   check(NoteBank_VmActiveMask()==3u,"per-voice program mask");
-  check(NoteBank_NoteOn(1u,69u)==0,"mapped note accepted");boundary();
+  check(NoteBank_NoteOn(1u,69u,1u)==0,"mapped note accepted");boundary();
   check(NoteBank_GetKey(1u)==69u&&NoteBank_GetMappedKey(1u)==33u,"A4 input maps to A1");
+  check(NoteBank_GetVelocity(1u)==1u,"minimum velocity survives mapping");
   check(fabs(NoteBank_GetFreq(1u)-54.0)<0.001,"A1 resolves under A4=432 tuning");
-  check(NoteBank_NoteOn(0u,69u)==0,"identity voice accepts same physical key");boundary();
+  check(NoteBank_NoteOn(0u,69u,127u)==0,"identity voice accepts same physical key");boundary();
   check(NoteBank_GetMappedKey(0u)==69u&&fabs(NoteBank_GetFreq(0u)-440.0)<0.001,"voices retain independent maps and tuning");
-  {uint8_t *abi5=malloc(size);int feed;check(abi5!=NULL,"allocate ABI5 case");memcpy(abi5,program,size);abi5[8]=5u;abi5[9]=0u;NoteBank_PanicAll();
-   check(NoteBank_VmUploadBegin(0u)==0,"ABI5 upload begin");feed=NoteBank_VmUploadFeed(0u,abi5,size);
-   check(feed!=0||NoteBank_VmUploadCommit(0u)!=0,"ABI5 container must be rejected");free(abi5);}
+  {uint8_t *abi6=malloc(size);int feed;check(abi6!=NULL,"allocate ABI6 case");memcpy(abi6,program,size);abi6[8]=6u;abi6[9]=0u;NoteBank_PanicAll();
+   check(NoteBank_VmUploadBegin(0u)==0,"ABI6 upload begin");feed=NoteBank_VmUploadFeed(0u,abi6,size);
+   check(feed!=0||NoteBank_VmUploadCommit(0u)!=0,"ABI6 container must be rejected");free(abi6);}
   {size_t example_size;uint8_t *example=read_file(argv[2],&example_size);NoteBank_VmUploadAbort(0u);
    check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,example,example_size)==0&&NoteBank_VmUploadCommit(0u)==0,"load production example");
-   check(NoteBank_NoteOn(0u,60u)==0,"example first note");boundary();
+   check(NoteBank_NoteOn(0u,60u,40u)==0,"example first note");boundary();
    check(StreamRing_HasPending(0u)==0u,"example must start an idle voice immediately");
-   check(NoteBank_NoteOn(0u,62u)==0,"example replacement note");boundary();
+   check(NoteBank_NoteOn(0u,62u,100u)==0,"example replacement note");boundary();
    check(StreamRing_HasPending(0u)==0u,"example must promote a replacement immediately");free(example);}
+  NoteBank_PanicAll();
+  {size_t velocity_size;uint8_t *velocity_program=read_file(argv[3],&velocity_size);
+   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,velocity_program,velocity_size)==0&&NoteBank_VmUploadCommit(0u)==0,"load velocity example");
+   check(NoteBank_NoteOn(0u,60u,32u)==0,"low velocity note accepted");boundary();
+   check(NoteBank_GetVelocity(0u)==32u,"low velocity reaches active voice");
+   check(fabsf(NoteEnv_Amplitude(0u)-(32.0f/127.0f))<0.0001f,"velocity example scales amplitude");
+   check(NoteBank_NoteOn(0u,62u,127u)==0,"replacement velocity accepted");boundary();
+   check(NoteBank_GetVelocity(0u)==127u,"replacement keeps its own velocity");
+   check(fabsf(NoteEnv_Amplitude(0u)-1.0f)<0.0001f,"full velocity reaches full envelope amplitude");free(velocity_program);}
   free(program);puts("Channel shared Berry VM test passed");return 0;
 }

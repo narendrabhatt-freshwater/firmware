@@ -65,7 +65,7 @@ the same session does not.
 The host packs the hungriest wanting voices into each UAC window (fair share
 of a 5062-sample 10 ms OUT budget for eight voices, weighted by source-consumption
 rate). The host reserves the BODY session, launches about 25 ms of SOF BODY,
-then immediately queues RS485 `aw` and `nX <Hz> <scale> @<session>` without
+then immediately queues RS485 `aw` and `nX on <key> <velocity> @<session>` without
 waiting for USB. Tagged `nX` binds the wave/session and starts pitch/attack. An
 early matching SOF waits on-card for I2S to select its ring origin, while a
 superseded session is rejected as stale.
@@ -122,7 +122,7 @@ flowchart TB
   end
 ```
 
-RS485 `vq` returns a 56-byte ABI6 frame containing active/pending masks,
+RS485 `vq` returns a 56-byte ABI7 frame containing active/pending masks,
 runtime capacity, target session/fill, exact credit, and the last processed UAC
 sequence. It is the only live refill authority. Each UAC window carries one
 voice/session tag, one sequence, and 508 BODY samples. The host subtracts the

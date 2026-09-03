@@ -123,8 +123,9 @@ public:
   Result loadSampleFolder(const std::string &path);
   Result setSampleRoot(uint16_t sample_id, double root_hz);
 
-  /** Play a loaded attack/BODY sample on a fixed hardware voice. */
-  Result sampleNoteOn(uint8_t voice, uint8_t midi_key, uint16_t sample_id);
+  /** Play a loaded sample with raw MIDI velocity 1..127 on a fixed voice. */
+  Result sampleNoteOn(uint8_t voice, uint8_t midi_key, uint16_t sample_id,
+                      uint8_t velocity = 127u);
   Result noteOff(uint8_t voice);
   Result allNotesOff();
 

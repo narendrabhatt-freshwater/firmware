@@ -8,7 +8,7 @@ Programs provide these event handlers:
 
 ```berry
 # optional: def on_init()
-def on_note_on(key)
+def on_note_on(key, velocity)
 def on_note_off(has_pending)
 def on_ramp_end()
 ```
@@ -17,7 +17,8 @@ When `on_init()` is omitted, the compiler embeds identity mapping and standard
 C4 = 261.625565 Hz tuning. Optional init may call
 `tuning_set(reference_key, reference_frequency)` once and configure the map with
 `keymap_set(input_key, output_key)` or `keymap_fill(output_key)`. Runtime `key`
-is the physical MIDI key and `has_pending` reports whether a replacement waits.
+is the physical MIDI key, `velocity` is the raw MIDI value from 1 through 127,
+and `has_pending` reports whether a replacement waits.
 
 ```text
 input(id)
@@ -38,7 +39,8 @@ The lower-level `input(id)` call remains available for less-common data. Input
 constants are `INPUT_NOTE_ID`, `INPUT_FREQUENCY`, `INPUT_GAIN`, `INPUT_GATE`,
 `INPUT_ACTIVE`, `INPUT_HAS_PENDING`, `INPUT_PENDING_FREQUENCY`,
 `INPUT_PENDING_GAIN`, `INPUT_AMPLITUDE`, `INPUT_KEY`,
-`INPUT_MAPPED_KEY`, `INPUT_PENDING_KEY`, and `INPUT_PENDING_MAPPED_KEY`.
+`INPUT_MAPPED_KEY`, `INPUT_PENDING_KEY`, `INPUT_PENDING_MAPPED_KEY`,
+`INPUT_VELOCITY`, and `INPUT_PENDING_VELOCITY`.
 Scripts implement pitch-dependent envelope policy themselves with allocation-free
 `pow()` and a two-argument `ramp()`.
 
@@ -58,7 +60,7 @@ line statements. Reads in expressions and assignments in every handler then
 use the name directly:
 
 ```berry
-def on_note_on(key)
+def on_note_on(key, velocity)
     state stage = 1
 end
 
@@ -74,7 +76,7 @@ compile-time errors. Named state cannot be mixed with direct numeric
 handler-local.
 
 The target runtime has no source compiler, filesystem, REPL, bytecode saver, or
-optional Berry modules. It uses float32/int32, a 25 KiB fixed arena including a
+optional Berry modules. It uses float32/int32, a 26 KiB fixed arena including a
 4 KiB upload scratch region, pre-grown stacks, and a 32-instruction watchdog
 heartbeat. Allocation or GC during a handler invalidates the shared VM.
 
@@ -90,7 +92,7 @@ The qualification test loads eight distinct objects, performs replacement,
 runs one million event dispatches, checks the fault-containment matrix, and
 prints the allocator peak and formula-derived arena size.
 
-`fw_scriptc` emits an FWSC v1 container carrying ABI6 tuning/map metadata and bytecode:
+`fw_scriptc` emits an FWSC v1 container carrying ABI7 tuning/map metadata and bytecode:
 
 ```sh
 build/shared-berry/fw_scriptc cmi_core/runtime/examples/channel_envelope.be \

@@ -108,8 +108,8 @@ At boot the card turns the analog bypass path on and sets CH1 DAC trim to
 
 | Command                | Meaning                                                                           |
 | ---------------------- | --------------------------------------------------------------------------------- |
-| `n0`…`n7 on <key>`       | Start raw MIDI key 0…127; FWSC maps and tunes it.                              |
-| `n0`…`n7 on <key> @<session>` | Streamed note-on; bind BODY session 0…254 before ACK.                    |
+| `n0`…`n7 on <key> [velocity]` | Start raw MIDI key 0…127 with velocity 1…127; omitted velocity defaults to 127. |
+| `n0`…`n7 on <key> <velocity> @<session>` | Streamed note-on; bind BODY session 0…254 before ACK.          |
 | `n0`…`n7 off`            | Turn that slot off.                                                            |
 | `n off`                | Silence all 8.                                                                  |
 
@@ -133,7 +133,7 @@ and are lost on reset.
 | `ar <id> <Hz>`      | Set head `<id>`'s root pitch (Hz > 0)                               |
 | `aw <v> <id>`       | Assign head `<id>` to voice `<v>` 0…7                               |
 | `a`                 | Loaded count + 256-bit hex mask (bit 0 = wave 0)                    |
-| `vq`                | ABI6 active/pending generations + exact runtime ring credit             |
+| `vq`                | ABI7 active/pending generations + exact runtime ring credit             |
 | `usb`               | BODY counters: drop/hold/fill, RS-485 `vq`, rx/bytes/bad              |
 | `usb 0`             | Clear those counters, then same reply                                 |
 
@@ -145,13 +145,13 @@ Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 2-tap
 linear interpolation. The attack plays to its committed length (not a hold-pad to
 512). Body starts at `len − 32` with the same source index and
 fraction as the attack. The host does not count body-FIFO consume
-until that join. Every `nX on <key>` command is a note-on, including key 0.
+until that join. Every `nX on <key> [velocity]` command is a note-on, including key 0.
 
 ### Channel VM programs
 
 | Command                    | Meaning                                                          |
 | -------------------------- | ---------------------------------------------------------------- |
-| `vmload <voice> <nbytes>`  | **USB CDC only.** Upload one FWSC ABI6 program to voice 0…7      |
+| `vmload <voice> <nbytes>`  | **USB CDC only.** Upload one FWSC ABI7 program to voice 0…7      |
 | `vm`                       | Query the active-program voice mask                              |
 | `vm <voice>`               | Query active state, ABI target/version, and fault for one voice  |
 | `vm mem`                   | Shared-arena metrics followed by eight per-voice diagnostic lines |
@@ -325,11 +325,11 @@ RS485 `vq` every 5 ms is the steady-state refill authority and lifecycle
 monitor. UAC OUT carries BODY data only.
 
 ```text
-RS485 vq reply, fixed 56-byte ABI6 binary frame
+RS485 vq reply, fixed 56-byte ABI7 binary frame
 offset  size  field
 0       2     sync = a5 5a
 2       1     card = 43 ('C')
-3       1     type = 04 sequenced ABI6 generation status
+3       1     type = 04 sequenced ABI7 generation status
 4       1     active voice mask
 5       1     pending voice mask
 6       1     best refill voice, or 255
@@ -438,7 +438,7 @@ Notes:
    do not discard pending replies.
 3. Upload only loads AXI RAM (lost on reset). Set `ar <id> <rootHz>`; the host
    app starts it with RS485 `aw <voice> <id>` then session-bound
-   `nX on <key> @<session>` immediately after launching its USB BODY job;
+   `nX on <key> <velocity> @<session>` immediately after launching its USB BODY job;
    later sustain uses vq-authorized BODY refills.
 
 ### VM program upload (`vmload`)
@@ -448,7 +448,7 @@ uploaded, note commands return `err:no-program` and the note bank stays silent.
 
 `vmload <voice> <nbytes>` is CDC-only and uses the same line-to-binary
 transition as `al`. Each voice 0..7 owns an independent program. The payload is
-one Berry ABI6 `FWSC` container, up to 4116 bytes (20-byte container header
+one Berry ABI7 `FWSC` container, up to 4116 bytes (20-byte container header
 plus at most 4096 payload bytes). The card writes
 `ok:ready`, receives exactly `nbytes`, validates target/version, CRC, bytecode,
 runtime/configuration, handlers, host calls, and CRC, then replies
@@ -464,7 +464,7 @@ remain voice-local; allocation, GC, watchdog, or uncertain interpreter state
 invalidates the shared VM and silences all voices. Programs are lost on reset.
 `vm mem` reports arena current/peak/free and allocation/GC diagnostics.
 
-ABI6 requires `on_note_on(key)`, `on_note_off(has_pending)`, and
+ABI7 requires `on_note_on(key, velocity)`, `on_note_off(has_pending)`, and
 `on_ramp_end()`. Optional compile-time `on_init()` can override the default
 C4 = 261.625565 Hz tuning and identity key map. Runtime scripts inspect
 raw/mapped keys and live amplitude through `input()`, use allocation-free

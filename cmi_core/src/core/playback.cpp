@@ -10,14 +10,17 @@ using detail::Ok;
 using detail::ValidKey;
 using detail::ValidVoice;
 
-Result Core::Impl::SampleNoteOn(uint8_t voice, uint8_t key, uint16_t sample_id)
+Result Core::Impl::SampleNoteOn(uint8_t voice, uint8_t key, uint16_t sample_id,
+                                uint8_t velocity)
 {
   const Result ready = RequireVoiceReady(voice);
   if (!ready) {
     return ready;
   }
-  if (!ValidKey(key) || sample_id >= 256u) {
-    return Fail(ErrorCode::InvalidArgument, "invalid MIDI key or sample id");
+  if (!ValidKey(key) || sample_id >= 256u || velocity == 0u ||
+      velocity > 127u) {
+    return Fail(ErrorCode::InvalidArgument,
+                "invalid MIDI key, velocity, or sample id");
   }
   if (!loaded_samples[sample_id]) {
     return Fail(ErrorCode::SampleError,
@@ -32,7 +35,7 @@ Result Core::Impl::SampleNoteOn(uint8_t voice, uint8_t key, uint16_t sample_id)
 
   last_sample_result = Ok();
   const cardlink::sample::NoteRequest note{
-      voice, key, sample_id, 0xFFu, true};
+      voice, key, velocity, sample_id, 0xFFu, true};
   if (!samples.NoteOnBatch(&note, 1u)) {
     return last_sample_result.ok()
                ? Fail(ErrorCode::SampleError,
@@ -93,7 +96,7 @@ Result Core::Impl::ApplyMidi(const cardlink::midi::NoteEvent &event)
   }
 
   const auto events = event.action == cardlink::midi::NoteAction::On
-                          ? voices.NoteOn(event.key)
+                          ? voices.NoteOn(event.key, event.velocity)
                           : voices.NoteOff(event.key);
   for (const auto &bank_event : events) {
     Result result = Ok();
@@ -104,7 +107,8 @@ Result Core::Impl::ApplyMidi(const cardlink::midi::NoteEvent &event)
     case cardlink::midi::BankEventKind::On:
     case cardlink::midi::BankEventKind::Retrig:
       result = SampleNoteOn(bank_event.slot, bank_event.midi_key,
-                            midi_sample[bank_event.midi_key]);
+                            midi_sample[bank_event.midi_key],
+                            bank_event.velocity);
       break;
     case cardlink::midi::BankEventKind::Steal:
       continue;
@@ -148,10 +152,11 @@ void Core::Impl::PollVoiceStatus()
   }
 }
 
-Result Core::sampleNoteOn(uint8_t voice, uint8_t midi_key, uint16_t sample_id)
+Result Core::sampleNoteOn(uint8_t voice, uint8_t midi_key, uint16_t sample_id,
+                          uint8_t velocity)
 {
   std::lock_guard<std::mutex> lock(impl_->operation_mutex);
-  return impl_->SampleNoteOn(voice, midi_key, sample_id);
+  return impl_->SampleNoteOn(voice, midi_key, sample_id, velocity);
 }
 
 Result Core::noteOff(uint8_t voice)

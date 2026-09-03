@@ -42,7 +42,8 @@ struct Core::Impl {
   Result RefreshAttackSamples();
   Result LoadSample(const SampleDefinition &sample);
 
-  Result SampleNoteOn(uint8_t voice, uint8_t key, uint16_t sample_id);
+  Result SampleNoteOn(uint8_t voice, uint8_t key, uint16_t sample_id,
+                      uint8_t velocity);
   Result NoteOff(uint8_t voice);
   Result AllNotesOff();
   Result ApplyMidi(const cardlink::midi::NoteEvent &event);

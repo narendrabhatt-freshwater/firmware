@@ -1,4 +1,8 @@
 #include "cmi/core.hpp"
+#include "cardlink/midi/midi_input.hpp"
+#include "cardlink/midi/voice_bank.hpp"
+#include "cardlink/vm/compiler.hpp"
+#include "cardproto/channel.hpp"
 
 #include <array>
 #include <cstdlib>
@@ -18,6 +22,65 @@ void Expect(bool condition, const char *message)
 
 int main()
 {
+  using cardlink::midi::BankEventKind;
+  using cardlink::midi::DecodeNoteMessage;
+  using cardlink::midi::NoteAction;
+
+  const auto low = DecodeNoteMessage({0x90u, 60u, 1u});
+  const auto middle = DecodeNoteMessage({0x90u, 61u, 64u});
+  const auto high = DecodeNoteMessage({0x90u, 62u, 127u});
+  const auto zero = DecodeNoteMessage({0x90u, 63u, 0u});
+  Expect(low && low->action == NoteAction::On && low->velocity == 1u,
+         "minimum MIDI velocity must be preserved");
+  Expect(middle && middle->velocity == 64u,
+         "middle MIDI velocity must be preserved");
+  Expect(high && high->velocity == 127u,
+         "maximum MIDI velocity must be preserved");
+  Expect(zero && zero->action == NoteAction::Off && zero->velocity == 0u,
+         "velocity-zero Note On must decode as Note Off");
+
+  cardlink::midi::VoiceBank voices;
+  auto events = voices.NoteOn(60u, 1u);
+  Expect(events.size() == 1u && events[0].velocity == 1u,
+         "voice allocation must preserve velocity");
+  events = voices.NoteOn(60u, 64u);
+  Expect(events.size() == 1u && events[0].kind == BankEventKind::Retrig &&
+             events[0].velocity == 64u,
+         "voice retrigger must replace velocity");
+  for (uint8_t key = 61u; key < 68u; ++key) {
+    (void)voices.NoteOn(key, static_cast<uint8_t>(key));
+  }
+  events = voices.NoteOn(68u, 127u);
+  Expect(events.size() == 2u && events[0].kind == BankEventKind::Steal &&
+             events[1].kind == BankEventKind::On &&
+             events[1].velocity == 127u,
+         "voice stealing must preserve replacement velocity");
+  Expect(voices.NoteOn(69u, 0u).empty(),
+         "voice allocation must reject zero velocity");
+
+  Expect(cardproto::FormatNoteOn(0u, 69u, 100u) == "n0 on 69 100",
+         "note formatter must include velocity");
+  Expect(cardproto::FormatStreamNoteOn(7u, 1u, 127u, 254u) ==
+             "n7 on 1 127 @254",
+         "stream note formatter must include velocity and session");
+  Expect(cardproto::FormatStreamNoteOn(7u, 1u, 254u) ==
+             "n7 on 1 127 @254",
+         "legacy stream formatter must default to full velocity");
+
+  const std::string handlers =
+      "def on_note_off(has_pending)\nend\n"
+      "def on_ramp_end()\nend\n";
+  cardlink::vm::BerryCompiler compiler;
+  const auto abi7 = compiler.CompileChannel(
+      "def on_note_on(key, velocity)\n    start_note()\nend\n" + handlers);
+  Expect(abi7.ok && abi7.program.size() >= 10u && abi7.program[8] == 7u &&
+             abi7.program[9] == 0u,
+         "two-argument note handler must compile as ABI7");
+  const auto abi6_source = compiler.CompileChannel(
+      "def on_note_on(key)\n    start_note()\nend\n" + handlers);
+  Expect(!abi6_source.ok,
+         "one-argument note handler must be rejected by ABI7 compiler");
+
   cmi::Core core({});
   Expect(!core.isConnected(), "a new Core must be disconnected");
   Expect(!core.isReady(), "a new Core must not be ready");

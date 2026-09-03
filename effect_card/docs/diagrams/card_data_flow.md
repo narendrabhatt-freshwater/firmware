@@ -64,7 +64,7 @@ Q16.16 interpolation. `nX > 0` is always a note-on. A new BODY session
 the same session does not.
 The host packs the hungriest wanting voices into each UAC window (fair share
 of a 5062-sample 10 ms OUT budget for eight voices, weighted by source-consumption
-rate). RS485 `aw` then `nX <Hz>` assigns the wave and starts pitch/attack. Only
+rate). RS485 `aw` then `nX on <key> <velocity>` assigns the wave and starts pitch/attack. Only
 after their ACK does the host create the session and put about 15 ms of
 pitch-adjusted SOF BODY at the top of the USB queue, without consulting `vq`.
 Every fresh RS485 `vq` exact free-space grant permits one later bounded refill.

@@ -71,6 +71,7 @@ void RegisterAbi(bvm *vm){
   GlobalInt(vm,"INPUT_AMPLITUDE",FW_VM_CHANNEL_INPUT_AMPLITUDE);
   GlobalInt(vm,"INPUT_KEY",FW_VM_CHANNEL_INPUT_KEY);GlobalInt(vm,"INPUT_MAPPED_KEY",FW_VM_CHANNEL_INPUT_MAPPED_KEY);
   GlobalInt(vm,"INPUT_PENDING_KEY",FW_VM_CHANNEL_INPUT_PENDING_KEY);GlobalInt(vm,"INPUT_PENDING_MAPPED_KEY",FW_VM_CHANNEL_INPUT_PENDING_MAPPED_KEY);
+  GlobalInt(vm,"INPUT_VELOCITY",FW_VM_CHANNEL_INPUT_VELOCITY);GlobalInt(vm,"INPUT_PENDING_VELOCITY",FW_VM_CHANNEL_INPUT_PENDING_VELOCITY);
   GlobalNil(vm,"on_init");GlobalNil(vm,"on_note_on");GlobalNil(vm,"on_note_off");GlobalNil(vm,"on_ramp_end");
 }
 CompileResult Error(const std::string &message){CompileResult r;r.message=message;return r;}
@@ -86,7 +87,7 @@ bool SourceIsIsolated(const std::string &source){
     if(line.find("global ")!=std::string::npos||line.find("import ")!=std::string::npos||line.find("class ")!=std::string::npos)return false;
     const auto first=line.find_first_not_of(" \t\r");if(first==std::string::npos||line[first]=='#'||first!=0u)continue;
     if(line.compare(0,sizeof("def on_init()")-1u,"def on_init()")&&
-       line.compare(0,sizeof("def on_note_on(key)")-1u,"def on_note_on(key)")&&
+       line.compare(0,sizeof("def on_note_on(key, velocity)")-1u,"def on_note_on(key, velocity)")&&
        line.compare(0,sizeof("def on_note_off(has_pending)")-1u,"def on_note_off(has_pending)")&&
        line.compare(0,sizeof("def on_ramp_end()")-1u,"def on_ramp_end()")&&
        line.compare(0,3,"end"))return false;
@@ -129,7 +130,7 @@ CompileResult BerryCompiler::CompileChannel(const std::string &source) const {
                                      preprocess_error,sizeof(preprocess_error))!=0)
     return Error(preprocess_error[0]?preprocess_error:"could not preprocess named state");
   std::string lowered(lowered_data,lowered_size);std::free(lowered_data);
-  if(!SourceIsIsolated(lowered))return Error("only ABI6 Channel handlers are allowed at top level");
+  if(!SourceIsIsolated(lowered))return Error("only ABI7 Channel handlers are allowed at top level");
   InitMetadata metadata;for(unsigned key=0;key<FW_SCRIPT_CHANNEL_KEY_COUNT;++key)metadata.keymap[key]=static_cast<uint8_t>(key);
   bvm *vm=be_vm_new();if(!vm)return Error("could not create Berry compiler VM");RegisterAbi(vm);
   if(be_loadbuffer(vm,"channel.be",lowered.data(),lowered.size())!=BE_OK){
@@ -143,7 +144,7 @@ CompileResult BerryCompiler::CompileChannel(const std::string &source) const {
   if(be_savecode(vm,temp.c_str())!=BE_OK){be_vm_delete(vm);return Error("could not serialize Berry bytecode");}
   if(be_pcall(vm,0)!=BE_OK){std::remove(temp.c_str());be_vm_delete(vm);return Error("Berry program initialization failed");}
   const char *handlers[]={"on_note_on","on_note_off","on_ramp_end"};
-  const bbyte arities[]={1u,1u,0u};
+  const bbyte arities[]={2u,1u,0u};
   for(unsigned i=0u;i<3u;++i)if(!HandlerHasArity(vm,handlers[i],arities[i])){std::remove(temp.c_str());be_vm_delete(vm);return Error(std::string("missing handler or invalid signature: ")+handlers[i]);}
   int init_result=BE_OK;
   const bool got_init=be_getglobal(vm,"on_init")&&be_isfunction(vm,-1);

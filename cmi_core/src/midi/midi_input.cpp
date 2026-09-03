@@ -144,10 +144,11 @@ void MidiInput::RtMidiCallback(double /*time_stamp*/,
   static_cast<MidiInput*>(user_data)->HandleMessage(*message);
 }
 
-void MidiInput::HandleMessage(const std::vector<unsigned char>& message)
+std::optional<NoteEvent>
+DecodeNoteMessage(const std::vector<unsigned char>& message)
 {
   if (message.size() < 3) {
-    return;
+    return std::nullopt;
   }
 
   const uint8_t status = message[0];
@@ -160,23 +161,35 @@ void MidiInput::HandleMessage(const std::vector<unsigned char>& message)
     // Note On with velocity 0 is Note Off (MIDI convention).
     ev.action = (data2 == 0) ? NoteAction::Off : NoteAction::On;
     ev.key = data1;
+    ev.velocity = data2;
   } else if (type == 0x80u) {
     ev.action = NoteAction::Off;
     ev.key = data1;
+    ev.velocity = 0;
   } else if (type == 0xB0u) {
     // CC 120 All Sound Off / CC 123 All Notes Off — kill stuck tones.
     if (data1 == 120 || data1 == 123) {
       ev.action = NoteAction::AllOff;
       ev.key = 0;
+      ev.velocity = 0;
     } else {
-      return;
+      return std::nullopt;
     }
   } else {
-    return;
+    return std::nullopt;
   }
 
+  return ev;
+}
+
+void MidiInput::HandleMessage(const std::vector<unsigned char>& message)
+{
+  const std::optional<NoteEvent> decoded = DecodeNoteMessage(message);
+  if (!decoded) {
+    return;
+  }
   std::lock_guard<std::mutex> lock(queue_mu_);
-  queue_.push(ev);
+  queue_.push(*decoded);
 }
 
 } // namespace cardlink::midi

@@ -55,11 +55,14 @@ public:
 
   /* ---- notes (n0…n7, n) ---- */
 
-  /** Raw MIDI-key note-on. Wire `nX on key`. */
-  Result NoteOn(uint8_t slot, uint8_t key);
+  /** Raw MIDI-key note-on. Wire `nX on key velocity`. */
+  Result NoteOn(uint8_t slot, uint8_t key, uint8_t velocity = 127u);
 
-  /** Authoritative streamed note-on. Wire `nX Hz scale @session`; the tag
+  /** Authoritative streamed note-on. Wire `nX on key velocity @session`; the tag
    * binds the following USB BODY SOF to this exact gate generation. */
+  Result StreamNoteOn(uint8_t slot, uint8_t key, uint8_t velocity,
+                      uint8_t session);
+  /** Source-compatible streamed note-on using full velocity. */
   Result StreamNoteOn(uint8_t slot, uint8_t key, uint8_t session);
 
   /**
@@ -166,14 +169,19 @@ private:
 /**
  * @param[in] slot Voice 0…15 (encoded as `n0`…`nf`).
  * @param[in] key  Raw MIDI key.
- * @return Command string, e.g. `"n0 on 69"`.
+ * @param[in] velocity Raw MIDI velocity in 1..127.
+ * @return Command string, e.g. `"n0 on 69 127"`.
  */
-std::string FormatNoteOn(uint8_t slot, uint8_t key);
+std::string FormatNoteOn(uint8_t slot, uint8_t key,
+                         uint8_t velocity = 127u);
 
 /** Format a note-off (`nX off`). */
 std::string FormatNoteOff(uint8_t slot);
 
-/** Format a session-bound streamed note-on (`nX on key @session`). */
+/** Format a session-bound streamed note-on (`nX on key velocity @session`). */
+std::string FormatStreamNoteOn(uint8_t slot, uint8_t key, uint8_t velocity,
+                               uint8_t session);
+/** Source-compatible formatter using full velocity. */
 std::string FormatStreamNoteOn(uint8_t slot, uint8_t key, uint8_t session);
 
 /**

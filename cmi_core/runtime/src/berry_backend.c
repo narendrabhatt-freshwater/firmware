@@ -243,6 +243,7 @@ static int create_vm(ScriptBerryRuntime *r) {
   register_int(vm,"INPUT_PENDING_GAIN",FW_VM_CHANNEL_INPUT_PENDING_GAIN);register_int(vm,"INPUT_AMPLITUDE",FW_VM_CHANNEL_INPUT_AMPLITUDE);
   register_int(vm,"INPUT_KEY",FW_VM_CHANNEL_INPUT_KEY);register_int(vm,"INPUT_MAPPED_KEY",FW_VM_CHANNEL_INPUT_MAPPED_KEY);
   register_int(vm,"INPUT_PENDING_KEY",FW_VM_CHANNEL_INPUT_PENDING_KEY);register_int(vm,"INPUT_PENDING_MAPPED_KEY",FW_VM_CHANNEL_INPUT_PENDING_MAPPED_KEY);
+  register_int(vm,"INPUT_VELOCITY",FW_VM_CHANNEL_INPUT_VELOCITY);register_int(vm,"INPUT_PENDING_VELOCITY",FW_VM_CHANNEL_INPUT_PENDING_VELOCITY);
   clear_handler_globals(vm);
   be_newlist(vm);for(i=0u;i<FW_SCRIPT_CHANNEL_VOICE_COUNT;++i){be_pushnil(vm);be_data_push(vm,-2);be_pop(vm,1);}be_setglobal(vm,"_fw_programs");be_pop(vm,1);
   /* Intern all native exception text before handlers become allocation-free. */
@@ -267,7 +268,7 @@ static int push_handler(bvm *vm,uint8_t voice,uint8_t handler){
   return be_isfunction(vm,-1)?0:-1;
 }
 static int validate_program(bvm *vm,int index){
-  static const bbyte argc[]={1u,1u,0u};unsigned i;int stable=index<0?be_top(vm)+index+1:index;
+  static const bbyte argc[]={2u,1u,0u};unsigned i;int stable=index<0?be_top(vm)+index+1:index;
   if(!be_islist(vm,stable)||be_data_size(vm,stable)!=FW_SCRIPT_CHANNEL_HANDLER_COUNT)return -1;
   for(i=0u;i<FW_SCRIPT_CHANNEL_HANDLER_COUNT;++i){bvalue *value;be_pushint(vm,(bint)i);be_getindex(vm,stable);value=be_indexof(vm,-1);
     if(!var_isclosure(value)||((bclosure *)var_toobj(value))->proto->argc!=argc[i]){be_pop(vm,2);return -1;}be_pop(vm,2);}return 0;
@@ -315,11 +316,12 @@ void script_berry_record_cycles(ScriptBerryRuntime *r,uint8_t v,uint32_t cycles)
   if(r->boundary_cycles>SCRIPT_BERRY_BOUNDARY_CYCLE_LIMIT&&r->shared_valid)invalidate_shared(r,FW_VM_FAULT_BUDGET);
 }
 int script_berry_dispatch(ScriptBerryRuntime *r,FwVmChannelHandler handler,uint8_t voice){
-  bvm *vm=(bvm *)r->vm;volatile int result=BE_EXCEPTION;uint32_t used;float first=0.0f;
+  bvm *vm=(bvm *)r->vm;volatile int result=BE_EXCEPTION;uint32_t used;float first=0.0f,second=0.0f;
   if(!r->shared_valid||!script_berry_is_active(r,voice)||handler>=FW_SCRIPT_CHANNEL_HANDLER_COUNT)return -1;
   if(handler==FW_VM_CHANNEL_HANDLER_NOTE_ON){
     if(!r->ops.read_input||r->ops.read_input(r->ops.context,voice,FW_VM_CHANNEL_INPUT_PENDING_KEY,&first)!=0||
-       !isfinite(first)||first<0.0f||first>127.0f){
+       r->ops.read_input(r->ops.context,voice,FW_VM_CHANNEL_INPUT_PENDING_VELOCITY,&second)!=0||
+       !isfinite(first)||first<0.0f||first>127.0f||!isfinite(second)||second<1.0f||second>127.0f){
       silence(r,voice,FW_VM_FAULT_HOST_CALL);return -1;}
   }else if(handler==FW_VM_CHANNEL_HANDLER_NOTE_OFF){
     if(!r->ops.read_input||r->ops.read_input(r->ops.context,voice,FW_VM_CHANNEL_INPUT_HAS_PENDING,&first)!=0||!isfinite(first)){
@@ -328,9 +330,9 @@ int script_berry_dispatch(ScriptBerryRuntime *r,FwVmChannelHandler handler,uint8
   s_runtime=r;r->current_voice=voice;r->pending_fault=FW_VM_FAULT_NONE;r->discard_vm=0u;r->phase=PHASE_HANDLER;
   r->handler_instruction_start=vm->counter_ins;r->abort_active=1u;
   if(setjmp(r->abort_jump)==0){if(push_handler(vm,voice,(uint8_t)handler)==0){
-    if(handler==FW_VM_CHANNEL_HANDLER_NOTE_ON){be_pushint(vm,(bint)first);}
+    if(handler==FW_VM_CHANNEL_HANDLER_NOTE_ON){be_pushint(vm,(bint)first);be_pushint(vm,(bint)second);}
     else if(handler==FW_VM_CHANNEL_HANDLER_NOTE_OFF)be_pushbool(vm,first!=0.0f);
-    result=be_pcall(vm,handler==FW_VM_CHANNEL_HANDLER_NOTE_ON?1:
+    result=be_pcall(vm,handler==FW_VM_CHANNEL_HANDLER_NOTE_ON?2:
                        handler==FW_VM_CHANNEL_HANDLER_NOTE_OFF?1:0);}}
   r->abort_active=0u;used=vm->counter_ins-r->handler_instruction_start;r->phase=PHASE_IDLE;
   if(!r->discard_vm)be_pop(vm,be_top(vm));

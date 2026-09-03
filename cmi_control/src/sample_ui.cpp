@@ -366,7 +366,8 @@ void DrainPending(App &app)
 void NoteOn(App &app, int voice, uint8_t key)
 {
   (void)app.EnsureSampleStream();
-  app.samples.NoteOn(static_cast<uint8_t>(voice), key);
+  app.samples.NoteOn(static_cast<uint8_t>(voice), key, 0xFFFFu,
+                     static_cast<uint8_t>(app.piano_velocity));
 }
 
 void NoteOff(App &app, int voice)
@@ -648,7 +649,8 @@ void DrawSamplePage(App &app)
       std::array<cardlink::sample::NoteRequest, kVoices> notes{};
       for (int v = 0; v < kVoices; ++v) {
         notes[static_cast<size_t>(v)] = cardlink::sample::NoteRequest{
-            static_cast<uint8_t>(v), kChordKeys[v], 0xFFFFu, 0xFFu, true};
+            static_cast<uint8_t>(v), kChordKeys[v],
+            static_cast<uint8_t>(app.piano_velocity), 0xFFFFu, 0xFFu, true};
       }
       (void)app.EnsureSampleStream();
       (void)app.samples.NoteOnBatch(notes.data(), notes.size());

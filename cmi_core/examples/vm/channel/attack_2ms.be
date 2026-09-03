@@ -1,7 +1,7 @@
 # A 2 ms attack, held level, and 50 ms release.
 # stage: 1=attack, 2=hold, 3=release
 
-def on_note_on(key)
+def on_note_on(key, velocity)
     state stage
     start_note()
     set_amplitude(0)

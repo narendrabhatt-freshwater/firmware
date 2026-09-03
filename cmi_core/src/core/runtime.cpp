@@ -40,7 +40,7 @@ Core::Impl::Impl(CoreParams initial) : params(std::move(initial))
                 std::to_string(note.wave_id));
             if (card.ok()) {
               card = bus.Channel().StreamNoteOn(
-                  note.voice, note.key, note.session);
+                  note.voice, note.key, note.velocity, note.session);
             }
           } else {
             card = bus.Channel().NoteOff(note.voice);

@@ -24,7 +24,7 @@ Card.
 | Numeric representation | Signed 32-bit integers and 32-bit floating point |
 | MIDI keys and key-map entries | 128 values, numbered `0..127` |
 | Source parser nesting | 25 nested parser levels on the host compiler |
-| VM memory arena | 25 KiB total, including a 4 KiB upload scratch region |
+| VM memory arena | 26 KiB total, including a 4 KiB upload scratch region |
 
 The 3,960-byte bytecode limit is the 4,096-byte FWSC payload minus its 136
 bytes of Channel metadata. Comments and whitespace in the `.be` source do not
@@ -66,7 +66,7 @@ in Channel Card RAM and must be loaded again after a card reset.
 Every program provides these runtime handlers:
 
 ```berry
-def on_note_on(key)
+def on_note_on(key, velocity)
 end
 
 def on_note_off(has_pending)
@@ -76,9 +76,11 @@ def on_ramp_end()
 end
 ```
 
-`on_note_on(key)` runs when a transport-ready note is pending. `key` is the
-physical MIDI key from `0` through `127`. The handler must call `start_note()`
-to promote that pending note, or `discard_pending()` to reject it.
+`on_note_on(key, velocity)` runs when a transport-ready note is pending. `key`
+is the physical MIDI key from `0` through `127`; `velocity` is the raw MIDI
+velocity from `1` through `127`. The handler must call `start_note()` to
+promote that pending note, or `discard_pending()` to reject it. Velocity zero
+is handled as note-off before dispatch.
 
 `on_note_off(has_pending)` runs when the host releases the voice. The Boolean
 argument reports whether a replacement note is waiting. A program normally
@@ -141,20 +143,23 @@ Runtime functions cannot be called from `on_init()`.
 | --- | --- |
 | `INPUT_NOTE_ID` | Channel Card voice index, `0..7`. |
 | `INPUT_FREQUENCY` | Current note frequency in Hz, or pending frequency when no note is active. |
-| `INPUT_GAIN` | Current velocity-derived gain, or pending gain when no note is active, normalized to `0.0..1.0`. |
+| `INPUT_GAIN` | Current fixed per-voice mixer gain, or pending gain when no note is active, normalized to `0.0..1.0`. |
 | `INPUT_GATE` | `1` while the host currently requests the voice on; otherwise `0`. |
 | `INPUT_ACTIVE` | `1` while a current note owns playback resources; otherwise `0`. |
 | `INPUT_HAS_PENDING` | `1` when a transport-ready replacement note is waiting; otherwise `0`. |
 | `INPUT_PENDING_FREQUENCY` | Pending note frequency in Hz. |
-| `INPUT_PENDING_GAIN` | Pending velocity-derived gain normalized to `0.0..1.0`. |
+| `INPUT_PENDING_GAIN` | Pending fixed per-voice mixer gain normalized to `0.0..1.0`. |
 | `INPUT_AMPLITUDE` | Current envelope amplitude in `0.0..1.0`. |
 | `INPUT_KEY` | Physical MIDI key of the current note. |
 | `INPUT_MAPPED_KEY` | Mapped key of the current note. |
 | `INPUT_PENDING_KEY` | Physical MIDI key of the pending note. |
 | `INPUT_PENDING_MAPPED_KEY` | Mapped key of the pending note. |
+| `INPUT_VELOCITY` | Raw MIDI velocity of the current note, `1..127`, or `0` when inactive. |
+| `INPUT_PENDING_VELOCITY` | Raw MIDI velocity of the pending note, `1..127`, or `0` when absent. |
 
-The audio path applies `INPUT_GAIN` separately from the scripted envelope, so
-an amplitude of `1.0` preserves MIDI velocity rather than bypassing it.
+The audio path applies `INPUT_GAIN` separately from the scripted envelope.
+Velocity does not alter gain automatically; scripts decide whether and how to
+use the handler argument or velocity inputs.
 
 ## Persistent state
 
@@ -162,7 +167,7 @@ Use `state` for values that must survive between handlers. Declare each name
 exactly once in the program:
 
 ```berry
-def on_note_on(key)
+def on_note_on(key, velocity)
     state stage = 1
 end
 
@@ -178,7 +183,8 @@ handler invocation.
 
 Persistent state accepts finite numeric values and stores them as float32.
 Handler-local `var` values should be integers, real numbers, Booleans, or
-`nil`. The `key` handler argument is an integer and `has_pending` is a Boolean.
+`nil`. The `key` and `velocity` handler arguments are integers and
+`has_pending` is a Boolean.
 Strings, byte buffers, lists, maps, instances, closures, and other allocated
 objects are not supported inside runtime handlers because handler allocation
 invalidates the shared VM.
@@ -195,7 +201,7 @@ invalidates the shared VM.
   calls.
 - Each compiled program payload is limited to 4 KiB and each handler is limited
   to 64 VM instructions.
-- The eight voice programs share one 25 KiB fixed-arena VM. A bad native call
+- The eight voice programs share one 26 KiB fixed-arena VM. A bad native call
   or ordinary exception silences the affected voice. Allocation, garbage
   collection, watchdog, or interpreter-integrity faults invalidate all eight
   programs.

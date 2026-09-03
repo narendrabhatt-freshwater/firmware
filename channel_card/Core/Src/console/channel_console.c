@@ -48,7 +48,7 @@ void ChannelConsole_SetDacHandle(CS4304_HandleTypeDef *h)
 #define RS485_ECHO 0
 
 /* 921600 8N1 ≈ 11 µs/byte. HAL Timeout is a deadline, not the payload
- * size. The 56-byte ABI6 vq frame is bounded; 50 ms was a poll
+ * size. The 56-byte ABI7 vq frame is bounded; 50 ms was a poll
  * cap that could eat TinyUSB's ~32 ms ISO software FIFO if TX stalled. */
 static uint32_t RS485_TxDeadlineMs(uint32_t nbytes)
 {
@@ -333,10 +333,10 @@ static const SwitchDef_t switches[] = {
 /* Console commands (RS485 + USB CDC). Console_Poll lowercases.
  *
  *   h / help / ?      — command list
- *   n0..n7 on <key> [@session] / off — raw MIDI-key gate
+ *   n0..n7 on <key> [velocity] [@session] / off — MIDI gate
  *   n off             — release all 8 voices
  *   al <id> <len>     — CDC attack-head upload (2..ATTACK_BANK_BYTES)
- *   vmload <v> <len>  — CDC Berry ABI6 upload; vm [v|mem] — status
+ *   vmload <v> <len>  — CDC Berry ABI7 upload; vm [v|mem] — status
  *   ar <id> <Hz>      — sample root pitch (id = wave 0..255); a — loaded mask
  *   a / vq            — loaded heads per voice / hungriest + exact credit
  *   usb               — BODY counters: drop/hold/min/fill/z/sof/rx/bytes/bad
@@ -380,8 +380,9 @@ static uint8_t Console_ParseNoteSlot(char hex_digit)
   return 0xFFu;
 }
 
-/** Apply nX on <key> [@session]. Compact ACK: ok / err:<code>. */
-static void Console_NoteOn(uint8_t note, uint8_t key, uint16_t session)
+/** Apply nX on <key> <velocity> [@session]. Compact ACK: ok / err:<code>. */
+static void Console_NoteOn(uint8_t note, uint8_t key, uint8_t velocity,
+                           uint16_t session)
 {
   if (NoteBank_VmUploadIsBusy() != 0u)
   {
@@ -396,11 +397,11 @@ static void Console_NoteOn(uint8_t note, uint8_t key, uint16_t session)
 
   if (session < USB_STREAM_SESSION_MOD)
   {
-    NoteBank_NoteOnSession(note, key, (uint8_t)session);
+    NoteBank_NoteOnSession(note, key, velocity, (uint8_t)session);
   }
   else
   {
-    NoteBank_NoteOn(note, key);
+    NoteBank_NoteOn(note, key, velocity);
   }
   RS485_Reply("ok\r\n");
 }
@@ -419,7 +420,7 @@ static void Console_Help(void)
   char b[256];
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   snprintf(b, sizeof b,
-           "ok: SAMPLE n0..n7 on key [@session] | off | "
+           "ok: SAMPLE n0..n7 on key [velocity] [@session] | off | "
            "aw v id | "
            "al id n | vmload v n | vm [v] | ar id Hz | a | vq | "
            "usb | "
@@ -692,7 +693,7 @@ static void Console_CmdFk(char *line, char *b, size_t bsz)
 }
 
 /**
- * vq — ABI6 target identity/fill plus exact total writable credit.
+ * vq — ABI7 target identity/fill plus exact total writable credit.
  */
 static void Console_CmdVoiceQuery(void)
 {
@@ -765,6 +766,7 @@ static void Console_CmdNoteAll(char *line)
 static void Console_CmdNoteSlot(char *line)
 {
   unsigned int key;
+  unsigned int velocity = 127u;
   unsigned int session;
   char extra;
   uint8_t note;
@@ -799,20 +801,46 @@ static void Console_CmdNoteSlot(char *line)
   {
     NoteBank_NoteOff(note);RS485_Reply("ok\r\n");return;
   }
-  nscan = sscanf(line + 3, "on %u @%u %c", &key, &session, &extra);
-  if (nscan == 2)
+  nscan = sscanf(line + 3, "on %u %u @%u %c", &key, &velocity, &session,
+                 &extra);
+  if (nscan == 3)
   {
-    if (key >= FW_SCRIPT_CHANNEL_KEY_COUNT || session >= USB_STREAM_SESSION_MOD)
+    if (key >= FW_SCRIPT_CHANNEL_KEY_COUNT || velocity == 0u ||
+        velocity > 127u || session >= USB_STREAM_SESSION_MOD)
     { RS485_Reply("err:range\r\n"); return; }
   }
   else
   {
-    nscan = sscanf(line + 3, "on %u %c", &key, &extra);
-    if (nscan != 1) { RS485_Reply("err:syntax\r\n"); return; }
-    if (key >= FW_SCRIPT_CHANNEL_KEY_COUNT) { RS485_Reply("err:range\r\n"); return; }
-    session = USB_STREAM_SESSION_MOD;
+    nscan = sscanf(line + 3, "on %u %u %c", &key, &velocity, &extra);
+    if (nscan == 2)
+    {
+      if (key >= FW_SCRIPT_CHANNEL_KEY_COUNT || velocity == 0u ||
+          velocity > 127u)
+      { RS485_Reply("err:range\r\n"); return; }
+      session = USB_STREAM_SESSION_MOD;
+    }
+    else
+    {
+      velocity = 127u;
+      nscan = sscanf(line + 3, "on %u @%u %c", &key, &session, &extra);
+      if (nscan == 2)
+      {
+        if (key >= FW_SCRIPT_CHANNEL_KEY_COUNT ||
+            session >= USB_STREAM_SESSION_MOD)
+        { RS485_Reply("err:range\r\n"); return; }
+      }
+      else
+      {
+        nscan = sscanf(line + 3, "on %u %c", &key, &extra);
+        if (nscan != 1) { RS485_Reply("err:syntax\r\n"); return; }
+        if (key >= FW_SCRIPT_CHANNEL_KEY_COUNT)
+        { RS485_Reply("err:range\r\n"); return; }
+        session = USB_STREAM_SESSION_MOD;
+      }
+    }
   }
-  Console_NoteOn(note, (uint8_t)key, (uint16_t)session);
+  Console_NoteOn(note, (uint8_t)key, (uint8_t)velocity,
+                 (uint16_t)session);
 }
 
 /** aw <voice> <id> — assign AXI head 0..255 to voice 0..7. */
@@ -884,7 +912,7 @@ static void Console_CmdAttackLoad(char *line)
   RS485_Reply("ok:ready\r\n");
 }
 
-/** vmload <voice> <nbytes> — receive one Channel ABI6 FWSC container over CDC. */
+/** vmload <voice> <nbytes> — receive one Channel ABI7 FWSC container over CDC. */
 static void Console_CmdVmLoad(char *line)
 {
   unsigned int voice;

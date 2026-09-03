@@ -9,6 +9,7 @@ use handlers, persistent stage state, ramps, and voice cleanup without using
 - `pluck.be` — 2 ms attack followed by a 500 ms automatic decay.
 - `voice_steal.be` — fade the current note for at most 2 ms, promote the
   pending note, and start it with a 2 ms attack.
+- `velocity_gate.be` — use raw MIDI velocity to set the held envelope level.
 
 Load `voice_steal.be` into all eight voices to use it with automatic MIDI voice
 allocation. When a ninth note arrives, the oldest allocated voice performs the

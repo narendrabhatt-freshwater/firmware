@@ -36,6 +36,7 @@ BankEvent VoiceBank::MakeEvent(BankEventKind kind, uint8_t slot) const
   ev.kind = kind;
   ev.slot = slot;
   ev.midi_key = slots_[slot].midi_key;
+  ev.velocity = slots_[slot].velocity;
   ev.active_count = ActiveCount();
   return ev;
 }
@@ -65,14 +66,18 @@ void VoiceBank::RemoveFromFifo(uint8_t slot)
   fifo_.erase(std::remove(fifo_.begin(), fifo_.end(), slot), fifo_.end());
 }
 
-std::vector<BankEvent> VoiceBank::NoteOn(uint8_t midi_key)
+std::vector<BankEvent> VoiceBank::NoteOn(uint8_t midi_key, uint8_t velocity)
 {
   std::vector<BankEvent> events;
+  if (velocity == 0u || velocity > 127u) {
+    return events;
+  }
   if (auto existing = FindSlotByKey(midi_key)) {
     const uint8_t slot = *existing;
     RemoveFromFifo(slot);
     slots_[slot].active = true;
     slots_[slot].midi_key = midi_key;
+    slots_[slot].velocity = velocity;
     fifo_.push_back(slot);
     events.push_back(MakeEvent(BankEventKind::Retrig, slot));
     return events;
@@ -82,6 +87,7 @@ std::vector<BankEvent> VoiceBank::NoteOn(uint8_t midi_key)
     const uint8_t slot = *free;
     slots_[slot].active = true;
     slots_[slot].midi_key = midi_key;
+    slots_[slot].velocity = velocity;
     fifo_.push_back(slot);
     events.push_back(MakeEvent(BankEventKind::On, slot));
     return events;
@@ -96,6 +102,7 @@ std::vector<BankEvent> VoiceBank::NoteOn(uint8_t midi_key)
 
   slots_[steal_slot].active = true;
   slots_[steal_slot].midi_key = midi_key;
+  slots_[steal_slot].velocity = velocity;
   fifo_.push_back(steal_slot);
   events.push_back(MakeEvent(BankEventKind::On, steal_slot));
   return events;
@@ -113,6 +120,7 @@ std::vector<BankEvent> VoiceBank::NoteOff(uint8_t midi_key)
   BankEvent off = MakeEvent(BankEventKind::Off, slot);
   slots_[slot].active = false;
   slots_[slot].midi_key = 0;
+  slots_[slot].velocity = 0;
   RemoveFromFifo(slot);
   off.active_count = ActiveCount();
   events.push_back(off);
@@ -136,16 +144,18 @@ std::vector<BankEvent> VoiceBank::AllOff()
   return events;
 }
 
-std::vector<BankEvent> VoiceBank::SetSlotKey(uint8_t slot, uint8_t midi_key)
+std::vector<BankEvent> VoiceBank::SetSlotKey(uint8_t slot, uint8_t midi_key,
+                                             uint8_t velocity)
 {
   std::vector<BankEvent> events;
-  if (slot >= voice_limit_) {
+  if (slot >= voice_limit_ || velocity == 0u || velocity > 127u) {
     return events;
   }
 
   const bool was_active = slots_[slot].active;
   slots_[slot].active = true;
   slots_[slot].midi_key = midi_key;
+  slots_[slot].velocity = velocity;
   RemoveFromFifo(slot);
   fifo_.push_back(slot);
   events.push_back(MakeEvent(
@@ -159,11 +169,12 @@ std::vector<BankEvent> VoiceBank::ClearSlot(uint8_t slot)
   return NoteOff(slots_[slot].midi_key);
 }
 
-std::vector<BankEvent> VoiceBank::SetAllKey(uint8_t midi_key)
+std::vector<BankEvent> VoiceBank::SetAllKey(uint8_t midi_key,
+                                            uint8_t velocity)
 {
   std::vector<BankEvent> events;
   for (uint8_t i = 0; i < voice_limit_; ++i) {
-    auto more = SetSlotKey(i, midi_key);
+    auto more = SetSlotKey(i, midi_key, velocity);
     events.insert(events.end(), more.begin(), more.end());
   }
   return events;
