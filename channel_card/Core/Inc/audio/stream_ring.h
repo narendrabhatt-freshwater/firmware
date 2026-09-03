@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    stream_ring.h
- * @brief   Per-voice body FIFO: base + tail banks, filled from USB.
+ * @brief   Per-voice BODY FIFOs stored contiguously in DTCM, filled from USB.
  *
  * SPSC: USB writes from main, the playhead reads in I2S. A full FIFO drops
  * the write (never unread samples). An empty FIFO is an underrun.
@@ -25,14 +25,8 @@ extern "C"
 
 #include "attack_bank.h" /* SAMPLE_VOICES, SAMPLE_CROSSFADE_LEN */
 
-/** Three physical banks form one FIFO split into current/pending spans. */
-#define STREAM_BANK_LEN 1360u
-#define STREAM_BASE_BANKS 2u
-#define STREAM_TAIL_BANKS 1u
-#define STREAM_BANKS (STREAM_BASE_BANKS + STREAM_TAIL_BANKS)
-#define STREAM_RING_BASE_SAMPLES (STREAM_BASE_BANKS * STREAM_BANK_LEN)
-#define STREAM_RING_TAIL_SAMPLES (STREAM_TAIL_BANKS * STREAM_BANK_LEN)
-#define STREAM_RING_SAMPLES (STREAM_BANKS * STREAM_BANK_LEN)
+/** 85 ms of signed-int8 BODY data per voice at 48 kHz. */
+#define STREAM_RING_SAMPLES 4080u
 
   /** One in-progress producer reservation. Samples remain invisible to the
    *  audio consumer until StreamRing_WriteCommit advances the ring writer. */

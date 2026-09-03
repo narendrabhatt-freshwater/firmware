@@ -17,10 +17,8 @@
 
 #if defined(CHANNEL_TEST_WAVETABLE)
 #define STREAM_RING_STORAGE_SAMPLES 1u
-#define STREAM_RING_TAIL_STORAGE_SAMPLES 1u
 #else
-#define STREAM_RING_STORAGE_SAMPLES STREAM_RING_BASE_SAMPLES
-#define STREAM_RING_TAIL_STORAGE_SAMPLES STREAM_RING_TAIL_SAMPLES
+#define STREAM_RING_STORAGE_SAMPLES STREAM_RING_SAMPLES
 #endif
 
 typedef struct
@@ -41,35 +39,13 @@ typedef struct
   int8_t data[STREAM_RING_STORAGE_SAMPLES];
 } StreamRing_t;
 
-#if defined(__APPLE__)
-#define STREAM_RING_SECTION(name) __attribute__((aligned(32)))
-#else
-#define STREAM_RING_SECTION(name) \
-  __attribute__((aligned(32), section(name)))
-#endif
-
-/* Use all three CPU SRAM domains for genuine per-voice jitter storage. These
- * buffers are single-core CPU data (USB main loop + I2S ISR), never DMA, so
- * no cache-maintenance boundary is introduced. */
-static StreamRing_t s_rings_dtcm[5];
-static StreamRing_t s_rings_d2[2]
-    STREAM_RING_SECTION(".ring_d2");
-static StreamRing_t s_rings_d3[1]
-    STREAM_RING_SECTION(".ring_d3");
-static int8_t s_ring_tail[SAMPLE_VOICES][STREAM_RING_TAIL_STORAGE_SAMPLES]
-    STREAM_RING_SECTION(".ring_itcm");
+/* CPU-only producer/consumer storage. The default .bss placement keeps all
+ * eight complete rings contiguous in DTCM; USB DMA never accesses it. */
+static StreamRing_t s_rings[SAMPLE_VOICES] __attribute__((aligned(32)));
 
 static StreamRing_t *StreamRing_At(uint8_t voice)
 {
-  if (voice < 5u)
-  {
-    return &s_rings_dtcm[voice];
-  }
-  if (voice < 7u)
-  {
-    return &s_rings_d2[voice - 5u];
-  }
-  return &s_rings_d3[0];
+  return &s_rings[voice];
 }
 static volatile uint32_t s_drop_pkts;
 static volatile uint32_t s_rx_pkts;
@@ -83,8 +59,7 @@ static volatile uint16_t s_last_uac_sequence;
 /* 0xFFFFFFFF = no consume sample since last clear. */
 static volatile uint32_t s_min_fill = 0xFFFFFFFFu;
 
-static int8_t *StreamRing_DataAt(StreamRing_t *r, uint8_t voice,
-                                 uint32_t index);
+static int8_t *StreamRing_DataAt(StreamRing_t *r, uint32_t index);
 
 static uint32_t StreamRing_CurrentFilled(const StreamRing_t *r)
 {
@@ -216,14 +191,9 @@ void StreamRing_ResetAll(void)
   }
 }
 
-static int8_t *StreamRing_DataAt(StreamRing_t *r, uint8_t voice,
-                                 uint32_t index)
+static int8_t *StreamRing_DataAt(StreamRing_t *r, uint32_t index)
 {
-  if (index < STREAM_RING_BASE_SAMPLES)
-  {
-    return &r->data[index];
-  }
-  return &s_ring_tail[voice][index - STREAM_RING_BASE_SAMPLES];
+  return &r->data[index];
 }
 
 int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
@@ -356,9 +326,7 @@ int8_t *StreamRing_WriteSpan(StreamRing_Write_t *write,
   }
   r = StreamRing_At(write->voice);
   idx = (write->start_wr + write->written) % STREAM_RING_SAMPLES;
-  room = (idx < STREAM_RING_BASE_SAMPLES)
-             ? (STREAM_RING_BASE_SAMPLES - idx)
-             : (STREAM_RING_SAMPLES - idx);
+  room = STREAM_RING_SAMPLES - idx;
   remain = write->nsamp - write->written;
   if (room > remain)
   {
@@ -368,7 +336,7 @@ int8_t *StreamRing_WriteSpan(StreamRing_Write_t *write,
   {
     *nsamp_out = room;
   }
-  return StreamRing_DataAt(r, write->voice, idx);
+  return StreamRing_DataAt(r, idx);
 }
 
 int StreamRing_WriteAdvance(StreamRing_Write_t *write, uint32_t nsamp)
@@ -402,7 +370,7 @@ uint32_t StreamRing_WriteCommit(StreamRing_Write_t *write)
   for (i = 0u; i < write->nsamp; i++)
   {
     uint32_t idx = (write->start_wr + i) % STREAM_RING_SAMPLES;
-    if (*StreamRing_DataAt(r, write->voice, idx) != 0)
+    if (*StreamRing_DataAt(r, idx) != 0)
     {
       all_zero = 0u;
       break;
@@ -537,8 +505,7 @@ int StreamRing_GetRel(uint8_t voice, uint32_t offset, int8_t *out)
   {
     return -1;
   }
-  *out = *StreamRing_DataAt(r, voice,
-                            (rd + offset) % STREAM_RING_SAMPLES);
+  *out = *StreamRing_DataAt(r, (rd + offset) % STREAM_RING_SAMPLES);
   return 0;
 }
 

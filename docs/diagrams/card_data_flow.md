@@ -28,7 +28,7 @@ flowchart TB
   subgraph ch [Channel STM32H725]
     ChCon[channel_console]
     ChAtk[AXI attack heads al]
-    ChRing[DTCM/D2/D3 body rings]
+    ChRing[Contiguous DTCM BODY rings]
     ChMix[note_bank mix]
     ChI2S[I2S1/I2S2 DMA AXI]
     ChDac[CS4304]
@@ -88,7 +88,7 @@ flowchart TB
 
   subgraph usb [USB FS]
     Tag["BODY: 4-byte metadata + signed int8 samples"]
-    Slots["4080 int8 per voice · current/pending spans · DTCM/D2/D3/ITCM SRAM"]
+    Slots["4080 int8 per voice · current/pending spans · contiguous DTCM"]
     Body --> Tag --> Slots
   end
 

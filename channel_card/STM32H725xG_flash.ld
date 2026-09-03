@@ -195,32 +195,6 @@ SECTIONS
   PROVIDE( __data_source_end = __tdata_source_end );
   PROVIDE( __data_source_size = __data_source_end - __data_source );
 
-  /* Three BODY rings use otherwise-idle D2/D3 SRAM. They are initialized by
-     StreamRing_Init and are CPU-only (not DMA buffers). */
-  .ring_d2 (NOLOAD) :
-  {
-    . = ALIGN(32);
-    *(.ring_d2)
-    . = ALIGN(32);
-  } >RAM_D2
-
-  .ring_d3 (NOLOAD) :
-  {
-    . = ALIGN(32);
-    *(.ring_d3)
-    . = ALIGN(32);
-  } >RAM_D3
-
-  /* Third 1360-sample segment for all eight BODY rings. Keep address zero
-     unused so no C object has the null-pointer representation. */
-  .ring_itcm (NOLOAD) :
-  {
-    . = ALIGN(32);
-    . = . + 32;
-    *(.ring_itcm)
-    . = ALIGN(32);
-  } >ITCMRAM
-
   /* Uninitialized data section */
   .tbss (NOLOAD) : ALIGN(4)
   {

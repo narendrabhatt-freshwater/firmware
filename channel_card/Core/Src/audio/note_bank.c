@@ -35,10 +35,8 @@ _Static_assert(NOTE_FILTER_VOICES >= NOTE_BANK_VOICES,
                "note_filter voice count must cover note_bank");
 _Static_assert(NOTE_ENV_VOICE_COUNT == NOTE_BANK_VOICES,
                "note_envelope voice count must match note_bank");
-_Static_assert(STREAM_BANK_LEN == 1360u,
-               "Berry integration must not resize a USB BODY bank");
 _Static_assert(STREAM_RING_SAMPLES == 4080u,
-               "normal streaming profile must keep three BODY banks");
+               "normal streaming profile must keep 85 ms per BODY ring");
 
 #define NOTE_AMP_Q15_MAX 32767
 #define PHASE_ONE (1u << 16)
