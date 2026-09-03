@@ -26,65 +26,12 @@ static int fail(const char *message, const char *path)
     return 1;
 }
 
-typedef struct {
-    uint8_t keymap[FW_SCRIPT_CHANNEL_KEY_COUNT];
-    uint8_t reference_key;
-    float reference_hz;
-    int tuning_called;
-} InitMetadata;
-static InitMetadata *s_metadata;
 static int init_error(bvm *vm, const char *message)
 { be_raise(vm, "value_error", message); return 0; }
 static int compile_only_native(bvm *vm)
 {
-    if (s_metadata) return init_error(vm, "runtime function is not available in on_init");
     be_pushnil(vm);
     be_return(vm);
-}
-static int keymap_set_native(bvm *vm)
-{
-    bint input, output;
-    if (!s_metadata || be_top(vm) != 2 || !be_isint(vm, 1) || !be_isint(vm, 2))
-        return init_error(vm, "keymap_set requires two integer keys");
-    input = be_toint(vm, 1); output = be_toint(vm, 2);
-    if (input < 0 || input >= (bint)FW_SCRIPT_CHANNEL_KEY_COUNT ||
-        output < 0 || output >= (bint)FW_SCRIPT_CHANNEL_KEY_COUNT)
-        return init_error(vm, "keymap_set key out of range");
-    s_metadata->keymap[input] = (uint8_t)output; be_pushnil(vm); be_return(vm);
-}
-static int keymap_fill_native(bvm *vm)
-{
-    bint output;
-    if (!s_metadata || be_top(vm) != 1 || !be_isint(vm, 1))
-        return init_error(vm, "keymap_fill requires one integer key");
-    output = be_toint(vm, 1);
-    if (output < 0 || output >= (bint)FW_SCRIPT_CHANNEL_KEY_COUNT)
-        return init_error(vm, "keymap_fill key out of range");
-    memset(s_metadata->keymap, (int)output, sizeof(s_metadata->keymap));
-    be_pushnil(vm); be_return(vm);
-}
-static int keymap_get_native(bvm *vm)
-{
-    bint input;
-    if (!s_metadata || be_top(vm) != 1 || !be_isint(vm, 1))
-        return init_error(vm, "keymap_get requires one integer key");
-    input = be_toint(vm, 1);
-    if (input < 0 || input >= (bint)FW_SCRIPT_CHANNEL_KEY_COUNT)
-        return init_error(vm, "keymap_get key out of range");
-    be_pushint(vm, s_metadata->keymap[input]); be_return(vm);
-}
-static int tuning_set_native(bvm *vm)
-{
-    bint key; float hz;
-    if (!s_metadata || be_top(vm) != 2 || !be_isint(vm, 1) || !be_isnumber(vm, 2))
-        return init_error(vm, "tuning_set requires reference key and frequency");
-    key = be_toint(vm, 1); hz = (float)be_toreal(vm, 2);
-    if (key < 0 || key >= (bint)FW_SCRIPT_CHANNEL_KEY_COUNT || !isfinite(hz) || hz <= 0.0f)
-        return init_error(vm, "invalid tuning reference");
-    if (s_metadata->tuning_called)
-        return init_error(vm, "tuning_set must be called exactly once");
-    s_metadata->reference_key = (uint8_t)key; s_metadata->reference_hz = hz;
-    s_metadata->tuning_called = 1; be_pushnil(vm); be_return(vm);
 }
 static int pow_native(bvm *vm)
 {
@@ -126,11 +73,10 @@ static int source_line_allowed(const char *line)
         strstr(line, "class ")) return 0;
     while (*p == ' ' || *p == '\t') ++p;
     if (p != line || *p == '\0' || *p == '\n' || *p == '#') return 1;
-    return strncmp(p, "def on_init()", sizeof("def on_init()") - 1u) == 0 ||
-           strncmp(p, "def on_note_on(key, velocity)",
+    return strncmp(p, "def on_note_on(key, velocity)",
                    sizeof("def on_note_on(key, velocity)") - 1u) == 0 ||
-           strncmp(p, "def on_note_off(has_pending)",
-                   sizeof("def on_note_off(has_pending)") - 1u) == 0 ||
+           strncmp(p, "def on_note_off()",
+                   sizeof("def on_note_off()") - 1u) == 0 ||
            strncmp(p, "def on_ramp_end()", sizeof("def on_ramp_end()") - 1u) == 0 ||
            strncmp(p, "end", 3) == 0;
 }
@@ -142,8 +88,7 @@ int main(int argc, char **argv)
     FILE *file, *source, *wrapper;
     char *source_text = NULL, *lowered = NULL;
     size_t source_size = 0, lowered_size = 0;
-    uint8_t *payload, *body, header[FW_SCRIPT_CONTAINER_HEADER_SIZE] = {0};
-    InitMetadata metadata;
+    uint8_t *payload, header[FW_SCRIPT_CONTAINER_HEADER_SIZE] = {0};
     char line[1024];
     long length;
     bvm *vm;
@@ -205,7 +150,7 @@ int main(int argc, char **argv)
     while (fgets(line, sizeof(line), source)) {
         if (!source_line_allowed(line)) {
             fclose(source); fclose(wrapper); remove(wrapped);
-            return fail("only ABI7 Channel handlers are allowed at top level", input);
+            return fail("only ABI1 Channel handlers are allowed at top level", input);
         }
         fputs(line, wrapper);
     }
@@ -224,10 +169,7 @@ int main(int argc, char **argv)
     be_regfunc(vm, "note_end", compile_only_native);
     be_regfunc(vm, "discard_pending", compile_only_native);
     be_regfunc(vm, "led", compile_only_native);
-    be_regfunc(vm, "keymap_set", keymap_set_native);
-    be_regfunc(vm, "keymap_fill", keymap_fill_native);
-    be_regfunc(vm, "keymap_get", keymap_get_native);
-    be_regfunc(vm, "tuning_set", tuning_set_native);
+    be_regfunc(vm, "pitch_for_key", compile_only_native);
     be_regfunc(vm, "pow", pow_native);
     compiler_int(vm, "INPUT_NOTE_ID", FW_VM_CHANNEL_INPUT_NOTE_ID);
     compiler_int(vm, "INPUT_FREQUENCY", FW_VM_CHANNEL_INPUT_FREQUENCY);
@@ -239,12 +181,9 @@ int main(int argc, char **argv)
     compiler_int(vm, "INPUT_PENDING_GAIN", FW_VM_CHANNEL_INPUT_PENDING_GAIN);
     compiler_int(vm, "INPUT_AMPLITUDE", FW_VM_CHANNEL_INPUT_AMPLITUDE);
     compiler_int(vm, "INPUT_KEY", FW_VM_CHANNEL_INPUT_KEY);
-    compiler_int(vm, "INPUT_MAPPED_KEY", FW_VM_CHANNEL_INPUT_MAPPED_KEY);
     compiler_int(vm, "INPUT_PENDING_KEY", FW_VM_CHANNEL_INPUT_PENDING_KEY);
-    compiler_int(vm, "INPUT_PENDING_MAPPED_KEY", FW_VM_CHANNEL_INPUT_PENDING_MAPPED_KEY);
     compiler_int(vm, "INPUT_VELOCITY", FW_VM_CHANNEL_INPUT_VELOCITY);
     compiler_int(vm, "INPUT_PENDING_VELOCITY", FW_VM_CHANNEL_INPUT_PENDING_VELOCITY);
-    compiler_nil(vm, "on_init");
     compiler_nil(vm, "on_note_on");
     compiler_nil(vm, "on_note_off");
     compiler_nil(vm, "on_ramp_end");
@@ -253,28 +192,9 @@ int main(int argc, char **argv)
     if (result == BE_OK) result = be_pcall(vm, 0);
     if (result == BE_OK &&
         (!handler_has_arity(vm, "on_note_on", 2u) ||
-         !handler_has_arity(vm, "on_note_off", 1u) ||
+         !handler_has_arity(vm, "on_note_off", 0u) ||
          !handler_has_arity(vm, "on_ramp_end", 0u))) {
         result = BE_EXCEPTION;
-    }
-    memset(&metadata, 0, sizeof(metadata));
-    metadata.reference_key = 60u;
-    metadata.reference_hz = 261.625565f;
-    for (unsigned key = 0; key < FW_SCRIPT_CHANNEL_KEY_COUNT; ++key)
-        metadata.keymap[key] = (uint8_t)key;
-    if (result == BE_OK) {
-        bbool found = be_getglobal(vm, "on_init");
-        if (found && be_isfunction(vm, -1)) {
-            bvalue *value = be_indexof(vm, -1);
-            if (!var_isclosure(value) ||
-                ((bclosure *)var_toobj(value))->proto->argc != 0u) {
-                result = BE_EXCEPTION;
-            } else {
-                s_metadata = &metadata; result = be_pcall(vm, 0); s_metadata = NULL;
-            }
-        } else {
-            be_pop(vm, 1);
-        }
     }
     if (result != BE_OK) {
         be_dumpexcept(vm);
@@ -286,9 +206,9 @@ int main(int argc, char **argv)
     file = fopen(temporary, "rb");
     if (!file) return fail(strerror(errno), temporary);
     if (fseek(file, 0, SEEK_END) || (length = ftell(file)) < 0 ||
-        length + FW_SCRIPT_CHANNEL_METADATA_SIZE > FW_SCRIPT_MAX_PAYLOAD || fseek(file, 0, SEEK_SET)) {
+        length > FW_SCRIPT_MAX_PAYLOAD || fseek(file, 0, SEEK_SET)) {
         fclose(file); remove(temporary);
-        return fail("bytecode and metadata exceed 4096-byte limit", input);
+        return fail("bytecode exceeds 4096-byte limit", input);
     }
     payload = (uint8_t *)malloc((size_t)length);
     if (!payload || fread(payload, 1, (size_t)length, file) != (size_t)length) {
@@ -298,29 +218,21 @@ int main(int argc, char **argv)
     fclose(file);
     remove(temporary);
 
-    body = (uint8_t *)calloc(1u, FW_SCRIPT_CHANNEL_METADATA_SIZE + (size_t)length);
-    if (!body) { free(payload); return fail("could not allocate container", output); }
-    body[0] = FW_SCRIPT_CHANNEL_METADATA_VERSION;
-    body[FW_SCRIPT_CHANNEL_METADATA_REFERENCE_KEY_OFFSET] = metadata.reference_key;
-    { uint32_t bits; memcpy(&bits, &metadata.reference_hz, sizeof(bits));
-      put_u32(body + FW_SCRIPT_CHANNEL_METADATA_REFERENCE_HZ_OFFSET, bits); }
-    memcpy(body + FW_SCRIPT_CHANNEL_METADATA_KEYMAP_OFFSET, metadata.keymap, sizeof(metadata.keymap));
-    memcpy(body + FW_SCRIPT_CHANNEL_METADATA_SIZE, payload, (size_t)length);
     memcpy(header, "FWSC", 4);
     put_u16(header + 4, FW_SCRIPT_CONTAINER_VERSION);
     header[6] = FW_SCRIPT_RUNTIME_BERRY;
     header[7] = FW_SCRIPT_CONFIG_FLOAT32_INT32;
     put_u16(header + 8, FW_SCRIPT_CHANNEL_ABI_VERSION);
     put_u16(header + 10, FW_SCRIPT_CONTAINER_HEADER_SIZE);
-    put_u32(header + 12, (uint32_t)length + FW_SCRIPT_CHANNEL_METADATA_SIZE);
-    put_u32(header + 16, fw_vm_crc32(body, FW_SCRIPT_CHANNEL_METADATA_SIZE + (size_t)length));
+    put_u32(header + 12, (uint32_t)length);
+    put_u32(header + 16, fw_vm_crc32(payload, (size_t)length));
     file = fopen(output, "wb");
     if (!file || fwrite(header, 1, sizeof(header), file) != sizeof(header) ||
-        fwrite(body, 1, FW_SCRIPT_CHANNEL_METADATA_SIZE + (size_t)length, file) != FW_SCRIPT_CHANNEL_METADATA_SIZE + (size_t)length || fclose(file)) {
+        fwrite(payload, 1, (size_t)length, file) != (size_t)length || fclose(file)) {
         if (file) fclose(file);
-        free(body); free(payload);
+        free(payload);
         return fail("could not write container", output);
     }
-    free(body); free(payload);
+    free(payload);
     return 0;
 }

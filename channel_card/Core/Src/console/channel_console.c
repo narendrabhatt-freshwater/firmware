@@ -48,7 +48,7 @@ void ChannelConsole_SetDacHandle(CS4304_HandleTypeDef *h)
 #define RS485_ECHO 0
 
 /* 921600 8N1 ≈ 11 µs/byte. HAL Timeout is a deadline, not the payload
- * size. The 56-byte ABI7 vq frame is bounded; 50 ms was a poll
+ * size. The 56-byte ABI1 vq frame is bounded; 50 ms was a poll
  * cap that could eat TinyUSB's ~32 ms ISO software FIFO if TX stalled. */
 static uint32_t RS485_TxDeadlineMs(uint32_t nbytes)
 {
@@ -336,7 +336,7 @@ static const SwitchDef_t switches[] = {
  *   n0..n7 on <key> [velocity] [@session] / off — MIDI gate
  *   n off             — release all 8 voices
  *   al <id> <len>     — CDC attack-head upload (2..ATTACK_BANK_BYTES)
- *   vmload <v> <len>  — CDC Berry ABI7 upload; vm [v|mem] — status
+ *   vmload <v> <len>  — CDC Berry ABI1 upload; vm [v|mem] — status
  *   ar <id> <Hz>      — sample root pitch (id = wave 0..255); a — loaded mask
  *   a / vq            — loaded heads per voice / hungriest + exact credit
  *   usb               — BODY counters: drop/hold/min/fill/z/sof/rx/bytes/bad
@@ -693,7 +693,7 @@ static void Console_CmdFk(char *line, char *b, size_t bsz)
 }
 
 /**
- * vq — ABI7 target identity/fill plus exact total writable credit.
+ * vq — ABI1 target identity/fill plus exact total writable credit.
  */
 static void Console_CmdVoiceQuery(void)
 {
@@ -912,7 +912,7 @@ static void Console_CmdAttackLoad(char *line)
   RS485_Reply("ok:ready\r\n");
 }
 
-/** vmload <voice> <nbytes> — receive one Channel ABI7 FWSC container over CDC. */
+/** vmload <voice> <nbytes> — receive one Channel ABI1 FWSC container over CDC. */
 static void Console_CmdVmLoad(char *line)
 {
   unsigned int voice;

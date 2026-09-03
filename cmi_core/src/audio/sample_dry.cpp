@@ -793,7 +793,7 @@ void SampleDryMixer::ApplyCmd(const Cmd &c)
   /* Join index is this wave's committed head, not the voice slot.
    * MIDI plays wave_id = key on whatever voice was allocated. */
   v.attack_len = attack_len_[c.wave_id].load(std::memory_order_acquire);
-  /* No compiled-in capacity or release reservation. A matching ABI7 vq is
+  /* No compiled-in capacity or release reservation. A matching ABI1 vq is
    * the only authority to emit complete UAC BODY frames. */
   v.urgent_epoch = c.epoch;
   urgent_ready_.fetch_add(1u, std::memory_order_release);

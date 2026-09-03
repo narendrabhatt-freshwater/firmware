@@ -66,14 +66,13 @@ int main(int argc,char **argv){
   for(i=0;i<FW_SCRIPT_CHANNEL_VOICE_COUNT;++i){
     uint8_t v=(uint8_t)i;script_berry_boundary_begin(&runtime);
     runtime.state[v][0]=1.0f;assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_RAMP_END,v)==0);
-    mock.input[v][FW_VM_CHANNEL_INPUT_HAS_PENDING]=0.0f;assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_OFF,v)==0);
+    assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_OFF,v)==0);
     assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_RAMP_END,v)==0);
     mock.input[v][FW_VM_CHANNEL_INPUT_ACTIVE]=1.0f;mock.input[v][FW_VM_CHANNEL_INPUT_AMPLITUDE]=0.5f;runtime.state[v][0]=2.0f;
     assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_ON,v)==0);assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_RAMP_END,v)==0);
     mock.input[v][FW_VM_CHANNEL_INPUT_ACTIVE]=1.0f;mock.input[v][FW_VM_CHANNEL_INPUT_AMPLITUDE]=0.0f;runtime.state[v][0]=2.0f;
     assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_ON,v)==0);
-    mock.input[v][FW_VM_CHANNEL_INPUT_HAS_PENDING]=1.0f;assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_OFF,v)==0);
-    mock.input[v][FW_VM_CHANNEL_INPUT_HAS_PENDING]=0.0f;
+    assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_OFF,v)==0);
   }
   for(i=0;i<1000000u;++i){uint8_t v=(uint8_t)(i&7u);if(v==0u)script_berry_boundary_begin(&runtime);assert(script_berry_dispatch(&runtime,FW_VM_CHANNEL_HANDLER_NOTE_ON,v)==0);}
   mem=script_berry_memory_metrics(&runtime);assert(mem->handler_allocations==0u);assert(mem->handler_gc==0u);assert(runtime.shared_valid);
@@ -81,6 +80,6 @@ int main(int argc,char **argv){
     runtime.voice_metrics[0].instructions_max,mem->arena_peak,
     (unsigned)(((mem->arena_peak+SCRIPT_BERRY_UPLOAD_SIZE+
       (mem->arena_peak/5u>2048u?mem->arena_peak/5u:2048u)+1023u)/1024u)*1024u));
-  assert(mock.output_hash==UINT32_C(0x7db90c25));
+  assert(mock.output_hash==UINT32_C(0x302cc6e5));
   free(program);fault_matrix(argv[1],argv[2],argv[3],argv[4],argv[5]);pitch_tracking(argv[6]);puts("fault_matrix_ok");return 0;
 }

@@ -212,7 +212,7 @@ ExchangeResult Link::ReadTerminalReply(Target expected,
       r.status = Status::BadReply;
       r.from = Target::Channel;
       std::snprintf(r.raw, sizeof(r.raw),
-                    "firmware/host mismatch: Sample mode requires ABI7 vq3");
+                    "firmware/host mismatch: Sample mode requires ABI1 vq3");
       return r;
     }
   }

@@ -43,6 +43,7 @@ constexpr VmExample kExamples[] = {
     {"2 ms attack", "attack_2ms", "Two millisecond attack, hold, and release."},
     {"Gate", "gate", "Immediate full level with a short release."},
     {"Pluck", "pluck", "Two millisecond attack and automatic decay."},
+    {"Velocity gate", "velocity_gate", "Gate level controlled by MIDI velocity."},
     {"Voice steal", "voice_steal", "Two millisecond steal fade and replacement attack."},
 };
 
@@ -136,13 +137,11 @@ void FinishVmLoad(App &app)
   VmLoadJob &job = app.vm_load;
   std::string result;
   bool ok = false;
-  cardlink::vm::ChannelProgramMetadata metadata;
   {
     std::lock_guard<std::mutex> lock(job.mu);
     if (!job.ready) return;
     result = std::move(job.result);
     ok = job.ok;
-    metadata = job.metadata;
     job.ready = false;
   }
   if (job.worker.joinable()) job.worker.join();
@@ -150,7 +149,6 @@ void FinishVmLoad(App &app)
   app.log.Push(result);
   if (ok) {
     app.ReconcileVmUpload();
-    app.channel_program_metadata = metadata;
     app.PushToastOk(result);
   }
   else app.PushToastErr(result);
@@ -181,9 +179,6 @@ void StartVmLoad(App &app, const VmExample &example)
     std::string result;
     bool rebuilt = false;
     bool ok = LoadOrCompile(example, program, rebuilt, result);
-    cardlink::vm::ChannelProgramMetadata metadata;
-    if (ok) ok = cardlink::vm::ParseChannelProgramMetadata(
-        program.data(), program.size(), metadata, result);
     if (ok) {
       set_status(rebuilt ? "compiled" : "cached FWSC");
       job.progress.store(0.08f);
@@ -218,7 +213,6 @@ void StartVmLoad(App &app, const VmExample &example)
     {
       std::lock_guard<std::mutex> lock(job.mu);
       job.ok = ok;
-      if (ok) job.metadata = metadata;
       job.result = std::move(result);
       job.status = ok ? "done" : "failed";
       job.ready = true;

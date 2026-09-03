@@ -68,18 +68,24 @@ int main()
          "legacy stream formatter must default to full velocity");
 
   const std::string handlers =
-      "def on_note_off(has_pending)\nend\n"
+      "def on_note_off()\nend\n"
       "def on_ramp_end()\nend\n";
   cardlink::vm::BerryCompiler compiler;
-  const auto abi7 = compiler.CompileChannel(
+  const auto abi1 = compiler.CompileChannel(
       "def on_note_on(key, velocity)\n    start_note()\nend\n" + handlers);
-  Expect(abi7.ok && abi7.program.size() >= 10u && abi7.program[8] == 7u &&
-             abi7.program[9] == 0u,
-         "two-argument note handler must compile as ABI7");
-  const auto abi6_source = compiler.CompileChannel(
+  Expect(abi1.ok && abi1.program.size() >= 10u && abi1.program[8] == 1u &&
+             abi1.program[9] == 0u,
+         "zero-argument note-off handler must compile as ABI1");
+  const auto legacy_note_on = compiler.CompileChannel(
       "def on_note_on(key)\n    start_note()\nend\n" + handlers);
-  Expect(!abi6_source.ok,
-         "one-argument note handler must be rejected by ABI7 compiler");
+  Expect(!legacy_note_on.ok,
+         "one-argument note-on handler must be rejected by ABI1 compiler");
+  const auto pending_note_off = compiler.CompileChannel(
+      "def on_note_on(key, velocity)\n    start_note()\nend\n"
+      "def on_note_off(has_pending)\nend\n"
+      "def on_ramp_end()\nend\n");
+  Expect(!pending_note_off.ok,
+         "legacy pending argument must be rejected by ABI1 compiler");
 
   cmi::Core core({});
   Expect(!core.isConnected(), "a new Core must be disconnected");

@@ -9,8 +9,7 @@ def on_note_on(key, velocity)
     ramp(1, 500)
 end
 
-def on_note_off(has_pending)
-    if has_pending discard_pending() end
+def on_note_off()
     stage = 3
     ramp(0, 20)
 end

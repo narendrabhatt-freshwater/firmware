@@ -8,9 +8,7 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-void PreviewScope::SetVoices(
-    const cardlink::midi::VoiceBank &bank,
-    const cardlink::vm::ChannelProgramMetadata &metadata)
+void PreviewScope::SetVoices(const cardlink::midi::VoiceBank &bank)
 {
   const auto &slots = bank.Slots();
   for (uint8_t i = 0; i < cardlink::midi::kVoiceCount; ++i) {
@@ -19,9 +17,8 @@ void PreviewScope::SetVoices(
       oscs_[i].phase = 0.0;
     }
     oscs_[i].active = on;
-    const uint8_t mapped = metadata.keymap[slots[i].midi_key];
-    oscs_[i].freq_hz = on ? cardlink::midi::MidiNoteToHz(mapped) *
-                                metadata.tuning_scale : 0.0;
+    oscs_[i].freq_hz = on ? cardlink::midi::MidiNoteToHz(slots[i].midi_key)
+                          : 0.0;
   }
 }
 

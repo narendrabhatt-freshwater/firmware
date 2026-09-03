@@ -36,7 +36,7 @@ extern "C"
   void NoteBank_Init(void);
   void NoteBank_PanicAll(void);
 
-  /** Raw MIDI-key/velocity note-on. Script mapping and tuning select pitch. */
+  /** Raw MIDI-key/velocity note-on. Script may override standard MIDI pitch. */
   int NoteBank_NoteOn(uint8_t note, uint8_t key, uint8_t velocity);
 
   /** Streamed note-on variant. The session is bound to nX before its ACK so
@@ -46,7 +46,6 @@ extern "C"
   int NoteBank_NoteOff(uint8_t note);
 
   uint8_t NoteBank_GetKey(uint8_t note);
-  uint8_t NoteBank_GetMappedKey(uint8_t note);
   uint8_t NoteBank_GetVelocity(uint8_t note);
   double NoteBank_GetFreq(uint8_t note);
 

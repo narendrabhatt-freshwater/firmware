@@ -1,7 +1,7 @@
 # Channel scripting
 
-Channel programs define the amplitude envelope, retrigger behavior, key map,
-tuning, and optional RGB feedback for each voice. Sources use a restricted,
+Channel programs define pitch, amplitude envelope, retrigger behavior, and
+optional RGB feedback for each voice. Sources use a restricted,
 allocation-free subset of Berry and are compiled before upload to the Channel
 Card.
 
@@ -12,9 +12,7 @@ Card.
 | Channel voices | 8, numbered `0..7` |
 | Programs | One independently loaded program per voice |
 | Editable `.be` source size | No fixed byte limit; source remains on the host and must compile within the limits below |
-| Serialized Berry bytecode | 3,960 bytes maximum |
-| Program metadata | 136 bytes per program |
-| FWSC payload | 4,096 bytes maximum, including bytecode and metadata |
+| Serialized Berry bytecode / FWSC payload | 4,096 bytes maximum |
 | Complete FWSC container | 4,116 bytes maximum, including the 20-byte header |
 | Persistent state | 16 float32 values per voice program |
 | Runtime stack | 128 VM values, including arguments, locals, expression temporaries, and call overhead |
@@ -22,13 +20,12 @@ Card.
 | Whole-boundary budget | 512 VM instructions across all eight voices |
 | Whole-boundary CPU budget | 55,000 Channel Card CPU cycles |
 | Numeric representation | Signed 32-bit integers and 32-bit floating point |
-| MIDI keys and key-map entries | 128 values, numbered `0..127` |
+| MIDI keys | 128 values, numbered `0..127` |
 | Source parser nesting | 25 nested parser levels on the host compiler |
-| VM memory arena | 26 KiB total, including a 4 KiB upload scratch region |
+| VM memory arena | 25 KiB total, including a 4 KiB upload scratch region |
 
-The 3,960-byte bytecode limit is the 4,096-byte FWSC payload minus its 136
-bytes of Channel metadata. Comments and whitespace in the `.be` source do not
-consume card storage, but executable code, constants, and handler structures
+Comments and whitespace in the `.be` source do not consume card storage, but
+executable code, constants, and handler structures
 increase the serialized bytecode size. `loadVoiceScript()` and
 `loadVoiceScriptSource()` return `ErrorCode::VmError` when the compiled result
 is too large.
@@ -69,7 +66,7 @@ Every program provides these runtime handlers:
 def on_note_on(key, velocity)
 end
 
-def on_note_off(has_pending)
+def on_note_off()
 end
 
 def on_ramp_end()
@@ -78,30 +75,18 @@ end
 
 `on_note_on(key, velocity)` runs when a transport-ready note is pending. `key`
 is the physical MIDI key from `0` through `127`; `velocity` is the raw MIDI
-velocity from `1` through `127`. The handler must call `start_note()` to
-promote that pending note, or `discard_pending()` to reject it. Velocity zero
-is handled as note-off before dispatch.
+velocity from `1` through `127`. The handler must call `start_note()` or
+`start_note(frequency)` to promote that pending note, or `discard_pending()` to
+reject it. Velocity zero is handled as note-off before dispatch.
 
-`on_note_off(has_pending)` runs when the host releases the voice. The Boolean
-argument reports whether a replacement note is waiting. A program normally
-ramps the current amplitude to zero and calls `note_end()` when that ramp ends.
+`on_note_off()` runs when the host releases the voice. Firmware first cancels
+any pending replacement and its buffered BODY, so release scripts only manage
+the current note. A program normally ramps the current amplitude to zero and
+calls `note_end()` when that ramp ends.
 
 `on_ramp_end()` runs once after a `ramp()` reaches its target. Store the current
 envelope stage in persistent state when different ramps require different next
 actions.
-
-An optional `on_init()` runs in the host compiler, not on the card. It may only
-configure tuning and key mapping:
-
-```berry
-def on_init()
-    tuning_set(69, 440.0)
-    keymap_set(36, 48)
-end
-```
-
-Without `on_init()`, the key map is an identity map and tuning uses
-C4 = 261.625565 Hz.
 
 ## Runtime functions
 
@@ -111,31 +96,32 @@ C4 = 261.625565 Hz.
 | `set_amplitude(value)` | Immediately sets amplitude to `0.0..1.0` and cancels the current ramp. |
 | `ramp(target, slope)` | Ramps to `target` in `0.0..1.0`. `slope` is a positive amplitude change per second. |
 | `hold()` | Stops ramping and holds the current amplitude. It does not emit `on_ramp_end()`. |
-| `start_note()` | Replaces the current note with the transport-ready pending note. Fails when no note is pending. |
-| `discard_pending()` | Removes the pending note without changing the current note. |
+| `start_note()` | Starts the pending note with standard MIDI pitch. Fails when no note is pending. |
+| `start_note(frequency)` | Overrides the pending pitch with a positive frequency in Hz and starts the note. |
+| `discard_pending()` | Removes the pending note without changing the current note; primarily used when `on_note_on()` rejects a transport-ready note. |
+| `pitch_for_key(key)` | Returns the standard MIDI frequency for key `0..127` (A4 = 440 Hz). Using it is optional. |
 | `note_end()` | Retires the current note and releases its playback resources. It does not promote a pending note. |
-| `keymap_get(key)` | Returns the mapped key for a physical key in `0..127`. |
 | `pow(base, exponent)` | Returns an allocation-free floating-point power calculation. |
 | `led(red, green, blue, brightness)` | Flashes the card RGB LED for 100 ms. Every argument is `0.0..1.0`. |
 | `state_get(slot)` | Returns persistent state slot `0..15`. Prefer named state. |
 | `state_set(slot, value)` | Stores a finite number in persistent state slot `0..15`. Prefer named state. |
 
-Native functions other than `input()`, `keymap_get()`, `pow()`, and
+Native functions other than `input()`, `pitch_for_key()`, `pow()`, and
 `state_get()` return no value. Invalid argument counts, types, ranges, or
 non-finite results fault the voice.
 
-## Compile-time functions
+Each pending note starts with standard MIDI pitch. `on_note_on()` may replace
+it before activation:
 
-These functions are valid only inside `on_init()`:
+```berry
+def on_note_on(key, velocity)
+    start_note(pitch_for_key(key) * 0.5) # optional lookup, octave down
+end
+```
 
-| Function | Description |
-| --- | --- |
-| `tuning_set(reference_key, frequency_hz)` | Sets one key in `0..127` to a positive reference frequency. Call at most once. |
-| `keymap_set(input_key, output_key)` | Changes one physical key mapping. Both keys are `0..127`. |
-| `keymap_fill(output_key)` | Maps every physical key to one key in `0..127`. |
-| `keymap_get(input_key)` | Reads the current compile-time mapping. |
-
-Runtime functions cannot be called from `on_init()`.
+A script may ignore the lookup entirely and call, for example,
+`start_note(440.0)`. The physical key remains event metadata; changing pitch
+does not rewrite it.
 
 ## Inputs
 
@@ -151,9 +137,7 @@ Runtime functions cannot be called from `on_init()`.
 | `INPUT_PENDING_GAIN` | Pending fixed per-voice mixer gain normalized to `0.0..1.0`. |
 | `INPUT_AMPLITUDE` | Current envelope amplitude in `0.0..1.0`. |
 | `INPUT_KEY` | Physical MIDI key of the current note. |
-| `INPUT_MAPPED_KEY` | Mapped key of the current note. |
 | `INPUT_PENDING_KEY` | Physical MIDI key of the pending note. |
-| `INPUT_PENDING_MAPPED_KEY` | Mapped key of the pending note. |
 | `INPUT_VELOCITY` | Raw MIDI velocity of the current note, `1..127`, or `0` when inactive. |
 | `INPUT_PENDING_VELOCITY` | Raw MIDI velocity of the pending note, `1..127`, or `0` when absent. |
 
@@ -171,7 +155,7 @@ def on_note_on(key, velocity)
     state stage = 1
 end
 
-def on_note_off(has_pending)
+def on_note_off()
     stage = 2
 end
 ```
@@ -183,15 +167,14 @@ handler invocation.
 
 Persistent state accepts finite numeric values and stores them as float32.
 Handler-local `var` values should be integers, real numbers, Booleans, or
-`nil`. The `key` and `velocity` handler arguments are integers and
-`has_pending` is a Boolean.
+`nil`. The `key` and `velocity` handler arguments are integers.
 Strings, byte buffers, lists, maps, instances, closures, and other allocated
 objects are not supported inside runtime handlers because handler allocation
 invalidates the shared VM.
 
 ## Runtime restrictions
 
-- Only `on_init`, `on_note_on`, `on_note_off`, and `on_ramp_end` definitions
+- Only `on_note_on`, `on_note_off`, and `on_ramp_end` definitions
   may appear at the top level. Global variables, imports, classes, and helper
   functions are rejected.
 - The target provides no filesystem, REPL, source compiler, bytecode saver, or
@@ -201,7 +184,7 @@ invalidates the shared VM.
   calls.
 - Each compiled program payload is limited to 4 KiB and each handler is limited
   to 64 VM instructions.
-- The eight voice programs share one 26 KiB fixed-arena VM. A bad native call
+- The eight voice programs share one 25 KiB fixed-arena VM. A bad native call
   or ordinary exception silences the affected voice. Allocation, garbage
   collection, watchdog, or interpreter-integrity faults invalidate all eight
   programs.

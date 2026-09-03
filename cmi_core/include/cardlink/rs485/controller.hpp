@@ -41,7 +41,7 @@ public:
                          const cardproto::Result &)>;
   /** Called when vq reports a voice idle after note activity. */
   using IdleHandler = std::function<void(uint8_t slot)>;
-  /** ABI7 target identity/fill and exact BODY refill credit. */
+  /** ABI1 target identity/fill and exact BODY refill credit. */
   using VqHandler = std::function<void(const cardproto::VoiceQuery &)>;
 
   Controller();

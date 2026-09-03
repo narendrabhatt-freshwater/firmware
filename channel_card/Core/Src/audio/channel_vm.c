@@ -21,6 +21,7 @@ void ChannelVm_Init(const ChannelVmNativeOps *ops)
     native_ops.start_note = ops->start_note;
     native_ops.note_end = ops->note_end;
     native_ops.discard_pending = ops->discard_pending;
+    native_ops.start_note_at = ops->start_note_at;
     native_ops.silence_voice = ops->silence_voice;
     native_ops.set_led = ops->set_led;
   }
@@ -30,8 +31,6 @@ void ChannelVm_Stop(uint8_t voice) { script_berry_stop(&s_runtime, voice); }
 void ChannelVm_StopAll(void) { script_berry_stop_all(&s_runtime); }
 uint8_t ChannelVm_IsActive(uint8_t voice) { return script_berry_is_active(&s_runtime, voice); }
 uint8_t ChannelVm_ActiveMask(void) { return script_berry_active_mask(&s_runtime); }
-uint8_t ChannelVm_MapKey(uint8_t voice, uint8_t key) { return script_berry_map_key(&s_runtime, voice, key); }
-float ChannelVm_TuningScale(uint8_t voice) { return script_berry_tuning_scale(&s_runtime, voice); }
 FwVmFault ChannelVm_Fault(uint8_t voice) { return script_berry_fault(&s_runtime, voice); }
 const FwVmMetrics *ChannelVm_Metrics(uint8_t voice) { return script_berry_voice_metrics(&s_runtime, voice); }
 const FwVmMemoryMetrics *ChannelVm_MemoryMetrics(void) { return script_berry_memory_metrics(&s_runtime); }

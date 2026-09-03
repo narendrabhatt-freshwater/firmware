@@ -122,7 +122,7 @@ flowchart TB
   end
 ```
 
-RS485 `vq` returns a 56-byte ABI7 frame containing active/pending masks,
+RS485 `vq` returns a 56-byte ABI1 frame containing active/pending masks,
 runtime capacity, target session/fill, exact credit, and the last processed UAC
 sequence. It is the only live refill authority. Each UAC window carries one
 voice/session tag, one sequence, and 508 BODY samples. The host subtracts the

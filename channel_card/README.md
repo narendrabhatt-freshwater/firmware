@@ -35,7 +35,7 @@ over I2S.
 - Console over RS485 (`c:` prefix) and USB CDC
 
 The note bank has no firmware-owned envelope policy. After each reset, upload a
-valid Channel Berry ABI7 program with `cmi::Core` before sending note commands.
+valid Channel Berry ABI1 program with `cmi::Core` before sending note commands.
 Until then the card stays silent and replies `err:no-program`.
 
 ### USB streaming profile (default)
@@ -230,7 +230,7 @@ Pitch tracking uses `fc = fbase × (noteHz / 261.625565)^k`. See
 | `ar <id> <Hz>` | RS485 or CDC | Set the positive root frequency for attack ID 0…255. |
 | `aw <voice> <id>` | RS485 or CDC | Assign attack ID 0…255 to voice 0…7. |
 | `a` | RS485 or CDC | Query loaded attack count and the 256-bit loaded mask. |
-| `vmload <voice> <nbytes>` | USB CDC only | Begin an FWSC ABI7 program upload to voice 0…7. Total container size is 20…4116 bytes. After `ok:ready`, send exactly that many bytes. |
+| `vmload <voice> <nbytes>` | USB CDC only | Begin an FWSC ABI1 program upload to voice 0…7. Total container size is 20…4116 bytes. After `ok:ready`, send exactly that many bytes. |
 | `vm` | RS485 or CDC | Query the active-program voice mask. |
 | `vm <voice>` | RS485 or CDC | Query active state, target, ABI version, and fault for voice 0…7. |
 | `vm mem` | RS485 or CDC | Return shared VM arena and per-voice fault/cycle diagnostics. |

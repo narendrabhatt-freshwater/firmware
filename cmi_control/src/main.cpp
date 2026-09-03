@@ -147,7 +147,7 @@ int main(int argc, char **argv)
       app.samples.Silence(slot);
     }
   });
-  /* The RS485 worker binds the session to nX; ABI7 vq then grants exact
+  /* The RS485 worker binds the session to nX; ABI1 vq then grants exact
    * credit for the repeated SOF and steady-state BODY frames. */
   app.bus.SetVqHandler(
       [&app](const cardproto::VoiceQuery &status) {

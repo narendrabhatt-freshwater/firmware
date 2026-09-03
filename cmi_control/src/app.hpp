@@ -83,7 +83,6 @@ struct VmLoadJob
   std::string result;
   bool ok = false;
   bool ready = false;
-  cardlink::vm::ChannelProgramMetadata metadata;
 
   VmLoadJob() = default;
   VmLoadJob(const VmLoadJob &) = delete;
@@ -165,12 +164,6 @@ struct App
   float filter_k_f = 0.f;
   bool filter_bypass = true;
   int selected_voice = 0;
-  cardlink::vm::ChannelProgramMetadata channel_program_metadata = [] {
-    cardlink::vm::ChannelProgramMetadata metadata;
-    for (unsigned key = 0; key < metadata.keymap.size(); ++key)
-      metadata.keymap[key] = static_cast<uint8_t>(key);
-    return metadata;
-  }();
   int vm_script_index = 0;
   int piano_octave = 0; // offset from C4 (0 = C4–C5)
   int piano_velocity = 100;

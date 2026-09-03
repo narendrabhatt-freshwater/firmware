@@ -3,7 +3,7 @@
  * @brief Host body feeder: unpitched int16 → direct UAC2 BODY frames.
  *
  * Card owns pitch / env / filter. The host binds one session to nX and waits
- * for matching ABI7 `vq` authority before emitting BODY. SOF repeats until a
+ * for matching ABI1 `vq` authority before emitting BODY. SOF repeats until a
  * later status confirms that session and its first complete BODY frame.
  * Thereafter each status grants exact runtime-capacity credit.
  * Every 1 ms UAC packet carries routing/sequence metadata and 508 raw samples.
@@ -79,7 +79,7 @@ public:
 
   /** Queue a note using a session already bound into authoritative nX.
    * source_hz is a transport scheduling hint only; the card/script remains
-   * authoritative for the actual mapped pitch. */
+   * authoritative for the actual playback pitch. */
   uint8_t NoteOnSession(uint8_t voice, uint16_t wave_id, uint8_t session,
                         double attack_elapsed_ms = 0.0,
                         double source_hz = 0.0);

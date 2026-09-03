@@ -4,5 +4,5 @@ def on_note_on(key, velocity)
     end
     recurse()
 end
-def on_note_off(has_pending) end
+def on_note_off() end
 def on_ramp_end() end

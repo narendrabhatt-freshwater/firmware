@@ -133,7 +133,7 @@ and are lost on reset.
 | `ar <id> <Hz>`      | Set head `<id>`'s root pitch (Hz > 0)                               |
 | `aw <v> <id>`       | Assign head `<id>` to voice `<v>` 0…7                               |
 | `a`                 | Loaded count + 256-bit hex mask (bit 0 = wave 0)                    |
-| `vq`                | ABI7 active/pending generations + exact runtime ring credit             |
+| `vq`                | ABI1 active/pending generations + exact runtime ring credit             |
 | `usb`               | BODY counters: drop/hold/fill, RS-485 `vq`, rx/bytes/bad              |
 | `usb 0`             | Clear those counters, then same reply                                 |
 
@@ -151,7 +151,7 @@ until that join. Every `nX on <key> [velocity]` command is a note-on, including 
 
 | Command                    | Meaning                                                          |
 | -------------------------- | ---------------------------------------------------------------- |
-| `vmload <voice> <nbytes>`  | **USB CDC only.** Upload one FWSC ABI7 program to voice 0…7      |
+| `vmload <voice> <nbytes>`  | **USB CDC only.** Upload one FWSC ABI1 program to voice 0…7      |
 | `vm`                       | Query the active-program voice mask                              |
 | `vm <voice>`               | Query active state, ABI target/version, and fault for one voice  |
 | `vm mem`                   | Shared-arena metrics followed by eight per-voice diagnostic lines |
@@ -325,11 +325,11 @@ RS485 `vq` every 5 ms is the steady-state refill authority and lifecycle
 monitor. UAC OUT carries BODY data only.
 
 ```text
-RS485 vq reply, fixed 56-byte ABI7 binary frame
+RS485 vq reply, fixed 56-byte ABI1 binary frame
 offset  size  field
 0       2     sync = a5 5a
 2       1     card = 43 ('C')
-3       1     type = 04 sequenced ABI7 generation status
+3       1     type = 04 sequenced ABI1 generation status
 4       1     active voice mask
 5       1     pending voice mask
 6       1     best refill voice, or 255
@@ -348,9 +348,15 @@ pending generation; matching SOF data fills it, and Berry receives
 `on_note_on` only after a complete BODY frame exists. Berry then decides when
 to call `start_note()`, which atomically promotes pending. No native crash
 duration or release reservation exists.
+`start_note(frequency)` may atomically replace the pending playback pitch while
+promoting it; zero-argument `start_note()` keeps the default. `pitch_for_key(key)`
+returns standard MIDI pitch (A4 = 440 Hz) when a script wants a reference;
+direct Hz selection may ignore it.
 Superseded or late same-wave sessions are stale. Untagged `nX` is available
 for direct console use. There is no native release reservation.
 RS485 `nX off` remains note-off authority. `type` `0x20` CAPTURE remains reserved.
+An explicit note-off cancels any pending replacement in firmware before the
+script's zero-argument `on_note_off()` handler runs.
 Every routed UAC frame has a wrapping sequence. The card reports the last
 processed sequence with the same ring snapshot, and the host subtracts exactly
 the later frames in its ledger. Playing voices are scheduled by depletion
@@ -448,7 +454,7 @@ uploaded, note commands return `err:no-program` and the note bank stays silent.
 
 `vmload <voice> <nbytes>` is CDC-only and uses the same line-to-binary
 transition as `al`. Each voice 0..7 owns an independent program. The payload is
-one Berry ABI7 `FWSC` container, up to 4116 bytes (20-byte container header
+one Berry ABI1 `FWSC` container, up to 4116 bytes (20-byte container header
 plus at most 4096 payload bytes). The card writes
 `ok:ready`, receives exactly `nbytes`, validates target/version, CRC, bytecode,
 runtime/configuration, handlers, host calls, and CRC, then replies
@@ -464,10 +470,9 @@ remain voice-local; allocation, GC, watchdog, or uncertain interpreter state
 invalidates the shared VM and silences all voices. Programs are lost on reset.
 `vm mem` reports arena current/peak/free and allocation/GC diagnostics.
 
-ABI7 requires `on_note_on(key, velocity)`, `on_note_off(has_pending)`, and
-`on_ramp_end()`. Optional compile-time `on_init()` can override the default
-C4 = 261.625565 Hz tuning and identity key map. Runtime scripts inspect
-raw/mapped keys and live amplitude through `input()`, use allocation-free
+ABI1 requires `on_note_on(key, velocity)`, `on_note_off()`, and
+`on_ramp_end()`. Runtime scripts inspect raw keys and live amplitude through
+`input()`, use allocation-free
 `pow()` for tracking policy, and call only `ramp(target, slope)`.
 
 ---

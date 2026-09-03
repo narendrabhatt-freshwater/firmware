@@ -3,7 +3,7 @@
 
 def on_note_on(key, velocity)
     state stage
-    var color = (keymap_get(key) - 36) / 48.0
+    var color = (key - 36) / 48.0
     if color < 0 color = 0 end
     if color > 1 color = 1 end
     led(color, 1 - color, 0, 0.8)
@@ -29,12 +29,7 @@ def on_note_on(key, velocity)
     ramp(1, 20)       # 0.0 -> 1.0 at slope 20 (50 ms).
 end
 
-def on_note_off(has_pending)
-    if has_pending
-        note_end()  # A queued note owns the next transition.
-        return
-    end
-
+def on_note_off()
     stage = 3   # Enter release.
     ramp(0, 4)  # Current amplitude -> 0.0 at slope 4.
 end

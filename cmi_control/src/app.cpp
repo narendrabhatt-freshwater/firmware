@@ -550,9 +550,7 @@ void App::ApplyBankEvents(const std::vector<cardlink::midi::BankEvent> &events)
   {
     if (want_speakers && audio)
     {
-      const uint8_t mapped = channel_program_metadata.keymap[ev.midi_key];
-      audio->ApplyBankEvent(ev, cardlink::midi::MidiNoteToHz(mapped) *
-                                   channel_program_metadata.tuning_scale);
+      audio->ApplyBankEvent(ev, cardlink::midi::MidiNoteToHz(ev.midi_key));
     }
     if (want_card && ev.slot < cardlink::audio::kSampleVoices)
     {
@@ -600,9 +598,7 @@ void App::ApplyLocalBankEvents(
   {
     if (want_speakers && audio)
     {
-      const uint8_t mapped = channel_program_metadata.keymap[ev.midi_key];
-      audio->ApplyBankEvent(ev, cardlink::midi::MidiNoteToHz(mapped) *
-                                   channel_program_metadata.tuning_scale);
+      audio->ApplyBankEvent(ev, cardlink::midi::MidiNoteToHz(ev.midi_key));
     }
   }
 }
@@ -906,7 +902,7 @@ void App::Tick()
   scope_volt = std::clamp(scope_volt, 0.1f, 8.f);
   preview.SetTimeDivUs(scope_time_ms * 1000.f);
   preview.SetVoltDiv(scope_volt);
-  preview.SetVoices(bank, channel_program_metadata);
+  preview.SetVoices(bank);
   preview.Render(48000.f);
 
   const float peak = preview.Peak();

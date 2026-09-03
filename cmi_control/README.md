@@ -47,7 +47,7 @@ cmake --build cmi_control/build
 
 The Channel header keeps its **SCRIPT** selector and **UPLOAD n0–n7** action
 available in both Wave and Sample modes, because the script owns envelope,
-retrigger, key mapping, and release behavior for either source. It includes six
+retrigger, pitch, and release behavior for either source. It includes six
 examples covering envelope, retrigger, pitch tracking, gate, and pluck behavior.
 
 The build generates cached FWSC files under `cmi_control/build/vm_scripts`.
@@ -87,10 +87,10 @@ there is no separate Start BODY step.
 
 Channel envelope programs receive the physical MIDI key and use two-argument
 `ramp(target, slope)`. A script can calculate pitch-dependent slopes with
-allocation-free `pow()` and inspect raw/mapped current or pending keys.
+allocation-free `pow()` and inspect raw current or pending keys.
 
-**Preview scope** applies the uploaded FWSC key map and tuning reference to its
-illustrative sine mix; it is not a bit-exact Channel DSP or DAC probe.
+**Preview scope** uses standard MIDI pitch for its illustrative sine mix; it is
+not a bit-exact Channel DSP or DAC probe.
 
 ## Output modes
 
