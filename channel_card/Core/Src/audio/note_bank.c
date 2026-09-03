@@ -20,6 +20,10 @@
 #include "note_filter.h"
 #include "stream_ring.h"
 
+#if defined(__arm__) || defined(__thumb__)
+#include "main.h"
+#endif
+
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -77,9 +81,8 @@ static uint8_t note_play_key[NOTE_BANK_VOICES];
 static uint8_t note_play_mapped_key[NOTE_BANK_VOICES];
 static uint8_t note_next_key[NOTE_BANK_VOICES];
 static uint8_t note_next_mapped_key[NOTE_BANK_VOICES];
-static NoteBank_Shape_t note_shape = NOTE_SHAPE_SINE;
-static double note_shape_param = 0.5;
 #if defined(CHANNEL_TEST_WAVETABLE)
+static NoteBank_Shape_t note_shape = NOTE_SHAPE_SINE;
 static int16_t note_sine_table[WAVETABLE_SAMPLES];
 static volatile uint32_t note_shape_split = WAVETABLE_PHASE_ONE / 2u;
 #endif
@@ -281,13 +284,16 @@ static int NoteBank_InterpAttackBody(uint8_t note, uint16_t wid,
 
 /**
  * Two-tap linear interpolation over the body FIFO. Count every miss at the
- * actual BODY boundary, including a late first frame, and temporarily hold
- * the last valid sample until the producer catches up. Transport jitter must
- * not halt the entire card.
+ * actual BODY boundary, including a late first frame. Continuing with the
+ * last valid sample hides a broken USB stream and produces plausible but
+ * incorrect audio, so production firmware fails closed here.
  */
 static int32_t NoteBank_BodyMiss(uint8_t note)
 {
   note_hold_miss++;
+#if defined(__arm__) || defined(__thumb__)
+  Error_Handler();
+#endif
   return note_hold[note];
 }
 
@@ -738,9 +744,8 @@ void NoteBank_Init(void)
   uint8_t i;
   ChannelVmNativeOps vm_ops = {0};
 
-  note_shape = NOTE_SHAPE_SINE;
-  note_shape_param = 0.5;
 #if defined(CHANNEL_TEST_WAVETABLE)
+  note_shape = NOTE_SHAPE_SINE;
   note_shape_split = WAVETABLE_PHASE_ONE / 2u;
   NoteBank_WavetableInit();
 #endif
@@ -941,17 +946,15 @@ uint16_t NoteBank_GetWaveId(uint8_t note)
   return note_wave_id[note];
 }
 
+#if defined(CHANNEL_TEST_WAVETABLE)
 int NoteBank_SetShape(NoteBank_Shape_t shape, double param)
 {
-  (void)param;
   if (shape != NOTE_SHAPE_SINE && shape != NOTE_SHAPE_PULSE &&
       shape != NOTE_SHAPE_TRI && shape != NOTE_SHAPE_SAW)
   {
     return -1;
   }
   note_shape = shape;
-  note_shape_param = param;
-#if defined(CHANNEL_TEST_WAVETABLE)
   if (shape == NOTE_SHAPE_PULSE || shape == NOTE_SHAPE_TRI)
   {
     double limited = param;
@@ -959,19 +962,9 @@ int NoteBank_SetShape(NoteBank_Shape_t shape, double param)
     if (limited > 0.9) limited = 0.9;
     note_shape_split = (uint32_t)(limited * (double)WAVETABLE_PHASE_ONE);
   }
-#endif
   return 0;
 }
-
-NoteBank_Shape_t NoteBank_GetShape(void)
-{
-  return note_shape;
-}
-
-double NoteBank_GetShapeParam(void)
-{
-  return note_shape_param;
-}
+#endif
 
 uint32_t NoteBank_HoldCount(void)
 {

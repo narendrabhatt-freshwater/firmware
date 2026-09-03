@@ -10,32 +10,6 @@ using detail::Ok;
 using detail::ValidKey;
 using detail::ValidVoice;
 
-Result Core::Impl::NoteOn(uint8_t voice, uint8_t key)
-{
-  const Result ready = RequireVoiceReady(voice);
-  if (!ready) {
-    return ready;
-  }
-  if (!ValidKey(key)) {
-    return Fail(ErrorCode::InvalidArgument, "MIDI key must be 0..127");
-  }
-  const auto empty_sample =
-      std::find(attack_samples.begin(), attack_samples.end(), false);
-  if (empty_sample == attack_samples.end()) {
-    return Fail(ErrorCode::SampleError,
-                "oscillator playback requires one unused sample slot");
-  }
-  const size_t sample_id = static_cast<size_t>(
-      std::distance(attack_samples.begin(), empty_sample));
-  std::lock_guard<std::mutex> lock(bus_mutex);
-  cardproto::Result card = bus.Channel().Exec(
-      "aw " + std::to_string(voice) + " " + std::to_string(sample_id));
-  if (card.ok()) {
-    card = bus.Channel().NoteOn(voice, key);
-  }
-  return FromCard(card);
-}
-
 Result Core::Impl::SampleNoteOn(uint8_t voice, uint8_t key, uint16_t sample_id)
 {
   const Result ready = RequireVoiceReady(voice);
@@ -129,10 +103,8 @@ Result Core::Impl::ApplyMidi(const cardlink::midi::NoteEvent &event)
       break;
     case cardlink::midi::BankEventKind::On:
     case cardlink::midi::BankEventKind::Retrig:
-      result = midi_playback == MidiPlayback::Oscillator
-                   ? NoteOn(bank_event.slot, bank_event.midi_key)
-                   : SampleNoteOn(bank_event.slot, bank_event.midi_key,
-                                  midi_sample[bank_event.midi_key]);
+      result = SampleNoteOn(bank_event.slot, bank_event.midi_key,
+                            midi_sample[bank_event.midi_key]);
       break;
     case cardlink::midi::BankEventKind::Steal:
       continue;
@@ -176,12 +148,6 @@ void Core::Impl::PollVoiceStatus()
   }
 }
 
-Result Core::noteOn(uint8_t voice, uint8_t midi_key)
-{
-  std::lock_guard<std::mutex> lock(impl_->operation_mutex);
-  return impl_->NoteOn(voice, midi_key);
-}
-
 Result Core::sampleNoteOn(uint8_t voice, uint8_t midi_key, uint16_t sample_id)
 {
   std::lock_guard<std::mutex> lock(impl_->operation_mutex);
@@ -198,23 +164,6 @@ Result Core::allNotesOff()
 {
   std::lock_guard<std::mutex> lock(impl_->operation_mutex);
   return impl_->AllNotesOff();
-}
-
-Result Core::setMidiPlayback(MidiPlayback playback)
-{
-  std::lock_guard<std::mutex> lock(impl_->operation_mutex);
-  const Result connection = impl_->RequireConnected();
-  if (!connection) {
-    return connection;
-  }
-  const Result silence = impl_->AllNotesOff();
-  if (!silence) {
-    return silence;
-  }
-  impl_->midi_playback = playback;
-  return Ok(playback == MidiPlayback::Oscillator
-                ? "MIDI oscillator playback enabled"
-                : "MIDI sample playback enabled");
 }
 
 Result Core::setMidiSampleMap(const std::array<uint16_t, 128> &sample_ids)

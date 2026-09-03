@@ -47,9 +47,9 @@ int main()
   Expect(midi_map.code == cmi::ErrorCode::InvalidArgument,
          "MIDI mappings must reject invalid sample IDs");
 
-  const cmi::Result note = core.noteOn(0u, 60u);
+  const cmi::Result note = core.sampleNoteOn(0u, 60u, 0u);
   Expect(note.code == cmi::ErrorCode::NotConnected,
-         "noteOn must reject disconnected use");
+         "sampleNoteOn must reject disconnected use");
 
   Expect(core.disconnect().ok(), "disconnect must be idempotent");
   return 0;

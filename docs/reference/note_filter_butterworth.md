@@ -21,11 +21,9 @@ Butterworth low-pass** before the voices are mixed onto DAC CH1.
   voice 7:  source → × amp/env → 4-pole LPF → ─┘
 ```
 
-The voice source is either the SAMPLE path (attack head + streamed
-sustain) or the global DDS shape: `s` (sine), `p <0.1..0.9>` (pulse
-duty), `t <0.1..0.9>` (triangle asymmetry). On a pure sine the LPF
-mostly changes level (and phase); pulse/tri give harmonics for filter
-sweeps.
+The production voice source is the SAMPLE path (attack head + streamed
+sustain). Use sample material with the desired harmonic content when checking
+filter response.
 
 The digital filter is a **4-pole Butterworth LPF** (reference DF4
 `four_pole_filter` direct-form algorithm). `cutoff` sets the corner; **20000 Hz**
@@ -53,8 +51,8 @@ usual no-float-on-the-hot-path rule, confined to this module.
 | Reference DF4 (`coef[9]`, `d[4]`) | Match the `four_pole_filter` reference bit-for-algorithm |
 | `g` / console `q` (default 1.0)   | Shape param; 1.0 ≈ Butterworth; higher → more peak       |
 | `double` hot path                 | FPU present; stay faithful to reference                  |
-| LPF only in v1                    | Ship LPF first; HP init kept in kernel for later         |
-| Bypass at 20 kHz                  | Default = transparent; matches pre-filter bank behaviour |
+| LPF response                      | Matches the Channel voice signal-path requirement        |
+| Bypass at 20 kHz                  | Default transparent response                             |
 | Reset delays on cutoff/q change   | Avoids clicks from stale state                           |
 
 ---
@@ -137,19 +135,16 @@ Track never flips bypass; overflow clamps to just below 20 kHz.
 ```text
 f0 300
 fk0 1
-n0 261.63 1          # fc ≈ 300 Hz (at C4)
-n0 523.25 1          # fc ≈ 600 Hz (C5)
+n0 on 60             # fc ≈ 300 Hz at C4
+n0 on 72             # fc ≈ 600 Hz at C5
 ```
-
-Requires firmware that includes `note_filter.c`. Old images reply with the
-generic unknown-command error (type `h` for the live list).
 
 ---
 
-## 5. Scope verification (sine test)
+## 5. Scope verification (sample test)
 
-A **sine in → LPF → sine out** at the **same frequency**. The output is
-not a reshaped waveform — verify with the **amplitude ratio**.
+Load a sample with stable harmonic content, then compare the same note with the
+filter bypassed and engaged.
 
 ### 5.1 Procedure
 
@@ -157,7 +152,7 @@ not a reshaped waveform — verify with the **amplitude ratio**.
 n 0
 n0
 g 1 0
-n0 1000
+# load/assign a sample and start n0 through the host sample transport
 f0 20000                # reference (bypass)
 # measure Vpp_ref
 
@@ -203,19 +198,11 @@ Bypass (fc=20k)          fc=300 Hz, f=1kHz
 ──┘ └───┘ └──            ──┘└─────┘└──
 ```
 
-Frequency counter / period cursors: **unchanged**. Peak-to-peak: **down**.
+Peak-to-peak and high-frequency content should decrease.
 
-If a measured ratio disagrees by more than ~15%: old firmware without
-the filter, probing the analog VCF path instead of bypass, another host
-driving the note bank concurrently, or gain/scale too low for a stable
-trigger.
-
-### 5.4 Harmonic demo
-
-Use `p 0.5` or `t 0.5` then sweep `f0` for an audible/filterable
-harmonic demo. Sine (`s`) remains the primary amplitude-ratio test.
-
----
+If a measured ratio disagrees by more than ~15%, check for the analog VCF path
+instead of bypass, another host driving the note bank concurrently, or gain
+too low for a stable trigger.
 
 ## 6. Files / integration
 

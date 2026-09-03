@@ -487,7 +487,7 @@ void DrawSamplePage(App &app)
   const bool dialog_busy = app.file_dialog.Busy();
   const bool load_busy = app.sample_load.busy.load();
 
-  // Source selector. Only SAMPLE exposes CDC/UAC transport controls.
+  // Program header. SAMPLE is the Channel Card's only production source.
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kPalette.bg_alt);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(16.f), 0.f));
   ImGui::BeginChild("sample_mode_bar", ImVec2(0, S(40.f)),
@@ -500,18 +500,7 @@ void DrawSamplePage(App &app)
                 ImVec2(wp.x + wsz.x, wp.y + wsz.y - 1.f),
                 fw::theme::U32(kPalette.border));
     const float mid_y = S(9.f);
-    ImGui::SetCursorPos(ImVec2(S(16.f), mid_y + S(3.f)));
-    MonoText("SOURCE", kPalette.text_dim, fs);
-    ImGui::SameLine(0.f, S(12.f));
-    ImGui::SetCursorPosY(mid_y);
-    if (fw::ui::ChipBtn("WAVE", false, BtnKind::Neutral)) {
-      app.SetSourceMode(SourceMode::Wave);
-      app.MarkSettingsDirty();
-    }
-    ImGui::SameLine(0.f, S(6.f));
-    (void)fw::ui::ChipBtn("SAMPLE", true, BtnKind::Primary);
-    ImGui::SameLine(0.f, S(18.f));
-    ImGui::SetCursorPosY(mid_y);
+    ImGui::SetCursorPos(ImVec2(S(16.f), mid_y));
     DrawVmProgramHeader(app);
   }
   ImGui::EndChild();
@@ -717,6 +706,9 @@ void DrawSamplePage(App &app)
     }
     ImGui::Spacing();
   }
+
+  ImGui::Spacing();
+  DrawFilterCard(app);
 
   ImGui::Spacing();
   fw::ui::BeginSection("sample_help", "SIGNAL PATH", ImVec2(0, S(100.f)));

@@ -700,15 +700,6 @@ void SampleDryMixer::AbortBurst(uint8_t voice, uint8_t session,
   sent_[voice].store(restored, std::memory_order_release);
 }
 
-void SampleDryMixer::AbortBurst(uint8_t voice, unsigned nsamp, bool sof)
-{
-  if (voice >= kSampleVoices) {
-    return;
-  }
-  AbortBurst(voice, voices_[voice].session, voices_[voice].wave_id,
-             nsamp, sof);
-}
-
 void SampleDryMixer::CommitBurst(uint8_t voice, uint8_t session,
                                  uint16_t wave_id, unsigned nsamp, bool sof)
 {
@@ -717,15 +708,6 @@ void SampleDryMixer::CommitBurst(uint8_t voice, uint8_t session,
   }
   (void)sof;
   committed_[voice].fetch_add(nsamp, std::memory_order_release);
-}
-
-void SampleDryMixer::CommitBurst(uint8_t voice, unsigned nsamp, bool sof)
-{
-  if (voice >= kSampleVoices) {
-    return;
-  }
-  CommitBurst(voice, voices_[voice].session, voices_[voice].wave_id,
-              nsamp, sof);
 }
 
 bool SampleDryMixer::Post(const Cmd &c)

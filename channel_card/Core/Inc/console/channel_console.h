@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    channel_console.h
- * @brief   Channel Card RS485 + USB CDC console, LED chaser, session defaults.
+ * @brief   Channel Card RS485 + USB CDC console and status LEDs.
  *
  * One command parser serves both transports. RS485 uses card address prefixes
  * (`c:` / `*:` / bare) and tagged replies (`[C]ok` / `[C]err:<token>`).
@@ -30,7 +30,7 @@ extern "C"
   void ChannelConsole_SetDacHandle(CS4304_HandleTypeDef *h);
 
   /**
-   * @brief Tri-state RS485 idle, default switches, session defaults, ready banner.
+   * @brief Tri-state RS485 idle, apply boot defaults, and emit the ready banner.
    * @note Also initializes note filter / bank / envelope cold state.
    */
   void ChannelConsole_Init(void);

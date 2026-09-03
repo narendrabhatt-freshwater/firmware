@@ -30,8 +30,8 @@ enum class GuiView : int
 {
   Perform = 0,
   Channel = 1,
-  Effect = 3,
-  Setup = 4,
+  Effect = 2,
+  Setup = 3,
 };
 
 enum class OutMode : int
@@ -39,12 +39,6 @@ enum class OutMode : int
   Speakers = 0,
   Card = 1,
   Both = 2,
-};
-
-enum class SourceMode : int
-{
-  Wave = 0,   /**< Card-generated sine/pulse/triangle/saw; no UAC BODY. */
-  Sample = 1, /**< Attack over CDC plus sample BODY over UAC. */
 };
 
 /** Native picker target for the SAMPLE page. */
@@ -146,7 +140,6 @@ struct App
   uint32_t baud = 921600;
   int gain_db = 6;
   OutMode out_mode = OutMode::Card;
-  SourceMode source_mode = SourceMode::Wave;
   GuiView view = GuiView::Perform;
 
   char raw_cmd[256] = {};
@@ -167,8 +160,6 @@ struct App
   bool settings_dirty = false;
   float settings_save_countdown = 0.f;
 
-  int shape_mode = 0;
-  float shape_param = 0.5f;
   float filter_hz_f = 5000.f;
   float filter_q_f = 1.f;
   float filter_k_f = 0.f;
@@ -225,7 +216,6 @@ struct App
   void DrawActivityLog();
   void DrawPerform();
   void DrawChannel();
-  void DrawWavePage();
   void DrawSetup();
   void DrawAbout();
   void DrawBusFaultBanner();
@@ -249,7 +239,6 @@ struct App
   void RequestConnectBus();
   void HandleKeyboardPiano();
   void MarkSettingsDirty();
-  void SetSourceMode(SourceMode mode);
   void PushToastOk(const std::string &msg);
   void PushToastErr(const std::string &msg);
   void NotifyEnqueue(bool ok, const char *what);

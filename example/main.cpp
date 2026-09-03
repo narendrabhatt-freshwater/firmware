@@ -44,7 +44,7 @@ void PrintUsage(const char *program)
       << "  --voice N          Hardware voice 0..7 (default 0)\n"
       << "  --key N            MIDI key 0..127 (default 60)\n"
       << "  --duration-ms N    Playback time 1..600000 (default 2000)\n"
-      << "  --sample FILE      Optional combined WAV or signed 16-bit raw file\n"
+      << "  --sample FILE      Combined WAV or signed 16-bit raw file (required)\n"
       << "  --sample-id N      Sample ID 0..255 (default 60)\n"
       << "  --root-hz HZ       Sample root frequency (default 261.625565)\n"
       << "  --raw-rate HZ      Raw-file sample rate (default 48000)\n"
@@ -172,6 +172,10 @@ bool ParseOptions(int argc, char **argv, Options &options)
     std::cerr << "Provide --script once or exactly eight times\n";
     return false;
   }
+  if (options.sample_file.empty()) {
+    std::cerr << "--sample is required; card-generated oscillators are unavailable\n";
+    return false;
+  }
   return true;
 }
 
@@ -231,26 +235,20 @@ int main(int argc, char **argv)
     }
   }
 
-  cmi::Result started;
-  if (options.sample_file.empty()) {
-    started = core.noteOn(options.voice, options.key);
-  } else {
-    cmi::SampleDefinition sample;
-    sample.id = options.sample_id;
-    sample.sample_file = options.sample_file;
-    sample.root_hz = options.root_hz;
-    sample.raw_sample_rate_hz = options.raw_rate;
-    if (!Check(core.loadSample(sample), "loadSample")) return 1;
+  cmi::SampleDefinition sample;
+  sample.id = options.sample_id;
+  sample.sample_file = options.sample_file;
+  sample.root_hz = options.root_hz;
+  sample.raw_sample_rate_hz = options.raw_rate;
+  if (!Check(core.loadSample(sample), "loadSample")) return 1;
 
-    std::array<uint16_t, 128> midi_map;
-    midi_map.fill(options.sample_id);
-    if (!Check(core.setMidiSampleMap(midi_map), "setMidiSampleMap") ||
-        !Check(core.setMidiPlayback(cmi::MidiPlayback::Samples),
-               "setMidiPlayback")) {
-      return 1;
-    }
-    started = core.sampleNoteOn(options.voice, options.key, options.sample_id);
+  std::array<uint16_t, 128> midi_map;
+  midi_map.fill(options.sample_id);
+  if (!Check(core.setMidiSampleMap(midi_map), "setMidiSampleMap")) {
+    return 1;
   }
+  const cmi::Result started =
+      core.sampleNoteOn(options.voice, options.key, options.sample_id);
 
   if (!Check(started, "noteOn")) return 1;
   std::cout << "Playing voice " << static_cast<unsigned>(options.voice)

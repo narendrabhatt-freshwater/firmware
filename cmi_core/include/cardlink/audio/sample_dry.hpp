@@ -151,15 +151,9 @@ public:
   /** Undo FillBurst when the bulk OUT did not accept the packet. */
   void AbortBurst(uint8_t voice, uint8_t session, uint16_t wave_id,
                   unsigned nsamp, bool sof);
-  /** Compatibility overload for callers that only operate on current data. */
-  void AbortBurst(uint8_t voice, unsigned nsamp, bool sof);
-
   /** Record successful host-to-device completion. */
   void CommitBurst(uint8_t voice, uint8_t session, uint16_t wave_id,
                    unsigned nsamp, bool sof);
-  /** Compatibility overload for callers that only operate on current data. */
-  void CommitBurst(uint8_t voice, unsigned nsamp, bool sof);
-
   /** True only while a queued chunk still belongs to the live note. */
   bool BurstIsCurrent(uint8_t voice, uint8_t session,
                       uint16_t wave_id) const;

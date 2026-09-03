@@ -164,11 +164,6 @@ namespace fw::ui
                       theme::S2(7.f, 3.f));
   }
 
-  bool GlowButton(const char *label, const ImVec2 &size, bool danger)
-  {
-    return Btn(label, size, danger ? BtnKind::Danger : BtnKind::Primary);
-  }
-
   bool ToggleSwitch(const char *str_id, bool *value, bool enabled)
   {
     ImGui::PushID(str_id);

@@ -109,9 +109,9 @@ void UART5_IRQHandler(void)
   {
     const uint8_t c = (uint8_t)(UART5->RDR & 0xFFu);
 
-    /* RS485 turnaround often stamps FE/NE on noise and on real bytes.
-     * Clear the sticky flags so RX keeps running, but keep the byte —
-     * dropping on FE used to truncate frames and stick voices.
+    /* RS485 turnaround can stamp FE/NE on noise and valid bytes.
+     * Clear the sticky flags so RX keeps running, and retain the byte to avoid
+     * truncating command frames.
      * Console_Poll resyncs on a fresh "c:"/"*:"/"e:" if idle garbage
      * prefixes a line. */
     if (isr & (USART_ISR_FE | USART_ISR_NE))

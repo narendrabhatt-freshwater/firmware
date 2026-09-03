@@ -54,15 +54,6 @@ void MirrorChannel(const std::string &cmd, const cardproto::Result &result,
 {
   (void)result;
 
-  /* Bare n0 = session defaults (gain + bypass). */
-  if (cmd == "n0") {
-    p.has_gain_db = true;
-    p.gain_db = 0;
-    p.has_filter_bypass = true;
-    p.filter_bypass = true;
-    return;
-  }
-
   if (cmd == "n off") {
     p.has_note = true;p.note_slot = -1;p.note_on = false;
     return;
@@ -78,7 +69,7 @@ void MirrorChannel(const std::string &cmd, const cardproto::Result &result,
     }
     if (slot >= 0 && slot <= 7 && (cmd.size() == 2 || cmd[2] == ' ')) {
       if (cmd.size() == 2) {
-        /* bare n1..n7 = syntax err on card; ignore */
+        /* A bare slot token is a syntax error; ignore it. */
         return;
       }
       unsigned key = 0, session = 0;
@@ -101,35 +92,6 @@ void MirrorChannel(const std::string &cmd, const cardproto::Result &result,
       db <= 127u) {
     p.has_gain_db = true;
     p.gain_db = static_cast<int>(db);
-    return;
-  }
-
-  if (cmd == "s") {
-    p.has_shape = true;
-    p.shape_mode = 0;
-    p.shape_param = 0.5f;
-    return;
-  }
-  if (cmd == "saw") {
-    p.has_shape = true;
-    p.shape_mode = 3;
-    p.shape_param = 0.5f;
-    return;
-  }
-
-  double param = 0.0;
-  if (std::sscanf(cmd.c_str(), "p %lf", &param) == 1 && param >= 0.1 &&
-      param <= 0.9) {
-    p.has_shape = true;
-    p.shape_mode = 1;
-    p.shape_param = static_cast<float>(param);
-    return;
-  }
-  if (std::sscanf(cmd.c_str(), "t %lf", &param) == 1 && param >= 0.1 &&
-      param <= 0.9) {
-    p.has_shape = true;
-    p.shape_mode = 2;
-    p.shape_param = static_cast<float>(param);
     return;
   }
 
@@ -261,7 +223,7 @@ void MirrorEffect(const std::string &cmd, UiMirrorPatch &p)
 
 bool UiMirrorPatch::Any() const
 {
-  return has_gain_db || has_shape || has_filter_hz ||
+  return has_gain_db || has_filter_hz ||
          has_filter_q || has_filter_k || has_filter_bypass ||
          has_filter_voice || has_fx_phantom || has_fx_audio_en ||
          has_fx_echo || has_fx_led_flash || has_fx_led_red ||
@@ -290,14 +252,6 @@ UiMirrorPatch ParseConsoleMirror(cardproto::Target target,
       (target == cardproto::Target::Channel || target == cardproto::Target::All);
   const bool effect =
       (target == cardproto::Target::Effect || target == cardproto::Target::All);
-
-  /* Bare `s`: Channel sine only — never treat as Effect status on All. */
-  if (cmd == "s") {
-    if (target == cardproto::Target::Channel) {
-      MirrorChannel(cmd, result, p);
-    }
-    return p;
-  }
 
   if (channel) {
     MirrorChannel(cmd, result, p);

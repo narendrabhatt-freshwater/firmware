@@ -94,11 +94,6 @@ cardproto::Result Bus::Open(const std::string &path, const BusOptions &opts)
     return last_;
   };
 
-  last_ = channel_->NoteDefaults();
-  if (!last_.ok()) {
-    return fail_close(last_);
-  }
-
   last_ = channel_->SetGain(1, static_cast<uint8_t>(opts_.atten_db));
   if (!last_.ok()) {
     return fail_close(last_);

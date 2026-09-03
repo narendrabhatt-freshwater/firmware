@@ -94,7 +94,7 @@ extern "C"
 
   /** Reserve a complete BODY burst without publishing it to the consumer.
    * @retval STREAM_RING_WRITE_OK reservation active
-   * @retval STREAM_RING_WRITE_STALE prior note/session already retired
+   * @retval STREAM_RING_WRITE_STALE prior note/session is no longer active
    * @retval STREAM_RING_WRITE_FUTURE SOF arrived before its tagged nX
    * @retval STREAM_RING_WRITE_ERROR invalid request or insufficient credit */
   int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,

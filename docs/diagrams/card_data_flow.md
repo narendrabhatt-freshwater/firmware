@@ -72,9 +72,9 @@ superseded session is rejected as stale.
 Every fresh RS485 `vq` exact free-space grant permits one later bounded refill.
 Unsent refill suffixes yield to a new urgent note; already transmitted records
 are rejected as stale when their voice/session has been replaced.
-Iso OUT has no NAK. A primed BODY underrun increments `hold` but never disables
-USB, RS485, or audio; a later authorized refill can recover. A full ring drops
-the whole chunk; the producer never overwrites unread FIFO samples.
+Iso OUT has no NAK. A primed BODY underrun or full-ring drop fails closed: the
+DAC resets/mutes, the fault LEDs latch solid, and the Channel Card halts until
+reset or power-cycle. The producer never overwrites unread FIFO samples.
 
 ```mermaid
 flowchart TB

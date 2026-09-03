@@ -22,8 +22,8 @@ extern "C"
 /** Voices available in SAMPLE mode (n0..n7). */
 #define NOTE_BANK_VOICES SAMPLE_VOICES
 
-  /** Test-oscillator shapes. Streaming builds preserve these controls for
-   * console compatibility but source their audio from attack/BODY samples. */
+#if defined(CHANNEL_TEST_WAVETABLE)
+  /** Test-build-only oscillator shapes; absent from production firmware. */
   typedef enum
   {
     NOTE_SHAPE_SINE = 0,
@@ -31,6 +31,7 @@ extern "C"
     NOTE_SHAPE_TRI = 2,
     NOTE_SHAPE_SAW = 3
   } NoteBank_Shape_t;
+#endif
 
   void NoteBank_Init(void);
   void NoteBank_PanicAll(void);
@@ -51,11 +52,11 @@ extern "C"
   int NoteBank_SetWaveId(uint8_t note, uint16_t wave_id);
   uint16_t NoteBank_GetWaveId(uint8_t note);
 
+#if defined(CHANNEL_TEST_WAVETABLE)
   int NoteBank_SetShape(NoteBank_Shape_t shape, double param);
-  NoteBank_Shape_t NoteBank_GetShape(void);
-  double NoteBank_GetShapeParam(void);
+#endif
 
-  /** Body FIFO miss counter. A published-body underrun now halts instead. */
+  /** Body FIFO miss counter. Production firmware halts on the first miss. */
   uint32_t NoteBank_HoldCount(void);
   void NoteBank_HoldCountClear(void);
 

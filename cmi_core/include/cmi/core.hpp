@@ -54,18 +54,6 @@ struct MidiPort {
   std::string name;
 };
 
-enum class MidiPlayback : uint8_t {
-  Oscillator = 0,
-  Samples,
-};
-
-enum class Waveform : uint8_t {
-  Sine = 0,
-  Pulse,
-  Triangle,
-  Saw,
-};
-
 struct SampleDefinition {
   uint16_t id = 0;
   /** Combined WAV or signed 16-bit little-endian raw recording. */
@@ -135,19 +123,14 @@ public:
   Result loadSampleFolder(const std::string &path);
   Result setSampleRoot(uint16_t sample_id, double root_hz);
 
-  /** Play the VM oscillator path on a fixed hardware voice. */
-  Result noteOn(uint8_t voice, uint8_t midi_key);
   /** Play a loaded attack/BODY sample on a fixed hardware voice. */
   Result sampleNoteOn(uint8_t voice, uint8_t midi_key, uint16_t sample_id);
   Result noteOff(uint8_t voice);
   Result allNotesOff();
 
-  /** Select oscillator or sample playback for automatic MIDI handling. */
-  Result setMidiPlayback(MidiPlayback playback);
   Result setMidiSampleMap(const std::array<uint16_t, 128> &sample_ids);
 
   Result setAttenuation(uint8_t attenuation_db);
-  Result setWaveform(Waveform waveform, double parameter = 0.5);
   Result setFilter(uint8_t voice, double cutoff_hz, double q = 1.0);
   Result setAllFilters(double cutoff_hz, double q = 1.0);
   Result setFilterPitchTracking(uint8_t voice, double amount);

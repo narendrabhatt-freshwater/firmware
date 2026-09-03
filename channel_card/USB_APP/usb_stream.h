@@ -18,7 +18,7 @@ extern "C" {
 #endif
 
 #define USB_STREAM_VID 0xCafe
-#define USB_STREAM_PID 0x402F
+#define USB_STREAM_PID 0x4030
 
 /* Full 8-bit sequence; 0xFF is reserved as the unarmed sentinel. */
 #define USB_STREAM_SESSION_MOD 255u

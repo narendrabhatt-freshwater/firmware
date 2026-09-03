@@ -2,11 +2,13 @@
  *   ITF0/1: synchronous UAC2 output (10ch int16, 51 kHz)
  *   ITF2/3: CDC-ACM console
  *
- * PID 0x402F identifies the fixed-51 kHz maximum-payload UAC revision.
+ * PID 0x4030 identifies the hardware-unique serial descriptor revision.
  */
+#include "stm32h7xx_hal.h"
 #include "tusb.h"
 #include "usb_stream.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #define TUD_AUDIO_SPEAKER_10CH_SYNC_DESC_LEN                               \
@@ -124,12 +126,26 @@ char const *string_desc_arr[] = {
     (const char[]){0x09, 0x04},
     "Freshwater",
     "Channel Card Audio",
-    "CHCARD-UAC-009",
+    NULL,
     "Channel Card BODY",
     "Channel Card Console",
 };
 
 static uint16_t _desc_str[32 + 1];
+static char serial_number[32];
+
+static const char *USB_SerialNumber(void)
+{
+  if (serial_number[0] == '\0')
+  {
+    (void)snprintf(serial_number, sizeof serial_number,
+                   "CHCARD-%08lX%08lX%08lX",
+                   (unsigned long)HAL_GetUIDw0(),
+                   (unsigned long)HAL_GetUIDw1(),
+                   (unsigned long)HAL_GetUIDw2());
+  }
+  return serial_number;
+}
 
 uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid)
 {
@@ -146,11 +162,13 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid)
     size_t const max_count = sizeof(_desc_str) / sizeof(_desc_str[0]) - 1;
     if (index >= count)
       return NULL;
-    chr_count = strlen(string_desc_arr[index]);
+    const char *str =
+        index == STRID_SERIAL ? USB_SerialNumber() : string_desc_arr[index];
+    chr_count = strlen(str);
     if (chr_count > max_count)
       chr_count = max_count;
     for (size_t i = 0; i < chr_count; i++)
-      _desc_str[1 + i] = string_desc_arr[index][i];
+      _desc_str[1 + i] = str[i];
   }
   _desc_str[0] = (uint16_t)((TUSB_DESC_STRING << 8) | (2 * chr_count + 2));
   return _desc_str;

@@ -57,10 +57,8 @@ add_library(cmi_core STATIC
   src/cardproto/types.cpp
   src/cardproto/result.cpp
   src/cardproto/channel_notes.cpp
-  src/cardproto/channel_shape.cpp
   src/cardproto/channel_filter.cpp
   src/cardproto/channel_gain.cpp
-  src/cardproto/channel_cpu.cpp
   src/cardproto/effect.cpp
   src/rs485/types.cpp
   src/rs485/link.cpp

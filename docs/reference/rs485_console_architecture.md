@@ -13,8 +13,8 @@ terminal can type (`screen`, `minicom`, PuTTY at **921600 8N1**).
 | [`cmi_control`](../../cmi_control)           | Supported example: MIDI + full console + preview scope   | No             |
 | [`cmi_core`](../../cmi_core) | C++17 core library: cards, VM, waves, MIDI, and USB audio | Host apps |
 
-**Implication:** do not invent framing a terminal cannot type. Voice commands
-are ASCII (`c:n3 440` + Enter). Compact `[C]ok` replies stay human-readable.
+**Implication:** control framing remains terminal-friendly. Voice commands are
+ASCII (`c:n3 on 69` + Enter). Compact `[C] ok` replies stay human-readable.
 
 ```mermaid
 flowchart LR
@@ -51,22 +51,22 @@ Addresses: `c:` Channel, `e:` Effect, `*:` / bare = broadcast.
 | Success     | `[C]ok\r\n` / `[E]ok\r\n` (compact)                                                                |
 | Failure     | `[C]err:<code>\r\n` — `syntax`, `range`, `unknown`, `rxdrop`, …                                    |
 
-### Voice dialect (MIDI / realtime)
+### Voice commands
 
-**Fractional Hz** (ASCII `double`); never integer-round pitch — that breaks
-equal-temperament octaves (e.g. C4→262 / C5→523 → ~1 Hz beat). On-card
-default scale **0.125** when `[scale]` omitted.
+The host sends a physical MIDI key. The loaded Channel program owns key
+mapping, tuning, envelope behavior, and note lifecycle.
 
-| Intent   | Example TX          | ACK         |
-| -------- | ------------------- | ----------- |
-| Note on  | `c:n3 261.625565\r` | `[C]ok\r\n` |
-| Note off | `c:n3 0\r`          | `[C]ok\r\n` |
-| Silence  | `c:n 0\r`           | `[C]ok\r\n` |
-| Gain     | `c:g 1 6\r`         | `[C]ok\r\n` |
+| Intent        | Example TX             | ACK          |
+| ------------- | ---------------------- | ------------ |
+| Note on       | `c:n3 on 69\r`         | `[C] ok\r\n` |
+| Streamed note | `c:n3 on 69 @12\r`     | `[C] ok\r\n` |
+| Note off      | `c:n3 off\r`           | `[C] ok\r\n` |
+| Silence       | `c:n off\r`            | `[C] ok\r\n` |
+| Gain          | `c:g 1 6\r`            | `[C] ok\r\n` |
 
-Host keeps the 8-slot **VoiceBank**; the card only receives per-slot `nX`.
-ASCII only — the old binary bank frame (`c:` + magic `0x01` + `uint16` Hz)
-has been removed.
+The host owns voice allocation and sends each physical key to one of the eight
+Channel voice slots. BODY session data travels over Channel UAC2; RS485 carries
+the note authority and exact-credit `vq` polling.
 
 ### Echo (Effect)
 
@@ -104,7 +104,7 @@ Same command set over USB CDC (no `[C]` tag on CDC).
 ## Host library
 
 [`cmi_core`](../../cmi_core) exposes the `cmi::Core` host API. Transport,
-wire-format, MIDI, VM, wave, and audio-streaming components remain internal to
+wire-format, MIDI, VM, sample, and audio-streaming components remain internal to
 the library. `cmi_control` is the repository application using the same core.
 
 ## Command reference

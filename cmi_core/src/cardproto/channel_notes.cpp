@@ -59,8 +59,6 @@ namespace cardproto
     return std::string("n") + NoteSlotHex(slot) + " off";
   }
 
-  Result ChannelClient::NoteDefaults() { return Send("n0"); }
-
   Result ChannelClient::NoteOn(uint8_t slot, uint8_t key)
   {
     if (!ValidSlot(slot) || key >= 128u)

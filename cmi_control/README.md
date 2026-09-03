@@ -39,7 +39,7 @@ cmake --build cmi_control/build
 ## Views
 
 1. **Perform** — full-height preview scope with TIME/DIV / VOLTS/DIV controls, voice grid, two-octave on-screen + computer keyboard piano (A–K / W E T Y U, Z/X octave)
-2. **Channel** — switch between Wave (oscillator, n0–n7 LPF + fk, Berry program upload) and Sample (8-voice sample set, CDC attack upload, UAC2 BODY streaming, root pitch and voice assignment)
+2. **Channel** — 8-voice sample set, CDC attack upload, UAC2 BODY streaming, root pitch, voice assignment, n0–n7 LPF + fk, and Berry program upload
 3. **Effect** — phantom / AUDIO_EN / LEDs (last-sent state), USB ADC channel, ADC/I2C tools
 4. **Setup** — RS485 / MIDI / output routing, auto-reconnect, port refresh
 
@@ -60,9 +60,8 @@ the operation intentionally silences any playing notes.
 The UI follows a phosphor-terminal design language (green-on-dark,
 scanline accents).
 
-The Channel page has two source modes. **Wave** generates sine/pulse/triangle/
-saw directly on the card and never starts UAC/BODY. **Sample** uses attack CDC
-plus UAC BODY; the GUI opens BODY automatically on the first card note, so
+The Channel page exposes the production sample path only: attack data over CDC
+plus UAC BODY. The GUI opens BODY automatically on the first card note, so
 there is no separate Start BODY step.
 
 ## Shell

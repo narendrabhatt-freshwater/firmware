@@ -401,7 +401,7 @@ static void Console_Exec(char *line) {
 /** Check if a received line is addressed to this card.
  * Prefix format:  "X:command"  where X is a card ID letter.
  *   'C' = Channel Card,  'E' = Effect Card (us),  '*' = broadcast.
- * No prefix = broadcast (backward-compatible).
+ * No prefix = broadcast.
  *
  * If addressed to us, strips the prefix and returns 1.
  * If addressed to another card, returns 0 (ignore).
@@ -418,7 +418,7 @@ static uint8_t RS485_IsForMe(char *line) {
       return 0; /* addressed to another card — ignore */
     }
   }
-  /* No prefix → treat as broadcast (backward-compatible) */
+  /* No prefix → broadcast. */
   return 1;
 }
 

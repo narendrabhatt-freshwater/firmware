@@ -46,34 +46,6 @@ std::string ConfigDir()
 #endif
 }
 
-/** Pre-CMI branding path — read once if the new config is absent. */
-std::string LegacyConfigDir()
-{
-#if defined(_WIN32)
-  char buf[MAX_PATH] = {};
-  if (SUCCEEDED(SHGetFolderPathA(nullptr, CSIDL_APPDATA, nullptr, 0, buf))) {
-    return std::string(buf) + "\\Freshwater";
-  }
-  return ".";
-#elif defined(__APPLE__)
-  const char *home = std::getenv("HOME");
-  if (home && home[0]) {
-    return std::string(home) + "/Library/Application Support/Freshwater";
-  }
-  return ".";
-#else
-  const char *xdg = std::getenv("XDG_CONFIG_HOME");
-  if (xdg && xdg[0]) {
-    return std::string(xdg) + "/freshwater";
-  }
-  const char *home = std::getenv("HOME");
-  if (home && home[0]) {
-    return std::string(home) + "/.config/freshwater";
-  }
-  return ".";
-#endif
-}
-
 void EnsureDir(const std::string &dir)
 {
 #if defined(_WIN32)
@@ -131,12 +103,7 @@ bool Load(App &app)
 {
   std::ifstream in(Path());
   if (!in) {
-    /* One-shot migration from the pre-CMI config directory. */
-    const std::string legacy = LegacyConfigDir() + "/control_gui.ini";
-    in.open(legacy);
-    if (!in) {
-      return false;
-    }
+    return false;
   }
   std::string line;
   std::string key;
@@ -149,14 +116,8 @@ bool Load(App &app)
       continue;
     }
     if (key == "view") {
-      const int saved_view = std::clamp(std::atoi(val.c_str()), 0, 4);
-      if (saved_view == 2) {
-        /* Legacy SAMPLE page: it is now the Sample source on Channel. */
-        app.view = GuiView::Channel;
-        app.source_mode = SourceMode::Sample;
-      } else {
-        app.view = static_cast<GuiView>(saved_view);
-      }
+      const int saved_view = std::clamp(std::atoi(val.c_str()), 0, 3);
+      app.view = static_cast<GuiView>(saved_view);
     } else if (key == "log_collapsed") {
       app.log_collapsed = (std::atoi(val.c_str()) != 0);
     } else if (key == "gain_db") {
@@ -164,9 +125,6 @@ bool Load(App &app)
     } else if (key == "out_mode") {
       app.out_mode =
           static_cast<OutMode>(std::clamp(std::atoi(val.c_str()), 0, 2));
-    } else if (key == "source_mode") {
-      app.source_mode =
-          static_cast<SourceMode>(std::clamp(std::atoi(val.c_str()), 0, 1));
     } else if (key == "baud") {
       const uint32_t saved = static_cast<uint32_t>(std::atoi(val.c_str()));
       app.baud = (saved == 460800u || saved == 960000u) ? 921600u : saved;
@@ -206,7 +164,6 @@ bool Save(const App &app)
   WriteKV(out, "log_collapsed", app.log_collapsed);
   WriteKV(out, "gain_db", app.gain_db);
   WriteKV(out, "out_mode", static_cast<int>(app.out_mode));
-  WriteKV(out, "source_mode", static_cast<int>(app.source_mode));
   WriteKV(out, "baud", static_cast<int>(app.baud));
   WriteKV(out, "serial_path", std::string(app.serial_path_buf));
   WriteKV(out, "attack_cdc_path", std::string(app.attack_cdc_path));

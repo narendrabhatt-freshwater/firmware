@@ -25,7 +25,7 @@ FLASH_START=1
 BUILD_FORCE=0
 
 # Serial console / log
-SERIAL_PORT="${FW_SERIAL_PORT:-}"     # e.g. /dev/cu.usbmodemCHCARD_0013
+SERIAL_PORT="${FW_SERIAL_PORT:-}"     # e.g. /dev/cu.usbmodemCHCARD_<hardware-uid>3
 SERIAL_BAUD="${FW_SERIAL_BAUD:-115200}"
 SEND_WAIT_SECS="${FW_SEND_WAIT:-1.5}"
 

@@ -35,7 +35,7 @@ public:
   BusController(const BusController &) = delete;
   BusController &operator=(const BusController &) = delete;
 
-  /** Open adapter + bootstrap (ec 0, n0, g, n off). Logs to log. */
+  /** Open adapter + bootstrap (ec 0, g, n off). Logs to log. */
   bool Open(const std::string &path,
             uint32_t baud,
             uint32_t atten_db,

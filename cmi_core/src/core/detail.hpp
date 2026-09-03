@@ -42,7 +42,6 @@ struct Core::Impl {
   Result RefreshAttackSamples();
   Result LoadSample(const SampleDefinition &sample);
 
-  Result NoteOn(uint8_t voice, uint8_t key);
   Result SampleNoteOn(uint8_t voice, uint8_t key, uint16_t sample_id);
   Result NoteOff(uint8_t voice);
   Result AllNotesOff();
@@ -62,7 +61,6 @@ struct Core::Impl {
   std::array<uint16_t, 128> midi_sample{};
   std::array<bool, 256> attack_samples{};
   std::array<bool, 256> loaded_samples{};
-  MidiPlayback midi_playback = MidiPlayback::Oscillator;
   std::optional<unsigned> midi_index;
   Result last_sample_result;
 

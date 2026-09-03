@@ -44,7 +44,7 @@ struct BusOptions {
   bool allow_missing_effect = false;
 };
 
-/** Production RS485 host session: ec → n0 / g / n off, then typed clients. */
+/** Production RS485 host session: ec → g / n off, then typed clients. */
 class Bus {
 public:
   Bus();

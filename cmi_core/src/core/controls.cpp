@@ -39,37 +39,6 @@ Result Core::setAttenuation(uint8_t attenuation_db)
   return FromCard(impl_->bus.Channel().SetGain(1u, attenuation_db));
 }
 
-Result Core::setWaveform(Waveform waveform, double parameter)
-{
-  std::lock_guard<std::mutex> operation_lock(impl_->operation_mutex);
-  const Result connection = impl_->RequireConnected();
-  if (!connection) {
-    return connection;
-  }
-  if ((waveform == Waveform::Pulse || waveform == Waveform::Triangle) &&
-      (parameter < 0.1 || parameter > 0.9)) {
-    return Fail(ErrorCode::InvalidArgument,
-                "pulse and triangle parameters must be 0.1..0.9");
-  }
-  std::lock_guard<std::mutex> bus_lock(impl_->bus_mutex);
-  cardproto::Result result;
-  switch (waveform) {
-  case Waveform::Sine:
-    result = impl_->bus.Channel().Sine();
-    break;
-  case Waveform::Pulse:
-    result = impl_->bus.Channel().Pulse(parameter);
-    break;
-  case Waveform::Triangle:
-    result = impl_->bus.Channel().Triangle(parameter);
-    break;
-  case Waveform::Saw:
-    result = impl_->bus.Channel().Saw();
-    break;
-  }
-  return FromCard(result);
-}
-
 Result Core::setFilter(uint8_t voice, double cutoff_hz, double q)
 {
   std::lock_guard<std::mutex> operation_lock(impl_->operation_mutex);

@@ -8,6 +8,10 @@
 #include "stream_ring.h"
 #include "usb_stream.h"
 
+#if defined(__arm__) || defined(__thumb__)
+#include "main.h"
+#endif
+
 #include <stddef.h>
 #include <string.h>
 
@@ -285,7 +289,7 @@ int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
                          r->pending_armed != 0u ||
                          session != r->current_session))
   {
-    /* A fresh vq authorized this refill, but note-off/new-note retired its
+    /* A fresh vq authorized this refill, but note-off/new-note invalidated its
      * session before the ISO bytes arrived. It is valid transport data, but
      * it must not repopulate the ring. */
     s_stale_pkts++;
@@ -296,6 +300,10 @@ int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
   {
     s_drop_pkts++;
     s_full_pkts++;
+#if defined(__arm__) || defined(__thumb__)
+    /* A dropped BODY frame makes subsequent audio knowingly incorrect. */
+    Error_Handler();
+#endif
     return STREAM_RING_WRITE_ERROR;
   }
   write->pending = target_pending;

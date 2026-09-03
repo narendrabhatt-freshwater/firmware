@@ -543,12 +543,10 @@ void Client::NoteOn(uint8_t voice, uint8_t key, uint16_t wave_id)
   (void)NoteOnBatch(&note, 1u);
 }
 
-bool Client::NoteOnBatch(const NoteRequest *notes, size_t count,
-                         unsigned legacy_timeout_ms)
+bool Client::NoteOnBatch(const NoteRequest *notes, size_t count)
 {
-  /* Kept in the ABI for existing callers. Direct SOF prefill and tagged RS485
-   * nX launch together so USB fills the ring while the local attack plays. */
-  (void)legacy_timeout_ms;
+  /* Direct SOF prefill and tagged RS485 nX launch together so USB fills the
+   * ring while the local attack plays. */
   if (notes == nullptr || count == 0u || count > cardlink::audio::kSampleVoices) {
     return false;
   }

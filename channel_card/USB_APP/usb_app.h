@@ -36,9 +36,9 @@ extern "C"
     uint32_t USB_App_RxByteCount(void);
     uint32_t USB_App_UacWindowCount(void);
     uint32_t USB_App_BadCount(void);
-    /** Compatibility counters; direct transport reports routing faults in 2. */
+    /** Reserved reason counters; direct transport reports routing faults in 2. */
     uint32_t USB_App_BadReasonCount(uint8_t reason);
-    /** Legacy compatibility value; direct transport returns 0xFFFF. */
+    /** Reserved PACK sequence field; direct transport returns 0xFFFF. */
     uint16_t USB_App_LastPackSequence(void);
     void USB_App_StatsClear(void);
 

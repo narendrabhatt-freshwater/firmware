@@ -2,7 +2,7 @@
 
 This standalone C++17 application uses only the public `<cmi/core.hpp>` API.
 It connects to the hardware, loads scripts into all eight Channel voices,
-optionally loads one WAV or raw sample, plays a note, and disconnects.
+loads one WAV or raw sample, plays a note, and disconnects.
 
 ## Build from this repository
 
@@ -17,29 +17,12 @@ cmake --build example/build --parallel
 example/build/cmi_core_example --list-midi
 ```
 
-## Play the oscillator
-
-Pass `--script` once to load the same script into every voice:
-
-```sh
-example/build/cmi_core_example \
-  --rs485 /dev/cu.usbserial-0001 \
-  --cdc /dev/cu.usbmodemCHCARD1 \
-  --script cmi_core/examples/vm/channel/attack_2ms.be \
-  --voice 0 \
-  --key 60 \
-  --duration-ms 2000
-```
-
-Pass `--script` exactly eight times when each voice needs a different script.
-The arguments map to voices `0` through `7` in command-line order.
-
 ## Play a WAV or raw sample
 
 ```sh
 example/build/cmi_core_example \
   --rs485 /dev/cu.usbserial-0001 \
-  --cdc /dev/cu.usbmodemCHCARD1 \
+  --cdc /dev/cu.usbmodemCHCARD_0123456789ABCDEF012345673 \
   --script cmi_core/examples/vm/channel/attack_2ms.be \
   --sample samples/piano_c4.wav \
   --sample-id 60 \
@@ -50,6 +33,9 @@ example/build/cmi_core_example \
 
 For signed 16-bit little-endian raw input, add `--raw-rate HZ`. WAV input is
 converted to mono and resampled automatically.
+
+Pass `--script` exactly eight times when each voice needs a different script.
+The arguments map to voices `0` through `7` in command-line order.
 
 Use `--midi "EXACT PORT NAME"` to enable automatic MIDI input and
 `--audio "EXACT DEVICE NAME"` to select the Channel USB audio device. When

@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    channel_console.c
- * @brief   Channel Card RS485 + USB CDC console (short cmds), cpu probe, LED.
+ * @brief   Channel Card RS485 + USB CDC console (short cmds) and status LEDs.
  *
  * main.c owns bring-up and the DAC handle; this file owns the interactive
  * console surface.
@@ -333,10 +333,8 @@ static const SwitchDef_t switches[] = {
 /* Console commands (RS485 + USB CDC). Console_Poll lowercases.
  *
  *   h / help / ?      — command list
- *   n0                — session defaults: bypass ON + g 1 0
  *   n0..n7 on <key> [@session] / off — raw MIDI-key gate
  *   n off             — release all 8 voices
- *   s / p <d> / t <a> — global note-bank shape (sine / pulse duty / tri asym)
  *   al <id> <len>     — CDC attack-head upload (2..ATTACK_BANK_BYTES)
  *   vmload <v> <len>  — CDC Berry ABI6 upload; vm [v|mem] — status
  *   ar <id> <Hz>      — sample root pitch (id = wave 0..255); a — loaded mask
@@ -346,9 +344,8 @@ static const SwitchDef_t switches[] = {
  *   f0..f7 <Hz> [q] / f <Hz> [q] — LPF on the 8 voices (0 or 20000 = bypass;
  *                        q = DF4 g 0.5..10, default 1.0; higher = more peak)
  *   fk0..fk7 / fk     — filter pitch-track k (0..10, fc = fbase*(f/C4)^k)
- *   g <ch> <dB>       — CS4304 DAC atten dB (0..127; 0.5 dB reg steps), ch 1..4
- *   cpu [0|N|q [N]]   — LED_Y load probe (see README) */
-#define N0_DEFAULT_ATTEN_DB 0u
+ *   g <ch> <dB>       — CS4304 DAC atten dB (0..127; 0.5 dB reg steps), ch 1..4 */
+#define BOOT_DEFAULT_ATTEN_DB 0u
 /** Console-addressable filter slots (voices 8..15 stay boot bypass). */
 #define NOTE_FILTER_CONSOLE_VOICES 8u
 
@@ -358,14 +355,14 @@ static void Console_SetBypassOn(void)
   HAL_GPIO_WritePin(BYPASS_SW_GPIO_Port, BYPASS_SW_Pin, GPIO_PIN_RESET);
 }
 
-/** Defaults for bare n0 / boot: dry path + CH1 DAC trim 0 dB (`g 1 0`).
- * Key changes (`nX on <key>`) do not touch gain or bypass. */
-static void Console_ApplySessionDefaults(void)
+/** Boot defaults: dry path + CH1 DAC trim 0 dB (`g 1 0`).
+ * Runtime note commands do not touch gain or bypass. */
+static void Console_ApplyBootDefaults(void)
 {
   Console_SetBypassOn();
   if (s_dac != NULL)
   {
-    CS4304_SetChannelTrim(s_dac, '1', (uint8_t)(N0_DEFAULT_ATTEN_DB * 2u));
+    CS4304_SetChannelTrim(s_dac, '1', (uint8_t)(BOOT_DEFAULT_ATTEN_DB * 2u));
   }
 }
 
@@ -408,8 +405,8 @@ static void Console_NoteOn(uint8_t note, uint8_t key, uint16_t session)
   RS485_Reply("ok\r\n");
 }
 
-/** Deterministic N-voice load: fixed freqs; equal scale so sum ≈ 1.0 FS. */
-static void Console_CpuLoad_DisableVoices(void)
+/** Release every voice. */
+static void Console_AllNotesOff(void)
 {
   for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
   {
@@ -417,123 +414,16 @@ static void Console_CpuLoad_DisableVoices(void)
   }
 }
 
-/** Enable the first `count` voices (1..16). Others off. */
-static void Console_CpuLoad_EnableVoices(uint8_t count)
-{
-  if (count < 1u)
-  {
-    count = 1u;
-  }
-  if (count > NOTE_BANK_VOICES)
-  {
-    count = (uint8_t)NOTE_BANK_VOICES;
-  }
-
-  Console_CpuLoad_DisableVoices();
-  for (uint8_t i = 0; i < count; i++)
-  {
-    NoteBank_NoteOn(i, (uint8_t)(57u + i));
-  }
-}
-
-/**
- * Parse cpu mode + optional voice count.
- * Returns 1 and fills *mode_out / *nvoices on success; 0 on bad input.
- * *mode_out: 0=off, 1=dma/on, 2=queue.
- * Args: bare | 0 | N | q | q N  (no on/off/dma/queue words).
- */
-static uint8_t Console_CpuLoad_Parse(const char *arg, uint8_t *mode_out,
-                                     uint8_t *nvoices_out)
-{
-  char mode_tok[8];
-  unsigned int nvoices = NOTE_BANK_VOICES;
-  unsigned int only_n;
-  int nscan;
-
-  *nvoices_out = (uint8_t)NOTE_BANK_VOICES;
-
-  if (arg == NULL || *arg == '\0')
-  {
-    *mode_out = 1u; /* bare cpu → on, all NOTE_BANK_VOICES voices */
-    return 1u;
-  }
-
-  /* "cpu 0" / "cpu 8" */
-  if (sscanf(arg, "%u", &only_n) == 1)
-  {
-    char trail[8];
-    if (sscanf(arg, "%u %7s", &only_n, trail) != 1)
-    {
-      return 0u;
-    }
-    if (only_n == 0u)
-    {
-      *mode_out = 0u;
-      *nvoices_out = 0u;
-      return 1u;
-    }
-    if (only_n >= 1u && only_n <= NOTE_BANK_VOICES)
-    {
-      *mode_out = 1u;
-      *nvoices_out = (uint8_t)only_n;
-      return 1u;
-    }
-    return 0u;
-  }
-
-  /* "cpu q" / "cpu q 8" */
-  nscan = sscanf(arg, "%7s %u", mode_tok, &nvoices);
-  if (nscan < 1 || strcmp(mode_tok, "q") != 0)
-  {
-    return 0u;
-  }
-  if (nscan == 2)
-  {
-    if (nvoices < 1u || nvoices > NOTE_BANK_VOICES)
-    {
-      return 0u;
-    }
-    *nvoices_out = (uint8_t)nvoices;
-  }
-  *mode_out = 2u;
-  return 1u;
-}
-
 static void Console_Help(void)
 {
   char b[256];
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   snprintf(b, sizeof b,
-           "ok: SAMPLE n0..n7 on key [@session] | off | s|p d|t a|saw | "
+           "ok: SAMPLE n0..n7 on key [@session] | off | "
            "aw v id | "
            "al id n | vmload v n | vm [v] | ar id Hz | a | vq | "
            "usb | "
-           "f0..f7 Hz [q] | fk0..fk7 k | g ch dB | "
-           "cpu [0|N|q N]\r\n");
-  RS485_Reply(b);
-}
-
-static void Console_ShapeReply(void)
-{
-  char b[40];
-  NoteBank_Shape_t sh = NoteBank_GetShape();
-
-  if (sh == NOTE_SHAPE_PULSE)
-  {
-    snprintf(b, sizeof b, "ok: p %.2f\r\n", NoteBank_GetShapeParam());
-  }
-  else if (sh == NOTE_SHAPE_TRI)
-  {
-    snprintf(b, sizeof b, "ok: t %.2f\r\n", NoteBank_GetShapeParam());
-  }
-  else if (sh == NOTE_SHAPE_SAW)
-  {
-    snprintf(b, sizeof b, "ok: saw\r\n");
-  }
-  else
-  {
-    snprintf(b, sizeof b, "ok: s\r\n");
-  }
+           "f0..f7 Hz [q] | fk0..fk7 k | g ch dB\r\n");
   RS485_Reply(b);
 }
 
@@ -801,57 +691,6 @@ static void Console_CmdFk(char *line, char *b, size_t bsz)
   RS485_Reply("err:syntax\r\n");
 }
 
-/** cpu [0|N|q [N]]: LED_Y busy/idle probe. */
-static void Console_CmdCpu(char *line, char *b, size_t bsz)
-{
-  const char *arg = line + 3;
-  uint8_t mode;
-  uint8_t nvoices;
-
-  while (*arg == ' ')
-  {
-    arg++;
-  }
-
-  if (!Console_CpuLoad_Parse(arg, &mode, &nvoices))
-  {
-    RS485_Reply("err:syntax\r\n");
-    return;
-  }
-
-  if (mode == 0u)
-  {
-    Audio_CpuLoad_SetMode(AUDIO_CPULOAD_OFF);
-    Console_CpuLoad_DisableVoices();
-    led_show_on = 1;
-    RS485_Reply("ok: cpu 0\r\n");
-    return;
-  }
-
-  if (NoteBank_VmUploadIsBusy() != 0u)
-  {
-    RS485_Reply("err:vm-busy\r\n");
-    return;
-  }
-
-  Console_ApplySessionDefaults();
-  Audio_StartPlayback();
-  Console_CpuLoad_EnableVoices(nvoices);
-  led_show_on = 0;
-
-  if (mode == 2u)
-  {
-    Audio_CpuLoad_SetMode(AUDIO_CPULOAD_QUEUE);
-    snprintf(b, bsz, "ok: cpu q %u\r\n", (unsigned)nvoices);
-  }
-  else
-  {
-    Audio_CpuLoad_SetMode(AUDIO_CPULOAD_DMA);
-    snprintf(b, bsz, "ok: cpu %u\r\n", (unsigned)nvoices);
-  }
-  RS485_Reply(b);
-}
-
 /**
  * vq — ABI6 target identity/fill plus exact total writable credit.
  */
@@ -919,7 +758,7 @@ static void Console_CmdVoiceQuery(void)
 static void Console_CmdNoteAll(char *line)
 {
   if (strcmp(line, "n off") != 0) { RS485_Reply("err:syntax\r\n"); return; }
-  Console_CpuLoad_DisableVoices();RS485_Reply("ok\r\n");
+  Console_AllNotesOff();RS485_Reply("ok\r\n");
 }
 
 /** n0..n7: note bank on CH1 (also answers unknown; slots 8..f err:range). */
@@ -949,18 +788,10 @@ static void Console_CmdNoteSlot(char *line)
     return;
   }
 
-  /* Bare "n0" = session defaults only. Bare n1..n7 are not session cmds. */
+  /* A slot token without `on` or `off` is not a command. */
   if (line[2] == '\0')
   {
-    if (note == 0u)
-    {
-      Console_ApplySessionDefaults();
-      RS485_Reply("ok\r\n");
-    }
-    else
-    {
-      RS485_Reply("err:syntax\r\n");
-    }
+    RS485_Reply("err:syntax\r\n");
     return;
   }
 
@@ -1132,13 +963,6 @@ static void Console_CmdVmStatus(char *line)
   RS485_Reply(reply);
 }
 
-/** bl is retired — body is the USB BODY stream, not on-card RAM. */
-static void Console_CmdBodyLoad(char *line)
-{
-  (void)line;
-  RS485_Reply("err:unsupported\r\n");
-}
-
 /** ar <wave_id> <root_hz> — attack-head native pitch for on-card rate-scale. */
 static void Console_CmdRoot(char *line)
 {
@@ -1197,13 +1021,6 @@ static void Console_Exec(char *line)
   if (strncmp(line, "al ", 3) == 0)
   {
     Console_CmdAttackLoad(line);
-    return;
-  }
-
-  /* ---- bl: retired (body is USB-streamed) ---- */
-  if (strncmp(line, "bl ", 3) == 0)
-  {
-    Console_CmdBodyLoad(line);
     return;
   }
 
@@ -1294,51 +1111,6 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- fb: retired with UAC async feedback ---- */
-  if (strncmp(line, "fb", 2) == 0 && (line[2] == '\0' || line[2] == ' '))
-  {
-    RS485_Reply("err:unsupported\r\n");
-    return;
-  }
-
-  /* ---- s / p <0.1..0.9> / t <0.1..0.9> / saw: oscillator shape ---- */
-  if (strcmp(line, "s") == 0)
-  {
-    (void)NoteBank_SetShape(NOTE_SHAPE_SINE, 0.0);
-    Console_ShapeReply();
-    return;
-  }
-  if (strcmp(line, "saw") == 0)
-  {
-    (void)NoteBank_SetShape(NOTE_SHAPE_SAW, 0.0);
-    Console_ShapeReply();
-    return;
-  }
-  if (line[0] == 'p' || line[0] == 't')
-  {
-    double param;
-    NoteBank_Shape_t sh =
-        (line[0] == 'p') ? NOTE_SHAPE_PULSE : NOTE_SHAPE_TRI;
-
-    if (line[1] != ' ')
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-    if (sscanf(line + 2, "%lf", &param) != 1)
-    {
-      RS485_Reply("err:syntax\r\n");
-      return;
-    }
-    if (NoteBank_SetShape(sh, param) != 0)
-    {
-      RS485_Reply("err:range\r\n");
-      return;
-    }
-    Console_ShapeReply();
-    return;
-  }
-
   /* ---- g <ch> <dB>: CS4304 DAC atten ---- */
   if (sscanf(line, "g %u %u", &ch, &val) == 2)
   {
@@ -1362,13 +1134,6 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- cpu [0|N|q [N]]: LED_Y busy/idle probe ---- */
-  if (strncmp(line, "cpu", 3) == 0 && (line[3] == '\0' || line[3] == ' '))
-  {
-    Console_CmdCpu(line, b, sizeof b);
-    return;
-  }
-
   /* ---- n off: silence all voices. n0..n7 below. ---- */
   if (line[0] == 'n' && (line[1] == '\0' || line[1] == ' '))
   {
@@ -1383,7 +1148,7 @@ static void Console_Exec(char *line)
 /** Check if a received line is addressed to this card.
  * Prefix format:  "X:command"  where X is a card ID letter.
  *   'C' = Channel Card (us),  'E' = Effect Card,  '*' = broadcast.
- * No prefix = broadcast (backward-compatible).
+ * No prefix = broadcast.
  *
  * If addressed to us, strips the prefix and returns 1.
  * If addressed to another card, returns 0 (ignore).
@@ -1405,7 +1170,7 @@ static uint8_t RS485_IsForMe(char *line)
       return 0; /* addressed to another card — ignore */
     }
   }
-  /* No prefix → treat as broadcast (backward-compatible) */
+  /* No prefix → broadcast. */
   return 1;
 }
 
@@ -1506,11 +1271,6 @@ static void LED_Task(void)
   static uint8_t step = 0;
 
   ChannelLed_Task();
-  if (Audio_CpuLoad_IsActive())
-  {
-    HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_RESET);
-    return;
-  }
   if (!led_show_on)
   {
     for (uint8_t i = 0; i < 2; i++)
@@ -1539,7 +1299,7 @@ void ChannelConsole_Init(void)
     HAL_GPIO_WritePin(switches[i].port, switches[i].pin,
                       switches[i].active_low ? GPIO_PIN_SET : GPIO_PIN_RESET);
   }
-  Console_ApplySessionDefaults();
+  Console_ApplyBootDefaults();
 
   NoteFilter_InitAll();
   NoteEnv_Init();

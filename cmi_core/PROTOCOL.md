@@ -163,7 +163,7 @@ from line parsing to binary input. The full transaction is specified in §4.
 
 Amplitude ramps and note lifecycle are controlled only by the uploaded per-voice
 VM program. The firmware exposes no separate envelope-programming commands.
-See [SCRIPTING.md](../cmi_core/SCRIPTING.md) and `vmload` below.
+See [SCRIPTING.md](SCRIPTING.md) and `vmload` below.
 
 ### Digital low-pass filter
 

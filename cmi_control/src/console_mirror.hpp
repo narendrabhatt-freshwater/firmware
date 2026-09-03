@@ -15,10 +15,6 @@ struct UiMirrorPatch
   bool has_gain_db = false;
   int gain_db = 0;
 
-  bool has_shape = false;
-  int shape_mode = 0; // 0 sine, 1 pulse, 2 triangle, 3 saw
-  float shape_param = 0.5f;
-
   bool has_filter_hz = false;
   float filter_hz_f = 5000.f;
 
@@ -67,8 +63,6 @@ struct UiMirrorPatch
 /**
  * Parse a successful console exchange into a UI patch.
  * Uses TX args for sets.
- * Bare `s` is Channel-only (Effect status is not mirrored).
- *
  * @return Empty patch (Any()==false) when the command does not map to UI.
  */
 UiMirrorPatch ParseConsoleMirror(cardproto::Target target,

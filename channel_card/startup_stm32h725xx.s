@@ -106,15 +106,15 @@ LoopForever:
 
 /**
  * @brief  This is the code that gets called when the processor receives an
- *         unexpected interrupt.  This simply enters an infinite loop, preserving
- *         the system state for examination by a debugger.
+ *         unexpected interrupt. Route it through the latched hardware fault
+ *         indicator instead of hanging silently.
  * @param  None
  * @retval None
 */
     .section  .text.Default_Handler,"ax",%progbits
 Default_Handler:
 Infinite_Loop:
-  b  Infinite_Loop
+  b  Error_Handler
   .size  Default_Handler, .-Default_Handler
 /******************************************************************************
 *
@@ -757,5 +757,4 @@ g_pfnVectors:
 
    .weak      TIM24_IRQHandler
    .thumb_set TIM24_IRQHandler,Default_Handler
-
 

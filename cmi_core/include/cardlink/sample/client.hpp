@@ -79,10 +79,8 @@ public:
   /** Reserve/launch matching USB SOF, then queue authoritative RS485 aw/nX. */
   void NoteOn(uint8_t voice, uint8_t key, uint16_t wave_id = 0xFFFFu);
   /** Queue RS485 note starts; each worker launches its matching BODY session
-   *  immediately before aw/nX so the attack bridges into the first samples.
-   *  The timeout argument remains for source/ABI compatibility and is ignored. */
-  bool NoteOnBatch(const NoteRequest *notes, size_t count,
-                   unsigned timeout_ms = 200u);
+   *  immediately before aw/nX so the attack bridges into the first samples. */
+  bool NoteOnBatch(const NoteRequest *notes, size_t count);
   void NoteOff(uint8_t voice);
   void AllNotesOff();
   void Silence(uint8_t voice);

@@ -47,7 +47,7 @@ use different programs:
 ```cpp
 cmi::CoreParams params;
 params.rs485_port = "/dev/cu.usbserial-0001";
-params.channel_cdc_port = "/dev/cu.usbmodemCHCARD1";
+params.channel_cdc_port = "/dev/cu.usbmodemCHCARD_0123456789ABCDEF012345673";
 cmi::Core core(params);
 if (!core.connect()) return 1;
 

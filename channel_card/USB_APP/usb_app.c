@@ -109,7 +109,8 @@ void USB_App_Init(void)
   s_sample_freq_range.subrange[0].bMax = CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE;
   s_sample_freq_range.subrange[0].bRes = 0;
   USB_LowLevel_Init();
-  tud_init(BOARD_TUD_RHPORT);
+  if (!tud_init(BOARD_TUD_RHPORT))
+    Error_Handler();
 }
 
 void USB_CDC_WriteStr(const char *s)
@@ -214,7 +215,10 @@ static void USB_App_DrainUac(void)
     {
       const uint16_t n = tud_audio_read(s_uac_packet, packet_bytes);
       if (n != packet_bytes)
-        return;
+      {
+        s_bad_uac++;
+        Error_Handler();
+      }
       s_rx_bytes += n;
       USB_App_ConsumeUacWords(
           (const int16_t *)(const void *)s_uac_packet,
@@ -230,11 +234,16 @@ static void USB_App_DrainUac(void)
           chunk = sizeof s_uac_packet;
         chunk = tud_audio_read(s_uac_packet, chunk);
         if (chunk == 0u)
-          return;
+        {
+          s_bad_uac++;
+          Error_Handler();
+        }
         left = (uint16_t)(left - chunk);
         s_rx_bytes += chunk;
       }
       s_bad_uac++;
+      /* A malformed ISO transfer destroys the fixed BODY framing. */
+      Error_Handler();
     }
     s_uac_length_rd = (uint8_t)((rd + 1u) % USB_PACKET_LENGTH_QUEUE);
   }
@@ -372,6 +381,8 @@ bool tud_audio_rx_done_post_read_cb(uint8_t rhport, uint16_t nbytes,
   if (next == s_uac_length_rd)
   {
     s_bad_uac++;
+    /* Lost boundary metadata makes the buffered audio ambiguous. */
+    Error_Handler();
     return true;
   }
   s_uac_lengths[s_uac_length_wr] = nbytes;

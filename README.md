@@ -201,14 +201,12 @@ command references are in the
 [`docs/protocol.md`](docs/protocol.md) defines framing, binary uploads, and
 reply formats.
 
-**Channel Card** — 8 SAMPLE voices (`n0`…`n7`, summed on CH1), fallback
-oscillator shape (`s`/`p`/`t`), sample upload/assignment
+**Channel Card** — 8 SAMPLE voices (`n0`…`n7`, summed on CH1), sample upload/assignment
 (`al`/`ar`/`aw`/`a`/`vq`), per-voice VM programs (`vmload`/`vm`) and LPF
-(`f`/`fk`), DAC gain (`g`), CPU probe (`cpu`).
+(`f`/`fk`) and DAC gain (`g`).
 
 | Command | Meaning |
 | ------- | ------- |
-| `n0` | Session defaults: bypass on and `g 1 0`. |
 | `n0`…`n7 on <key> [@session]` | Start one scripted voice with MIDI key 0…127. |
 | `n0`…`n7 off` / `n off` | Release one voice or all voices. |
 | `g <ch> <dB>` | Set CS4304 attenuation on channel 1…4 to 0…127 dB. |

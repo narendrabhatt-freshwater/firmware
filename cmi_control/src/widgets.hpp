@@ -26,10 +26,6 @@ bool Btn(const char *label, const ImVec2 &size = ImVec2(0, 0),
 bool ChipBtn(const char *label, bool selected = false,
              BtnKind kind = BtnKind::Neutral);
 
-/** Compatibility wrapper: danger → Danger, otherwise Primary. */
-bool GlowButton(const char *label, const ImVec2 &size = ImVec2(0, 0),
-                bool danger = false);
-
 /** 32×16 sliding toggle switch (design Effect page). Returns true on change. */
 bool ToggleSwitch(const char *str_id, bool *value, bool enabled = true);
 

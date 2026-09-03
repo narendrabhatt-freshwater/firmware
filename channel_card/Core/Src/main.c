@@ -197,7 +197,7 @@ int main(void)
 
   /* filter_ctl (TIM3_CH1, PC6): keep LOW at boot. */
 
-  /* RS485 idle Hi-Z, switch defaults, bypass/gain session, ready banner. */
+  /* RS485 idle Hi-Z, switch defaults, boot bypass/gain, ready banner. */
   ChannelConsole_Init();
 
   /* USER CODE END 2 */
@@ -210,11 +210,9 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-    Audio_I2S1_Poll();     /* Compatibility hook; I2S1 refills in DMA callbacks */
     USB_App_Task();        /* UAC BODY drain + CDC */
     ChannelConsole_Poll(); /* RS485 console + LED chaser */
     USB_App_Task();        /* drain UAC FIFO after a console TX */
-    Audio_CpuLoad_Poll();  /* queue-mode NoteBank producer (no-op otherwise) */
   }
   /* USER CODE END 3 */
 }
@@ -336,10 +334,43 @@ void MPU_Config(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
+  uint32_t mode_mask;
+  uint32_t mode_output;
+
+  /* Fail closed. DMA would otherwise keep replaying its last audio buffer
+   * after the CPU stops, so hold the DAC in reset before latching the LEDs. */
   __disable_irq();
+
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+
+  mode_mask = (3u << (1u * 2u)) | (3u << (3u * 2u)) |
+              (3u << (6u * 2u));
+  mode_output = (1u << (1u * 2u)) | (1u << (3u * 2u)) |
+                (1u << (6u * 2u));
+  GPIOA->MODER = (GPIOA->MODER & ~mode_mask) | mode_output;
+  GPIOA->OTYPER &= ~(RGB_B_Pin | RGB_R_Pin | RGB_G_Pin);
+
+  mode_mask = (3u << (8u * 2u)) | (3u << (9u * 2u));
+  mode_output = (1u << (8u * 2u)) | (1u << (9u * 2u));
+  GPIOB->MODER = (GPIOB->MODER & ~mode_mask) | mode_output;
+  GPIOB->OTYPER &= ~(LED_R_Pin | LED_Y_Pin);
+
+  mode_mask = 3u << (7u * 2u);
+  mode_output = 1u << (7u * 2u);
+  GPIOC->MODER = (GPIOC->MODER & ~mode_mask) | mode_output;
+  GPIOC->OTYPER &= ~DAC_RST_Pin;
+
+  /* Distinct from the normal red/yellow chaser: both fixed LEDs and RGB red
+   * stay solid. Green/blue stay off. BSRR writes are atomic and need no HAL. */
+  GPIOC->BSRR = (uint32_t)DAC_RST_Pin << 16u;
+  GPIOA->BSRR = RGB_R_Pin |
+                ((uint32_t)(RGB_G_Pin | RGB_B_Pin) << 16u);
+  GPIOB->BSRR = LED_R_Pin | LED_Y_Pin;
   while (1)
   {
+    __NOP();
   }
   /* USER CODE END Error_Handler_Debug */
 }
@@ -354,9 +385,9 @@ void Error_Handler(void)
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line
-     number, ex: printf("Wrong parameters value: file %s on line %d\r\n", file,
-     line) */
+  (void)file;
+  (void)line;
+  Error_Handler();
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */

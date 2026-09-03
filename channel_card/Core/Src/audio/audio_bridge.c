@@ -5,7 +5,7 @@
  *
  * Owns I2S DMA ring buffers, USB packet ingest, CH1 note-bank refill,
  * and the TIM7 I2S2 underrun pump. Tone/DC and CPU-load probe live in
- * audio_tone_dc.c / audio_cpuload.c.
+ * audio_tone_dc.c.
  ******************************************************************************
  */
 
@@ -15,7 +15,6 @@
 #include "i2s.h"
 #include "cs4304.h"
 #include "audio_rate.h"
-#include "audio_cpuload.h"
 #include "audio_tone_dc.h"
 #include "note_bank.h"
 #include "stream_ring.h"
@@ -248,36 +247,13 @@ static void Audio_FillToneSlot(int32_t *buf, uint32_t num_frames,
  * @brief  Fill ONE slot with the mixed N0–NF note bank. Only called while
  *         NoteBank_AnyActive() during the I2S DMA refill.
  *
- *         In AUDIO_CPULOAD_DMA mode, LED_Y is driven low for the duration of
- *         the fill (busy) and high afterward (idle) for scope duty-cycle.
- *         In AUDIO_CPULOAD_QUEUE mode, samples are pulled from the soft queue
- *         filled by Audio_CpuLoad_Poll() instead of calling NoteBank here.
  */
 static void Audio_FillCh1NoteBankSlot(int32_t *buf, uint32_t num_frames,
                                       uint8_t slot)
 {
-  if (Audio_CpuLoad_GetMode() == AUDIO_CPULOAD_QUEUE)
-  {
-    for (uint32_t i = 0; i < num_frames; i++)
-    {
-      buf[i * 2 + slot] = Audio_CpuLoad_QueuePop();
-    }
-    return;
-  }
-
-  if (Audio_CpuLoad_GetMode() == AUDIO_CPULOAD_DMA)
-  {
-    Audio_CpuLoad_LedBusy(1);
-  }
-
   for (uint32_t i = 0; i < num_frames; i++)
   {
     buf[i * 2 + slot] = NoteBank_NextSample();
-  }
-
-  if (Audio_CpuLoad_GetMode() == AUDIO_CPULOAD_DMA)
-  {
-    Audio_CpuLoad_LedBusy(0);
   }
 }
 
@@ -452,6 +428,8 @@ static void Audio_I2S1_FillHalf(uint8_t half)
   if (i2s1_fill_busy != 0u)
   {
     g_i2s1_fill_late++;
+    /* Re-entering a DMA half refill means output timing is already corrupt. */
+    Error_Handler();
   }
   i2s1_fill_busy = 1u;
   NoteBank_VmBoundaryBegin();
@@ -459,13 +437,6 @@ static void Audio_I2S1_FillHalf(uint8_t half)
   Audio_RefillCh1Slot(buf, frames);
   NoteBank_VmBoundaryEnd();
   i2s1_fill_busy = 0u;
-}
-
-/**
- * @brief  Compatibility hook. I2S1 refill runs in the DMA callbacks.
- */
-void Audio_I2S1_Poll(void)
-{
 }
 
 uint32_t Audio_Bridge_UsbDropCount(void)

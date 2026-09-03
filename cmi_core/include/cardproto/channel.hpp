@@ -26,16 +26,6 @@
 namespace cardproto {
 
 /**
- * @brief CPU-load LED probe mode (wire `cpu`).
- * @note Bring-up only; not part of the musical control path.
- */
-enum class CpuProbe : uint8_t {
-  Off = 0,   /**< Wire `cpu 0`. */
-  On = 1,    /**< Wire `cpu` or `cpu N`. */
-  Queue = 2  /**< Wire `cpu q` or `cpu q N`. */
-};
-
-/**
  * @brief High-level Channel Card client over an injected transport.
  *
  * All Exchange calls use Target::Channel. The transport may still prepend
@@ -65,13 +55,6 @@ public:
 
   /* ---- notes (n0…n7, n) ---- */
 
-  /**
-   * @brief Apply session defaults only (bypass on, `g 1 0`).
-   * @note Does not start a tone. Wire: bare `n0`.
-   * @return Exchange result.
-   */
-  Result NoteDefaults();
-
   /** Raw MIDI-key note-on. Wire `nX on key`. */
   Result NoteOn(uint8_t slot, uint8_t key);
 
@@ -97,31 +80,6 @@ public:
    * @return Versioned `vq7` status (binary on RS485, readable on USB CDC).
    */
   Result QueryVoiceStatus();
-
-  /* ---- shape (global) ---- */
-
-  /**
-   * @brief Select global sine shape for the note bank.
-   * @return Exchange result for wire `s`.
-   */
-  Result Sine();
-
-  /**
-   * @brief Select global pulse shape.
-   * @param[in] duty Pulse duty cycle in `[0.1, 0.9]`.
-   * @return LocalErr on bad duty; otherwise wire `p …` exchange result.
-   */
-  Result Pulse(double duty);
-
-  /**
-   * @brief Select global triangle shape.
-   * @param[in] asymmetry Triangle asymmetry in `[0.1, 0.9]` (`0.5` = symmetric).
-   * @return LocalErr on bad value; otherwise wire `t …` exchange result.
-   */
-  Result Triangle(double asymmetry);
-
-  /** Select the phase-derived saw oscillator. Wire `saw`. */
-  Result Saw();
 
   /* ---- digital LPF voices 0…7 only (f / fk) ---- */
 
@@ -194,18 +152,6 @@ public:
    */
   Result SetGain(uint8_t ch, uint8_t atten_db);
 
-  /* ---- cpu load probe (bring-up) ---- */
-
-  /**
-   * @brief Drive the CPU-load LED probe.
-   *
-   * @param[in] kind    Off / On / Queue.
-   * @param[in] nvoices Voice count in `[1, 16]` when On/Queue with N; `0`
-   *                    selects the firmware default / off path for that kind.
-   * @return LocalErr on bad @p nvoices; otherwise wire `cpu …` exchange result.
-   */
-  Result Cpu(CpuProbe kind, uint8_t nvoices = 0);
-
 private:
   IConsoleTransport &tx_;
   Result Send(const std::string &cmd);
@@ -218,30 +164,17 @@ private:
  */
 
 /**
- * @param[in] slot  Voice 0…15 (encoded as `n0`…`nf`).
- * @param[in] hz    Frequency or `0` for off.
- * @param[in] scale Scale, or `< 0` to omit from the wire string.
- * @return Command string, e.g. `"n0 261.625565"`.
+ * @param[in] slot Voice 0…15 (encoded as `n0`…`nf`).
+ * @param[in] key  Raw MIDI key.
+ * @return Command string, e.g. `"n0 on 69"`.
  */
 std::string FormatNoteOn(uint8_t slot, uint8_t key);
 
 /** Format a note-off (`nX off`). */
 std::string FormatNoteOff(uint8_t slot);
 
-/** Format a session-bound streamed note-on (`nX Hz scale @session`). */
+/** Format a session-bound streamed note-on (`nX on key @session`). */
 std::string FormatStreamNoteOn(uint8_t slot, uint8_t key, uint8_t session);
-
-/**
- * @param[in] duty Pulse duty.
- * @return Command string for wire `p …`.
- */
-std::string FormatPulse(double duty);
-
-/**
- * @param[in] asymmetry Triangle asymmetry.
- * @return Command string for wire `t …`.
- */
-std::string FormatTriangle(double asymmetry);
 
 /**
  * @param[in] slot Voice 0…7.
@@ -277,13 +210,6 @@ std::string FormatSetFkAll(double k);
  * @return Command string for wire `g …`.
  */
 std::string FormatGain(uint8_t ch, uint8_t atten_db);
-
-/**
- * @param[in] kind    Probe mode.
- * @param[in] nvoices Optional voice count (`0` = omit N / off path).
- * @return Command string for wire `cpu …`.
- */
-std::string FormatCpu(CpuProbe kind, uint8_t nvoices = 0);
 
 /** @} */
 

@@ -1,9 +1,10 @@
-# Freshwater protocol
+# Freshwater card protocol
 
 Host ↔ Channel Card and Effect Card over RS485 (and the same command
 set over USB CDC). One ASCII line in, one reply line out. That is the
-protocol — there is no separate binary control frame; the only binary
-payloads are the CDC attack-head uploads (`al`, §4).
+protocol — there is no separate binary control frame. CDC attack-head (`al`)
+and VM program (`vmload`) sessions carry binary payloads after their ASCII
+commands (§4).
 
 Baud on the RS485 UARTs is **921600 8N1**.
 
@@ -32,10 +33,10 @@ Input is folded to lower case. Spaces separate arguments.
 Examples:
 
 ```text
-c:n0 440
+c:n0 on 69
 e:s
 *:h
-n0 440
+n0 on 69
 ```
 
 On a single-card USB CDC link the prefix is optional; the card still
@@ -52,7 +53,7 @@ accepts `c:` / `e:` / `*:`.
 
 | Path    | Reply shape                                                       |
 | ------- | ----------------------------------------------------------------- |
-| RS485   | `[C] ` or `[E] ` then the body (note the space after the bracket) |
+| RS485   | `[C]` or `[E]` then the body (note the space after the bracket) |
 | USB CDC | body only, no tag                                                 |
 
 Examples of bodies (tag omitted for clarity):
@@ -75,8 +76,10 @@ return `ok: …` with the value.
 | `err:syntax`                            | Could not parse the line                      |
 | `err:range`                             | Number or slot out of allowed range (Channel) |
 | `err:unknown`                           | No such command                               |
-| `err:usb`                               | CDC-only command (`al`) sent on RS485         |
+| `err:usb`                               | CDC-only command (`al` or `vmload`) sent on RS485 |
 | `err:rxdrop`                            | Channel UART RX overrun between lines         |
+| `err:no-program`                        | Channel voice has no active VM program        |
+| `err:vm-busy`                           | Note/program operation conflicts with VM upload or active playback |
 | `err: ar …` / `err: aw …` / `err: adc…` | Effect I2C / ADC failure                      |
 
 ---
@@ -88,12 +91,12 @@ but reply `err:range`. All voices mix onto DAC channel 1.
 
 Each voice is a **SAMPLE voice**: note-on plays the assigned attack head
 from AXI RAM, then the USB BODY slots, through one on-card playhead
-(pitch, filter, and VM-controlled amplitude). Host streams unpitched body; the card rate-scales
-(`note_Hz / root_Hz`). Voices without a loaded wave synthesize the global
-DDS shape (`s` / `p` / `t`). The VM-controlled amplitude and per-voice LPF (`f`) apply to either source.
+(pitch, filter, and VM-controlled amplitude). Host streams unpitched body; the
+card rate-scales (`note_Hz / root_Hz`). Production firmware has no internal
+oscillator source; a playable voice requires sample BODY data.
 
-Boot / bare `n0` also turns the analog bypass path on and sets CH1 DAC
-trim to 0 dB (`g 1 0`). Frequency changes do not touch gain or bypass.
+At boot the card turns the analog bypass path on and sets CH1 DAC trim to
+0 dB. Note commands do not touch gain or bypass.
 
 ### Help
 
@@ -105,14 +108,12 @@ trim to 0 dB (`g 1 0`). Frequency changes do not touch gain or bypass.
 
 | Command                | Meaning                                                                           |
 | ---------------------- | --------------------------------------------------------------------------------- |
-| `n0`                   | Session defaults only (bypass on, `g 1 0`). Does not start a tone.                |
-| `n0`…`n7 <Hz> [scale]` | Set that slot. Hz in **[20, 20000)**. Scale in **[0, 1]**; if omitted, **0.125**. |
-| `n0`…`n7 0`            | Turn that slot off (Hz ≤ 0).                                                      |
-| `n <Hz> [scale]`       | Same rules for all 8 slots.                                                       |
-| `n 0`                  | Silence all 8.                                                                    |
+| `n0`…`n7 on <key>`       | Start raw MIDI key 0…127; FWSC maps and tunes it.                              |
+| `n0`…`n7 on <key> @<session>` | Streamed note-on; bind BODY session 0…254 before ACK.                    |
+| `n0`…`n7 off`            | Turn that slot off.                                                            |
+| `n off`                | Silence all 8.                                                                  |
 
-Bare `n1`…`n7` (no Hz) is a syntax error. Only bare `n0` is the session
-shortcut.
+Bare `n0`…`n7` is a syntax error.
 
 Success reply for sets: `ok`.
 
@@ -132,39 +133,37 @@ and are lost on reset.
 | `ar <id> <Hz>`      | Set head `<id>`'s root pitch (Hz > 0)                               |
 | `aw <v> <id>`       | Assign head `<id>` to voice `<v>` 0…7                               |
 | `a`                 | Loaded count + 256-bit hex mask (bit 0 = wave 0)                    |
-| `vq`                | Active mask + hungriest + exact ring credit + USB PACK ACK            |
-| `crash [0..50]`     | Query/set steal overlap in ms; 0 = hard cut (default 3)                |
+| `vq`                | ABI6 active/pending generations + exact runtime ring credit             |
 | `usb`               | BODY counters: drop/hold/fill, RS-485 `vq`, rx/bytes/bad              |
 | `usb 0`             | Clear those counters, then same reply                                 |
 
 Replies: `ok: ar <id> <Hz>`, `ok: aw <v> <id>`, `ok: a <n> <64 hex>`.
-USB CDC returns `vq` as `ok:vq <mask> <best> free0 … free7 <pack_seq>`.
-RS485 returns the same fields in a 26-byte binary frame: `a5 5a 43 02`,
-mask, best, eight uint16 LE exact free-sample counts, uint16 LE last applied
-USB PACK sequence, CRC-8/0x07, then `0a`. Best is 0–7 or 255; each free
-count is 0–8160. At 921600 8N1 the reply is about 282 µs on the wire.
+USB CDC returns a readable `ok:vq7` diagnostic. RS485 returns the fixed 56-byte
+frame described below.
 
 Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 2-tap
 linear interpolation. The attack plays to its committed length (not a hold-pad to
 512). Body starts at `len − 32` with the same source index and
 fraction as the attack. The host does not count body-FIFO consume
-until that join. `nX > 0` is always a note-on.
+until that join. Every `nX on <key>` command is a note-on, including key 0.
 
-### Oscillator shape (global)
+### Channel VM programs
 
-| Command        | Meaning                                           |
-| -------------- | ------------------------------------------------- |
-| `s`            | Sine                                              |
-| `p <0.1..0.9>` | Pulse; argument is duty                           |
-| `t <0.1..0.9>` | Triangle; argument is asymmetry (0.5 = symmetric) |
+| Command                    | Meaning                                                          |
+| -------------------------- | ---------------------------------------------------------------- |
+| `vmload <voice> <nbytes>`  | **USB CDC only.** Upload one FWSC ABI6 program to voice 0…7      |
+| `vm`                       | Query the active-program voice mask                              |
+| `vm <voice>`               | Query active state, ABI target/version, and fault for one voice  |
+| `vm mem`                   | Shared-arena metrics followed by eight per-voice diagnostic lines |
 
-Applies to voices whose assigned wave id has no loaded attack head.
+`vmload` accepts a complete 20…4116-byte FWSC container and then switches CDC
+from line parsing to binary input. The full transaction is specified in §4.
 
 ### VM-controlled amplitude envelope
 
 Amplitude ramps and note lifecycle are controlled only by the uploaded per-voice
 VM program. The firmware exposes no separate envelope-programming commands.
-See `vmload` below.
+See [SCRIPTING.md](../../cmi_core/SCRIPTING.md) and `vmload` below.
 
 ### Digital low-pass filter
 
@@ -210,40 +209,18 @@ fc = fbase * (note_Hz / C4)^k
 
 Reply: `ok`.
 
-### CPU load probe (bring-up)
-
-Drives N note-bank voices and lights LED_Y while the main loop fills
-audio. Not a normal musical control.
-
-| Command             | Meaning                              |
-| ------------------- | ------------------------------------ |
-| `cpu`               | On, all 8 voices, DMA-style probe    |
-| `cpu N`             | On, N voices (1..8)                  |
-| `cpu q` / `cpu q N` | Soft-queue style probe               |
-| `cpu 0`             | Off; clear notes; LED chaser resumes |
-
-### Removed commands
-
-`m` / `mode`, `w0`…`w7`, `wl`, `sw`, `tone1`, `dc`, `scf`, `duty` and
-`gain` no longer exist; they reply `err:unknown` (or parse as another
-command). Attack upload uses `al`; the former `bl` body upload is retired
-and replies `err:unsupported`.
-
 ### Channel quick examples
 
 ```text
-c:n0
 c:g 1 0
-c:s
-c:n0 440
-c:p 0.5
+c:n0 on 69
 c:f0 300
 c:fk0 1
-c:n0 523.25
+c:n0 on 72
 c:aw 0 0
 c:a
 c:vq
-c:n 0
+c:n off
 ```
 
 ---
@@ -300,21 +277,19 @@ Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 
 | Interface                    | Role                                                                |
 | ---------------------------- | ------------------------------------------------------------------- |
-| **UAC2 output** (ITF0/1)     | 10-channel signed 16-bit, synchronous 51 kHz carrier; its PCM bytes carry packed 48 kHz BODY data (1020 B / 1 ms). |
+| **UAC2 output** (ITF0/1)     | 10-channel signed 16-bit, synchronous 51 kHz carrier; every 1 ms packet carries a tag, sequence, and 508 raw 48 kHz BODY samples (1020 B). |
 | **CDC ACM** (serial)         | Same ASCII console as RS485, plus binary attack-head upload (`al`). |
 
 The Channel device is class-compliant UAC2 so the operating system owns the
 audio endpoint lifecycle; there is no custom vendor/libusb isochronous pipe.
-The audio samples are transport words, not audible multichannel PCM. Iso OUT
-has no retry, so every logical PACK ends in CRC32 and an incomplete or corrupt
-PACK is discarded before its ring reservations are published. A
-primed BODY underrun increments `hold` without disabling USB, RS485, or audio;
-a later authorized refill can recover.
+The audio samples are transport words, not audible multichannel PCM. A primed
+BODY underrun increments `hold`, resets/mutes the DAC, latches the fault LEDs,
+and halts the Channel Card. A ring-capacity rejection does the same after
+incrementing `drop`. Reset or power-cycle the card after either fault.
 The UAC topology has no Feature Unit and exposes no mute or volume controls.
-UAC audio-frame alignment is retained only because the class driver requires
-complete 10-channel int16 frames. PACK boundaries are independent: PACK bytes
-may cross callback, USB-packet, and 1 ms boundaries without padding or a
-per-millisecond wrapper.
+Each complete 10-channel int16 frame is independently routable. The host audio
+callback may produce multiple milliseconds at once, but USB transmits fixed
+51-frame, 1020-byte windows every millisecond.
 
 CDC is a separate function. `al` still uses CDC. Keep that port closed during
 BODY streaming unless console or attack-head traffic is required.
@@ -323,96 +298,75 @@ Effect Card still has CDC and a UAC2 microphone (mono, 32-bit, 96 kHz).
 
 ### BODY stream (UAC2 iso OUT, signed 16-bit)
 
-Little-endian. BODY has no per-packet ACK. `type` `0x03` PACK is the live
-OUT format: one header plus N BODY metas so several voices share one
-transfer. The 1020-byte UAC packets form one continuous byte stream;
-there is no per-packet envelope or reserved channel. A PACK plus its CRC may
-occupy up to 10200 bytes (10 ms of maximum-rate UAC wire time).
-Sequential RS485 `vq` polling supplies exact free space and the last applied
-PACK sequence every 5 ms for steady-state refills. The first SOF BODY is
-released immediately after the corresponding RS485 `aw`/`nX` ACK and does not
-wait for `vq`; its conservative credit accounts for the configured old-note
-crash-release tail.
+Little-endian. The first int16 word is a routing tag, the second is a wrapping
+transport sequence, and the remaining 508 words are raw BODY samples. `vq`
+reports the last routed sequence processed by the card, whether accepted or
+rejected, alongside an atomic ring-credit snapshot. The host ledger subtracts
+exactly the later submitted frames; it never estimates in-flight occupancy.
 
 ```text
 UAC carrier: 51 kHz × 10 channels × int16 = 1020000 bytes/s
 BODY/DAC:    48 kHz (pitch and playback rate are unchanged)
-idle          zero int16 words
-PACK wire     header + BODY records + trailing CRC32, ≤ 10200 bytes
-
-PACK (type 0x03), logical bytes before CRC ≤ 10196
-offset  size  field
-0       1     magic0 = 0x46  'F'
-1       1     magic1 = 0x57  'W'
-2       1     type   = 0x03  PACK
-3       1     flags  (0)
-4       2     nbytes rest of packet
-6       2     wrapping PACK sequence
-8       …     repeated BODY meta + int16 samples:
-
-  0     1     voice  0..7
-  1     1     session 0..254 (8-bit note sequence; 255 is unarmed)
-  2     1     flags  bit 0 SOF
-  3     1     reserved (0)
-  4     2     nsamp
-  6     2     wave_id (MIDI note/sample identity, little-endian)
-  8     2*nsamp  int16 LE unpitched body
-
-  final 4 bytes  IEEE CRC32 of the complete header + BODY records
+packet word 0      tag = 0xA000 | session[11:4] | SOF[3] | voice[2:0]
+packet word 1      wrapping uint16 transport sequence
+packet words 2..509  508 consecutive int16 LE unpitched BODY samples
+idle tag      0xAFFF (remaining words are zero)
+session       0..254 (255 is reserved for idle/unarmed)
 ```
 
-VID `0xCafe`, PID `0x402F`. The host opens the 10-channel UAC output through
+VID `0xCafe`, PID `0x4030`. The host opens the 10-channel UAC output through
 RtAudio/CoreAudio; CDC stays a serial port.
 
-After framing, an eight-voice PACK holds 5062 int16 BODY samples per 10 ms
-(506.2 ksample/s aggregate). Workloads above that single-PACK source-consumption
-ceiling cannot be lossless on this 51 kHz, 10-channel, 16-bit Full-Speed carrier;
-`hold` then records the missing playback samples while control remains alive.
-Each fresh `vq` uses all exact safe ring credit up to that wire ceiling; there
-is no shorter prediction horizon that can under-fill a high-pitch voice.
-Hardware smoke has passed 500 ksample/s with zero hold, drop, bad PACKs, late
-replies, or xruns.
+The direct carrier supplies 508 BODY samples/ms (508 ksample/s aggregate).
+Workloads above that source-consumption ceiling cannot be lossless; `hold`
+records missing playback samples while control remains alive. Each fresh `vq`
+uses exact safe ring credit up to that wire ceiling.
 RS485 `vq` every 5 ms is the steady-state refill authority and lifecycle
 monitor. UAC OUT carries BODY data only.
 
 ```text
-RS485 vq reply, fixed 26-byte binary frame
+RS485 vq reply, fixed 56-byte ABI6 binary frame
 offset  size  field
 0       2     sync = a5 5a
 2       1     card = 43 ('C')
-3       1     type = 02 exact refill status
-4       1     active/requested voice mask
-5       1     hungriest voice, or 255
-6       16    exact uint16 LE free samples for voices 0..7 (0..8160)
-22      2     last USB PACK sequence reflected by these free counts
-24      1     CRC-8/0x07 over bytes 0..23
-25      1     terminator = 0a
+3       1     type = 04 sequenced ABI6 generation status
+4       1     active voice mask
+5       1     pending voice mask
+6       1     best refill voice, or 255
+7       1     reserved
+8       2     runtime ring capacity (uint16 LE; normally 12240)
+10      2     status sequence (uint16 LE)
+12      2     last processed UAC sequence
+14      40    eight records: session u8, target fill u16 LE, total writable u16 LE
+54      1     CRC-8/0x07 over bytes 0..53
+55      1     terminator = 0a
 ```
 
-RS485 `vq` is both steady-refill permission and an exact PACK-order snapshot.
-One fresh reply permits at most one new refill PACK, or one retry of the same
-unacknowledged PACK, bounded for each included voice. Its sequence prevents a
-racing completed OUT from being subtracted twice. RS485 `nX <Hz>` remains the
-sole audible note-on and pitch authority. After `aw` and `nX` ACK, the host
-creates the new per-voice session and places about 15 ms of pitch-adjusted SOF
-BODY at the top of the USB work queue without waiting for `vq`. If a
-conservative 50 ms release reservation leaves no safe prefill credit, USB
-sends no control record; the next `vq` supplies the first SOF BODY normally.
-RS485 `nX 0` remains note-off authority. `type` `0x20` CAPTURE remains reserved.
-Up to three ordered PACKs may await acknowledgement so the UAC pipe does
-not idle while the next `vq` observes the previous PACK. All their per-voice
-samples are subtracted from every newer exact-credit snapshot; this is
-pipelining, not permission reuse—each steady refill still consumes its own
-fresh `vq`. Urgent jobs form a newest-first priority deque with one latest job
-per physical voice (maximum depth eight). A new
-note cancels and reuses any not-yet-rendered ordered PACK suffix; bytes already
-entering USB finish and are rejected as stale by voice/session if superseded.
-Every refill uses all exact credit up to its per-voice and wire limits.
+RS485 `vq` is the sole refill permission. The host sends only complete
+508-sample UAC frames within its reported credit. A streamed `nX` first arms a
+pending generation; matching SOF data fills it, and Berry receives
+`on_note_on` only after a complete BODY frame exists. Berry then decides when
+to call `start_note()`, which atomically promotes pending. No native crash
+duration or release reservation exists.
+Superseded or late same-wave sessions are stale. Untagged `nX` is available
+for direct console use. There is no native release reservation.
+RS485 `nX off` remains note-off authority. `type` `0x20` CAPTURE remains reserved.
+Every routed UAC frame has a wrapping sequence. The card reports the last
+processed sequence with the same ring snapshot, and the host subtracts exactly
+the later frames in its ledger. Playing voices are scheduled by depletion
+deadline. A silent voice is admitted only when its exact one-packet (1 ms)
+service cost finishes before the earliest playing deadline.
 The controller targets one `vq` every 5 ms (200 Hz) and requests an immediate
 one after successful Channel commands; single-flight RS485 traffic can stretch
-the observed interval. Raw UAC capacity is 510 int16 samples/ms. After the
-PACK header, CRC, and per-voice metadata, usable capacity is 509.0 samples/ms
-for one voice, 508.2 for three, and 506.2 for eight.
+the observed interval. The direct UAC capacity is 508 BODY samples/ms: one tag
+word, one sequence word, and 508 sample words in each 1020-byte packet.
+If note-off or a newer generation retires a ring while a prior-session frame is in
+flight, the card acknowledges the routed sequence but rejects its stale
+session instead of publishing it into the new ring.
+
+The `usb` bad-reason fields are reserved and read zero for the direct
+transport. Ring-capacity rejection remains visible as `drop` and
+playback starvation as `hold`.
 
 ### CDC vs RS485 (console)
 
@@ -421,10 +375,11 @@ for one voice, 508.2 for three, and 506.2 for eight.
 | Commands       | Same parsers                                | Same parsers                                                                   |
 | Line framing   | Host `\r`; card `\r\n`                      | Same                                                                           |
 | Address prefix | Useful on a shared bus (`c:` / `e:` / `*:`) | Optional; still accepted                                                       |
-| Reply tag      | `[C] ` / `[E] `                             | None — body only                                                               |
+| Reply tag      | `[C]` / `[E]`                             | None — body only                                                               |
 | Echo           | Channel: off. Effect: `ec` (default off)    | Local keystroke echo on                                                        |
 | Baud           | **921600 8N1** on the UART                  | Host may open any rate (e.g. 115200); TinyUSB CDC ignores line coding for data |
 | `al`           | Rejected (`err:usb`)                        | Allowed                                                                        |
+| `vmload`       | Rejected (`err:usb`)                        | Allowed                                                                        |
 
 Typical host path on macOS / Linux: Channel `cu.usbmodem*` / `ttyACM*`.
 USB–UART adapters (`cu.usbserial*`, `ttyUSB*`) are the RS485 dongle — wrong
@@ -482,16 +437,47 @@ Notes:
 2. While waiting for the completion line, keep reading the CDC RX path —
    do not discard pending replies.
 3. Upload only loads AXI RAM (lost on reset). Set `ar <id> <rootHz>`; the host
-   app starts it with RS485 `aw <voice> <id>` then `nX <Hz>`. Their ACK releases
-   the first USB BODY job; later sustain uses vq-authorized BODY refills.
+   app starts it with RS485 `aw <voice> <id>` then session-bound
+   `nX on <key> @<session>` immediately after launching its USB BODY job;
+   later sustain uses vq-authorized BODY refills.
+
+### VM program upload (`vmload`)
+
+The Channel Card boots with no active note program. Until a valid program is
+uploaded, note commands return `err:no-program` and the note bank stays silent.
+
+`vmload <voice> <nbytes>` is CDC-only and uses the same line-to-binary
+transition as `al`. Each voice 0..7 owns an independent program. The payload is
+one Berry ABI6 `FWSC` container, up to 4116 bytes (20-byte container header
+plus at most 4096 payload bytes). The card writes
+`ok:ready`, receives exactly `nbytes`, validates target/version, CRC, bytecode,
+runtime/configuration, handlers, host calls, and CRC, then replies
+`ok:vm <voice> <target> <version>`. `vm` reports the active voice mask;
+`vm <voice>` reports `ok:vm <voice> inactive <fault>` or
+`ok:vm <voice> active <target> <version> <fault>`.
+
+One fixed-arena Berry VM roots eight independent program objects and gives each
+voice 16 native float state slots. Upload is accepted only while no voice is
+sounding; note-ons during transfer return `err:vm-busy`. Invalid or interrupted
+replacement preserves the selected program. Protected native-argument faults
+remain voice-local; allocation, GC, watchdog, or uncertain interpreter state
+invalidates the shared VM and silences all voices. Programs are lost on reset.
+`vm mem` reports arena current/peak/free and allocation/GC diagnostics.
+
+ABI6 requires `on_note_on(key)`, `on_note_off(has_pending)`, and
+`on_ramp_end()`. Optional compile-time `on_init()` can override the default
+C4 = 261.625565 Hz tuning and identity key map. Runtime scripts inspect
+raw/mapped keys and live amplitude through `input()`, use allocation-free
+`pow()` for tracking policy, and call only `ramp(target, slope)`.
 
 ---
 
-## 5. Half-duplex and pitch text
+## 5. Half-duplex and key text
 
 On RS485, send one command, wait for the tagged reply, then send the
 next. Do not pile commands while an ACK is still due.
 
 Prefer `e:ec 0` unless you are deliberately testing echo.
-For pitch, send the real frequency as text (`261.625565`), not a rounded
-integer, if you care about octaves lining up.
+
+For notes, send the physical MIDI key as an integer from 0 through 127. The
+loaded FWSC program owns mapping and tuning.

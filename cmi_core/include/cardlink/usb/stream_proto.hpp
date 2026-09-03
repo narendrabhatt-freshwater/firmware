@@ -7,7 +7,7 @@
 namespace cardlink::usb {
 
 constexpr uint16_t kStreamVid = 0xCafe;
-constexpr uint16_t kStreamPid = 0x402F;
+constexpr uint16_t kStreamPid = 0x4030;
 /** Full 8-bit session sequence; 0xFF remains the card's unarmed sentinel. */
 constexpr unsigned kStreamSessionMod = 255;
 

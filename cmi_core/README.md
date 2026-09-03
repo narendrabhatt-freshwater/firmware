@@ -5,6 +5,14 @@
 USB BODY streaming, MIDI input, voice allocation, and the supported Effect Card
 controls.
 
+## Documentation
+
+The three top-level documents in this folder are the complete entry points:
+
+- [README.md](README.md) — host library setup, API, samples, playback, and controls.
+- [SCRIPTING.md](SCRIPTING.md) — Channel Berry language, handlers, functions, limits, and examples.
+- [PROTOCOL.md](PROTOCOL.md) — complete Channel and Effect Card RS485/USB wire protocol and command reference.
+
 ## Package structure
 
 ```mermaid
@@ -21,7 +29,7 @@ flowchart TD
     vm["src/vm, runtime/, shared/vm/<br/>Berry compiler and Channel VM"]
     examples["examples/vm/channel/<br/>Production .be examples"]
     thirdparty["third_party/<br/>Vendored RtMidi and RtAudio"]
-    docs["README.md and SCRIPTING.md<br/>Production documentation"]
+    docs["README.md, SCRIPTING.md, PROTOCOL.md<br/>Production documentation"]
     tests["tests/<br/>Public API qualification"]
 
     root --> public
@@ -81,8 +89,6 @@ sequenceDiagram
         Core->>RS485: Configure root frequency
     end
     Core-->>App: Result
-    App->>Core: setMidiPlayback(MidiPlayback::Samples)
-
     alt Direct playback
         App->>Core: sampleNoteOn(voice, key, sample_id)
     else Automatic MIDI playback
@@ -128,7 +134,7 @@ int main()
 {
   cmi::CoreParams params;
   params.rs485_port = "/dev/cu.usbserial-0001";
-  params.channel_cdc_port = "/dev/cu.usbmodemCHCARD1";
+  params.channel_cdc_port = "/dev/cu.usbmodemCHCARD_0123456789ABCDEF012345673";
   params.midi_port = "Launchkey MIDI Out"; // Empty disables MIDI.
 
   cmi::Core core(params);
@@ -151,7 +157,15 @@ int main()
     }
   }
 
-  const cmi::Result started = core.noteOn(0, 60);
+  cmi::SampleDefinition sample;
+  sample.id = 60;
+  sample.sample_file = "piano_c4.wav";
+  sample.root_hz = 261.625565;
+  if (!core.loadSample(sample)) {
+    return 1;
+  }
+
+  const cmi::Result started = core.sampleNoteOn(0, 60, sample.id);
   if (!started) {
     std::cerr << started.message << '\n';
   }
@@ -166,7 +180,7 @@ name; when empty, the library selects the first compatible Channel Card device.
 
 Use `cmi::Core::listMidiPorts()` to obtain names accepted by `midi_port`. When a
 port is assigned, MIDI opens automatically after all eight Channel voice
-programs are loaded. MIDI starts in oscillator mode and supports Note On, Note
+programs are loaded. MIDI uses the loaded sample map and supports Note On, Note
 Off, velocity-zero Note Off, and controllers 120/123 for all-notes-off.
 
 All direct operations wait for their card reply and return a `cmi::Result`.
@@ -245,19 +259,13 @@ specific voice. `sampleNoteOn(voice, key, sample_id)` selects a loaded sample
 when starting that voice. Sample files are therefore loaded explicitly after
 `connect()`, never through `CoreParams`.
 
-For MIDI sample playback, load the required samples and then call:
-
-```cpp
-const cmi::Result mode = core.setMidiPlayback(cmi::MidiPlayback::Samples);
-```
-
-MIDI key `N` selects sample ID `N` by default. `setMidiSampleMap()` replaces that
-mapping.
+MIDI key `N` selects sample ID `N` by default. Load those samples before use;
+`setMidiSampleMap()` replaces that mapping.
 
 ## Channel controls
 
-The public API provides oscillator and sample note playback, all-notes-off,
-output attenuation, waveform selection, per-voice or global low-pass filters,
+The public API provides sample note playback, all-notes-off,
+output attenuation, per-voice or global low-pass filters,
 filter pitch tracking, Channel voice status, and bus recovery.
 
 Each Channel voice has its own VM program slot. After connecting, call

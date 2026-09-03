@@ -4,9 +4,8 @@
  * @brief   USB audio / note-bank → I2S bridge for the CS4304 4-channel DAC.
  *
  * Owns I2S DMA ring buffers, USB BODY ingest, CH1 note-bank refill,
- * and the TIM7 I2S2 underrun pump. Tone/DC generators and the CPU-load
- * probe live in audio_tone_dc.h / audio_cpuload.h (re-exported here so
- * existing callers that include only audio_bridge.h keep working).
+ * and the TIM7 I2S2 underrun pump. Tone/DC generators live in
+ * audio_tone_dc.h (re-exported here for existing callers).
  * Vendor bulk BODY feeds StreamRing_WriteVoice (not the DAC). CH1 is
  * always the SAMPLE note-bank mix.
  ******************************************************************************
@@ -23,7 +22,6 @@ extern "C"
 #include <stdint.h>
 
 #include "cs4304.h"
-#include "audio_cpuload.h"
 #include "audio_tone_dc.h"
 
   /* ---------------- DAC handle (bound from main) --------------------------- */
@@ -104,8 +102,6 @@ extern "C"
   /**
    * @brief I2S1 half-buffer refill hook (no-op: fill runs in the DMA ISR).
    */
-  void Audio_I2S1_Poll(void);
-
   uint32_t Audio_Bridge_UsbDropCount(void);
   void Audio_Bridge_UsbDropCountClear(void);
   uint32_t Audio_Bridge_MaxFill(void);
