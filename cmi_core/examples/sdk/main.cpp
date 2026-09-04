@@ -35,10 +35,10 @@ void PrintUsage(const char *program)
       << "Usage:\n"
       << "  " << program << " --list-midi\n"
       << "  " << program
-      << " --rs485 PORT --cdc PORT --script FILE [options]\n\n"
-      << "Required:\n"
-      << "  --rs485 PORT       USB-to-RS485 serial path\n"
-      << "  --cdc PORT         Channel Card USB CDC path\n"
+      << " --script FILE [--rs485 PORT --cdc PORT] [options]\n\n"
+      << "Connection overrides:\n"
+      << "  --rs485 PORT       USB-to-RS485 serial path (auto when unique)\n"
+      << "  --cdc PORT         Channel Card USB CDC path (auto when unique)\n"
       << "  --script FILE      Repeat once for all voices or exactly eight times\n\n"
       << "Playback options:\n"
       << "  --voice N          Hardware voice 0..7 (default 0)\n"
@@ -164,10 +164,6 @@ bool ParseOptions(int argc, char **argv, Options &options)
   }
 
   if (options.help || options.list_midi) return true;
-  if (options.rs485_port.empty() || options.cdc_port.empty()) {
-    std::cerr << "--rs485 and --cdc are required\n";
-    return false;
-  }
   if (options.scripts.size() != 1 && options.scripts.size() != 8) {
     std::cerr << "Provide --script once or exactly eight times\n";
     return false;
@@ -219,6 +215,16 @@ int main(int argc, char **argv)
   params.channel_cdc_port = options.cdc_port;
   params.midi_port = options.midi_port;
   params.channel_audio_device = options.audio_device;
+
+  cmi::DiscoveryOptions discovery;
+  discovery.select_midi = false;
+  const cmi::SetupReport setup = cmi::Core::discover(params, discovery);
+  if (!setup.ready()) {
+    for (const auto &message : setup.diagnostics)
+      std::cerr << "Setup: " << message << '\n';
+    return 1;
+  }
+  params = setup.params;
 
   cmi::Core core(params);
   core.setErrorHandler([](const cmi::Result &error) {

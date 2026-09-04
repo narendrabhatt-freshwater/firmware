@@ -54,6 +54,26 @@ struct MidiPort {
   std::string name;
 };
 
+struct DiscoveryOptions {
+  /** Select a unique MIDI input. Missing MIDI remains non-fatal. */
+  bool select_midi = true;
+  /** Treat a missing compatible Channel Card audio output as an error. */
+  bool require_audio = true;
+};
+
+/** Result of inspecting a host and deriving usable Core parameters. */
+struct SetupReport {
+  Result result;
+  CoreParams params;
+  std::vector<std::string> rs485_ports;
+  std::vector<std::string> channel_cdc_ports;
+  std::vector<std::string> channel_audio_devices;
+  std::vector<MidiPort> midi_ports;
+  std::vector<std::string> diagnostics;
+
+  bool ready() const { return result.ok(); }
+};
+
 struct SampleDefinition {
   uint16_t id = 0;
   /** Combined WAV or signed 8-bit raw recording. */
@@ -96,6 +116,15 @@ public:
 
   /** Enumerate MIDI inputs whose exact names may be assigned in CoreParams. */
   static std::vector<MidiPort> listMidiPorts();
+
+  /**
+   * Inspect attached devices and fill empty fields in @p overrides.
+   * Explicit values are preserved. A required device is selected only when
+   * there is one unambiguous candidate; otherwise diagnostics list the
+   * candidates and the exact CoreParams field the caller must set.
+   */
+  static SetupReport discover(CoreParams overrides = {},
+                              DiscoveryOptions options = {});
 
   /** Open hardware and apply safe defaults. */
   Result connect();

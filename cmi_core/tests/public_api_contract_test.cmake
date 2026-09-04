@@ -14,3 +14,10 @@ string(FIND "${package_cmake}"
 if(public_header_install EQUAL -1)
   message(FATAL_ERROR "The installed cmi::Core header is missing")
 endif()
+
+foreach(required_api "SetupReport" "SetupReport discover")
+  string(FIND "${core_api}" "${required_api}" required_position)
+  if(required_position EQUAL -1)
+    message(FATAL_ERROR "The public setup API is missing ${required_api}")
+  endif()
+endforeach()

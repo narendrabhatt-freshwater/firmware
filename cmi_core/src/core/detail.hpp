@@ -13,6 +13,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <vector>
 
 namespace cmi {
 
@@ -23,6 +24,12 @@ Result Fail(ErrorCode code, std::string message);
 Result FromCard(const cardproto::Result &card);
 bool ValidVoice(uint8_t voice);
 bool ValidKey(uint8_t key);
+
+SetupReport BuildSetupReport(CoreParams overrides,
+                             DiscoveryOptions options,
+                             std::vector<std::string> serial_ports,
+                             std::vector<std::string> audio_devices,
+                             std::vector<MidiPort> midi_ports);
 
 } // namespace detail
 

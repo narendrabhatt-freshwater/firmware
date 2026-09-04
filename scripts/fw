@@ -30,7 +30,7 @@ SERIAL_BAUD="${FW_SERIAL_BAUD:-115200}"
 SEND_WAIT_SECS="${FW_SEND_WAIT:-1.5}"
 
 # Running firmware USB IDs (placeholders — see USB_APP/usb_descriptors.c)
-CHANNEL_VID_PID="cafe:4013"
+CHANNEL_VID_PID="cafe:4031"
 EFFECT_VID_PID="cafe:4015"
 
 # Print one line; leading \r resets column (fixes staircase when terminal
@@ -80,7 +80,7 @@ usage() {
     "  fw console  [channel|effect] [--port PATH]"
     "  fw log      [channel|effect] [--port PATH]"
     "  fw send     [channel|effect] <command...> [--port PATH]"
-    "  fw cli                              automatic interactive session"
+    "  fw cli [--sample FILE ...]          automatic interactive session"
     "  fw play     [PROJECT] [--rs485 PORT] [options]"
     "  fw control  [run] | build"
     "  fw clean    [channel|effect|all]"
@@ -108,7 +108,7 @@ usage() {
     "  fw send channel status"
     ""
     "Performance CLI (uploads everything, opens MIDI, watches channel.be)"
-    "  fw cli                              use repo defaults + detected devices"
+    "  fw cli --sample FILE --root-hz HZ   example script + your sample"
     "  fw play my-sound --rs485 /dev/cu.usbserial-0001"
     "  fw play build                       build the performance CLI"
     "  fw play --help                      project layout and all options"
@@ -595,7 +595,7 @@ cmd_list() {
     if command -v system_profiler >/dev/null 2>&1; then
       local usb
       usb="$(system_profiler SPUSBDataType 2>/dev/null || true)"
-      if echo "$usb" | grep -qiE 'Product ID: 0x4013'; then
+      if echo "$usb" | grep -qiE 'Product ID: 0x4031'; then
         row "channel" "$CHANNEL_VID_PID"
         found=1
       fi
@@ -919,7 +919,7 @@ resolve_serial_port() {
   local matches=()
   local pat=
   case "$card" in
-    channel) pat='CHCARD|chcard|Cafe.*4013|cafe.*4013' ;;
+    channel) pat='CHCARD|chcard|Cafe.*4031|cafe.*4031' ;;
     effect)  pat='EFCARD|efcard|Cafe.*4015|cafe.*4015' ;;
     *) die "serial needs channel|effect" ;;
   esac
@@ -1262,15 +1262,16 @@ cmd_control() {
 
 # ── Performance CLI (automatic assets + MIDI) ───────────────────────────────
 
-play_dir() { echo "$ROOT/cmi_cli"; }
-play_bin() { echo "$(play_dir)/build/cmi_play"; }
+play_dir() { echo "$ROOT/cmi_core"; }
+play_build_dir() { echo "$(play_dir)/build/cli"; }
+play_bin() { echo "$(play_build_dir)/cmi-play"; }
 
 cmd_play_build() {
   need_cmd cmake
   info "build CMI Play CLI (Release)"
-  cmake -S "$(play_dir)" -B "$(play_dir)/build" \
+  cmake -S "$(play_dir)" -B "$(play_build_dir)" \
     -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
-  cmake --build "$(play_dir)/build" --config Release --parallel
+  cmake --build "$(play_build_dir)" --config Release --parallel
   ok "$(relpath "$(play_bin)")"
 }
 
@@ -1279,7 +1280,7 @@ ensure_play_built() {
   bin="$(play_bin)"
   changed=""
   if [[ -x "$bin" ]]; then
-    changed="$(find "$ROOT/cmi_cli" "$ROOT/cmi_core" \
+    changed="$(find "$ROOT/cmi_core" \
       -path '*/build/*' -prune -o -type f \
       \( -name '*.cpp' -o -name '*.hpp' -o -name '*.c' -o -name '*.h' \
          -o -name 'CMakeLists.txt' \) -newer "$bin" -print -quit)"
@@ -1349,9 +1350,7 @@ cmd_play() {
 }
 
 cmd_cli() {
-  cmd_play "$ROOT/cmi_core/examples/vm/channel" \
-    --sample "$ROOT/cmi_control/waves/w0_sine_c4.raw" \
-    --sample-id 0 --root-hz 260 "$@"
+  cmd_play "$ROOT/cmi_core/examples/vm/channel" "$@"
 }
 
 # ── main ─────────────────────────────────────────────────────────────────────

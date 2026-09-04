@@ -1,5 +1,4 @@
 #include <cmi/core.hpp>
-#include "cardlink/audio/builtin_waves.hpp"
 
 #include <algorithm>
 #include <array>
@@ -48,19 +47,35 @@ struct Options {
   bool help = false;
 };
 
+const char *HostName()
+{
+#if defined(__APPLE__) && defined(__aarch64__)
+  return "macOS arm64";
+#elif defined(__APPLE__)
+  return "macOS x86_64";
+#elif defined(__linux__) && defined(__aarch64__)
+  return "Linux arm64";
+#elif defined(__linux__)
+  return "Linux x86_64";
+#else
+  return "best-effort host";
+#endif
+}
+
 void PrintUsage(const char *program)
 {
   std::cout
       << "Usage:\n"
-      << "  " << program << " [PROJECT] --rs485 PORT --cdc PORT [options]\n"
+      << "  " << program << " doctor\n"
+      << "  " << program << " [PROJECT] [options]\n"
       << "  " << program << " --list-midi\n\n"
       << "PROJECT convention:\n"
       << "  channel.be              script uploaded to voices 0-7\n"
       << "  samples/                wN_*.wav/raw/i8 or attack/BODY pairs\n"
       << "  wavetables/             osc0.wav/raw/i8 ... osc7.wav/raw/i8\n\n"
       << "Options:\n"
-      << "  --rs485 PORT            USB-to-RS485 serial port\n"
-      << "  --cdc PORT              Channel Card USB CDC port\n"
+      << "  --rs485 PORT            USB-to-RS485 serial port (auto when unique)\n"
+      << "  --cdc PORT              Channel Card USB CDC port (auto when unique)\n"
       << "  --script FILE           override PROJECT/channel.be\n"
       << "  --samples DIR           override PROJECT/samples (or '-' to skip)\n"
       << "  --sample FILE           load one fast sample instead of a full bank\n"
@@ -160,10 +175,6 @@ bool Parse(int argc, char **argv, Options &o)
   if (o.script.empty()) o.script = o.project / "channel.be";
   if (o.samples.empty()) o.samples = o.project / "samples";
   if (o.wavetables.empty()) o.wavetables = o.project / "wavetables";
-  if (o.rs485.empty() || o.cdc.empty()) {
-    std::cerr << "--rs485 and --cdc are required (the fw wrapper auto-detects them).\n";
-    return false;
-  }
   if (!fs::is_regular_file(o.script)) {
     std::cerr << "Script not found: " << o.script << "\n";
     return false;
@@ -171,23 +182,70 @@ bool Parse(int argc, char **argv, Options &o)
   return true;
 }
 
+void PrintSetup(const cmi::SetupReport &report)
+{
+  std::cout << "Host setup (" << HostName() << ")\n"
+            << "  RS485 "
+            << (report.params.rs485_port.empty() ? "not selected"
+                                                  : report.params.rs485_port)
+            << '\n'
+            << "  CDC    "
+            << (report.params.channel_cdc_port.empty()
+                    ? "not selected"
+                    : report.params.channel_cdc_port)
+            << '\n'
+            << "  audio  "
+            << (report.params.channel_audio_device.empty()
+                    ? "not selected"
+                    : report.params.channel_audio_device)
+            << '\n'
+            << "  MIDI   "
+            << (report.params.midi_port.empty() ? "off"
+                                                : report.params.midi_port)
+            << '\n';
+  for (const auto &message : report.diagnostics)
+    std::cout << "  " << (report.ready() ? "note  " : "fix   ")
+              << message << '\n';
+  std::cout << std::flush;
+}
+
+int RunDoctor()
+{
+  cmi::SetupReport report = cmi::Core::discover();
+  PrintSetup(report);
+  if (!report.ready()) {
+    std::cerr << "Doctor: setup needs attention. Apply the fixes above and rerun.\n";
+    return 1;
+  }
+
+  cmi::Core core(report.params);
+  const auto started = std::chrono::steady_clock::now();
+  const cmi::Result connected = core.connect();
+  if (!connected) {
+    std::cerr << "Doctor: card communication failed: " << connected.message
+              << "\nCheck that firmware is running and no other process owns the ports.\n";
+    return 1;
+  }
+  cmi::VoiceStatus status;
+  const cmi::Result queried = core.queryVoiceStatus(status);
+  (void)core.disconnect();
+  if (!queried) {
+    std::cerr << "Doctor: Channel Card status failed: " << queried.message
+              << '\n';
+    return 1;
+  }
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - started);
+  std::cout << "  ok     Channel Card communication (" << elapsed.count()
+            << " ms)\nDoctor: ready.\n";
+  return 0;
+}
+
 std::string Lower(std::string value)
 {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return value;
-}
-
-std::string AutoMidi()
-{
-  const auto ports = cmi::Core::listMidiPorts();
-  if (ports.empty()) return {};
-  for (const auto &port : ports) {
-    const std::string name = Lower(port.name);
-    if (name.find("midi") != std::string::npos &&
-        name.find("daw") == std::string::npos) return port.name;
-  }
-  return ports.front().name;
 }
 
 bool Check(const cmi::Result &result, const std::string &operation)
@@ -375,6 +433,14 @@ void RunCommand(cmi::Core &core, const std::string &line,
 
 int main(int argc, char **argv)
 {
+  if (argc >= 2 && std::string(argv[1]) == "doctor") {
+    if (argc != 2) {
+      std::cerr << "doctor takes no options\n";
+      return 2;
+    }
+    return RunDoctor();
+  }
+
   Options options;
   if (!Parse(argc, argv, options)) {
     PrintUsage(argv[0]);
@@ -396,29 +462,33 @@ int main(int argc, char **argv)
   if (options.wavetables != "-") options.wavetables = fs::weakly_canonical(options.wavetables, ec);
 
   std::string midi = options.midi;
-  if (midi == "auto") {
-    midi = AutoMidi();
-    if (midi.empty()) {
-      std::cerr << "No MIDI input found. Connect one, choose --midi NAME, or use --midi off.\n";
-      return 1;
-    }
-  }
-  else if (midi == "off") midi.clear();
-
-  std::cout << "CMI play\n"
-            << "  project " << options.project << '\n'
-            << "  RS485  " << options.rs485 << '\n'
-            << "  CDC    " << options.cdc << '\n'
-            << "  MIDI   " << (midi.empty() ? "off" : midi) << '\n'
-            << std::flush;
+  if (midi == "off") midi.clear();
 
   cmi::CoreParams params;
   params.rs485_port = options.rs485;
   params.channel_cdc_port = options.cdc;
   params.channel_audio_device = options.audio;
-  params.midi_port = midi;
+  if (options.midi != "auto") params.midi_port = midi;
   params.baud = options.baud;
   params.attenuation_db = options.attenuation;
+  cmi::DiscoveryOptions discovery;
+  discovery.select_midi = options.midi == "auto";
+  cmi::SetupReport setup = cmi::Core::discover(params, discovery);
+  if (!setup.ready()) {
+    PrintSetup(setup);
+    std::cerr << "Run cmi-play doctor after correcting the setup.\n";
+    return 1;
+  }
+  params = setup.params;
+  midi = params.midi_port;
+
+  std::cout << "CMI play\n"
+            << "  project " << options.project << '\n'
+            << "  RS485  " << params.rs485_port << '\n'
+            << "  CDC    " << params.channel_cdc_port << '\n'
+            << "  MIDI   " << (midi.empty() ? "off" : midi) << '\n'
+            << std::flush;
+
   cmi::Core core(params);
   core.setErrorHandler([](const cmi::Result &error) {
     if (error.code == cmi::ErrorCode::Timeout) {
@@ -434,9 +504,18 @@ int main(int argc, char **argv)
     std::cerr << '\n';
   });
 
+  auto phase = std::chrono::steady_clock::now();
+  std::cout << "  ...   connect\n" << std::flush;
   if (!Check(core.connect(), "connect")) return 1;
+  std::cout << "        "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now() - phase).count()
+            << " ms\n";
 
   if (!options.sample.empty()) {
+    phase = std::chrono::steady_clock::now();
+    std::cout << "  ...   upload sample " << options.sample.filename()
+              << "\n" << std::flush;
     cmi::SampleDefinition sample;
     sample.id = options.sample_id;
     sample.sample_file = options.sample.string();
@@ -446,8 +525,19 @@ int main(int argc, char **argv)
     std::array<uint16_t, 128> midi_map;
     midi_map.fill(options.sample_id);
     if (!Check(core.setMidiSampleMap(midi_map), "MIDI sample map")) return 1;
+    std::cout << "        sample upload "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now() - phase).count()
+              << " ms\n";
   } else if (options.samples != "-" && fs::is_directory(options.samples)) {
+    phase = std::chrono::steady_clock::now();
+    std::cout << "  ...   upload sample bank " << options.samples
+              << "\n" << std::flush;
     if (!Check(core.loadSampleFolder(options.samples), "sample attack/BODY bank")) return 1;
+    std::cout << "        sample bank "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now() - phase).count()
+              << " ms\n";
   } else if (options.samples != "-") {
     std::cerr << "  error sample directory not found: " << options.samples
               << " (use --samples - only for intentional no-sample setup)\n";
@@ -458,29 +548,32 @@ int main(int argc, char **argv)
 
   if (options.wavetables != "-") {
     const auto waves = FindWavetables(options.wavetables);
-    for (int number = 0; number < 8; ++number) {
-      const auto custom = waves.find(number);
-      if (custom != waves.end()) {
+    phase = std::chrono::steady_clock::now();
+    for (const auto &[number, path] : waves) {
+        std::cout << "  ...   upload osc" << number << " "
+                  << path.filename() << "\n" << std::flush;
         if (!Check(core.loadWavetable(static_cast<uint8_t>(number),
-                                     custom->second.string()),
+                                     path.string()),
                    "osc" + std::to_string(number) + " " +
-                       custom->second.filename().string())) {
+                       path.filename().string())) {
           return 1;
         }
-      } else {
-        if (!Check(core.loadWavetable(static_cast<uint8_t>(number),
-                                     cardlink::audio::MakeBuiltinWavetable(
-                                         static_cast<uint8_t>(number))),
-                   "osc" + std::to_string(number) + " built-in " +
-                       cardlink::audio::BuiltinWavetableName(
-                           static_cast<uint8_t>(number)))) {
-          return 1;
-        }
-      }
+    }
+    if (!waves.empty()) {
+      std::cout << "        wavetables "
+                << std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - phase).count()
+                << " ms\n";
     }
   }
 
+  phase = std::chrono::steady_clock::now();
+  std::cout << "  ...   compile/upload script voices 0-7\n" << std::flush;
   if (!Check(core.loadVoiceScriptAll(options.script.string()), "script voices 0-7")) return 1;
+  std::cout << "        script upload "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now() - phase).count()
+            << " ms\n";
 
   std::signal(SIGINT, SignalHandler);
   std::signal(SIGTERM, SignalHandler);

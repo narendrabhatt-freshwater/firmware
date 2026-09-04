@@ -1,0 +1,45 @@
+name: cmi_core
+
+on:
+  push:
+    paths:
+      - "cmi_core/**"
+      - ".github/workflows/cmi-core.yml"
+  pull_request:
+    paths:
+      - "cmi_core/**"
+      - ".github/workflows/cmi-core.yml"
+
+jobs:
+  qualify:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu x86_64 GCC
+            os: ubuntu-24.04
+            packages: g++
+          - name: Ubuntu x86_64 Clang
+            os: ubuntu-24.04
+            packages: clang
+            cc: clang
+            cxx: clang++
+          - name: Linux ARM64 GCC
+            os: ubuntu-24.04-arm
+            packages: g++
+          - name: macOS Intel
+            os: macos-13
+          - name: macOS Apple Silicon
+            os: macos-14
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libasound2-dev ${{ matrix.packages }}
+      - name: Qualify source and installed SDK
+        run: cmi_core/scripts/qualify.sh

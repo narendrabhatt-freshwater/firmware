@@ -50,6 +50,7 @@ target_include_directories(imgui_lib PUBLIC
 )
 target_link_libraries(imgui_lib PUBLIC glfw)
 
+set(CMI_CORE_BUILD_CLI OFF CACHE BOOL "" FORCE)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../cmi_core"
                  "${CMAKE_CURRENT_BINARY_DIR}/cmi_core")
 

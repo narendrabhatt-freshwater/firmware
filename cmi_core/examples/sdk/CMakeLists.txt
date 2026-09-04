@@ -10,7 +10,7 @@ option(CMI_CORE_EXAMPLE_USE_INSTALLED
 if(CMI_CORE_EXAMPLE_USE_INSTALLED)
   find_package(cmi_core CONFIG REQUIRED)
 else()
-  add_subdirectory(../cmi_core ${CMAKE_CURRENT_BINARY_DIR}/cmi_core)
+  add_subdirectory(../.. ${CMAKE_CURRENT_BINARY_DIR}/cmi_core)
 endif()
 
 add_executable(cmi_core_example main.cpp)

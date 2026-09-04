@@ -68,13 +68,13 @@ def on_note_on(key, velocity)
     # modulate(tremolo, SAMPLE, AMPLITUDE, 0.5)
     #
     # Simple vibrato: move the sample pitch at 5 Hz by +/-10 Hz.
-    var vibrato = osc(0, 5)
-    modulate(vibrato, SAMPLE, FREQUENCY, 10)
+    # Oscillators require a user-supplied wavetable in logical slot 0.
+    # var vibrato = osc(0, 5)
+    # modulate(vibrato, SAMPLE, FREQUENCY, 10)
 
-    var oscillator_fm = osc(0, pitch)
-
-    var vibrato1 = osc(0, 7)
-    modulate(vibrato1, oscillator_fm, FREQUENCY, 10)
+    # var oscillator_fm = osc(0, pitch)
+    # var vibrato1 = osc(0, 7)
+    # modulate(vibrato1, oscillator_fm, FREQUENCY, 10)
 
     #
     # Simple oscillator FM: move a carrier pitch by +/-250 Hz.

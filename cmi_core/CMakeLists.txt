@@ -51,6 +51,7 @@ add_library(cmi_core STATIC
   ${SERIAL_BACKEND}
   src/core.cpp
   src/core/controls.cpp
+  src/core/discovery.cpp
   src/core/playback.cpp
   src/core/runtime.cpp
   src/core/waves.cpp
@@ -168,13 +169,32 @@ install(FILES
   "${CMAKE_CURRENT_BINARY_DIR}/cmi_coreConfigVersion.cmake"
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/cmi_core
 )
-install(FILES README.md SCRIPTING.md
+install(FILES README.md SCRIPTING.md PROTOCOL.md CHANGELOG.md RELEASE.md
   DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/cmi_core)
 install(DIRECTORY examples/vm/channel
   DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/cmi_core/examples/vm)
+install(DIRECTORY examples/sdk
+  DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/cmi_core/examples)
+install(PROGRAMS scripts/qualify.sh
+  DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/cmi_core/scripts)
 install(DIRECTORY LICENSES/ DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/licenses/cmi_core)
 
 include(CTest)
+
+option(CMI_CORE_BUILD_CLI "Build and install the cmi-play reference CLI" ON)
+if(CMI_CORE_BUILD_CLI)
+  add_executable(cmi_play tools/cmi_play/main.cpp)
+  target_link_libraries(cmi_play PRIVATE cmi::core)
+  target_compile_features(cmi_play PRIVATE cxx_std_17)
+  set_target_properties(cmi_play PROPERTIES OUTPUT_NAME cmi-play)
+  if(MSVC)
+    target_compile_options(cmi_play PRIVATE /W4)
+  else()
+    target_compile_options(cmi_play PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  install(TARGETS cmi_play RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
 if(BUILD_TESTING)
   add_executable(cmi_core_api_tests tests/core_api_test.cpp)
   target_link_libraries(cmi_core_api_tests PRIVATE cmi::core)
@@ -183,6 +203,22 @@ if(BUILD_TESTING)
   add_executable(cmi_core_sample_format_tests tests/sample_format_test.cpp)
   target_link_libraries(cmi_core_sample_format_tests PRIVATE cmi::core)
   add_test(NAME cmi_core.sample_format COMMAND cmi_core_sample_format_tests)
+
+  add_executable(cmi_core_discovery_tests tests/discovery_test.cpp)
+  target_link_libraries(cmi_core_discovery_tests PRIVATE cmi::core)
+  target_include_directories(cmi_core_discovery_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  add_test(NAME cmi_core.discovery COMMAND cmi_core_discovery_tests)
+
+  if(CMI_CORE_BUILD_CLI)
+    add_test(NAME cmi_core.cli_help COMMAND cmi_play --help)
+  endif()
+
+  add_test(
+    NAME cmi_core.example_script
+    COMMAND fw_scriptc
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/vm/channel/channel.be
+            -o ${CMAKE_CURRENT_BINARY_DIR}/example-channel.fwsc)
 
   add_test(
     NAME cmi_core.public_api_contract
