@@ -8,6 +8,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#endif
 
 static void put_u16(uint8_t *p, uint16_t value)
 {
@@ -22,8 +26,60 @@ static void put_u32(uint8_t *p, uint32_t value)
 
 static int fail(const char *message, const char *path)
 {
-    fprintf(stderr, "fw_scriptc: %s%s%s\n", message, path ? ": " : "", path ? path : "");
+    fprintf(stderr, "berry: error: %s%s%s\n", message, path ? ": " : "", path ? path : "");
     return 1;
+}
+
+static int create_output_directories(const char *output)
+{
+    char path[1024];
+    size_t i;
+    if (!output[0]) return fail("output file path is required", NULL);
+    if (strlen(output) >= sizeof(path))
+        return fail("output path too long", output);
+    strcpy(path, output);
+    for (i = 1; path[i]; ++i) {
+        int result;
+        if (path[i] != '/'
+#ifdef _WIN32
+            && path[i] != '\\'
+#endif
+        ) continue;
+#ifdef _WIN32
+        if (i == 2 && path[1] == ':') continue;
+#endif
+        path[i] = '\0';
+#ifdef _WIN32
+        result = _mkdir(path);
+#else
+        result = mkdir(path, 0777);
+#endif
+        if (result != 0 && errno != EEXIST) {
+            fprintf(stderr, "berry: error: cannot create output directory '%s': %s\n",
+                    path, strerror(errno));
+            return 1;
+        }
+        path[i] = output[i];
+    }
+    return 0;
+}
+
+static void print_help(FILE *stream)
+{
+    fputs("Berry compiler for Freshwater firmware\n"
+          "Compile a Channel Card script (.be) into Berry bytecode (.bec).\n"
+          "\n"
+          "Usage: berry INPUT.be -o OUTPUT.bec\n"
+          "\n"
+          "Options:\n"
+          "  -o FILE     Output file path (required).\n"
+          "  -h, --help  Show this help.\n"
+          "\n"
+          "Example:\n"
+          "  berry script.be -o output/script.bec\n"
+          "\n"
+          "Missing output directories are created automatically.\n",
+          stream);
 }
 
 static int init_error(bvm *vm, const char *message)
@@ -88,18 +144,29 @@ int main(int argc, char **argv)
     FILE *file, *source, *wrapper;
     char *source_text = NULL, *lowered = NULL;
     size_t source_size = 0, lowered_size = 0;
+    size_t header_size = 0;
     uint8_t *payload, header[FW_SCRIPT_CONTAINER_HEADER_SIZE] = {0};
     char line[1024];
     long length;
     bvm *vm;
     int result;
 
+    if (argc == 1 || (argc == 2 &&
+        (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0))) {
+        print_help(stdout);
+        return 0;
+    }
     if (argc == 4 && strcmp(argv[2], "-o") == 0) {
         input = argv[1]; output = argv[3];
     } else {
-        fprintf(stderr, "usage: fw_scriptc INPUT.be -o PROGRAM.fwsc\n");
+        fputs("berry: error: expected an input script and -o output file.\n"
+              "Usage: berry INPUT.be -o OUTPUT.bec\n"
+              "Run 'berry --help' for an example.\n", stderr);
         return 2;
     }
+    if (strlen(output) >= 5u &&
+        strcmp(output + strlen(output) - 5u, ".fwsc") == 0)
+        header_size = sizeof(header);
     if (snprintf(temporary, sizeof(temporary), "%s.berry-bytecode.tmp", output) >= (int)sizeof(temporary))
         return fail("output path too long", output);
     if (snprintf(wrapped, sizeof(wrapped), "%s.berry-source.tmp", output) >= (int)sizeof(wrapped))
@@ -134,10 +201,16 @@ int main(int argc, char **argv)
                     "could not preprocess named state", input);
     }
     free(source_text);
+    if (create_output_directories(output)) {
+        free(lowered);
+        return 1;
+    }
     wrapper = fopen(wrapped, "wb");
     if (!wrapper) {
         free(lowered);
-        return fail("could not create wrapped source", input);
+        fprintf(stderr, "berry: error: cannot create output files for '%s': %s\n",
+                output, strerror(errno));
+        return 1;
     }
     source = tmpfile();
     if (!source || fwrite(lowered, 1, lowered_size, source) != lowered_size ||
@@ -233,12 +306,18 @@ int main(int argc, char **argv)
     put_u32(header + 12, (uint32_t)length);
     put_u32(header + 16, fw_vm_crc32(payload, (size_t)length));
     file = fopen(output, "wb");
-    if (!file || fwrite(header, 1, sizeof(header), file) != sizeof(header) ||
-        fwrite(payload, 1, (size_t)length, file) != (size_t)length || fclose(file)) {
+    if (!file || fwrite(header, 1, header_size, file) != header_size ||
+        fwrite(payload, 1, (size_t)length, file) != (size_t)length) {
         if (file) fclose(file);
         free(payload);
-        return fail("could not write container", output);
+        return fail("could not write output", output);
+    }
+    if (fclose(file)) {
+        free(payload);
+        return fail("could not finish writing output", output);
     }
     free(payload);
+    printf("Compiled %s -> %s (%zu bytes)\n", input, output,
+           header_size + (size_t)length);
     return 0;
 }

@@ -64,7 +64,7 @@ struct controls_t {
 
 struct voice_board_config_t {
     /* Program loaded into all eight voices by open(). */
-    std::string bec_file = "channel.bec";
+    std::string bec_file = "channel.fwsc";
     /* USB-to-RS485 device, for example /dev/cu.usbserial-XXXX. */
     std::string rs485_port = "/dev/cu.usbserial-BG03CSYB";
     /* USB port used to load the BEC and sample ATTACK data. */

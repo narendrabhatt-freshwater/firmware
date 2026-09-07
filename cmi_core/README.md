@@ -142,6 +142,13 @@ The shipped [channel.be](examples/vm/channel/channel.be) is sample-only by
 default. Oscillator examples remain commented until the application uploads a
 user wavetable with `loadWavetable(0..7, path)`.
 
+The standalone compiler is named `berry`: use
+`berry channel.be -o channel.fwsc` for a firmware upload container, or
+`berry channel.be -o channel.bec` for raw bytecode. To use a prebuilt compiler
+for CMake-generated programs, configure with
+`-DBERRY_EXECUTABLE=/absolute/path/to/berry`; otherwise CMake builds `berry`.
+`loadVoiceScript()` continues to accept `.be` source and compile internally.
+
 See [SCRIPTING.md](SCRIPTING.md) for the Berry language and limits, and
 [PROTOCOL.md](PROTOCOL.md) for the wire protocol.
 

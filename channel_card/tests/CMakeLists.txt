@@ -69,10 +69,10 @@ target_include_directories(note_bank_vm_test PRIVATE
 target_link_libraries(note_bank_vm_test PRIVATE script_runtime::berry m)
 add_dependencies(note_bank_vm_test shared_berry_program)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/channel.fwsc"
-  COMMAND fw_scriptc
+  COMMAND berry
           "${CMAKE_CURRENT_SOURCE_DIR}/../../cmi_core/examples/vm/channel/channel.be"
           -o "${CMAKE_CURRENT_BINARY_DIR}/channel.fwsc"
-  DEPENDS fw_scriptc
+  DEPENDS berry
           "${CMAKE_CURRENT_SOURCE_DIR}/../../cmi_core/examples/vm/channel/channel.be")
 add_custom_target(channel_program DEPENDS
   "${CMAKE_CURRENT_BINARY_DIR}/channel.fwsc")

@@ -48,10 +48,19 @@ target_compile_options(script_runtime_berry_backend PRIVATE
 add_library(script_runtime::berry ALIAS script_runtime_berry_backend)
 
 if(SCRIPT_RUNTIME_BUILD_HOST_TOOLS)
-add_executable(fw_scriptc tools/fw_scriptc.c)
-target_include_directories(fw_scriptc PRIVATE "${SCRIPT_RUNTIME_ROOT}/include")
-target_link_libraries(fw_scriptc PRIVATE berry_host freshwater::vm m)
-target_compile_options(fw_scriptc PRIVATE -Wall -Wextra -Werror -pedantic)
+set(BERRY_EXECUTABLE "" CACHE FILEPATH "Use an existing standalone Berry compiler")
+if(BERRY_EXECUTABLE)
+  if(NOT EXISTS "${BERRY_EXECUTABLE}" OR IS_DIRECTORY "${BERRY_EXECUTABLE}")
+    message(FATAL_ERROR "BERRY_EXECUTABLE must name an existing berry executable")
+  endif()
+  add_executable(berry IMPORTED GLOBAL)
+  set_target_properties(berry PROPERTIES IMPORTED_LOCATION "${BERRY_EXECUTABLE}")
+else()
+add_executable(berry tools/berry.c)
+target_include_directories(berry PRIVATE "${SCRIPT_RUNTIME_ROOT}/include")
+target_link_libraries(berry PRIVATE berry_host freshwater::vm m)
+target_compile_options(berry PRIVATE -Wall -Wextra -Werror -pedantic)
+endif()
 
 enable_testing()
 add_executable(shared_berry_runtime_test tests/shared_runtime_test.c)
@@ -73,24 +82,24 @@ add_test(NAME shared_berry.runtime
     "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.fwsc"
     "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.fwsc")
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.fwsc"
-  COMMAND fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/channel_envelope.be"
+  COMMAND berry "${SCRIPT_RUNTIME_ROOT}/examples/channel_envelope.be"
           -o "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.fwsc"
-  DEPENDS fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/channel_envelope.be")
+  DEPENDS berry "${SCRIPT_RUNTIME_ROOT}/examples/channel_envelope.be")
 foreach(FAULT_PROGRAM fault_bad_argument_event fault_nonfinite_event fault_osc_argument_event fault_allocation_event)
   add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${FAULT_PROGRAM}.fwsc"
-    COMMAND fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/${FAULT_PROGRAM}.be"
+    COMMAND berry "${SCRIPT_RUNTIME_ROOT}/examples/${FAULT_PROGRAM}.be"
             -o "${CMAKE_CURRENT_BINARY_DIR}/${FAULT_PROGRAM}.fwsc"
-    DEPENDS fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/${FAULT_PROGRAM}.be")
+    DEPENDS berry "${SCRIPT_RUNTIME_ROOT}/examples/${FAULT_PROGRAM}.be")
 endforeach()
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.fwsc"
-  COMMAND fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/pitch_tracking_event.be"
+  COMMAND berry "${SCRIPT_RUNTIME_ROOT}/examples/pitch_tracking_event.be"
           -o "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.fwsc"
-  DEPENDS fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/pitch_tracking_event.be")
+  DEPENDS berry "${SCRIPT_RUNTIME_ROOT}/examples/pitch_tracking_event.be")
 foreach(PROGRAM oscillator_event two_oscillator_event many_oscillator_event state64_event routing_event)
   add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${PROGRAM}.fwsc"
-    COMMAND fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/${PROGRAM}.be"
+    COMMAND berry "${SCRIPT_RUNTIME_ROOT}/examples/${PROGRAM}.be"
             -o "${CMAKE_CURRENT_BINARY_DIR}/${PROGRAM}.fwsc"
-    DEPENDS fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/${PROGRAM}.be")
+    DEPENDS berry "${SCRIPT_RUNTIME_ROOT}/examples/${PROGRAM}.be")
 endforeach()
 set(LARGE_PAYLOAD_SOURCE "def on_note_on(key, velocity)\n")
 foreach(INDEX RANGE 0 255)
@@ -103,9 +112,9 @@ string(APPEND LARGE_PAYLOAD_SOURCE
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.be"
   CONTENT "${LARGE_PAYLOAD_SOURCE}")
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.fwsc"
-  COMMAND fw_scriptc "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.be"
+  COMMAND berry "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.be"
           -o "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.fwsc"
-  DEPENDS fw_scriptc "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.be")
+  DEPENDS berry "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.be")
 set(MAXIMUM_PAYLOAD_SOURCE "def on_note_on(key, velocity)\n")
 foreach(INDEX RANGE 0 575)
   math(EXPR LEVEL "${INDEX} % 2")
@@ -117,9 +126,9 @@ string(APPEND MAXIMUM_PAYLOAD_SOURCE
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.be"
   CONTENT "${MAXIMUM_PAYLOAD_SOURCE}")
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.fwsc"
-  COMMAND fw_scriptc "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.be"
+  COMMAND berry "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.be"
           -o "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.fwsc"
-  DEPENDS fw_scriptc "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.be")
+  DEPENDS berry "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.be")
 add_custom_target(shared_berry_program DEPENDS
   "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.fwsc"
   "${CMAKE_CURRENT_BINARY_DIR}/fault_bad_argument_event.fwsc"
@@ -141,9 +150,9 @@ target_link_libraries(led_berry_runtime_test PRIVATE script_runtime::berry)
 target_compile_options(led_berry_runtime_test PRIVATE
     -Wall -Wextra -Werror -pedantic -UNDEBUG)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/led_event.fwsc"
-  COMMAND fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/led_event.be"
+  COMMAND berry "${SCRIPT_RUNTIME_ROOT}/examples/led_event.be"
           -o "${CMAKE_CURRENT_BINARY_DIR}/led_event.fwsc"
-  DEPENDS fw_scriptc "${SCRIPT_RUNTIME_ROOT}/examples/led_event.be")
+  DEPENDS berry "${SCRIPT_RUNTIME_ROOT}/examples/led_event.be")
 add_custom_target(led_berry_program DEPENDS
     "${CMAKE_CURRENT_BINARY_DIR}/led_event.fwsc")
 add_dependencies(led_berry_runtime_test led_berry_program)

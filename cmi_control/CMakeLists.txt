@@ -100,10 +100,10 @@ foreach(CMI_VM_EXAMPLE IN LISTS CMI_VM_EXAMPLE_NAMES)
     OUTPUT "${CMI_VM_EXAMPLE_OUTPUT}"
     COMMAND ${CMAKE_COMMAND} -E make_directory
             "${CMAKE_CURRENT_BINARY_DIR}/vm_scripts"
-    COMMAND fw_scriptc
+    COMMAND berry
             "${CMAKE_CURRENT_SOURCE_DIR}/../cmi_core/examples/vm/channel/${CMI_VM_EXAMPLE}.be"
             -o "${CMI_VM_EXAMPLE_OUTPUT}"
-    DEPENDS fw_scriptc
+    DEPENDS berry
             "${CMAKE_CURRENT_SOURCE_DIR}/../cmi_core/examples/vm/channel/${CMI_VM_EXAMPLE}.be"
     VERBATIM)
   list(APPEND CMI_VM_EXAMPLE_OUTPUTS "${CMI_VM_EXAMPLE_OUTPUT}")

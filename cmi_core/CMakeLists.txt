@@ -216,7 +216,7 @@ if(BUILD_TESTING)
 
   add_test(
     NAME cmi_core.example_script
-    COMMAND fw_scriptc
+    COMMAND berry
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/vm/channel/channel.be
             -o ${CMAKE_CURRENT_BINARY_DIR}/example-channel.fwsc)
 

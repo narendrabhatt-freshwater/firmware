@@ -6,18 +6,28 @@ make
 ./voicebdtest piano.wav
 ```
 
-An optional second argument selects the BEC program:
-`./voicebdtest piano.wav /path/to/channel.bec`. If omitted, `channel.bec` is
+An optional second argument selects the firmware program:
+`./voicebdtest piano.wav /path/to/channel.fwsc`. If omitted, `channel.fwsc` is
 read from the current working directory.
 
-`make` produces `voicebdtest` and `channel.bec` in this folder. Intermediate
+`make` produces `voicebdtest` and `channel.fwsc` in this folder. Intermediate
 build files go in `.build`.
+
+To use the standalone compiler in `175-mainframe/mas`, configure from this folder:
+
+```sh
+cmake -S . -B .build -DBERRY_EXECUTABLE="$PWD/../../175-mainframe/mas/berry"
+make
+```
+
+The build runs `berry channel.be -o channel.fwsc`. Raw `.bec` output is not
+accepted by this uploader.
 
 Set the three port names in `voice_board_config_t` in `voicebd.h` before building.
 The program uses those names and MIDI input 0, loads the sample for all eight
 voices, and reports board errors before exiting with a nonzero status. Ctrl+C stops playback and exits.
 
-Startup assumes the card is idle. If voices are active, BEC upload fails with
+Startup assumes the card is idle. If voices are active, program upload fails with
 `err:vm-busy`; startup does not silence them or wait for their release.
 
 Input: 48 kHz, 16-bit PCM WAV, mono or stereo. Build requires RtAudio 5.2 or 6,

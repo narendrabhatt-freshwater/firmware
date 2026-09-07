@@ -12,10 +12,10 @@ add_subdirectory(../cmi_core/third_party/rtmidi rtmidi EXCLUDE_FROM_ALL)
 add_subdirectory(../cmi_core/runtime runtime EXCLUDE_FROM_ALL)
 
 set(CHANNEL_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../cmi_core/examples/vm/channel/channel.be")
-add_custom_command(OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/channel.bec"
-    COMMAND fw_scriptc "${CHANNEL_SOURCE}" -o "${CMAKE_CURRENT_SOURCE_DIR}/channel.bec"
-    DEPENDS fw_scriptc "${CHANNEL_SOURCE}")
-add_custom_target(voicebd_program DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/channel.bec")
+add_custom_command(OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/channel.fwsc"
+    COMMAND berry "${CHANNEL_SOURCE}" -o "${CMAKE_CURRENT_SOURCE_DIR}/channel.fwsc"
+    DEPENDS berry "${CHANNEL_SOURCE}")
+add_custom_target(voicebd_program DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/channel.fwsc")
 
 add_executable(voicebdtest voicebdtest.cpp voicebd.cpp)
 target_compile_features(voicebdtest PRIVATE cxx_std_17)

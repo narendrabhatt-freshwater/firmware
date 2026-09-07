@@ -105,10 +105,33 @@ loads and repeatedly replaces eight generated programs larger than the former
 4 KiB cap, runs one million event dispatches, checks the fault-containment
 matrix, and verifies at least 20% heap headroom over the measured peak.
 
-`fw_scriptc` emits an FWSC v1 container carrying Channel ABI2 Berry bytecode.
+The standalone `berry` compiler emits raw Berry bytecode for `.bec` output:
+
+```sh
+build/shared-berry/berry cmi_core/runtime/examples/channel_envelope.be -o channel_envelope.bec
+```
+
+Use a `.fwsc` output filename to emit an FWSC v1 container carrying Channel ABI2
+Berry bytecode. The current Channel Card firmware requires this container and
+does not accept raw `.bec` files directly.
 ABI1 binaries are rejected and must be recompiled from source:
 
 ```sh
-build/shared-berry/fw_scriptc cmi_core/runtime/examples/channel_envelope.be \
+build/shared-berry/berry cmi_core/runtime/examples/channel_envelope.be \
   -o build/shared-berry/channel_envelope.fwsc
 ```
+
+To use an existing standalone compiler, set `BERRY_EXECUTABLE` when configuring
+the runtime, CMI Core, CMI Control, or voice-board build. For example, from the
+firmware folder:
+
+```sh
+cmake -S cmi_core -B build/cmi-core \
+  -DBERRY_EXECUTABLE="$PWD/../175-mainframe/mas/berry"
+cmake --build build/cmi-core --parallel 4
+```
+
+Without this setting, the build compiles its own `berry` executable. Build-time
+firmware programs use `.fwsc` output. CMI Core's `loadVoiceScript()` API accepts
+Berry source and compiles it internally; it does not invoke the CLI or accept
+raw `.bec` files.

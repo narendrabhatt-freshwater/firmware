@@ -265,4 +265,4 @@ invalidates the shared VM.
 - Upload is accepted only while the Channel Card is idle.
 
 Production examples are in
-[`examples/vm/channel`](examples/vm/channel/README.md).
+[`channel.be`](examples/vm/channel/channel.be).
