@@ -1,0 +1,16 @@
+CXX = g++
+PKG_CONFIG ?= pkg-config
+
+PACKAGES = rtaudio rtmidi libserialport
+CPPFLAGS += -I. $(shell $(PKG_CONFIG) --cflags $(PACKAGES))
+CXXFLAGS ?= -std=c++20 -O3 -pthread
+LDLIBS += $(shell $(PKG_CONFIG) --libs $(PACKAGES))
+
+.PHONY: all clean
+all: voicebd
+
+voicebd: voicebd.cpp voicebdtest.cpp voicebd.h options.h Makefile.debian
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) voicebd.cpp voicebdtest.cpp $(LDFLAGS) $(LDLIBS) -o $@
+
+clean:
+	rm -f voicebd

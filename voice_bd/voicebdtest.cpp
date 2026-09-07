@@ -1,15 +1,69 @@
+/*
+                                   __
+                               ___  \  \
+                          ___  \  \  \  \    _______
+                     ___  \  \  \  \  \__\__/_____  \
+                     \  \  \  \  \__\_______      \__\____
+                      \  \  \  \     ___ \  \________  \__/
+                       \  \  \__\___/_  \ \___/   \  \___
+                        \  \    ____  \  \________ \ ___/
+                         \__\__/ \  \  \____/  \  \
+                                  \  \     ___  \  \___
+                                   \__\___/ \  \ \____/
+                                           \  \
+                                              \  \___
+                 __                 _          \ ___/  _
+                / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+               | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+               |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+               |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+
+            (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+*/
+
 #undef NDEBUG
 #include <cassert>
 #include "voicebd.h"
+#include <options.h>
 #include <RtMidi.h>
 #include <array>
 #include <chrono>
 #include <csignal>
+#include <cstring>
+#include <sysexits.h>
 #include <fstream>
 #include <iostream>
 #include <thread>
 
 namespace {
+char const* exe_name;
+char const version[] = "0.01";
+static char const product[] = "172-XXXX";
+char const name[] = "Channel card voice board test";
+
+/* ---- print usage --------------------------------------------------------- */
+
+int usage(int status)
+{
+    std::ostream& out = status == EX_OK ? std::cout : std::cerr;
+    out << "\nNAME\n\n"
+        << "    " << exe_name << " - " << name
+        << " (" << product << "). Version " << version << "\n"
+        << "    (C) 2026 Freshwater Instruments\n"
+        << "\nUSAGE\n\n"
+        << "    " << exe_name << " [options] <sample.wav> [program.bec]\n"
+        << "\nOPTIONS\n\n"
+        << "    -h             Print this help and exit\n"
+        << "\nARGUMENTS\n\n"
+        << "    sample.wav     48 kHz, 16-bit PCM WAV, mono or stereo\n"
+        << "    program.bec    BEC program (default: channel.bec in current directory)\n"
+        << "\n    Uses MIDI input 0 and the device ports configured in voicebd.h.\n"
+        << "    Play MIDI notes; press Ctrl+C to exit.\n\n";
+    return status;
+}
+
+/* ---- handle termination signals ----------------------------------------- */
+
 volatile std::sig_atomic_t stopped = 0;
 void stop(int) { stopped = 1; }
 
@@ -56,13 +110,19 @@ std::vector<int16_t> read_wav(char const* path)
 
 int main(int argc, char** argv)
 {
-    if (argc != 2 && argc != 3) {
-        std::cerr << "Usage: " << argv[0] << " <sample.wav> [program.bec]\n";
-        return 1;
-    }
-    auto const pcm = read_wav(argv[1]);
+    char const* const slash = std::strrchr(argv[0], '/');
+    exe_name = slash ? slash + 1 : argv[0];
+    bool help(false);
+    opt_skip                                    /* skip over filename         */
+    opt_begin(null)                             /* begin processing options   */
+        option('h', help)
+        default: return usage(EX_USAGE);
+    opt_end
+    if (help) return usage(EX_OK);
+    if (argc < 1 || argc > 2) return usage(EX_USAGE);
+    auto const pcm = read_wav(argv[0]);
     voice_board_config_t config;
-    if (argc == 3) config.bec_file = argv[2];
+    if (argc == 2) config.bec_file = argv[1];
     voice_board_t board;
     auto result = board.open(config);
     assert(result.ok());

@@ -675,7 +675,11 @@ struct device_context
     std::string upload_usb_port_name;
     rs485_link rs485;
     stream_state stream;
+#if defined(__linux__)
+    RtAudio audio{RtAudio::LINUX_ALSA};
+#else
     RtAudio audio;
+#endif
     std::atomic<bool> connected{false};
     std::atomic<bool> worker_running{false};
     std::thread worker;
@@ -687,13 +691,25 @@ struct device_context
 /* ---- start the usb audio stream ------------------------------------------ */
 
     voice_board_result_t start_audio()
+#if !defined(RTAUDIO_VERSION_MAJOR) || RTAUDIO_VERSION_MAJOR < 6
+    try
+#endif
     {
         if (audio.isStreamRunning()) return ok();
         unsigned selected = 0u;
         bool found = false;
         std::string available_devices;
-        for (unsigned id : audio.getDeviceIds()) {
+#if defined(RTAUDIO_VERSION_MAJOR) && RTAUDIO_VERSION_MAJOR >= 6
+        auto const device_ids = audio.getDeviceIds();
+#else
+        std::vector<unsigned> device_ids(audio.getDeviceCount());
+        for (unsigned id = 0; id < device_ids.size(); ++id) device_ids[id] = id;
+#endif
+        for (unsigned id : device_ids) {
             RtAudio::DeviceInfo const info = audio.getDeviceInfo(id);
+#if !defined(RTAUDIO_VERSION_MAJOR) || RTAUDIO_VERSION_MAJOR < 6
+            if (!info.probed) continue;
+#endif
             if (info.outputChannels < kUsbAudioChannelCount) continue;
             if (!available_devices.empty()) available_devices += ", ";
             available_devices += info.name;
@@ -719,7 +735,10 @@ struct device_context
         output.nChannels = kUsbAudioChannelCount;
         output.firstChannel = 0u;
         unsigned frames = kUsbAudioFramesPerMillisecond;
-        RtAudioErrorType const opened = audio.openStream(
+#if defined(RTAUDIO_VERSION_MAJOR) && RTAUDIO_VERSION_MAJOR >= 6
+        RtAudioErrorType const opened =
+#endif
+        audio.openStream(
             &output, nullptr, RTAUDIO_SINT8, kSampleRate, &frames,
                 [](void* out, void*, unsigned count, double,
                     RtAudioStreamStatus,
@@ -728,6 +747,7 @@ struct device_context
                     static_cast<int8_t*>(out), count * kUsbAudioChannelCount);
                     return 0;
                 }, this);
+#if defined(RTAUDIO_VERSION_MAJOR) && RTAUDIO_VERSION_MAJOR >= 6
         if (opened != RTAUDIO_NO_ERROR)
             return fail(voice_board_error_t::audio_error, audio.getErrorText());
         RtAudioErrorType const started = audio.startStream();
@@ -736,8 +756,17 @@ struct device_context
             audio.closeStream();
             return fail(voice_board_error_t::audio_error, error);
         }
+#else
+        audio.startStream();
+#endif
         return ok();
     }
+#if !defined(RTAUDIO_VERSION_MAJOR) || RTAUDIO_VERSION_MAJOR < 6
+    catch (RtAudioError const& error) {
+        if (audio.isStreamOpen()) audio.closeStream();
+        return fail(voice_board_error_t::audio_error, error.getMessage());
+    }
+#endif
 
 /* ---- shut down the channel device ---------------------------------------- */
 
@@ -746,7 +775,15 @@ struct device_context
         worker_running.store(false);
         if (worker.joinable() && worker.get_id() != std::this_thread::get_id())
             worker.join();
+#if defined(RTAUDIO_VERSION_MAJOR) && RTAUDIO_VERSION_MAJOR >= 6
         if (audio.isStreamRunning()) (void)audio.stopStream();
+#else
+        try {
+            if (audio.isStreamRunning()) audio.stopStream();
+        } catch (RtAudioError const&) {
+            /* Continue closing resources even if stopping the driver failed. */
+        }
+#endif
         if (audio.isStreamOpen()) audio.closeStream();
         if (rs485.is_open()) {
             (void)rs485.command("n off");

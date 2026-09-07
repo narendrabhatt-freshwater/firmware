@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 project(voicebdtest LANGUAGES C CXX)
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(AUDIO REQUIRED IMPORTED_TARGET rtaudio>=6)
+pkg_check_modules(AUDIO REQUIRED IMPORTED_TARGET rtaudio>=5.2)
 pkg_check_modules(SERIAL REQUIRED IMPORTED_TARGET libserialport)
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)

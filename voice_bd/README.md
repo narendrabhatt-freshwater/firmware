@@ -17,5 +17,9 @@ Set the three port names in `voice_board_config_t` in `voicebd.h` before buildin
 The program uses those names and MIDI input 0, loads the sample for all eight
 voices, and asserts on board failures. Ctrl+C stops playback and exits.
 
-Input: 48 kHz, 16-bit PCM WAV, mono or stereo. Build requires RtAudio 6,
+Input: 48 kHz, 16-bit PCM WAV, mono or stereo. Build requires RtAudio 5.2 or 6,
 libserialport, CMake and pkg-config; other dependencies come from the repository.
+
+The command-line parser uses the shared Freshwater `options.h` header, as in
+`mas/extract.cpp`. Supply its directory in the compiler include path (`-I`).
+Use `-h` to display the version, product identifier, and usage.
