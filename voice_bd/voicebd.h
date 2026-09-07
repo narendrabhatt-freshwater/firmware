@@ -68,7 +68,7 @@ struct voice_board_config_t {
     /* USB-to-RS485 device, for example /dev/cu.usbserial-XXXX. */
     std::string rs485_port = "/dev/cu.usbserial-BG03CSYB";
     /* USB port used to load the BEC and sample ATTACK data. */
-    std::string upload_usb_port = "/dev/cu.usbmodem13203";
+    std::string upload_usb_port = "/dev/cu.usbmodem13303";
     /* RtAudio device used for the USB BODY stream. */
     std::string stream_usb_port = "Channel Card BODY";
     /* RS485 baud rate. */
@@ -90,17 +90,18 @@ public:
     voice_board_t& operator=(voice_board_t&&) noexcept;
     voice_board_t(voice_board_t const&) = delete;
     voice_board_t& operator=(voice_board_t const&) = delete;
-    /* Open the ports and load the BEC. */
+    /* Open the ports (including the reusable USB upload connection) and load the BEC. */
     voice_board_result_t open(voice_board_config_t const& config);
     /* Silence the card and close the ports. */
     voice_board_result_t close();
     bool is_open() const;
-    /* Load 48 kHz mono signed-16 PCM into a sample slot. */
+    /* Upload the ATTACK and retain 48 kHz mono signed-16 PCM BODY in memory. */
     voice_board_result_t load_sample(uint16_t sample_id,
         std::vector<int16_t> const& pcm,
         uint32_t source_sample_rate_hz = 48000,
         double root_pitch_hz = 261.625565);
-    /* Start a note on one voice. */
+    /* Start a note and prioritize its BODY using confirmed buffer space.
+     * Playback pitch is resolved on the card. */
     voice_board_result_t note_on(uint8_t voice_id, uint16_t sample_id,
         uint8_t midi_key, uint8_t velocity = 127);
     /* Release one voice. */

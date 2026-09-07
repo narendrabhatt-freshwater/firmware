@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.24)
 project(voicebd LANGUAGES C CXX)
 
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(AUDIO REQUIRED IMPORTED_TARGET rtaudio>=5.2)
 pkg_check_modules(SERIAL REQUIRED IMPORTED_TARGET libserialport)

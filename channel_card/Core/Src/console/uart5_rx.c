@@ -41,6 +41,7 @@ static volatile uint16_t rx_head;
  * critical section is needed around either index. */
 static volatile uint16_t rx_tail;
 static volatile uint32_t rx_dropped;
+static volatile uint8_t tx_complete;
 
 void Uart5Rx_Init(void)
 {
@@ -68,9 +69,8 @@ void Uart5Rx_Init(void)
   }
   UART5->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF;
 
-  /* USB OTG (0) nests over UART; UART nests over I2S DMA (2). The handler
-   * only copies RDR; the UART RX FIFO covers a USB ISR. */
-  HAL_NVIC_SetPriority(UART5_IRQn, 1, 0);
+  /* Release RS485 at the final stop bit, even while the audio pump runs. */
+  HAL_NVIC_SetPriority(UART5_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(UART5_IRQn);
 
   UART5->CR1 |= USART_CR1_RXNEIE_RXFNEIE;
@@ -92,9 +92,48 @@ uint32_t Uart5Rx_DroppedCount(void)
   return rx_dropped;
 }
 
+int Uart5Rx_Transmit(const uint8_t *data, uint16_t size, uint32_t timeout_ms)
+{
+  uint32_t const started = HAL_GetTick();
+  if (data == NULL || size == 0u) return -1;
+  tx_complete = 0u;
+  UART5->ICR = USART_ICR_TCCF;
+  for (uint16_t i = 0u; i < size; ++i)
+  {
+    while ((UART5->ISR & USART_ISR_TXE_TXFNF) == 0u)
+      if (HAL_GetTick() - started >= timeout_ms) return -1;
+    if (i + 1u == size)
+    {
+      uint32_t const primask = __get_PRIMASK();
+      __disable_irq();
+      UART5->TDR = data[i];
+      UART5->CR1 |= USART_CR1_TCIE;
+      __set_PRIMASK(primask);
+    }
+    else UART5->TDR = data[i];
+  }
+  while (tx_complete == 0u)
+  {
+    if (HAL_GetTick() - started >= timeout_ms)
+    {
+      UART5->CR1 &= ~USART_CR1_TCIE;
+      return -1;
+    }
+  }
+  return 0;
+}
+
 void UART5_IRQHandler(void)
 {
   uint32_t isr = UART5->ISR;
+
+  if ((isr & USART_ISR_TC) != 0u && (UART5->CR1 & USART_CR1_TCIE) != 0u)
+  {
+    RS485_CTL_GPIO_Port->BSRR = (uint32_t)RS485_CTL_Pin << 16u;
+    UART5->CR1 &= ~USART_CR1_TCIE;
+    UART5->ICR = USART_ICR_TCCF;
+    tx_complete = 1u;
+  }
 
   if (isr & USART_ISR_ORE)
   {

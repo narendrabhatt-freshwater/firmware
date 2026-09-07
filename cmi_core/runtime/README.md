@@ -114,9 +114,7 @@ build/shared-berry/berry cmi_core/runtime/examples/channel_envelope.be \
 ```
 
 The header carries the ABI version, payload length, and checksum required by
-the current Channel Card firmware. ABI1 binaries must be recompiled. Add
-`--raw` to omit this header for tools that need raw Berry bytecode; that output
-cannot be uploaded directly to the card.
+the Channel Card firmware. Every compiled output includes this header.
 
 To use an existing standalone compiler, set `BERRY_EXECUTABLE` when configuring
 the runtime, CMI Core, CMI Control, or voice-board build. For example, from the

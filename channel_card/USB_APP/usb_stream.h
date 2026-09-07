@@ -3,9 +3,9 @@
  * @brief Direct BODY samples carried in each 1 ms Channel Card UAC2 packet.
  *
  * The USB interface is class-compliant UAC2 (21ch, int8, 48 kHz).
- * Each 1 ms USB packet has four metadata bytes followed by 1004 signed BODY
+ * Each 1 ms USB packet has ten metadata bytes followed by up to 998 signed BODY
  * samples.
- * USB supplies the packet boundary; there is no inner header, length, or CRC.
+ * The fixed header carries two counted blocks, without a CRC.
  */
 
 #ifndef USB_STREAM_H
@@ -20,7 +20,7 @@ extern "C" {
 #define USB_STREAM_VID 0xCafe
 #define USB_STREAM_PID 0x4031
 
-/* Full 8-bit sequence; 0xFF is reserved as the unarmed sentinel. */
+/* Session identities 0..254; 0xFF is the unarmed sentinel. */
 #define USB_STREAM_SESSION_MOD 255u
 #define USB_STREAM_NSAMP_MAX 4096u
 
@@ -34,13 +34,14 @@ extern "C" {
   (USB_STREAM_UAC_AUDIO_FRAME_BYTES * USB_STREAM_UAC_FRAMES_PER_MS)
 #define USB_STREAM_UAC_EP_MAX_BYTES USB_STREAM_UAC_PACKET_BYTES
 
-/* byte 0 = 0xA0 | SOF[3] | voice[2:0]; byte 1 = session. */
+/* Payload: sequence u16, then two descriptors at offsets 2 and 6.
+ * Descriptor: tag = 0xA0 | SOF[3] | voice[2:0], session u8, count u16. */
 #define USB_STREAM_TAG_MASK 0xF0u
 #define USB_STREAM_TAG_BASE 0xA0u
 #define USB_STREAM_TAG_IDLE 0xFFu
 #define USB_STREAM_TAG_SOF 0x08u
 #define USB_STREAM_TAG_VOICE_MASK 0x07u
-#define USB_STREAM_UAC_HEADER_BYTES 4u
+#define USB_STREAM_UAC_HEADER_BYTES 10u
 #define USB_STREAM_UAC_BODY_SAMPLES \
   (USB_STREAM_UAC_PACKET_BYTES - USB_STREAM_UAC_HEADER_BYTES)
 

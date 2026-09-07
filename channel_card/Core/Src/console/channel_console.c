@@ -155,7 +155,7 @@ static int __attribute__((unused)) RS485_Send(const char *s)
 
   {
     uint32_t n = (uint32_t)strlen(s);
-    HAL_UART_Transmit(&huart5, (const uint8_t *)s, (uint16_t)n,
+    Uart5Rx_Transmit((const uint8_t *)s, (uint16_t)n,
                       RS485_TxDeadlineMs(n));
   }
 
@@ -205,10 +205,10 @@ static void RS485_Reply(const char *s)
   memcpy(frame + tag_len, s, body_len);
 
   RS485_BusAcquire();
-  if (HAL_UART_Transmit(&huart5, (const uint8_t *)frame,
+  if (Uart5Rx_Transmit((const uint8_t *)frame,
                         (uint16_t)(tag_len + body_len),
                         RS485_TxDeadlineMs((uint32_t)(tag_len + body_len))) !=
-      HAL_OK)
+      0)
   {
     rs485_tx_fail++;
   }
@@ -217,75 +217,56 @@ static void RS485_Reply(const char *s)
 
 /*
  * Sequenced vq frame: masks/capacity/status and last processed UAC sequence,
- * plus eight target records, CRC-8 and terminator.
+ * plus eight session/free-space/duration records and a terminator; no CRC.
  */
-#define VQ_FRAME_LEN 56u
+#define VQ_FRAME_LEN 53u
 #define VQ_SYNC_0 0xA5u
 #define VQ_SYNC_1 0x5Au
 #define VQ_CARD_CHANNEL 0x43u
-#define VQ_TYPE_STATUS 0x04u
+#define VQ_TYPE_STATUS 0x08u
 _Static_assert(NOTE_BANK_VOICES == 8u,
                "vq binary frame packs exactly eight voices");
 _Static_assert(STREAM_RING_SAMPLES <= 65535u,
                "vq exact free count is uint16");
 
-static uint8_t RS485_Crc8(const uint8_t *data, uint32_t len)
-{
-  uint8_t crc = 0u;
-  uint32_t i;
-  uint8_t bit;
-
-  for (i = 0u; i < len; i++)
-  {
-    crc ^= data[i];
-    for (bit = 0u; bit < 8u; bit++)
-    {
-      crc = (crc & 0x80u) != 0u ? (uint8_t)((crc << 1u) ^ 0x07u)
-                                : (uint8_t)(crc << 1u);
-    }
-  }
-  return crc;
-}
-
 static uint16_t rs485_vq_sequence;
 static void RS485_ReplyVq(uint8_t active_mask, uint8_t pending_mask,
-                          uint8_t best, const uint8_t *sessions,
-                          const uint16_t *fills, const uint16_t *free_samples,
+                          const uint8_t *sessions,
+                          const uint32_t *remaining_us,
+                          const uint16_t *free_samples,
                           uint16_t uac_sequence)
 {
-  uint8_t frame[VQ_FRAME_LEN];
-  uint8_t i;
-
+  uint8_t frame[VQ_FRAME_LEN] = {0};
   frame[0] = VQ_SYNC_0;
   frame[1] = VQ_SYNC_1;
   frame[2] = VQ_CARD_CHANNEL;
   frame[3] = VQ_TYPE_STATUS;
   frame[4] = active_mask;
   frame[5] = pending_mask;
-  frame[6] = best;
-  frame[7] = 0u;
-  frame[8] = (uint8_t)(STREAM_RING_SAMPLES & 0xFFu);
-  frame[9] = (uint8_t)(STREAM_RING_SAMPLES >> 8u);
-  rs485_vq_sequence++;
-  frame[10] = (uint8_t)(rs485_vq_sequence & 0xFFu);
-  frame[11] = (uint8_t)(rs485_vq_sequence >> 8u);
-  frame[12] = (uint8_t)(uac_sequence & 0xFFu);
-  frame[13] = (uint8_t)(uac_sequence >> 8u);
-  for (i = 0u; i < NOTE_BANK_VOICES; i++)
+  frame[6] = (uint8_t)STREAM_RING_SAMPLES;
+  frame[7] = (uint8_t)(STREAM_RING_SAMPLES >> 8u);
+  ++rs485_vq_sequence;
+  frame[8] = (uint8_t)rs485_vq_sequence;
+  frame[9] = (uint8_t)(rs485_vq_sequence >> 8u);
+  frame[10] = (uint8_t)uac_sequence;
+  frame[11] = (uint8_t)(uac_sequence >> 8u);
+  for (uint8_t i = 0u; i < NOTE_BANK_VOICES; ++i)
   {
-    uint8_t *record = frame + 14u + (5u * i);
+    uint8_t *record = frame + 12u + 5u * i;
     record[0] = sessions[i];
-    record[1] = (uint8_t)(fills[i] & 0xFFu);
-    record[2] = (uint8_t)(fills[i] >> 8u);
-    record[3] = (uint8_t)(free_samples[i] & 0xFFu);
-    record[4] = (uint8_t)(free_samples[i] >> 8u);
+    record[1] = (uint8_t)free_samples[i];
+    record[2] = (uint8_t)(free_samples[i] >> 8u);
+    /* 0.1 ms units, rounded down so urgency is never reported late. */
+    uint32_t duration = remaining_us[i] / 100u;
+    if (duration > UINT16_MAX) duration = UINT16_MAX;
+    record[3] = (uint8_t)duration;
+    record[4] = (uint8_t)(duration >> 8u);
   }
-  frame[54] = RS485_Crc8(frame, 54u);
-  frame[55] = '\n';
+  frame[52] = '\n';
 
   RS485_BusAcquire();
-  if (HAL_UART_Transmit(&huart5, frame, VQ_FRAME_LEN,
-                        RS485_TxDeadlineMs(VQ_FRAME_LEN)) != HAL_OK)
+  if (Uart5Rx_Transmit(frame, VQ_FRAME_LEN,
+                        RS485_TxDeadlineMs(VQ_FRAME_LEN)) != 0)
   {
     rs485_tx_fail++;
   }
@@ -331,7 +312,7 @@ static const SwitchDef_t switches[] = {
  *   wl <wave> <len>   — CDC logical wavetable upload (wave 0..7, len 2..512)
  *   vmload <v> <len>  — CDC Berry ABI2 upload; vm [v|mem] — status
  *   ar <id> <Hz>      — attack-bank root pitch (id 0..255); a — loaded mask
- *   a / vq            — loaded heads per voice / hungriest + exact credit
+ *   a / vq            — loaded heads / per-voice time and free space
  *   usb               — BODY counters: drop/hold/min/fill/z/sof/rx/bytes/bad
  *   usb 0             — clear those counters, then same reply
  *   cpuload [0|1]     — query/enable LED_Y DMA-refill scope probe
@@ -376,7 +357,7 @@ static uint8_t Console_ParseNoteSlot(char hex_digit)
 
 /** Apply nX on <key> <velocity> [@session]. Compact ACK: ok / err:<code>. */
 static void Console_NoteOn(uint8_t note, uint8_t key, uint8_t velocity,
-                           uint16_t session)
+                           uint16_t session, uint16_t sample)
 {
   if (NoteBank_VmUploadIsBusy() != 0u)
   {
@@ -389,15 +370,17 @@ static void Console_NoteOn(uint8_t note, uint8_t key, uint8_t velocity,
     return;
   }
 
-  if (session < USB_STREAM_SESSION_MOD)
-  {
-    NoteBank_NoteOnSession(note, key, velocity, (uint8_t)session);
-  }
+  int result;
+  if (sample != UINT16_MAX)
+    result = NoteBank_NoteOnSampleSession(note, sample, key, velocity,
+                                          (uint8_t)session);
+  else if (session < USB_STREAM_SESSION_MOD)
+    result = NoteBank_NoteOnSession(note, key, velocity, (uint8_t)session);
   else
-  {
-    NoteBank_NoteOn(note, key, velocity);
-  }
-  RS485_Reply("ok\r\n");
+    result = NoteBank_NoteOn(note, key, velocity);
+  RS485_Reply(result == 0 ? "ok\r\n" :
+              result == -3 ? "err:busy\r\n" :
+              result == -2 ? "err:no-program\r\n" : "err:range\r\n");
 }
 
 /** Release every voice. */
@@ -414,8 +397,7 @@ static void Console_Help(void)
   char b[256];
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   snprintf(b, sizeof b,
-           "ok: SAMPLE n0..n7 on key [velocity] [@session] | off | "
-           "aw v id | "
+           "ok: SAMPLE n0..n7 on sample key velocity @session | on key [velocity] [@session] | off | "
            "al id n | wl wave n | vmload v n | vm [v] | ar id Hz | a | vq | "
            "usb | cpuload [0|1] | "
            "f0..f7 Hz [q] | fk0..fk7 k | g ch dB\r\n");
@@ -687,41 +669,47 @@ static void Console_CmdFk(char *line, char *b, size_t bsz)
 }
 
 /**
- * vq — ABI1 target identity/fill plus exact total writable credit.
+ * vq — per-voice playback duration and exact total writable credit.
  */
 static void Console_CmdVoiceQuery(void)
 {
-  char b[256];
+  char b[384];
   int n;
   uint8_t mask = 0u;
-  uint8_t best = 0xFFu;
   uint16_t free_samples[NOTE_BANK_VOICES];
   uint8_t pending_mask = 0u;
   uint8_t sessions[NOTE_BANK_VOICES];
-  uint16_t fills[NOTE_BANK_VOICES];
+  uint32_t remaining_us[NOTE_BANK_VOICES];
   uint16_t uac_sequence;
   uint8_t i;
 
   {
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
-    NoteBank_VoiceQuery(&mask, &best);
-  for (i = 0u; i < NOTE_BANK_VOICES; i++)
-  {
-    free_samples[i] = (uint16_t)StreamRing_FreeLevel(i);
-    sessions[i] = StreamRing_TargetSession(i);
-    fills[i] = (uint16_t)StreamRing_TargetFill(i);
-    if (StreamRing_HasPending(i) != 0u)
-      pending_mask = (uint8_t)(pending_mask | (uint8_t)(1u << i));
-  }
+    for (i = 0u; i < NOTE_BANK_VOICES; i++)
+    {
+      if (NoteBank_IsActive(i) != 0u) mask |= (uint8_t)(1u << i);
+      free_samples[i] = (uint16_t)StreamRing_FreeLevel(i);
+      sessions[i] = StreamRing_TargetSession(i);
+      remaining_us[i] = NoteBank_RemainingUs(i);
+      if (StreamRing_HasPending(i) != 0u)
+        pending_mask = (uint8_t)(pending_mask | (uint8_t)(1u << i));
+    }
     /* Credit and acknowledgement must describe the same USB state. A newer
      * acknowledgement with older free space grants already-used space again. */
     uac_sequence = StreamRing_LastUacSequence();
     if (primask == 0u) __enable_irq();
   }
 
-  n = snprintf(b, sizeof b, "ok:vq7 %02x %02x %u %u %u %u",
-               (unsigned)mask, (unsigned)pending_mask, (unsigned)best,
+  if (!console_via_usb)
+  {
+    RS485_ReplyVq(mask, pending_mask, sessions, remaining_us, free_samples,
+                 uac_sequence);
+    return;
+  }
+
+  n = snprintf(b, sizeof b, "ok:vq11 %02x %02x %u %u %u",
+               (unsigned)mask, (unsigned)pending_mask,
                (unsigned)STREAM_RING_SAMPLES, (unsigned)rs485_vq_sequence,
                (unsigned)uac_sequence);
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
@@ -731,8 +719,8 @@ static void Console_CmdVoiceQuery(void)
       RS485_Reply("err:buf\r\n");
       return;
     }
-    n += snprintf(b + n, sizeof b - (size_t)n, " %u %u %u",
-                  (unsigned)sessions[i], (unsigned)fills[i],
+    n += snprintf(b + n, sizeof b - (size_t)n, " %u %lu %u",
+                  (unsigned)sessions[i], (unsigned long)remaining_us[i],
                   (unsigned)free_samples[i]);
   }
   if (n < 0 || (size_t)n >= sizeof b - 2u)
@@ -743,15 +731,7 @@ static void Console_CmdVoiceQuery(void)
   b[n++] = '\r';
   b[n++] = '\n';
   b[n] = '\0';
-  if (console_via_usb)
-  {
-    RS485_Reply(b);
-  }
-  else
-  {
-    RS485_ReplyVq(mask, pending_mask, best, sessions, fills, free_samples,
-                   uac_sequence);
-  }
+  RS485_Reply(b);
 }
 
 /** n off: release all voices. */
@@ -773,7 +753,9 @@ static void Console_CmdNoteSlot(char *line)
 
   if (line[0] != 'n' || line[1] == '\0')
   {
-    RS485_Reply("err:unknown\r\n");
+    char reply[128];
+    (void)snprintf(reply, sizeof(reply), "err:unknown received <%s>\r\n", line);
+    RS485_Reply(reply);
     return;
   }
 
@@ -799,6 +781,18 @@ static void Console_CmdNoteSlot(char *line)
   if (strcmp(line + 3, "off") == 0)
   {
     NoteBank_NoteOff(note);RS485_Reply("ok\r\n");return;
+  }
+  unsigned int sample;
+  nscan = sscanf(line + 3, "on %u %u %u @%u %c",
+                 &sample, &key, &velocity, &session, &extra);
+  if (nscan == 4)
+  {
+    if (sample >= ATTACK_BANK_SAMPLE_COUNT || key >= FW_SCRIPT_CHANNEL_KEY_COUNT ||
+        velocity == 0u || velocity > 127u || session >= USB_STREAM_SESSION_MOD)
+    { RS485_Reply("err:range\r\n"); return; }
+    Console_NoteOn(note, (uint8_t)key, (uint8_t)velocity,
+                   (uint16_t)session, (uint16_t)sample);
+    return;
   }
   nscan = sscanf(line + 3, "on %u %u @%u %c", &key, &velocity, &session,
                  &extra);
@@ -839,30 +833,7 @@ static void Console_CmdNoteSlot(char *line)
     }
   }
   Console_NoteOn(note, (uint8_t)key, (uint8_t)velocity,
-                 (uint16_t)session);
-}
-
-/** aw <voice> <id> — assign sample head 0..247 to voice 0..7. */
-static void Console_CmdAssignWave(char *line)
-{
-  unsigned int voice;
-  unsigned int wid;
-
-  if (sscanf(line, "aw %u %u", &voice, &wid) != 2)
-  {
-    RS485_Reply("err:syntax\r\n");
-    return;
-  }
-  if (NoteBank_SetWaveId((uint8_t)voice, (uint16_t)wid) != 0)
-  {
-    RS485_Reply("err:range\r\n");
-    return;
-  }
-  {
-    char b[48];
-    snprintf(b, sizeof b, "ok: aw %u %u\r\n", voice, wid);
-    RS485_Reply(b);
-  }
+                 (uint16_t)session, UINT16_MAX);
 }
 
 /** a — loaded count + 256-bit hex mask (bit 0 = wave 0). */
@@ -1110,13 +1081,6 @@ static void Console_Exec(char *line)
   if (strncmp(line, "ar ", 3) == 0)
   {
     Console_CmdRoot(line);
-    return;
-  }
-
-  /* ---- aw <voice> <wave_id> ---- */
-  if (strncmp(line, "aw ", 3) == 0)
-  {
-    Console_CmdAssignWave(line);
     return;
   }
 

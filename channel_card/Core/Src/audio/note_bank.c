@@ -19,6 +19,7 @@
 #include "note_envelope.h"
 #include "note_filter.h"
 #include "stream_ring.h"
+#include "usb_stream.h"
 #include "wavetable_osc.h"
 
 #if defined(__arm__) || defined(__thumb__)
@@ -28,9 +29,6 @@
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
-#if defined(__arm__) || defined(__thumb__)
-#include "stm32h725xx.h"
-#endif
 
 _Static_assert(NOTE_FILTER_VOICES >= NOTE_BANK_VOICES,
                "note_filter voice count must cover note_bank");
@@ -60,6 +58,7 @@ static uint64_t note_phase[NOTE_BANK_VOICES];
 static uint32_t note_body_frac[NOTE_BANK_VOICES];
 static int32_t note_hold[NOTE_BANK_VOICES];
 static uint32_t note_inc[NOTE_BANK_VOICES];
+static uint32_t note_observed_inc[NOTE_BANK_VOICES];
 static uint32_t note_inc_tgt[NOTE_BANK_VOICES];
 /* Body consume starts at fade0. skip = source samples already past. */
 static uint8_t note_body_locked[NOTE_BANK_VOICES];
@@ -282,6 +281,7 @@ static void NoteBank_ActivateReplacement(uint8_t note)
   }
   NoteBank_ClearPlayhead(note);
   note_inc[note] = note_next_inc[note];
+  note_observed_inc[note] = note_next_inc[note];
   note_inc_tgt[note] = note_next_inc[note];
   note_play_amp_q15[note] = note_next_amp_q15[note];
   note_play_hz[note] = note_next_hz[note];
@@ -413,9 +413,7 @@ static void NoteBank_DrainCmd(uint8_t note)
       NoteBank_HardOff(note);
       return;
     }
-    /* Authority alone cannot change musical state. Wait for one whole BODY
-     * frame, retaining the current note indefinitely if transport stalls. */
-    if (StreamRing_HasBody(note) == 0u) return;
+    if (StreamRing_PendingFill(note) < USB_STREAM_UAC_BODY_SAMPLES) return;
     note_cmd[note] = NOTE_CMD_NONE;
     NoteBank_StartVoice(note, note_cmd_key[note], note_cmd_velocity[note],
                         note_cmd_inc[note],
@@ -565,6 +563,7 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
   if (delta_inc < (double)PHASE_INC_MIN) delta_inc = PHASE_INC_MIN;
   if (delta_inc > (double)PHASE_INC_MAX) delta_inc = PHASE_INC_MAX;
   frame_inc = (uint32_t)(delta_inc + 0.5);
+  note_observed_inc[note] = frame_inc;
   s = NoteBank_Sample(note, frame_inc);
   s = WavetableOsc_MixSample(note, s);
   s = NoteFilter_Process(note, s);
@@ -882,6 +881,20 @@ int NoteBank_NoteOnSession(uint8_t note, uint8_t key, uint8_t velocity,
   return NoteBank_NoteOnBound(note, key, velocity, session);
 }
 
+int NoteBank_NoteOnSampleSession(uint8_t note, uint16_t sample,
+                                   uint8_t key, uint8_t velocity, uint8_t session)
+{
+  uint16_t previous;
+  int result;
+  if (note >= NOTE_BANK_VOICES || sample >= ATTACK_BANK_SAMPLE_COUNT)
+    return -1;
+  previous = note_wave_id[note];
+  note_wave_id[note] = sample;
+  result = NoteBank_NoteOnSession(note, key, velocity, session);
+  if (result != 0) note_wave_id[note] = previous;
+  return result;
+}
+
 int NoteBank_NoteOff(uint8_t note)
 {
   if (note >= NOTE_BANK_VOICES) return -1;
@@ -978,61 +991,38 @@ uint8_t NoteBank_AnyBankReferences(void)
   return 0u;
 }
 
-void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out)
+uint32_t NoteBank_RemainingUs(uint8_t note)
 {
-  uint8_t i;
-  uint8_t mask = 0u;
-  uint8_t best = 0u;
-  uint32_t best_t = 0xFFFFFFFFu;
-  uint8_t found = 0u;
-
-  for (i = 0u; i < NOTE_BANK_VOICES; i++)
+  uint32_t inc;
+  int64_t body;
+  int64_t attack = 0;
+  int64_t available;
+  uint64_t us;
+  if (note >= NOTE_BANK_VOICES || NoteBank_IsActive(note) == 0u)
+    return 0u;
+  inc = note_observed_inc[note];
+  if (inc < note_inc[note]) inc = note_inc[note];
+  if (inc < note_inc_tgt[note]) inc = note_inc_tgt[note];
+  if (inc < PHASE_INC_MIN) inc = PHASE_INC_MIN;
+  /* Reserve the second interpolation tap. Current fill excludes pending. */
+  body = ((int64_t)StreamRing_CurrentFill(note) - 1) * PHASE_ONE;
+  if (note_body_only[note] != 0u || note_body_locked[note] != 0u)
+    body -= (int64_t)note_body_frac[note] +
+            (int64_t)note_body_skip[note] * PHASE_ONE;
+  else
   {
-    uint32_t filled;
-    uint32_t inc;
-    uint32_t t;
-
-    if (NoteBank_IsActive(i) != 0u)
-    {
-      mask = (uint8_t)(mask | (uint8_t)(1u << i));
-    }
-    if (NoteBank_IsActive(i) == 0u && StreamRing_HasPending(i) == 0u)
-    {
-      continue;
-    }
-    filled = StreamRing_TargetFill(i);
-    if (filled >= STREAM_RING_SAMPLES)
-    {
-      continue;
-    }
-    inc = note_inc[i];
-    if (note_inc_tgt[i] > inc)
-    {
-      inc = note_inc_tgt[i];
-    }
-    if (inc < PHASE_INC_MIN)
-    {
-      inc = PHASE_INC_MIN;
-    }
-    t = (uint32_t)(((uint64_t)filled << 16) / (uint64_t)inc);
-    if (found == 0u || t < best_t)
-    {
-      best_t = t;
-      best = i;
-      found = 1u;
-    }
+    uint32_t fade0 = note_play_alen[note] > SAMPLE_CROSSFADE_LEN
+                       ? note_play_alen[note] - SAMPLE_CROSSFADE_LEN : 0u;
+    body += (int64_t)fade0 * PHASE_ONE - (int64_t)note_phase[note];
   }
-
-  if (mask_out != NULL)
-  {
-    *mask_out = mask;
-  }
-  if (best_out != NULL)
-  {
-    *best_out = found != 0u ? best : 0xFFu;
-  }
+  if (note_body_only[note] == 0u)
+    attack = ((int64_t)note_play_alen[note] - 1) * PHASE_ONE -
+             (int64_t)note_phase[note];
+  available = body > attack ? body : attack;
+  if (available <= 0) return 0u;
+  us = (uint64_t)available * 1000000u / ((uint64_t)inc * 48000u);
+  return us > UINT32_MAX ? UINT32_MAX : (uint32_t)us;
 }
-
 
 int32_t NoteBank_NextSample(void)
 {
@@ -1063,6 +1053,8 @@ void NoteBank_VmBoundaryEnd(void)
   uint8_t i;
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
+    /* Deliver the newest note command before completing its fade. */
+    if (note_cmd[i] == NOTE_CMD_ON) continue;
     if (NoteEnv_TakeRampEnd(i) != 0u)
     {
       (void)NoteBank_VmDispatch(FW_VM_CHANNEL_HANDLER_RAMP_END, i);

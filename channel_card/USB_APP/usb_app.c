@@ -47,11 +47,14 @@ static void USB_App_ConsumeUacBytes(const int8_t *bytes, uint16_t nbytes)
     /* CoreAudio begins on an audio-frame boundary, but not necessarily on
      * the endpoint's millisecond boundary. Find the existing tag once; from
      * there the 1008-byte period is exact and no further scanning is needed. */
-    for (at = 0u; at < nbytes; at = (uint16_t)(at + USB_STREAM_UAC_CHANNELS))
+    for (at = 0u; at + USB_STREAM_UAC_HEADER_BYTES <= nbytes; at = (uint16_t)(at + USB_STREAM_UAC_CHANNELS))
     {
-      const uint8_t tag = (uint8_t)bytes[at];
-      if (tag == USB_STREAM_TAG_IDLE ||
-          (tag & USB_STREAM_TAG_MASK) == USB_STREAM_TAG_BASE)
+      const uint8_t tag = (uint8_t)bytes[at + 2u];
+      const uint8_t tag2 = (uint8_t)bytes[at + 6u];
+      if ((tag == USB_STREAM_TAG_IDLE ||
+           (tag & USB_STREAM_TAG_MASK) == USB_STREAM_TAG_BASE) &&
+          (tag2 == USB_STREAM_TAG_IDLE ||
+           (tag2 & USB_STREAM_TAG_MASK) == USB_STREAM_TAG_BASE))
       {
         s_uac_synced = 1u;
         break;

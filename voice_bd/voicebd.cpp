@@ -30,14 +30,21 @@
 
 #include <RtAudio.h>
 #include <libserialport.h>
+#if defined(__APPLE__)
+// To change macOS serial latency from the default 16 ms to 1 ms.
+#include <IOKit/serial/ioss.h>
+#include <sys/ioctl.h>
+#endif
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -62,7 +69,7 @@ constexpr unsigned kUsbAudioChannelCount = 21u;
 constexpr unsigned kUsbAudioFramesPerMillisecond = 48u;
 constexpr unsigned kUsbPacketByteCount =
     kUsbAudioChannelCount * kUsbAudioFramesPerMillisecond;
-constexpr unsigned kUsbPacketHeaderByteCount = 4u;
+constexpr unsigned kUsbPacketHeaderByteCount = 10u;
 constexpr unsigned kUsbPacketBodySampleCount =
     kUsbPacketByteCount - kUsbPacketHeaderByteCount;
 constexpr uint8_t kUsbPacketTag = 0xA0u;
@@ -139,20 +146,6 @@ uint32_t crc32(uint8_t const* data, size_t size)
     return crc ^ 0xFFFFFFFFu;
 }
 
-/* ---- calculate the status crc8 ------------------------------------------- */
-
-uint8_t crc8(uint8_t const* data, size_t size)
-{
-    uint8_t crc = 0u;
-    for (size_t i = 0; i < size; ++i) {
-        crc ^= data[i];
-        for (unsigned bit = 0; bit < 8u; ++bit)
-            crc = (crc & 0x80u) ? static_cast<uint8_t>((crc << 1u) ^ 0x07u)
-            : static_cast<uint8_t>(crc << 1u);
-    }
-    return crc;
-}
-
 /*******************************************************************************
 
                              s e r i a l   p o r t
@@ -225,6 +218,19 @@ public:
             close();
             return false;
         }
+#if defined(__APPLE__)
+        if (!assert_dtr) {
+            int fd = -1;
+            unsigned long latency = 1u;
+            // Deliver short RS485 replies promptly instead of batching them.
+            if (sp_get_port_handle(port_, &fd) != SP_OK ||
+                ioctl(fd, IOSSDATALAT, &latency) < 0) {
+                error = "setting low-latency RS485 reception failed";
+                close();
+                return false;
+            }
+        }
+#endif
         if (assert_dtr) (void)sp_set_dtr(port_, SP_DTR_ON);
         (void)sp_flush(port_, SP_BUF_BOTH);
         return true;
@@ -370,12 +376,11 @@ struct card_status
 {
     uint8_t active_voice_mask = 0u;
     uint8_t pending_voice_mask = 0u;
-    uint8_t refill_voice = 0xFFu;
     uint16_t buffer_capacity = 0u;
     uint16_t status_sequence = 0u;
     uint16_t last_usb_sequence = 0u;
     std::array<uint8_t, kVoiceCount> session_id{};
-    std::array<uint16_t, kVoiceCount> buffered_samples{};
+    std::array<uint32_t, kVoiceCount> remaining_us{};
     std::array<uint16_t, kVoiceCount> free_samples{};
 };
 
@@ -384,26 +389,25 @@ struct card_status
 bool parse_voice_queue_status(std::vector<uint8_t> const& raw,
     card_status& status)
 {
-    for (size_t start = 0; start + 56u <= raw.size(); ++start) {
+    for (size_t start = 0; start + 53u <= raw.size(); ++start) {
         uint8_t const* p = raw.data() + start;
         if (p[0] != 0xA5u || p[1] != 0x5Au || p[2] != 0x43u ||
-            p[3] != 0x04u || p[55] != '\n' || p[54] != crc8(p, 54u)) continue;
+            p[3] != 0x08u || p[52] != '\n') continue;
         status.active_voice_mask = p[4];
         status.pending_voice_mask = p[5];
-        status.refill_voice = p[6];
-        status.buffer_capacity = read16(p + 8u);
-        status.status_sequence = read16(p + 10u);
-        status.last_usb_sequence = read16(p + 12u);
+        status.buffer_capacity = read16(p + 6u);
+        status.status_sequence = read16(p + 8u);
+        status.last_usb_sequence = read16(p + 10u);
         if (status.buffer_capacity == 0u) return false;
         for (size_t i = 0; i < kVoiceCount; ++i) {
-            size_t const at = 14u + i * 5u;
+            size_t const at = 12u + i * 5u;
             status.session_id[i] = p[at];
-            status.buffered_samples[i] = read16(p + at + 1u);
-            status.free_samples[i] = read16(p + at + 3u);
-            if (status.buffered_samples[i] > status.buffer_capacity ||
-                status.free_samples[i] > status.buffer_capacity ||
-                    status.buffered_samples[i] + status.free_samples[i] >
-                        status.buffer_capacity) return false;
+            status.free_samples[i] = read16(p + at + 1u);
+            status.remaining_us[i] = static_cast<uint32_t>(read16(p + at + 3u)) * 100u;
+            if (status.free_samples[i] > status.buffer_capacity ||
+                (((status.active_voice_mask | status.pending_voice_mask) &
+                  (1u << i)) != 0u && status.session_id[i] == 0xFFu))
+                return false;
         }
         return true;
     }
@@ -442,41 +446,49 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         std::string const wire = (body.size() > 1u && body[1] == ':')
             ? body + "\r" : "c:" + body + "\r";
-        for (unsigned attempt = 0; attempt < 3u; ++attempt) {
-            port_.flush();
-            std::string error;
-            if (!port_.write(wire.data(), wire.size(), error))
-                return fail(voice_board_error_t::io_error, error);
-            std::vector<uint8_t> reply;
-            auto const stop_waiting_at = std::chrono::steady_clock::now() +
-                std::chrono::milliseconds(500);
-            std::array<uint8_t, 256> bytes{};
-            while (std::chrono::steady_clock::now() < stop_waiting_at) {
-                size_t const count = port_.read(
-                    bytes.data(), bytes.size(), 40u);
-                reply.insert(reply.end(), bytes.begin(), bytes.begin() + count);
-                if (body == "vq") {
-                    card_status status;
-                    if (parse_voice_queue_status(reply, status)) {
-                        if (binary) *binary = std::move(reply);
-                        return ok();
-                    }
-                } else {
-                    std::string const text(reply.begin(), reply.end());
-                    size_t const tag = text.find('[');
-                    size_t const end = text.find_first_of("\r\n", tag);
-                    if (tag != std::string::npos && end != std::string::npos) {
-                        std::string const line = text.substr(tag, end - tag);
-                        if (line.find("err:") != std::string::npos)
-                            return fail(voice_board_error_t::bad_reply, line);
-                        return ok(line);
-                    }
+        port_.flush();
+        std::string error;
+        if (!port_.write(wire.data(), wire.size(), error))
+            return fail(voice_board_error_t::io_error, error);
+        std::vector<uint8_t> reply;
+        auto const stop_waiting_at = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(5);
+        std::array<uint8_t, 256> bytes{};
+        while (std::chrono::steady_clock::now() < stop_waiting_at) {
+            size_t const count = port_.read(
+                bytes.data(), bytes.size(), 1u);
+            reply.insert(reply.end(), bytes.begin(), bytes.begin() + count);
+            if (body == "vq") {
+                for (size_t i = 0; i + 4u <= reply.size(); ++i) {
+                    if (reply[i] != 0xA5u || reply[i + 1u] != 0x5Au ||
+                        reply[i + 2u] != 0x43u) continue;
+                    if (reply[i + 3u] != 0x08u)
+                        return fail(voice_board_error_t::bad_reply,
+                            "invalid voice status reply header");
+                    break;
+                }
+                card_status status;
+                if (parse_voice_queue_status(reply, status)) {
+                    if (binary) *binary = std::move(reply);
+                    return ok();
+                }
+            } else {
+                std::string const text(reply.begin(), reply.end());
+                size_t const tag = text.find('[');
+                size_t const end = text.find('\n', tag);
+                if (tag != std::string::npos && end != std::string::npos) {
+                    size_t const length = end - tag -
+                        (end > tag && text[end - 1u] == '\r' ? 1u : 0u);
+                    std::string const line = text.substr(tag, length);
+                    if (line.find("err:") != std::string::npos)
+                        return fail(voice_board_error_t::bad_reply,
+                            line + " (command: " + body + ")");
+                    return ok(line);
                 }
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         return fail(voice_board_error_t::timeout,
-            "RS485 timeout waiting for Channel Card");
+            "RS485 timeout waiting for Channel Card reply to: " + body);
     }
 
 };
@@ -489,7 +501,8 @@ public:
 
 struct sample_data
 {
-    std::vector<int8_t> body;
+    std::unique_ptr<int16_t[]> body;
+    size_t body_size = 0u;
     bool loaded = false;
 };
 
@@ -497,12 +510,14 @@ struct voice_data
 {
     bool active = false;
     bool waiting_for_first_packet = false;
+    unsigned initial_samples_left = 0u;
     bool confirmed_by_card = false;
     uint8_t session_id = 0u;
     uint16_t sample_id = 0u;
     size_t body_position = 0u;
     unsigned available_sample_slots = 0u;
-    unsigned buffered_sample_count = 0u;
+    bool pending = true;
+    std::chrono::steady_clock::time_point deadline{};
 };
 
 /* A USB packet that the card has not acknowledged yet. */
@@ -510,6 +525,7 @@ struct pending_packet
 {
     uint16_t sequence = 0u;
     uint8_t voice = 0u;
+    uint8_t session = 0u;
     uint16_t samples = 0u;
 };
 
@@ -529,14 +545,23 @@ struct stream_state
     bool sequence_ready = false;
     std::array<int8_t, kUsbPacketByteCount> packet{};
     size_t packet_offset = kUsbPacketByteCount;
-    uint8_t refill_voice = 0xFFu;
     uint8_t next_voice = 0u;
+    uint16_t last_status_sequence = 0u;
+    bool status_ready = false;
 
 /* ---- apply voice queue status -------------------------------------------- */
 
-    void apply_status(card_status const& status)
+    void apply_status(card_status const& status,
+        std::chrono::steady_clock::time_point requested_at)
     {
         std::lock_guard<std::mutex> lock(mutex);
+        if (status_ready) {
+            uint16_t const distance = static_cast<uint16_t>(
+                status.status_sequence - last_status_sequence);
+            if (distance == 0u || distance >= 0x8000u) return;
+        }
+        last_status_sequence = status.status_sequence;
+        status_ready = true;
         if (!sequence_ready) {
             next_sequence = static_cast<uint16_t>(
                 status.last_usb_sequence + 1u);
@@ -562,87 +587,124 @@ struct stream_state
             status.active_voice_mask | status.pending_voice_mask);
         for (uint8_t voice = 0; voice < kVoiceCount; ++voice) {
             auto& state = voices[voice];
-            if (!state.active ||
-                (live_voice_mask & static_cast<uint8_t>(1u << voice)) == 0u ||
-                    status.session_id[voice] != state.session_id) {
-                state.available_sample_slots = 0u;
-                continue;
-            }
-            state.confirmed_by_card = true;
-            state.available_sample_slots =
+            unsigned const free_slots =
                 status.free_samples[voice] > samples_in_flight[voice]
                     ? status.free_samples[voice] - samples_in_flight[voice]
                     : 0u;
-            state.buffered_sample_count =
-                status.buffered_samples[voice] + samples_in_flight[voice];
-            if (state.waiting_for_first_packet &&
-                status.buffered_samples[voice] >= kUsbPacketBodySampleCount)
-                state.waiting_for_first_packet = false;
+            if (!state.active) {
+                state.available_sample_slots = free_slots;
+                continue;
+            }
+            if ((live_voice_mask & static_cast<uint8_t>(1u << voice)) == 0u ||
+                    status.session_id[voice] != state.session_id) {
+                state.available_sample_slots = 0u;
+                if (state.confirmed_by_card &&
+                    (live_voice_mask & (1u << voice)) == 0u)
+                    state.active = false;
+                continue;
+            }
+            state.confirmed_by_card = true;
+            state.available_sample_slots = free_slots;
+            state.pending = (status.pending_voice_mask & (1u << voice)) != 0u;
+            state.deadline = requested_at +
+                std::chrono::microseconds(status.remaining_us[voice]);
+            state.waiting_for_first_packet = state.pending;
         }
-        refill_voice = status.refill_voice;
+
     }
 
 /* ---- prepare the next usb audio packet ----------------------------------- */
 
-    void make_packet()
+    void make_packet(std::chrono::steady_clock::time_point now =
+                         std::chrono::steady_clock::now())
     {
         std::fill(packet.begin(), packet.end(), 0);
-        packet[0] = static_cast<int8_t>(kUsbIdlePacketTag);
-        if (!sequence_ready ||
-            pending_packet_count == kPendingPacketCapacity) {
-            packet_offset = 0u;
-            return;
-        }
-        auto const can_refill = [this](uint8_t voice) {
-            return voice < kVoiceCount && voices[voice].active &&
-                voices[voice].available_sample_slots >=
-                kUsbPacketBodySampleCount;
-        };
-        uint8_t chosen = can_refill(refill_voice) ? refill_voice : 0xFFu;
-        if (chosen == 0xFFu) {
-            for (uint8_t offset = 0u; offset < kVoiceCount; ++offset) {
-                uint8_t const voice = static_cast<uint8_t>(
-                    (next_voice + offset) % kVoiceCount);
-                if (!can_refill(voice)) continue;
-                if (chosen == 0xFFu ||
-                    voices[voice].buffered_sample_count <
-                        voices[chosen].buffered_sample_count)
-                    chosen = voice;
-            }
-        }
-        if (chosen == 0xFFu) {
-            packet_offset = 0u;
-            return;
-        }
-        auto& voice = voices[chosen];
-        auto& sample = samples[voice.sample_id];
-        if (sample.body.empty()) {
-            voice.active = false;
-            packet_offset = 0u;
-            return;
-        }
-        packet[0] = static_cast<int8_t>(kUsbPacketTag |
-            (voice.waiting_for_first_packet ? kUsbStartOfVoiceFlag : 0u) |
-            chosen);
-        packet[1] = static_cast<int8_t>(voice.session_id);
-        packet[2] = static_cast<int8_t>(next_sequence & 0xFFu);
-        packet[3] = static_cast<int8_t>(next_sequence >> 8u);
-        /* The packet is zero-filled: leave silence after the sample ends. */
-        for (size_t i = 0; i < kUsbPacketBodySampleCount &&
-                voice.body_position < sample.body.size(); ++i) {
-            packet[kUsbPacketHeaderByteCount + i] =
-                sample.body[voice.body_position++];
-        }
-        pending_packets[(first_pending_packet + pending_packet_count) %
-            kPendingPacketCapacity] = {
-                next_sequence, chosen,
-                static_cast<uint16_t>(kUsbPacketBodySampleCount)};
-        ++pending_packet_count;
-        ++next_sequence;
-        next_voice = static_cast<uint8_t>((chosen + 1u) % kVoiceCount);
-        voice.available_sample_slots -= kUsbPacketBodySampleCount;
-        voice.buffered_sample_count += kUsbPacketBodySampleCount;
+        packet[2] = packet[6] = static_cast<int8_t>(kUsbIdlePacketTag);
         packet_offset = 0u;
+        if (!sequence_ready || pending_packet_count + 2u > kPendingPacketCapacity)
+            return;
+        std::array<unsigned, kVoiceCount> queued_samples{};
+        for (size_t i = 0u; i < pending_packet_count; ++i) {
+            auto const& queued = pending_packets[
+                (first_pending_packet + i) % kPendingPacketCapacity];
+            if (queued.session == voices[queued.voice].session_id)
+                queued_samples[queued.voice] += queued.samples;
+        }
+        std::array<uint8_t, kVoiceCount> candidates{};
+        size_t count = 0u;
+        auto urgent = [&](uint8_t v) {
+            return voices[v].initial_samples_left != 0u || voices[v].pending ||
+                voices[v].deadline <= now + std::chrono::milliseconds(10);
+        };
+        for (uint8_t i = 0u; i < kVoiceCount; ++i) {
+            uint8_t v = static_cast<uint8_t>((next_voice + i) % kVoiceCount);
+            if (voices[v].active && voices[v].available_sample_slots != 0u &&
+                samples[voices[v].sample_id].body_size != 0u) candidates[count++] = v;
+        }
+        auto before = [&](uint8_t a, uint8_t b) {
+                if ((voices[a].initial_samples_left != 0u) !=
+                    (voices[b].initial_samples_left != 0u))
+                    return voices[a].initial_samples_left != 0u;
+                if (urgent(a) != urgent(b)) return urgent(a);
+                if (urgent(a) && queued_samples[a] != queued_samples[b])
+                    return queued_samples[a] < queued_samples[b];
+                if (urgent(a) && voices[a].pending != voices[b].pending)
+                    return !voices[a].pending;
+                if (voices[a].pending && voices[b].pending) return false;
+                return voices[a].deadline < voices[b].deadline;
+            };
+        /* Eight entries: insertion sort is bounded and never allocates. */
+        for (size_t i = 1u; i < count; ++i) {
+            auto const candidate = candidates[i];
+            size_t j = i;
+            while (j != 0u && before(candidate, candidates[j - 1u])) {
+                candidates[j] = candidates[j - 1u];
+                --j;
+            }
+            candidates[j] = candidate;
+        }
+        if (count == 0u) return;
+        bool const initial = voices[candidates[0]].initial_samples_left != 0u;
+        size_t const blocks = count >= 2u && urgent(candidates[0]) &&
+            urgent(candidates[1]) && (!initial ||
+                voices[candidates[0]].available_sample_slots < kUsbPacketBodySampleCount)
+                    ? 2u : 1u;
+        std::array<unsigned, 2> sizes{};
+        unsigned const budget = kUsbPacketBodySampleCount;
+        sizes[0] = std::min(voices[candidates[0]].available_sample_slots,
+                           blocks == 2u && !initial ? budget / 2u : budget);
+        if (blocks == 2u) {
+            sizes[1] = std::min(voices[candidates[1]].available_sample_slots,
+                               budget - sizes[0]);
+            sizes[0] = std::min(voices[candidates[0]].available_sample_slots,
+                               budget - sizes[1]);
+        }
+        packet[0] = static_cast<int8_t>(next_sequence & 0xFFu);
+        packet[1] = static_cast<int8_t>(next_sequence >> 8u);
+        size_t offset = kUsbPacketHeaderByteCount;
+        for (size_t i = 0u; i < blocks; ++i) {
+            uint8_t const chosen = candidates[i];
+            auto& voice = voices[chosen];
+            auto& sample = samples[voice.sample_id];
+            size_t const at = 2u + 4u * i;
+            packet[at] = static_cast<int8_t>(kUsbPacketTag |
+                (voice.waiting_for_first_packet ? kUsbStartOfVoiceFlag : 0u) | chosen);
+            packet[at + 1u] = static_cast<int8_t>(voice.session_id);
+            packet[at + 2u] = static_cast<int8_t>(sizes[i] & 0xFFu);
+            packet[at + 3u] = static_cast<int8_t>(sizes[i] >> 8u);
+            for (unsigned j = 0u; j < sizes[i] &&
+                    voice.body_position < sample.body_size; ++j)
+                packet[offset + j] = static_cast<int8_t>(sample.body[voice.body_position++] >> 8);
+            offset += sizes[i];
+            pending_packets[(first_pending_packet + pending_packet_count) %
+                kPendingPacketCapacity] = {next_sequence, chosen, voice.session_id,
+                    static_cast<uint16_t>(sizes[i])};
+            ++pending_packet_count;
+            voice.available_sample_slots -= sizes[i];
+            voice.initial_samples_left -= std::min(voice.initial_samples_left, sizes[i]);
+        }
+        next_voice = static_cast<uint8_t>((candidates[blocks - 1u] + 1u) % kVoiceCount);
+        ++next_sequence;
     }
 
 /* ---- render the usb audio stream ----------------------------------------- */
@@ -676,6 +738,7 @@ struct device_context
     std::string rs485_name;
     std::string upload_usb_port_name;
     rs485_link rs485;
+    serial_port upload_port;
     stream_state stream;
 #if defined(__linux__)
     RtAudio audio{RtAudio::LINUX_ALSA};
@@ -685,6 +748,31 @@ struct device_context
     std::atomic<bool> connected{false};
     std::atomic<bool> worker_running{false};
     std::thread worker;
+    std::mutex control_mutex;
+    std::condition_variable control_changed;
+    std::atomic<unsigned> waiting_commands{0u};
+    std::chrono::steady_clock::time_point next_poll = std::chrono::steady_clock::now();
+
+    // MIDI commands take the next turn after any in-progress status query.
+    struct control_turn {
+        device_context* state;
+        std::unique_lock<std::mutex> lock;
+        explicit control_turn(device_context* s)
+            : state(s) {
+            ++state->waiting_commands;
+            state->control_changed.notify_all();
+            lock = std::unique_lock<std::mutex>(state->control_mutex);
+            if (state->worker_running.load() &&
+                std::chrono::steady_clock::now() >= state->next_poll) {
+                (void)state->query_status();
+                state->advance_poll();
+            }
+        }
+        ~control_turn() {
+            --state->waiting_commands;
+            state->control_changed.notify_all();
+        }
+    };
 
 /* ---- shut down the channel device context -------------------------------- */
 
@@ -775,6 +863,7 @@ struct device_context
     void shutdown()
     {
         worker_running.store(false);
+        control_changed.notify_all();
         if (worker.joinable() && worker.get_id() != std::this_thread::get_id())
             worker.join();
 #if defined(RTAUDIO_VERSION_MAJOR) && RTAUDIO_VERSION_MAJOR >= 6
@@ -787,6 +876,7 @@ struct device_context
         }
 #endif
         if (audio.isStreamOpen()) audio.closeStream();
+        upload_port.close();
         if (rs485.is_open()) {
             if (connected.load()) (void)rs485.command("n off");
             rs485.close();
@@ -797,6 +887,7 @@ struct device_context
             stream.first_pending_packet = 0u;
             stream.pending_packet_count = 0u;
             stream.sequence_ready = false;
+            stream.status_ready = false;
             stream.packet_offset = kUsbPacketByteCount;
         }
         connected.store(false);
@@ -804,29 +895,45 @@ struct device_context
 
 /* ---- poll channel card status -------------------------------------------- */
 
+    voice_board_result_t query_status()
+    {
+        auto const requested_at = std::chrono::steady_clock::now();
+        std::vector<uint8_t> raw;
+        auto result = rs485.command("vq", &raw);
+        if (result) {
+            card_status status;
+            if (parse_voice_queue_status(raw, status))
+                stream.apply_status(status, requested_at);
+            else result = fail(voice_board_error_t::bad_reply, "invalid voice status reply");
+        }
+        return result;
+    }
+
+    void advance_poll()
+    {
+        auto const now = std::chrono::steady_clock::now();
+        do { next_poll += std::chrono::milliseconds(5); } while (next_poll <= now);
+    }
+
     void poll()
     {
+        std::unique_lock<std::mutex> lock(control_mutex);
         while (worker_running.load()) {
-            std::vector<uint8_t> raw;
-            /* vq: voice queue status. */
-            auto const result = rs485.command("vq", &raw);
-            if (result) {
-                card_status status;
-                if (parse_voice_queue_status(raw, status)) {
-                    stream.apply_status(status);
-                    std::lock_guard<std::mutex> lock(stream.mutex);
-                    uint8_t const live_voice_mask = static_cast<uint8_t>(
-                        status.active_voice_mask | status.pending_voice_mask);
-                    for (uint8_t voice = 0; voice < kVoiceCount; ++voice)
-                        if (stream.voices[voice].confirmed_by_card &&
-                            (live_voice_mask &
-                                static_cast<uint8_t>(1u << voice)) == 0u)
-                            stream.voices[voice].active = false;
-                }
+            if (waiting_commands.load() != 0u) {
+                control_changed.wait(lock, [this] {
+                    return !worker_running.load() || waiting_commands.load() == 0u;
+                });
+                continue;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            if (std::chrono::steady_clock::now() < next_poll) {
+                control_changed.wait_until(lock, next_poll);
+                continue;
+            }
+            (void)query_status();
+            advance_poll();
         }
     }
+
 };
 
 /* ---- create a channel device context ------------------------------------- */
@@ -857,15 +964,20 @@ voice_board_result_t open_device(device_context* state,
     state->upload_usb_port_name = config.upload_usb_port;
     result = state->rs485.open(state->rs485_name, config.rs485_baud);
     if (!result) return result;
-    serial_port upload_port;
+    // Read initial voice timing and free space before accepting notes.
+    result = state->query_status();
+    if (!result) {
+        state->shutdown();
+        return result;
+    }
     std::string error;
-    if (!upload_port.open(state->upload_usb_port_name, 115200u, true, error)) {
+    if (!state->upload_port.open(state->upload_usb_port_name, 115200u, true, error)) {
         state->shutdown();
         return fail(voice_board_error_t::io_error, error);
     }
     for (uint8_t voice = 0u; voice < kVoiceCount; ++voice) {
         /* vmload rejects active voices with err:vm-busy. */
-        result = send_payload(upload_port,
+        result = send_payload(state->upload_port,
             "vmload " + std::to_string(voice),
             bec.data(), bec.size(), "ok:vm");
         if (!result) {
@@ -876,7 +988,6 @@ voice_board_result_t open_device(device_context* state,
             return result;
         }
     }
-    upload_port.close();
     result = state->rs485.command(
         "g 1 " + std::to_string(config.initial_attenuation_db));
     if (!result) {
@@ -884,8 +995,13 @@ voice_board_result_t open_device(device_context* state,
         result.message = "Channel gain setup failed: " + result.message;
         return result;
     }
-    /* Audio is opened on the first note. */
+    result = state->start_audio();
+    if (!result) {
+        state->shutdown();
+        return result;
+    }
     state->connected.store(true);
+    state->next_poll = std::chrono::steady_clock::now();
     state->worker_running.store(true);
     state->worker = std::thread([state] { state->poll(); });
     return ok("Channel Card connected; BEC loaded into voices 0-7");
@@ -915,22 +1031,9 @@ voice_board_result_t load_sample(device_context* state, uint16_t sample_id,
     if (!device_is_open(state))
         return fail(voice_board_error_t::not_connected,
             "voice board is not connected");
-    std::vector<int8_t> converted(pcm.size());
-    for (size_t i = 0; i < pcm.size(); ++i)
-        converted[i] = static_cast<int8_t>(pcm[i] >> 8);
-    if (converted.empty())
-        return fail(voice_board_error_t::sample_error,
-            "sample PCM is empty");
-    size_t const attack_size = std::min<size_t>(
-        kAttackSampleCount, converted.size());
-    size_t const overlap = std::min<size_t>(
-        kCrossfadeSampleCount, attack_size);
-    size_t const body_start = attack_size - overlap;
-    /* ATTACK is stored on card; BODY plays once over USB with a short overlap. */
-    std::vector<int8_t> body(converted.begin() + body_start, converted.end());
-    if (body.empty())
-        return fail(voice_board_error_t::sample_error,
-            "sample does not contain a BODY");
+    if (pcm.empty())
+        return fail(voice_board_error_t::sample_error, "sample PCM is empty");
+    device_context::control_turn turn(state);
     {
         std::lock_guard<std::mutex> lock(state->stream.mutex);
         for (auto const& voice : state->stream.voices)
@@ -938,31 +1041,32 @@ voice_board_result_t load_sample(device_context* state, uint16_t sample_id,
                 return fail(voice_board_error_t::sample_error,
                     "sample is currently in use");
     }
-    serial_port upload_port;
-    std::string error;
-    if (!upload_port.open(state->upload_usb_port_name, 115200u, true, error))
-        return fail(voice_board_error_t::io_error, error);
-    /* al: load the ATTACK data. */
-    auto result = send_payload(
-        upload_port, "al " + std::to_string(sample_id),
-            reinterpret_cast<uint8_t const*>(converted.data()), attack_size,
-            "ok:attack");
-    upload_port.close();
+    size_t const attack_size = std::min<size_t>(kAttackSampleCount, pcm.size());
+    size_t const body_start = attack_size -
+        std::min<size_t>(kCrossfadeSampleCount, attack_size);
+    std::array<int8_t, kAttackSampleCount> attack{};
+    for (size_t i = 0; i < attack_size; ++i)
+        attack[i] = static_cast<int8_t>(pcm[i] >> 8);
+    size_t const body_size = pcm.size() - body_start;
+    std::unique_ptr<int16_t[]> body(new int16_t[body_size]);
+    std::memcpy(body.get(), pcm.data() + body_start, body_size * sizeof(int16_t));
+    auto result = send_payload(state->upload_port, "al " + std::to_string(sample_id),
+        reinterpret_cast<uint8_t const*>(attack.data()), attack_size, "ok:attack");
     if (!result) {
         result.code = voice_board_error_t::sample_error;
         return result;
     }
+    result = state->rs485.command("ar " + std::to_string(sample_id) + " " +
+        std::to_string(root_pitch_hz));
+    if (!result) return result;
     {
         std::lock_guard<std::mutex> lock(state->stream.mutex);
         auto& sample = state->stream.samples[sample_id];
-        sample.body = std::move(body);
+        sample.body.swap(body);
+        sample.body_size = body_size;
         sample.loaded = true;
     }
-    /* ar: set the pitch of the original sample. */
-    result = state->rs485.command("ar " + std::to_string(sample_id) + " " +
-        std::to_string(root_pitch_hz));
-    return result ? ok("sample " + std::to_string(sample_id) + " loaded")
-        : result;
+    return ok("sample " + std::to_string(sample_id) + " loaded");
 }
 
 /* ---- start a channel voice ----------------------------------------------- */
@@ -976,6 +1080,7 @@ voice_board_result_t note_on(device_context* state, uint8_t voice,
             "voice board is not connected");
     auto result = state->start_audio();
     if (!result) return result;
+    device_context::control_turn turn(state);
     uint8_t session = 0u;
     {
         std::lock_guard<std::mutex> lock(state->stream.mutex);
@@ -984,26 +1089,28 @@ voice_board_result_t note_on(device_context* state, uint8_t voice,
                 "sample " + std::to_string(sample) + " is not loaded");
         auto& slot = state->stream.voices[voice];
         session = static_cast<uint8_t>((slot.session_id + 1u) % kSessionIdWrap);
+        unsigned const free_slots = slot.available_sample_slots;
         slot = {};
-        slot.active = true;
+        slot.available_sample_slots = free_slots;
         slot.waiting_for_first_packet = true;
+        slot.initial_samples_left = kUsbPacketBodySampleCount;
         slot.session_id = session;
         slot.sample_id = sample;
         slot.body_position = 0u;
     }
-    result = state->rs485.command("aw " + std::to_string(voice) + " " +
-        std::to_string(sample));
-    if (result) {
-        char const voice_char = static_cast<char>('0' + voice);
-        std::string const note = std::string("n") + voice_char + " on " +
-            std::to_string(key) + " " + std::to_string(velocity) + " @" +
-                std::to_string(session);
-        result = state->rs485.command(note);
-    }
+    std::string const note = "n" + std::to_string(voice) + " on " +
+        std::to_string(sample) + " " + std::to_string(key) + " " +
+        std::to_string(velocity) + " @" + std::to_string(session);
+    result = state->rs485.command(note);
     if (!result) {
         std::lock_guard<std::mutex> lock(state->stream.mutex);
         state->stream.voices[voice].active = false;
+        state->stream.voices[voice].available_sample_slots = 0u;
         return result;
+    }
+    {
+        std::lock_guard<std::mutex> lock(state->stream.mutex);
+        state->stream.voices[voice].active = true;
     }
     return ok("voice " + std::to_string(voice) + " started");
 }
@@ -1015,6 +1122,7 @@ voice_board_result_t note_off(device_context* state, uint8_t voice)
     if (!device_is_open(state))
         return fail(voice_board_error_t::not_connected,
             "voice board is not connected");
+    device_context::control_turn turn(state);
     auto const result = state->rs485.command(
         "n" + std::to_string(voice) + " off");
     return result;
@@ -1027,6 +1135,7 @@ voice_board_result_t all_notes_off(device_context* state)
     if (!device_is_open(state))
         return fail(voice_board_error_t::not_connected,
             "voice board is not connected");
+    device_context::control_turn turn(state);
     auto const result = state->rs485.command("n off");
     return result;
 }

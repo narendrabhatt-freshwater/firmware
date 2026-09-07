@@ -50,21 +50,49 @@ int main(void)
             StreamRing_StaleCount()==1u&&StreamRing_FullCount()==1u,
         "future, superseded, stale and full frames must be counted separately");
   StreamRing_ArmPending(2u,30u,5u);
-  packet[0]=(int8_t)(USB_STREAM_TAG_BASE|USB_STREAM_TAG_SOF|2u);
-  packet[1]=(int8_t)5u;
-  packet[2]=(int8_t)0xFEu;
-  packet[3]=(int8_t)0xFFu;
+  packet[2]=(int8_t)(USB_STREAM_TAG_BASE|USB_STREAM_TAG_SOF|2u);
+  packet[3]=(int8_t)5u;
+  packet[4]=(int8_t)(USB_STREAM_UAC_BODY_SAMPLES & 255u);
+  packet[5]=(int8_t)(USB_STREAM_UAC_BODY_SAMPLES >> 8u);
+  packet[0]=(int8_t)0xFEu;
+  packet[1]=(int8_t)0xFFu;
   Fill(packet+USB_STREAM_UAC_HEADER_BYTES,90);
   Check(StreamRing_WriteUac(packet)==1u&&
             StreamRing_LastUacSequence()==0xFFFEu&&
             StreamRing_PendingFill(2u)==USB_STREAM_UAC_BODY_SAMPLES,
         "UAC parser must separate sequence metadata from BODY");
-  packet[1]=(int8_t)6u;
-  packet[2]=(int8_t)0xFFu;
-  packet[3]=(int8_t)0xFFu;
-  packet[0]=(int8_t)(USB_STREAM_TAG_BASE|2u);
+  packet[3]=(int8_t)6u;
+  packet[0]=(int8_t)0xFFu;
+  packet[1]=(int8_t)0xFFu;
+  packet[2]=(int8_t)(USB_STREAM_TAG_BASE|2u);
   Check(StreamRing_WriteUac(packet)==0u&&
             StreamRing_LastUacSequence()==0xFFFFu,
         "vq must acknowledge a routed frame even when its session is rejected");
+  StreamRing_ResetAll();
+  StreamRing_ArmPending(0u,10u,7u);
+  StreamRing_ArmPending(1u,11u,8u);
+  packet[0]=0; packet[1]=0;
+  packet[2]=(int8_t)(USB_STREAM_TAG_BASE|USB_STREAM_TAG_SOF);
+  packet[3]=7; packet[4]=(int8_t)243; packet[5]=1; /* 499 */
+  packet[6]=(int8_t)(USB_STREAM_TAG_BASE|USB_STREAM_TAG_SOF|1u);
+  packet[7]=8; packet[8]=(int8_t)243; packet[9]=1;
+  Check(StreamRing_WriteUac(packet)==2u && StreamRing_LastUacSequence()==0u,
+        "split packet routes both voices across sequence wrap");
+  Check(StreamRing_PendingFill(0u)==499u && StreamRing_PendingFill(1u)==499u &&
+        StreamRing_StartNote(0u)==0,"partial BODY does not delay promotion");
+  packet[0]=1;
+  Check(StreamRing_WriteUac(packet)==2u && StreamRing_CurrentFill(0u)==998u &&
+        StreamRing_StartNote(1u)==0,"two split packets prime both voices");
+  packet[8]=(int8_t)244; /* total 999: reject before first write */
+  Check(StreamRing_WriteUac(packet)==0u && StreamRing_CurrentFill(0u)==998u &&
+        StreamRing_LastUacSequence()==1u,"invalid second count cannot publish first block");
+  packet[8]=(int8_t)243; packet[6]=packet[2];
+  Check(StreamRing_WriteUac(packet)==0u,"duplicate voice descriptors rejected");
+  packet[4]=0; packet[5]=0; packet[8]=0; packet[9]=0;
+  Check(StreamRing_WriteUac(packet)==0u && StreamRing_LastUacSequence()==1u,
+        "idle payload does not advance routed acknowledgment");
+  packet[2]=(int8_t)USB_STREAM_TAG_BASE; packet[4]=17;
+  Check(StreamRing_WriteUac(packet)==1u && StreamRing_CurrentFill(0u)==1015u,
+        "partial block appends only its declared samples");
   return EXIT_SUCCESS;
 }

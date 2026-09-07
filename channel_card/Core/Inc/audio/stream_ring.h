@@ -7,7 +7,7 @@
  * the write (never unread samples). An empty FIFO is an underrun.
  *
  * Every 1 ms UAC packet carries a route/session tag, transport sequence, and
- * 1004 signed-int8 samples.
+ * up to 998 signed-int8 samples across two voices.
  * Note-on arms the replacement origin; only its matching session may start
  * the body. Repeated SOF tags for that session append normally.
  ******************************************************************************
@@ -127,9 +127,6 @@ extern "C"
 
   /** Exact producer credit: capacity - current fill - pending fill. */
   uint32_t StreamRing_FreeLevel(uint8_t voice);
-
-  /** 1 once pending contains a complete UAC BODY frame. */
-  uint8_t StreamRing_HasBody(uint8_t voice);
 
   uint8_t StreamRing_HasPending(uint8_t voice);
   uint8_t StreamRing_TargetSession(uint8_t voice);

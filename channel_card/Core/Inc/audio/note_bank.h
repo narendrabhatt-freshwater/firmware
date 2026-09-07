@@ -23,6 +23,7 @@ extern "C"
 #define NOTE_BANK_VOICES SAMPLE_VOICES
 
   void NoteBank_Init(void);
+
   void NoteBank_PanicAll(void);
 
   /** Raw MIDI-key/velocity note-on. Script may override standard MIDI pitch. */
@@ -32,6 +33,9 @@ extern "C"
    * only the matching USB SOF can claim the replacement ring. */
   int NoteBank_NoteOnSession(uint8_t note, uint8_t key, uint8_t velocity,
                              uint8_t session);
+  /** Assign a sample and arm its streamed note in one control operation. */
+  int NoteBank_NoteOnSampleSession(uint8_t note, uint16_t sample,
+                                    uint8_t key, uint8_t velocity, uint8_t session);
   int NoteBank_NoteOff(uint8_t note);
 
   uint8_t NoteBank_GetKey(uint8_t note);
@@ -72,8 +76,9 @@ extern "C"
   uint32_t NoteBank_VmMaxCycles(uint8_t voice);
   uint32_t NoteBank_VmFaultCount(uint8_t voice);
 
-  /** Active mask and hungriest voice (0xFF if none). */
-  void NoteBank_VoiceQuery(uint8_t *mask_out, uint8_t *best_out);
+  /** Playback duration until a BODY miss at the current observed rate. */
+  uint32_t NoteBank_RemainingUs(uint8_t voice);
+
 
 #ifdef __cplusplus
 }

@@ -73,7 +73,6 @@ static void print_help(FILE *stream)
           "\n"
           "Options:\n"
           "  -o FILE     Output file path (required).\n"
-          "  --raw      Omit the firmware upload header (not for card uploads).\n"
           "  -h, --help  Show this help.\n"
           "\n"
           "Example:\n"
@@ -146,7 +145,6 @@ int main(int argc, char **argv)
     FILE *file, *source, *wrapper;
     char *source_text = NULL, *lowered = NULL;
     size_t source_size = 0, lowered_size = 0;
-    size_t header_size = FW_SCRIPT_CONTAINER_HEADER_SIZE;
     uint8_t *payload, header[FW_SCRIPT_CONTAINER_HEADER_SIZE] = {0};
     char line[1024];
     long length;
@@ -158,10 +156,8 @@ int main(int argc, char **argv)
         print_help(stdout);
         return 0;
     }
-    if ((argc == 4 || (argc == 5 && strcmp(argv[4], "--raw") == 0)) &&
-        strcmp(argv[2], "-o") == 0) {
+    if (argc == 4 && strcmp(argv[2], "-o") == 0) {
         input = argv[1]; output = argv[3];
-        if (argc == 5) header_size = 0;
     } else {
         fputs("berry: error: expected an input script and -o output file.\n"
               "Usage: berry INPUT.be -o OUTPUT.bec\n"
@@ -307,7 +303,7 @@ int main(int argc, char **argv)
     put_u32(header + 12, (uint32_t)length);
     put_u32(header + 16, fw_vm_crc32(payload, (size_t)length));
     file = fopen(output, "wb");
-    if (!file || fwrite(header, 1, header_size, file) != header_size ||
+    if (!file || fwrite(header, 1, sizeof(header), file) != sizeof(header) ||
         fwrite(payload, 1, (size_t)length, file) != (size_t)length) {
         if (file) fclose(file);
         free(payload);
@@ -319,6 +315,6 @@ int main(int argc, char **argv)
     }
     free(payload);
     printf("Compiled %s -> %s (%zu bytes)\n", input, output,
-           header_size + (size_t)length);
+           sizeof(header) + (size_t)length);
     return 0;
 }

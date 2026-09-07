@@ -110,6 +110,7 @@ At boot the card turns the analog bypass path on and sets CH1 DAC trim to
 | Command                | Meaning                                                                           |
 | ---------------------- | --------------------------------------------------------------------------------- |
 | `n0`…`n7 on <key> [velocity]` | Start raw MIDI key 0…127 with velocity 1…127; omitted velocity defaults to 127. |
+| `n0`…`n7 on <sample> <key> <velocity> @<session>` | Assign sample and arm streamed note together; one small ACK. |
 | `n0`…`n7 on <key> <velocity> @<session>` | Streamed note-on; bind BODY session 0…254 before ACK.          |
 | `n0`…`n7 off`            | Turn that slot off.                                                            |
 | `n off`                | Silence all 8.                                                                  |
@@ -123,7 +124,7 @@ to integers if you care about equal temperament.
 
 ### Shared bank (248 sample attacks + 8 oscillator wavetables)
 
-Eight voices (`n0`…`n7`) assign sample heads `0..247` (`aw <voice> <id>`).
+Eight voices (`n0`…`n7`) select sample heads `0..247` directly in note-on.
 The bank holds **256** signed-int8 heads of up to **512** samples (~10.7 ms @
 48 kHz); IDs `248..255` are reserved for logical oscillator wavetables
 `0..7`. Upload is USB CDC only (§4). Contents survive while powered and are
@@ -134,14 +135,13 @@ lost on reset.
 | `al <id> <nbytes>`  | **USB CDC only.** Load sample head `<id>` 0…247 (1…512 signed-int8 bytes) |
 | `wl <wave> <nbytes>` | **USB CDC only.** Load logical oscillator wave 0…7 (2…512 signed-int8 bytes) |
 | `ar <id> <Hz>`      | Set head `<id>`'s root pitch (Hz > 0)                               |
-| `aw <v> <id>`       | Assign sample head `<id>` 0…247 to voice `<v>` 0…7                  |
 | `a`                 | Loaded count + 256-bit hex mask (bit 0 = wave 0)                    |
-| `vq`                | ABI1 active/pending generations + exact runtime ring credit             |
+| `vq`                | All-voice remaining time, sessions, and exact ring credit             |
 | `usb`               | BODY counters: drop/hold/fill, RS-485 `vq`, rx/bytes/bad              |
 | `usb 0`             | Clear those counters, then same reply                                 |
 
-Replies: `ok: ar <id> <Hz>`, `ok: aw <v> <id>`, `ok: a <n> <64 hex>`.
-USB CDC returns a readable `ok:vq7` diagnostic. RS485 returns the fixed 56-byte
+Replies: `ok: ar <id> <Hz>`, `ok: a <n> <64 hex>`.
+USB CDC returns a readable `ok:vq11` diagnostic. RS485 returns the fixed 53-byte
 frame described below.
 
 Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 2-tap
@@ -242,7 +242,7 @@ c:n0 on 69
 c:f0 300
 c:fk0 1
 c:n0 on 72
-c:aw 0 0
+c:n0 on 0 60 100 @1
 c:a
 c:vq
 c:n off
@@ -279,9 +279,9 @@ echo keystrokes back on the bus.
 
 ADC 7-bit addresses used at init: ADC1 `0x4C`, ADC2 `0x4D`.
 
-Note the card-local meaning of `ar` / `aw`: on Effect they are ADC
-register read/write; on Channel they are sample root-pitch / wave
-assignment. Always address a specific card on a shared bus.
+On Effect, `ar` / `aw` read/write ADC registers. On Channel, `ar` sets
+sample root pitch; sample selection is part of note-on and there is no `aw`
+command. Always address a specific card on a shared bus.
 
 ### Effect quick examples
 
@@ -302,7 +302,7 @@ Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 
 | Interface                    | Role                                                                |
 | ---------------------------- | ------------------------------------------------------------------- |
-| **UAC2 output** (ITF0/1)     | 21-channel signed 8-bit, synchronous 48 kHz carrier; every 1 ms packet carries four metadata bytes and 1004 raw 48 kHz BODY samples (1008 B). |
+| **UAC2 output** (ITF0/1)     | 21-channel signed 8-bit, synchronous 48 kHz carrier; every 1 ms packet carries ten metadata bytes and up to 998 raw BODY samples (1008 B). |
 | **CDC ACM** (serial)         | Same ASCII console as RS485, plus binary attack-head upload (`al`). |
 
 The Channel device is class-compliant UAC2 so the operating system owns the
@@ -323,83 +323,106 @@ Effect Card still has CDC and a UAC2 microphone (mono, 32-bit, 96 kHz).
 
 ### BODY stream (UAC2 iso OUT, signed 8-bit)
 
-The first byte is a routing tag, the second is the session, the next two are a
-little-endian wrapping transport sequence, and the remaining 1004 bytes are
-raw signed-int8 BODY samples. `vq`
-reports the last routed sequence processed by the card, whether accepted or
-rejected, alongside an atomic ring-credit snapshot. The host ledger subtracts
-exactly the later submitted frames; it never estimates in-flight occupancy.
+The carrier remains 21 channels × 48 frames/ms × one byte = **1008 bytes/ms**.
+Each payload has a fixed ten-byte header and up to **998 unpitched signed-int8
+BODY samples**, shared by at most two distinct voices. There is no streaming CRC.
 
 ```text
-UAC carrier: 48 kHz × 21 channels × int8 = 1008000 bytes/s
-BODY/DAC:    48 kHz (pitch and playback rate are unchanged)
-packet byte 0       tag = 0xA0 | SOF[3] | voice[2:0]
-packet byte 1       session
-packet bytes 2..3   wrapping uint16 LE transport sequence
-packet bytes 4..1007  1004 consecutive signed-int8 unpitched BODY samples
-idle tag      0xFF (remaining bytes are zero)
-session       0..254 (255 is reserved for idle/unarmed)
+USB payload (1008 bytes, all multi-byte integers little-endian)
+0..1       wrapping uint16 payload sequence
+2..5       descriptor 0: tag u8, session u8, sample count u16
+6..9       descriptor 1: tag u8, session u8, sample count u16
+10..1007   descriptor 0 samples, then descriptor 1 samples, then ignored padding
+
+tag        0xA0 | SOF[3] | voice[2:0]
+session    0..254; 255 reserved
+count      zero means unused descriptor; both zero means idle
+idle tag   0xFF for unused descriptors
 ```
 
-VID `0xCafe`, PID `0x4031`. The host opens the 21-channel UAC output through
-RtAudio/CoreAudio; CDC stays a serial port.
-
-The direct carrier supplies 1004 BODY samples/ms (1004 ksample/s aggregate).
-Workloads above that source-consumption ceiling cannot be lossless; `hold`
-records missing playback samples while control remains alive. Each fresh `vq`
-uses exact safe ring credit up to that wire ceiling.
-RS485 `vq` every 5 ms is the steady-state refill authority and lifecycle
-monitor. UAC OUT carries BODY data only.
+The total declared count must not exceed 998. Validate both descriptors before
+writing either block. A malformed layout changes no ring and is not acknowledged.
+For a valid nonidle payload, process both blocks before advancing the sequence,
+including when a block is rejected as stale. Idle payloads do not advance the
+acknowledgment. Credit and acknowledgment are captured in the same snapshot.
+The receiver recognizes the tag bytes at offsets 2 and 6 when aligning the
+logical millisecond payload to the audio-frame stream.
 
 ```text
-RS485 vq reply, fixed 56-byte ABI1 binary frame
-offset  size  field
+RS485 vq reply: fixed 53-byte time-status frame
 0       2     sync = a5 5a
 2       1     card = 43 ('C')
-3       1     type = 04 sequenced ABI1 generation status
+3       1     status message type = 08
 4       1     active voice mask
 5       1     pending voice mask
-6       1     best refill voice, or 255
-7       1     reserved
-8       2     runtime ring capacity (uint16 LE; normally 4080)
-10      2     status sequence (uint16 LE)
-12      2     last processed UAC sequence
-14      40    eight records: session u8, target fill u16 LE, total writable u16 LE
-54      1     CRC-8/0x07 over bytes 0..53
-55      1     terminator = 0a
+6       2     runtime ring capacity (normally 4080 samples)
+8       2     wrapping status sequence
+10      2     last processed nonidle USB payload sequence
+12      40    eight records, five bytes each:
+                target session u8, total free sample slots u16,
+                current playback remaining time in 100-microsecond units u16
+52      1     terminator = 0a
 ```
 
-RS485 `vq` is the sole refill permission. The host sends only complete
-1004-sample UAC frames within its reported credit. A streamed `nX` first arms a
-pending generation; matching SOF data fills it, and Berry receives
-`on_note_on` only after a complete BODY frame exists. Berry then decides when
-to call `start_note()`, which atomically promotes pending. No native crash
-duration or release reservation exists.
-`start_note(frequency)` may atomically replace the pending playback pitch while
-promoting it; zero-argument `start_note()` keeps the default. `pitch_for_key(key)`
-returns standard MIDI pitch (A4 = 440 Hz) when a script wants a reference;
-direct Hz selection may ignore it.
-Superseded or late same-wave sessions are stale. Untagged `nX` is available
-for direct console use. There is no native release reservation.
-RS485 `nX off` remains note-off authority. `type` `0x20` CAPTURE remains reserved.
-An explicit note-off cancels any pending replacement in firmware before the
-script's zero-argument `on_note_off()` handler runs.
-Every routed UAC frame has a wrapping sequence. The card reports the last
-processed sequence with the same ring snapshot, and the host subtracts exactly
-the later frames in its ledger. Playing voices are scheduled by depletion
-deadline. A silent voice is admitted only when its exact one-packet (1 ms)
-service cost finishes before the earliest playing deadline.
-The controller targets one `vq` every 5 ms (200 Hz) and requests an immediate
-one after successful Channel commands; single-flight RS485 traffic can stretch
-the observed interval. The direct UAC capacity is 1004 BODY samples/ms: four
-metadata bytes and 1004 sample bytes in each 1008-byte packet.
-If note-off or a newer generation retires a ring while a prior-session frame is in
-flight, the card acknowledges the routed sequence but rejects its stale
-session instead of publishing it into the new ring.
+The host selects refill voices using the timing and free-space fields.
+CDC returns readable
+`ok:vq11` fields in the order masks, capacity, status sequence, USB sequence,
+then eight session/remaining-us/free-slots triples.
 
-The `usb` bad-reason fields are reserved and read zero for the direct
-transport. Ring-capacity rejection remains visible as `drop` and
-playback starvation as `hold`.
+The binary duration is rounded down to 0.1 ms and saturated at 6553.5 ms;
+the host converts these time units to microseconds without calculating pitch.
+CDC diagnostics retain microseconds. A 53-byte reply takes approximately
+0.575 ms on a 921600-baud 8N1 UART, excluding USB and software delays.
+
+Time describes the currently playing note, including the remaining ATTACK and
+BODY data, with space reserved for the second interpolation tap. Pending data
+is excluded from the current note's duration. A voice with no current playback
+reports zero duration; its pending mask identifies startup instead of underrun.
+When active and pending coexist, session identifies the pending write target,
+while duration still describes current playback. The host treats that target
+as a pending new note. The card uses the observed playback increment and, if
+faster, its base/target increment. Future modulation or speed increases can
+shorten the reported duration before the next poll.
+
+The host polls every 5 ms. Note-on prepares sample data and sends the combined
+`nX on <sample> <key> <velocity> @<session>` command. After its small ACK, USB
+can send the new session using free space already confirmed by the last `vq`,
+minus queued samples. Note-on does not issue an extra query or restart the
+poll timer. A due poll runs between commands even during continuous input.
+RS485 is serialized; USB continues independently using existing credit during
+serial transactions. The host timestamps each query at its start so serial
+response time is conservatively included in the countdown. An idle voice also
+retains its confirmed free-space allowance for the next note.
+
+The host subtracts elapsed time from each deadline but never converts samples
+into time or estimates pitch. Playing voices at or below 10 ms remaining and
+pending notes are urgent. A new note's first 998 BODY samples take priority and receive the full
+available payload budget, capped by known free space. Unused space can go to
+another urgent voice. This is a host refill priority, not a card playback gate.
+Among other urgent voices, those with fewer current-session samples still
+in flight are served first; remaining ties use playing/pending state, deadline,
+and rotation. Queued samples are not converted into extra playback time. Two urgent voices split a payload equally,
+with unused space given to the other. One urgent voice receives the available
+budget. Otherwise the earliest-deadline eligible voice is filled. Each send
+is capped by known free slots, and its count is deducted immediately. Fresh
+status grants reported space minus samples still in flight beyond its
+acknowledgment, including older sessions sharing that physical ring.
+
+A streamed `nX` arms a session. After 998 BODY samples have committed for
+that session, the next audio boundary delivers `on_note_on`. Split blocks
+accumulate toward this threshold. ATTACK is untouched while waiting for USB;
+a replacement follows the script's fade after its BODY is ready. This wait
+adds USB delivery latency to note onset. Pending idle voices report zero
+playback duration and remain marked pending in `vq`. Matching SOF blocks append before
+and after promotion. Note-off cancels pending replacement before
+`on_note_off`. Retired sessions cannot repopulate a replacement's ring.
+`start_note(frequency)` and script-controlled pitch remain entirely on the card.
+
+Sample-end silence and release behavior are unchanged. Missing/invalid status
+grants no new credit. Aggregate demand above **998 source samples/ms**, excessive
+USB/host stalls, rapid playback-speed changes, or unserviceable simultaneous
+deadlines can still exhaust audio. BODY underrun and buffer overflow retain the
+existing latched production fault behavior; neither is silently recovered.
 
 ### CDC vs RS485 (console)
 
@@ -481,9 +504,9 @@ Notes:
 2. While waiting for the completion line, keep reading the CDC RX path —
    do not discard pending replies.
 3. Upload only loads AXI RAM (lost on reset). Set `ar <id> <rootHz>`; the host
-   app starts it with RS485 `aw <voice> <id>` then session-bound
-   `nX on <key> <velocity> @<session>` immediately after launching its USB BODY job;
-   later sustain uses vq-authorized BODY refills.
+   app starts it with `nX on <sample> <key> <velocity> @<session>`, then queries
+   `vq` for buffer space before sending BODY samples. Later refills use the
+   periodic `vq` feedback.
 
 ### VM program upload (`vmload`)
 

@@ -33,6 +33,12 @@ int main(int argc,char **argv){
   check(NoteBank_NoteOn(0u,60u,127u)==-2,"note reports no program");boundary();check(!NoteBank_IsActive(0u),"no-program silent");
   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,program,size)==0&&NoteBank_VmUploadCommit(0u)==0,"valid FWSC activates");
   check(NoteBank_VmActiveMask()==1u,"only voice zero loaded");
+  { uint16_t previous=NoteBank_GetWaveId(0u);
+    check(NoteBank_NoteOnSampleSession(0u,248u,60u,100u,7u)!=0 && NoteBank_GetWaveId(0u)==previous,"combined command rejects reserved sample without assignment");
+    check(NoteBank_NoteOnSampleSession(0u,3u,60u,100u,255u)!=0 && NoteBank_GetWaveId(0u)==previous,"failed combined note preserves sample assignment");
+    check(NoteBank_NoteOnSampleSession(0u,3u,60u,100u,7u)==0 && NoteBank_GetWaveId(0u)==3u && StreamRing_TargetSession(0u)==7u,"combined command assigns sample and binds note session");
+    NoteBank_PanicAll();check(NoteBank_SetWaveId(0u,previous)==0,"restore sample after combined command test");
+  }
   AttackBank_SetWriteActive(1u);check(NoteBank_NoteOn(0u,60u,64u)==-3,"note rejected while attack-bank upload can tear tables");AttackBank_SetWriteActive(0u);
   check(NoteBank_NoteOn(0u,60u,64u)==0,"note accepted");prime_body(0u);boundary();
   check(NoteBank_GetKey(0u)==60u,"physical key applied");
@@ -75,6 +81,58 @@ int main(int argc,char **argv){
    check(StreamRing_HasPending(0u)==0u,"example must promote a replacement immediately");free(example);}
   NoteBank_PanicAll();
   {size_t channel_size;uint8_t *channel_program=read_file(argv[2],&channel_size);
+   const unsigned heads[]={0u,1u,32u,512u};
+   const uint8_t keys[]={48u,60u,72u};
+   for(unsigned h=0;h<4u;++h)for(unsigned k=0;k<3u;++k){
+    NoteBank_PanicAll();
+    check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,channel_program,channel_size)==0&&NoteBank_VmUploadCommit(0u)==0,"load ATTACK-only test program");
+    attack_lengths[0]=heads[h];memset(attack_tables[0],64,sizeof attack_tables[0]);
+    check(NoteBank_NoteOn(0u,keys[k],127u)==0,"accept note without BODY");
+    NoteBank_HoldCountClear();boundaries(30u);
+    check(!NoteBank_IsActive(0u)&&StreamRing_HasPending(0u)&&NoteBank_HoldCount()==0u,"delayed USB leaves ATTACK untouched at every pitch and head length");
+    int8_t body[USB_STREAM_UAC_BODY_SAMPLES]={0};
+    check(StreamRing_WriteVoice(0u,0xFFu,1u,0u,body,499u)==499u,"accept first split BODY block");
+    boundaries(10u);
+    check(!NoteBank_IsActive(0u)&&StreamRing_PendingFill(0u)==499u,"partial startup data stays pending");
+    check(StreamRing_WriteVoice(0u,0xFFu,1u,0u,body,498u)==498u,"accept all but last startup sample");
+    boundary();check(!NoteBank_IsActive(0u),"997 startup samples stay pending");
+    check(StreamRing_WriteVoice(0u,0xFFu,1u,0u,body,1u)==1u,"complete startup BODY");
+    boundary();
+    check(NoteBank_IsActive(0u)&&!StreamRing_HasPending(0u)&&NoteBank_HoldCount()==0u,"start on next boundary after 998 committed samples");
+   }
+   NoteBank_PanicAll();
+   check(NoteBank_NoteOnSampleSession(0u,0u,72u,127u,11u)==0,"arm tagged startup");
+   boundaries(8u);
+   check(NoteBank_NoteOff(0u)==0,"cancel before first BODY");boundary();
+   {int8_t body[USB_STREAM_UAC_BODY_SAMPLES]={0};
+    check(StreamRing_WriteVoice(0u,11u,1u,0u,body,sizeof body)==0u,"late canceled session cannot start playback");}
+   boundaries(8u);
+   check(!NoteBank_IsActive(0u)&&!StreamRing_HasPending(0u),"canceled startup remains silent");
+   attack_lengths[0]=0u;free(channel_program);}
+  NoteBank_PanicAll();
+  {size_t channel_size;uint8_t *channel_program=read_file(argv[2],&channel_size);
+   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,channel_program,channel_size)==0&&NoteBank_VmUploadCommit(0u)==0,"load channel for rapid replacement");
+   check(NoteBank_NoteOn(0u,60u,127u)==0,"start rapid replacement test");prime_body(0u);boundary();boundaries(29u);
+   check(NoteBank_NoteOn(0u,62u,100u)==0,"start replacement fade");prime_body(0u);boundary();
+   check(NoteBank_NoteOn(0u,64u,100u)==0,"supersede replacement before its fade ends");
+   boundaries(5u);
+   check(NoteBank_VmIsActive(0u)&&NoteBank_VmFault(0u)==FW_VM_FAULT_NONE,"fade completion preserves the newest pending note without a VM fault");
+   prime_body(0u);boundary();
+   check(NoteBank_VmIsActive(0u)&&NoteBank_GetKey(0u)==64u&&StreamRing_HasPending(0u)==0u,"latest replacement starts after its BODY arrives");
+   check(NoteBank_NoteOff(0u)==0,"release latest replacement");boundaries(50u);
+   check(NoteBank_VmIsActive(0u)&&!NoteBank_IsActive(0u),"replacement can release without losing its program");
+   NoteBank_PanicAll();
+   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,channel_program,channel_size)==0&&NoteBank_VmUploadCommit(0u)==0,"reload channel for replacement cancellation");
+   check(NoteBank_NoteOn(0u,60u,127u)==0,"start cancellation test");prime_body(0u);boundary();boundaries(29u);
+   check(NoteBank_NoteOn(0u,62u,100u)==0,"fade before cancellation");prime_body(0u);boundary();
+   check(NoteBank_NoteOn(0u,64u,100u)==0,"supersede before cancellation");boundaries(5u);
+   check(NoteBank_NoteOff(0u)==0,"release replacement before BODY arrives");boundaries(50u);
+   check(NoteBank_VmIsActive(0u)&&NoteBank_VmFault(0u)==FW_VM_FAULT_NONE&&!NoteBank_IsActive(0u)&&!StreamRing_HasPending(0u),"note off must cancel deferred replacement without a stale start");
+   check(NoteBank_NoteOn(0u,65u,100u)==0,"play after cancelled replacement");prime_body(0u);boundary();
+   check(NoteBank_VmIsActive(0u)&&NoteBank_GetKey(0u)==65u,"program remains usable after cancellation");
+   free(channel_program);}
+  NoteBank_PanicAll();
+  {size_t channel_size;uint8_t *channel_program=read_file(argv[2],&channel_size);
    check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,channel_program,channel_size)==0&&NoteBank_VmUploadCommit(0u)==0,"reload channel example");
    check(NoteBank_NoteOn(0u,60u,32u)==0,"low velocity note accepted");prime_body(0u);boundary();
    boundaries(49u);
@@ -115,5 +173,39 @@ int main(int argc,char **argv){
    check(NoteBank_NoteOff(0u)==0,"oscillator note off accepted");boundary();check(!NoteBank_IsActive(0u),"oscillator note end clears the voice");free(oscillator_program);}
   attack_lengths[255]=0u;check(NoteBank_NoteOn(0u,69u,127u)==0,"invalid oscillator note posts");prime_silent_body(0u);boundary();
   check(!NoteBank_IsActive(0u)&&!NoteBank_VmIsActive(0u)&&NoteBank_VmFault(0u)==FW_VM_FAULT_HOST_CALL,"unloaded oscillator table must fault and silence only its voice");
+  NoteBank_PanicAll();
+  check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,program,size)==0&&NoteBank_VmUploadCommit(0u)==0,"restore simple program for depletion tests");
+  check(NoteBank_SetWaveId(0u,0u)==0,"duration test wave");
+  for(unsigned head=0u;head<=512u;head+=512u) {
+    attack_lengths[0]=head;
+    for(unsigned key=48u;key<=72u;key+=12u) {
+      NoteBank_PanicAll();
+      check(NoteBank_NoteOn(0u,(uint8_t)key,127u)==0,"duration note accepted");
+      prime_body(0u);boundary();
+      uint32_t predicted=NoteBank_RemainingUs(0u), frames=0u;
+      uint32_t last=predicted;
+      if (head==0u && key==48u) {
+        int8_t replacement[USB_STREAM_UAC_BODY_SAMPLES]={0};
+        StreamRing_ArmPending(0u,0u,9u);
+        check(StreamRing_WriteVoice(0u,9u,1u,0u,replacement,sizeof replacement)==sizeof replacement,"stage pending data beside current playback");
+        check(NoteBank_RemainingUs(0u)==predicted,"pending samples must not extend current playback duration");
+      }
+      NoteBank_HoldCountClear();
+      while(NoteBank_HoldCount()==0u && frames<10000u) {
+        (void)NoteBank_NextSample();
+        if(NoteBank_HoldCount()!=0u) break;
+        ++frames;
+        uint32_t remaining=NoteBank_RemainingUs(0u);
+        check(remaining<=last,"remaining time must count down across attack/body");
+        last=remaining;
+      }
+      check(NoteBank_HoldCount()!=0u,"depletion must report an underrun");
+      uint32_t actual=(uint32_t)((uint64_t)frames*1000000u/48000u);
+      if (!(predicted<=actual && actual-predicted<=22u)) fprintf(stderr,"duration head=%u key=%u predicted=%u actual=%u frames=%u\n",head,key,predicted,actual,frames);
+      check(predicted<=actual && actual-predicted<=22u,"reported time predicts depletion within one output frame at each pitch");
+    }
+  }
+  NoteBank_PanicAll();
+  check(NoteBank_RemainingUs(0u)==0u,"inactive voice has no deadline");
   free(program);puts("Channel shared Berry VM test passed");return 0;
 }
