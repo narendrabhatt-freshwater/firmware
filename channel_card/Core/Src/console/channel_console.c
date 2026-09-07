@@ -256,7 +256,8 @@ static uint8_t RS485_Crc8(const uint8_t *data, uint32_t len)
 static uint16_t rs485_vq_sequence;
 static void RS485_ReplyVq(uint8_t active_mask, uint8_t pending_mask,
                           uint8_t best, const uint8_t *sessions,
-                          const uint16_t *fills, const uint16_t *free_samples)
+                          const uint16_t *fills, const uint16_t *free_samples,
+                          uint16_t uac_sequence)
 {
   uint8_t frame[VQ_FRAME_LEN];
   uint8_t i;
@@ -274,11 +275,8 @@ static void RS485_ReplyVq(uint8_t active_mask, uint8_t pending_mask,
   rs485_vq_sequence++;
   frame[10] = (uint8_t)(rs485_vq_sequence & 0xFFu);
   frame[11] = (uint8_t)(rs485_vq_sequence >> 8u);
-  {
-    const uint16_t uac_sequence = StreamRing_LastUacSequence();
-    frame[12] = (uint8_t)(uac_sequence & 0xFFu);
-    frame[13] = (uint8_t)(uac_sequence >> 8u);
-  }
+  frame[12] = (uint8_t)(uac_sequence & 0xFFu);
+  frame[13] = (uint8_t)(uac_sequence >> 8u);
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
     uint8_t *record = frame + 14u + (5u * i);
@@ -707,12 +705,13 @@ static void Console_CmdVoiceQuery(void)
   uint8_t pending_mask = 0u;
   uint8_t sessions[NOTE_BANK_VOICES];
   uint16_t fills[NOTE_BANK_VOICES];
+  uint16_t uac_sequence;
   uint8_t i;
 
-  NoteBank_VoiceQuery(&mask, &best);
   {
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
+    NoteBank_VoiceQuery(&mask, &best);
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
     free_samples[i] = (uint16_t)StreamRing_FreeLevel(i);
@@ -721,13 +720,16 @@ static void Console_CmdVoiceQuery(void)
     if (StreamRing_HasPending(i) != 0u)
       pending_mask = (uint8_t)(pending_mask | (uint8_t)(1u << i));
   }
+    /* Credit and acknowledgement must describe the same USB state. A newer
+     * acknowledgement with older free space grants already-used space again. */
+    uac_sequence = StreamRing_LastUacSequence();
     if (primask == 0u) __enable_irq();
   }
 
   n = snprintf(b, sizeof b, "ok:vq7 %02x %02x %u %u %u %u",
                (unsigned)mask, (unsigned)pending_mask, (unsigned)best,
                (unsigned)STREAM_RING_SAMPLES, (unsigned)rs485_vq_sequence,
-               (unsigned)StreamRing_LastUacSequence());
+               (unsigned)uac_sequence);
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
     if (n < 0 || (size_t)n >= sizeof b)
@@ -753,7 +755,8 @@ static void Console_CmdVoiceQuery(void)
   }
   else
   {
-    RS485_ReplyVq(mask, pending_mask, best, sessions, fills, free_samples);
+    RS485_ReplyVq(mask, pending_mask, best, sessions, fills, free_samples,
+                   uac_sequence);
   }
 }
 
