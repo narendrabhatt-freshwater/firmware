@@ -21,8 +21,6 @@
             (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
 */
 
-#undef NDEBUG
-#include <cassert>
 #include "voicebd.h"
 #include <options.h>
 #include <RtMidi.h>
@@ -30,9 +28,11 @@
 #include <chrono>
 #include <csignal>
 #include <cstring>
+#include <exception>
 #include <sysexits.h>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 #include <thread>
 
 namespace {
@@ -67,32 +67,29 @@ int usage(int status)
 volatile std::sig_atomic_t stopped = 0;
 void stop(int) { stopped = 1; }
 
-/* PCM16 mono/stereo WAV; playback uses the board's default 48 kHz. */
+/* Assumes a valid 48 kHz PCM16 mono/stereo WAV. */
 std::vector<int16_t> read_wav(char const* path)
 {
     std::ifstream file(path, std::ios::binary);
-    assert(file);
-    auto read = [&](char* bytes, size_t n) { file.read(bytes, n); assert(file); };
+    if (!file) throw std::runtime_error("cannot open WAV: " + std::string(path));
+    file.exceptions(std::ios::failbit | std::ios::badbit);
     auto number = [&](unsigned n) {
         uint32_t value = 0;
         for (unsigned i = 0; i < n; ++i) value |= uint32_t(uint8_t(file.get())) << (8 * i);
-        assert(file);
         return value;
     };
     file.ignore(12);
     unsigned channels = 0;
     for (;;) {
         char tag[4];
-        read(tag, 4);
+        file.read(tag, 4);
         uint32_t const size = number(4);
         if (std::string(tag, 4) == "fmt ") {
-            assert(size >= 16);
             file.ignore(2);
             channels = number(2);
             file.ignore(12);
-            file.ignore(size - 16 + (size & 1));
+            file.ignore(uint64_t(size) - 16 + (size & 1));
         } else if (std::string(tag, 4) == "data") {
-            assert(channels && size && size % (2 * channels) == 0);
             std::vector<int16_t> pcm(size / (2 * channels));
             for (auto& sample : pcm) {
                 int sum = 0;
@@ -109,6 +106,7 @@ std::vector<int16_t> read_wav(char const* path)
 } // namespace
 
 int main(int argc, char** argv)
+try
 {
     char const* const slash = std::strrchr(argv[0], '/');
     exe_name = slash ? slash + 1 : argv[0];
@@ -123,14 +121,15 @@ int main(int argc, char** argv)
     auto const pcm = read_wav(argv[0]);
     voice_board_config_t config;
     if (argc == 2) config.bec_file = argv[1];
+    auto check = [](voice_board_result_t const& result) {
+        if (!result) throw std::runtime_error(result.message);
+    };
     voice_board_t board;
-    auto result = board.open(config);
-    assert(result.ok());
-    result = board.load_sample(0, pcm);
-    assert(result.ok());
+    check(board.open(config));
+    check(board.load_sample(0, pcm));
     RtMidiIn midi;
-    midi.openPort(0);
     midi.ignoreTypes(true, true, true);
+    midi.openPort(0);
     std::signal(SIGINT, stop);
     std::signal(SIGTERM, stop);
     std::cout << "Ready. Play MIDI; Ctrl+C to exit.\n";
@@ -147,20 +146,21 @@ int main(int argc, char** argv)
                 unsigned voice = next;
                 for (unsigned i = 0; i < 8; ++i)
                     if (keys[(next + i) % 8] < 0) { voice = (next + i) % 8; break; }
-                result = board.note_on(voice, 0, message[1], message[2]);
-                assert(result.ok());
+                check(board.note_on(voice, 0, message[1], message[2]));
                 keys[voice] = key;
                 next = (voice + 1) % 8;
             } else if (type == 0x80 || (type == 0x90 && !message[2])) {
                 for (unsigned i = 0; i < 8; ++i)
                     if (keys[i] == key) {
-                        result = board.note_off(i);
-                        if (!result.ok()) std::cerr << "note_off: " << result.message << '\n';
-                        assert(result.ok());
+                        check(board.note_off(i));
                         keys[i] = -1;
                     }
             }
         } else std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     board.close();
+}
+catch (std::exception const& error) {
+    std::cerr << exe_name << ": " << error.what() << '\n';
+    return EX_SOFTWARE;
 }

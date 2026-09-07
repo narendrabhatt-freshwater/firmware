@@ -1,3 +1,26 @@
+/*
+                                   __
+                               ___  \  \
+                          ___  \  \  \  \    _______
+                     ___  \  \  \  \  \__\__/_____  \
+                     \  \  \  \  \__\_______      \__\____
+                      \  \  \  \     ___ \  \________  \__/
+                       \  \  \__\___/_  \ \___/   \  \___
+                        \  \    ____  \  \________ \ ___/
+                         \__\__/ \  \  \____/  \  \
+                                  \  \     ___  \  \___
+                                   \__\___/ \  \ \____/
+                                           \  \
+                                              \  \___
+                 __                 _          \ ___/  _
+                / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+               | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+               |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+               |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+
+            (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+*/
+
 #include "voicebd.h"
 
 /*
@@ -786,7 +809,7 @@ struct device_context
 #endif
         if (audio.isStreamOpen()) audio.closeStream();
         if (rs485.is_open()) {
-            (void)rs485.command("n off");
+            if (connected.load()) (void)rs485.command("n off");
             rs485.close();
         }
         {
@@ -855,41 +878,14 @@ voice_board_result_t open_device(device_context* state,
     state->upload_usb_port_name = config.upload_usb_port;
     result = state->rs485.open(state->rs485_name, config.rs485_baud);
     if (!result) return result;
-    (void)state->rs485.command("e:ec 0"); /* Command echo off. */
-    result = state->rs485.command(
-        "g 1 " + std::to_string(config.initial_attenuation_db));
-    if (!result) {
-        state->shutdown();
-        result.message = "Channel gain setup failed: " + result.message;
-        return result;
-    }
-    result = state->rs485.command("n off");
-    if (!result && result.message.find("no-program") == std::string::npos) {
-        state->shutdown();
-        result.message = "Channel silence failed: " + result.message;
-        return result;
-    }
     serial_port upload_port;
     std::string error;
     if (!upload_port.open(state->upload_usb_port_name, 115200u, true, error)) {
         state->shutdown();
         return fail(voice_board_error_t::io_error, error);
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(80));
-    std::array<uint8_t, 256> drain{};
-    while (upload_port.read(drain.data(), drain.size(), 5u) != 0u) {}
     for (uint8_t voice = 0u; voice < kVoiceCount; ++voice) {
-        std::string const off = "c:n" + std::to_string(voice) + " off\r";
-        if (!upload_port.write(off.data(), off.size(), error)) {
-            state->shutdown();
-            return fail(voice_board_error_t::io_error, error);
-        }
-        std::string ignored;
-        (void)wait_for(upload_port, "ok", ignored, 1000u);
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(400));
-    for (uint8_t voice = 0u; voice < kVoiceCount; ++voice) {
-        /* vmload: load the compiled program into one voice. */
+        /* vmload rejects active voices with err:vm-busy. */
         result = send_payload(upload_port,
             "vmload " + std::to_string(voice),
             bec.data(), bec.size(), "ok:vm");
@@ -902,6 +898,13 @@ voice_board_result_t open_device(device_context* state,
         }
     }
     upload_port.close();
+    result = state->rs485.command(
+        "g 1 " + std::to_string(config.initial_attenuation_db));
+    if (!result) {
+        state->shutdown();
+        result.message = "Channel gain setup failed: " + result.message;
+        return result;
+    }
     /* Audio is opened on the first note. */
     state->connected.store(true);
     state->worker_running.store(true);
@@ -958,7 +961,6 @@ voice_board_result_t load_sample(device_context* state, uint16_t sample_id,
     std::string error;
     if (!upload_port.open(state->upload_usb_port_name, 115200u, true, error))
         return fail(voice_board_error_t::io_error, error);
-    std::this_thread::sleep_for(std::chrono::milliseconds(80));
     /* al: load the ATTACK data. */
     auto result = send_payload(
         upload_port, "al " + std::to_string(sample_id),
