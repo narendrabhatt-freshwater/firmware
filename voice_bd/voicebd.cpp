@@ -662,27 +662,6 @@ struct stream_state
     }
 };
 
-/* ---- resample pcm to channel sample format ------------------------------- */
-
-std::vector<int8_t> resample_i8(std::vector<int16_t> const& pcm,
-    uint32_t source_rate)
-{
-    double const ratio = static_cast<double>(source_rate) / kSampleRate;
-    size_t const output_size = static_cast<size_t>(
-        std::ceil(static_cast<double>(pcm.size()) / ratio));
-    std::vector<int8_t> output(output_size);
-    for (size_t i = 0; i < output_size; ++i) {
-        double const at = static_cast<double>(i) * ratio;
-        size_t const left = std::min(static_cast<size_t>(at), pcm.size() - 1u);
-        size_t const right = std::min(left + 1u, pcm.size() - 1u);
-        double const fraction = at - static_cast<double>(left);
-        double const value = pcm[left] + (pcm[right] - pcm[left]) * fraction;
-        long const scaled = std::lround(value / 256.0);
-        output[i] = static_cast<int8_t>(std::clamp<long>(scaled, -128, 127));
-    }
-    return output;
-}
-
 } // namespace
 
 /*******************************************************************************
@@ -931,15 +910,17 @@ bool device_is_open(device_context const* state)
 
 voice_board_result_t load_sample(device_context* state, uint16_t sample_id,
     std::vector<int16_t> const& pcm,
-    uint32_t source_rate, double root_pitch_hz)
+    double root_pitch_hz)
 {
     if (!device_is_open(state))
         return fail(voice_board_error_t::not_connected,
             "voice board is not connected");
-    std::vector<int8_t> converted = resample_i8(pcm, source_rate);
+    std::vector<int8_t> converted(pcm.size());
+    for (size_t i = 0; i < pcm.size(); ++i)
+        converted[i] = static_cast<int8_t>(pcm[i] >> 8);
     if (converted.empty())
         return fail(voice_board_error_t::sample_error,
-            "sample is empty after resampling");
+            "sample PCM is empty");
     size_t const attack_size = std::min<size_t>(
         kAttackSampleCount, converted.size());
     size_t const overlap = std::min<size_t>(
@@ -1155,12 +1136,12 @@ voice_board_result_t voice_board_t::load_sample(
     if (!impl_ || !impl_->context) return unavailable();
     if (sample_id > 247u) return invalid_argument("sample ID must be 0..247");
     if (pcm.empty()) return invalid_argument("sample PCM is empty");
-    if (source_sample_rate_hz == 0u)
-        return invalid_argument("sample rate must be positive");
+    if (source_sample_rate_hz != 48000u)
+        return invalid_argument("sample rate must be 48000 Hz");
     if (!(root_pitch_hz > 0.0) || !std::isfinite(root_pitch_hz))
         return invalid_argument("root pitch must be positive and finite");
     return voice_board_detail::load_sample(
-        impl_->context, sample_id, pcm, source_sample_rate_hz, root_pitch_hz);
+        impl_->context, sample_id, pcm, root_pitch_hz);
 }
 
 /* ---- start a voice board note -------------------------------------------- */

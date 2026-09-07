@@ -95,7 +95,7 @@ public:
     /* Silence the card and close the ports. */
     voice_board_result_t close();
     bool is_open() const;
-    /* Load mono signed-16 PCM into a sample slot. */
+    /* Load 48 kHz mono signed-16 PCM into a sample slot. */
     voice_board_result_t load_sample(uint16_t sample_id,
         std::vector<int16_t> const& pcm,
         uint32_t source_sample_rate_hz = 48000,
