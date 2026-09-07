@@ -33,6 +33,8 @@ enable_language(C ASM)
 
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME})
+include(cmake/RS485Config.cmake)
+fw_configure_rs485(${CMAKE_PROJECT_NAME} PRIVATE)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)

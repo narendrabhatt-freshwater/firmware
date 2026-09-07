@@ -12,6 +12,7 @@
 
 #include "main.h"
 #include "usart.h"
+#include "rs485_config.h"
 #include "cs4304.h"
 #include "channel_led.h"
 #include "audio_bridge.h"
@@ -47,17 +48,10 @@ void ChannelConsole_SetDacHandle(CS4304_HandleTypeDef *h)
 #define RS485_BUS_TIMEOUT_MS 250
 #define RS485_ECHO 0
 
-/* 921600 8N1 ≈ 11 µs/byte. HAL Timeout is a deadline, not the payload
- * size. The 56-byte ABI1 vq frame is bounded; 50 ms was a poll
- * cap that could eat TinyUSB's ~32 ms ISO software FIFO if TX stalled. */
+/* Keep blocking TX close to its wire time so USB audio can be serviced. */
 static uint32_t RS485_TxDeadlineMs(uint32_t nbytes)
 {
-  uint32_t ms = 2u + (nbytes / 64u);
-  if (ms > 8u)
-  {
-    ms = 8u;
-  }
-  return ms;
+  return fw_rs485_tx_deadline_ms(nbytes, huart5.Init.BaudRate);
 }
 
 /** RS485 bus-aware transmit.

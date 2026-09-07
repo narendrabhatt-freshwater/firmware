@@ -68,37 +68,37 @@ target_link_libraries(shared_berry_runtime_test PRIVATE script_runtime::berry)
 target_compile_options(shared_berry_runtime_test PRIVATE -Wall -Wextra -Werror -pedantic -UNDEBUG)
 add_test(NAME shared_berry.runtime
   COMMAND shared_berry_runtime_test
-    "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.fwsc"
-    "${CMAKE_CURRENT_BINARY_DIR}/fault_bad_argument_event.fwsc"
-    "${CMAKE_CURRENT_BINARY_DIR}/fault_nonfinite_event.fwsc"
-    "${CMAKE_CURRENT_BINARY_DIR}/fault_osc_argument_event.fwsc"
-    "${CMAKE_CURRENT_BINARY_DIR}/fault_allocation_event.fwsc"
-    "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.fwsc"
-    "${CMAKE_CURRENT_BINARY_DIR}/oscillator_event.fwsc"
-    "${CMAKE_CURRENT_BINARY_DIR}/two_oscillator_event.fwsc"
-    "${CMAKE_CURRENT_BINARY_DIR}/many_oscillator_event.fwsc"
-    "${CMAKE_CURRENT_BINARY_DIR}/state64_event.fwsc"
-    "${CMAKE_CURRENT_BINARY_DIR}/routing_event.fwsc"
-    "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.fwsc"
-    "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.fwsc")
-add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.fwsc"
+    "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.bec"
+    "${CMAKE_CURRENT_BINARY_DIR}/fault_bad_argument_event.bec"
+    "${CMAKE_CURRENT_BINARY_DIR}/fault_nonfinite_event.bec"
+    "${CMAKE_CURRENT_BINARY_DIR}/fault_osc_argument_event.bec"
+    "${CMAKE_CURRENT_BINARY_DIR}/fault_allocation_event.bec"
+    "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.bec"
+    "${CMAKE_CURRENT_BINARY_DIR}/oscillator_event.bec"
+    "${CMAKE_CURRENT_BINARY_DIR}/two_oscillator_event.bec"
+    "${CMAKE_CURRENT_BINARY_DIR}/many_oscillator_event.bec"
+    "${CMAKE_CURRENT_BINARY_DIR}/state64_event.bec"
+    "${CMAKE_CURRENT_BINARY_DIR}/routing_event.bec"
+    "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.bec"
+    "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.bec")
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.bec"
   COMMAND berry "${SCRIPT_RUNTIME_ROOT}/examples/channel_envelope.be"
-          -o "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.fwsc"
+          -o "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.bec"
   DEPENDS berry "${SCRIPT_RUNTIME_ROOT}/examples/channel_envelope.be")
 foreach(FAULT_PROGRAM fault_bad_argument_event fault_nonfinite_event fault_osc_argument_event fault_allocation_event)
-  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${FAULT_PROGRAM}.fwsc"
+  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${FAULT_PROGRAM}.bec"
     COMMAND berry "${SCRIPT_RUNTIME_ROOT}/examples/${FAULT_PROGRAM}.be"
-            -o "${CMAKE_CURRENT_BINARY_DIR}/${FAULT_PROGRAM}.fwsc"
+            -o "${CMAKE_CURRENT_BINARY_DIR}/${FAULT_PROGRAM}.bec"
     DEPENDS berry "${SCRIPT_RUNTIME_ROOT}/examples/${FAULT_PROGRAM}.be")
 endforeach()
-add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.fwsc"
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.bec"
   COMMAND berry "${SCRIPT_RUNTIME_ROOT}/examples/pitch_tracking_event.be"
-          -o "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.fwsc"
+          -o "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.bec"
   DEPENDS berry "${SCRIPT_RUNTIME_ROOT}/examples/pitch_tracking_event.be")
 foreach(PROGRAM oscillator_event two_oscillator_event many_oscillator_event state64_event routing_event)
-  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${PROGRAM}.fwsc"
+  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${PROGRAM}.bec"
     COMMAND berry "${SCRIPT_RUNTIME_ROOT}/examples/${PROGRAM}.be"
-            -o "${CMAKE_CURRENT_BINARY_DIR}/${PROGRAM}.fwsc"
+            -o "${CMAKE_CURRENT_BINARY_DIR}/${PROGRAM}.bec"
     DEPENDS berry "${SCRIPT_RUNTIME_ROOT}/examples/${PROGRAM}.be")
 endforeach()
 set(LARGE_PAYLOAD_SOURCE "def on_note_on(key, velocity)\n")
@@ -111,9 +111,9 @@ string(APPEND LARGE_PAYLOAD_SOURCE
   "    start_note()\nend\n\ndef on_note_off()\nend\n\ndef on_ramp_end()\nend\n")
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.be"
   CONTENT "${LARGE_PAYLOAD_SOURCE}")
-add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.fwsc"
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.bec"
   COMMAND berry "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.be"
-          -o "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.fwsc"
+          -o "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.bec"
   DEPENDS berry "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.be")
 set(MAXIMUM_PAYLOAD_SOURCE "def on_note_on(key, velocity)\n")
 foreach(INDEX RANGE 0 575)
@@ -125,38 +125,38 @@ string(APPEND MAXIMUM_PAYLOAD_SOURCE
   "    start_note()\nend\n\ndef on_note_off()\nend\n\ndef on_ramp_end()\nend\n")
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.be"
   CONTENT "${MAXIMUM_PAYLOAD_SOURCE}")
-add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.fwsc"
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.bec"
   COMMAND berry "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.be"
-          -o "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.fwsc"
+          -o "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.bec"
   DEPENDS berry "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.be")
 add_custom_target(shared_berry_program DEPENDS
-  "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/fault_bad_argument_event.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/fault_nonfinite_event.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/fault_osc_argument_event.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/fault_allocation_event.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/oscillator_event.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/two_oscillator_event.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/many_oscillator_event.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/state64_event.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/routing_event.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.fwsc")
+  "${CMAKE_CURRENT_BINARY_DIR}/channel_envelope.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/fault_bad_argument_event.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/fault_nonfinite_event.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/fault_osc_argument_event.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/fault_allocation_event.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/pitch_tracking_event.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/oscillator_event.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/two_oscillator_event.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/many_oscillator_event.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/state64_event.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/routing_event.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/large_payload_event.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/maximum_payload_event.bec")
 add_dependencies(shared_berry_runtime_test shared_berry_program)
 
 add_executable(led_berry_runtime_test tests/led_runtime_test.c)
 target_link_libraries(led_berry_runtime_test PRIVATE script_runtime::berry)
 target_compile_options(led_berry_runtime_test PRIVATE
     -Wall -Wextra -Werror -pedantic -UNDEBUG)
-add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/led_event.fwsc"
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/led_event.bec"
   COMMAND berry "${SCRIPT_RUNTIME_ROOT}/examples/led_event.be"
-          -o "${CMAKE_CURRENT_BINARY_DIR}/led_event.fwsc"
+          -o "${CMAKE_CURRENT_BINARY_DIR}/led_event.bec"
   DEPENDS berry "${SCRIPT_RUNTIME_ROOT}/examples/led_event.be")
 add_custom_target(led_berry_program DEPENDS
-    "${CMAKE_CURRENT_BINARY_DIR}/led_event.fwsc")
+    "${CMAKE_CURRENT_BINARY_DIR}/led_event.bec")
 add_dependencies(led_berry_runtime_test led_berry_program)
 add_test(NAME shared_berry.led
   COMMAND led_berry_runtime_test
-    "${CMAKE_CURRENT_BINARY_DIR}/led_event.fwsc")
+    "${CMAKE_CURRENT_BINARY_DIR}/led_event.bec")
 endif()

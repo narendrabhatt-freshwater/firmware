@@ -23,6 +23,7 @@ FLASH_ERASE=0
 FLASH_VERIFY=1
 FLASH_START=1
 BUILD_FORCE=0
+BUILD_BAUD=""
 
 # Serial console / log
 SERIAL_PORT="${FW_SERIAL_PORT:-}"     # e.g. /dev/cu.usbmodemCHCARD_<hardware-uid>3
@@ -74,7 +75,7 @@ usage() {
     "fw - Freshwater CMI firmware CLI"
     ""
     "Usage"
-    "  fw build    [channel|effect|all] [--debug|--release] [--force]"
+    "  fw build    [channel|effect|all] [--debug|--release] [-BAUD RATE] [--force]"
     "  fw flash    [channel|effect] [options]"
     "  fw list     [usb|stlink|uart|all]"
     "  fw console  [channel|effect] [--port PATH]"
@@ -90,6 +91,7 @@ usage() {
     "Build options"
     "  --debug | --release     preset (default Debug)"
     "  --force | -f            wipe build/ then reconfigure and rebuild"
+    "  -BAUD RATE              Channel Card baud (otherwise 921600)"
     ""
     "Flash options"
     "  --debug | --release     preset (default Debug)"
@@ -233,7 +235,11 @@ cmd_build_one() {
   info "build $card ($PRESET)"
   (
     cd "$dir"
-    cmake --preset "$PRESET"
+    if [[ "$card" == "channel" ]]; then
+      cmake --preset "$PRESET" "-DFW_RS485_BAUD=$BUILD_BAUD"
+    else
+      cmake --preset "$PRESET"
+    fi
     cmake --build "build/$PRESET"
   )
   ok "$(relpath "$(artifact "$card" elf)")"
@@ -244,6 +250,9 @@ cmd_build() {
   card="$(normalize_card "${1:-all}")"
   shift || true
   parse_flags "$@"
+  if [[ -n "$BUILD_BAUD" && "$card" != "channel" ]]; then
+    die "-BAUD applies only to 'fw build channel'"
+  fi
 
   if [[ "$card" == "all" ]]; then
     cmd_build_one channel
@@ -1151,6 +1160,13 @@ parse_flags() {
         ;;
       --port=*)
         _set_port_arg "${1#--port=}"
+        ;;
+      -BAUD)
+        [[ $# -ge 2 ]] || die "-BAUD needs a value"
+        BUILD_BAUD="$2"; shift
+        ;;
+      -BAUD=*)
+        BUILD_BAUD="${1#-BAUD=}"
         ;;
       --baud)
         [[ $# -ge 2 ]] || die "--baud needs a value"

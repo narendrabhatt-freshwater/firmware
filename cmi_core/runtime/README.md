@@ -105,21 +105,18 @@ loads and repeatedly replaces eight generated programs larger than the former
 4 KiB cap, runs one million event dispatches, checks the fault-containment
 matrix, and verifies at least 20% heap headroom over the measured peak.
 
-The standalone `berry` compiler emits raw Berry bytecode for `.bec` output:
-
-```sh
-build/shared-berry/berry cmi_core/runtime/examples/channel_envelope.be -o channel_envelope.bec
-```
-
-Use a `.fwsc` output filename to emit an FWSC v1 container carrying Channel ABI2
-Berry bytecode. The current Channel Card firmware requires this container and
-does not accept raw `.bec` files directly.
-ABI1 binaries are rejected and must be recompiled from source:
+The standalone `berry` compiler takes `.be` source and emits an upload-ready
+`.bec` program containing Channel ABI2 Berry bytecode and the firmware header:
 
 ```sh
 build/shared-berry/berry cmi_core/runtime/examples/channel_envelope.be \
-  -o build/shared-berry/channel_envelope.fwsc
+  -o build/shared-berry/channel_envelope.bec
 ```
+
+The header carries the ABI version, payload length, and checksum required by
+the current Channel Card firmware. ABI1 binaries must be recompiled. Add
+`--raw` to omit this header for tools that need raw Berry bytecode; that output
+cannot be uploaded directly to the card.
 
 To use an existing standalone compiler, set `BERRY_EXECUTABLE` when configuring
 the runtime, CMI Core, CMI Control, or voice-board build. For example, from the
@@ -131,7 +128,8 @@ cmake -S cmi_core -B build/cmi-core \
 cmake --build build/cmi-core --parallel 4
 ```
 
+The external compiler must emit the same upload-ready `.bec` format.
 Without this setting, the build compiles its own `berry` executable. Build-time
-firmware programs use `.fwsc` output. CMI Core's `loadVoiceScript()` API accepts
+firmware programs use `.bec` output. CMI Core's `loadVoiceScript()` API accepts
 Berry source and compiles it internally; it does not invoke the CLI or accept
 raw `.bec` files.

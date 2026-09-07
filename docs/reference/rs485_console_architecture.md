@@ -4,6 +4,19 @@ Half-duplex, multi-drop RS485 console on Channel and Effect Card firmware,
 plus optional PC tools that speak the **same ASCII protocol** any serial
 terminal can type (`screen`, `minicom`, PuTTY at **921600 8N1**).
 
+## Channel Card build baud rate
+
+Channel Card defaults to **921600**. To build it at another rate:
+
+```sh
+./scripts/fw build channel --release -BAUD 115200
+```
+
+Omit `-BAUD` to return to 921600. This option affects only Channel Card
+firmware; host applications and Effect Card retain their own settings.
+Channel transmit deadlines follow the configured UART rate automatically.
+The build override is applied in a CubeMX-preserved USER CODE section.
+
 ## Shipping model
 
 | Artifact                                            | Role                                                      | Required?      |

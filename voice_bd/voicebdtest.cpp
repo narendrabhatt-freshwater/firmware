@@ -22,7 +22,7 @@
 */
 
 #include "voicebd.h"
-#include <options.h>
+#include "options.h"
 #include <RtMidi.h>
 #include <array>
 #include <chrono>
@@ -51,12 +51,12 @@ int usage(int status)
         << " (" << product << "). Version " << version << "\n"
         << "    (C) 2026 Freshwater Instruments\n"
         << "\nUSAGE\n\n"
-        << "    " << exe_name << " [options] <sample.wav> [program.fwsc]\n"
+        << "    " << exe_name << " [options] <sample.wav> [program.bec]\n"
         << "\nOPTIONS\n\n"
         << "    -h             Print this help and exit\n"
         << "\nARGUMENTS\n\n"
         << "    sample.wav     48 kHz, 16-bit PCM WAV, mono or stereo\n"
-        << "    program.fwsc    Firmware program (default: channel.fwsc in current directory)\n"
+        << "    program.bec    Firmware program (default: channel.bec in current directory)\n"
         << "\n    Uses MIDI input 0 and the device ports configured in voicebd.h.\n"
         << "    Play MIDI notes; press Ctrl+C to exit.\n\n";
     return status;

@@ -94,7 +94,7 @@ bool LoadOrCompile(const VmExample &example, std::vector<uint8_t> &program,
   const fs::path source = fs::path(CMI_VM_EXAMPLE_SOURCE_DIR) /
                           (std::string(example.file) + ".be");
   const fs::path cache = fs::path(CMI_VM_EXAMPLE_CACHE_DIR) /
-                         (std::string(example.file) + ".fwsc");
+                         (std::string(example.file) + ".bec");
   std::error_code ec;
   bool fresh = fs::is_regular_file(cache, ec) && !ec;
   if (fresh) {

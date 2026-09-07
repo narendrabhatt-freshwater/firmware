@@ -218,7 +218,7 @@ if(BUILD_TESTING)
     NAME cmi_core.example_script
     COMMAND berry
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/vm/channel/channel.be
-            -o ${CMAKE_CURRENT_BINARY_DIR}/example-channel.fwsc)
+            -o ${CMAKE_CURRENT_BINARY_DIR}/example-channel.bec)
 
   add_test(
     NAME cmi_core.public_api_contract

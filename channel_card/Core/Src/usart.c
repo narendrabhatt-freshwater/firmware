@@ -21,6 +21,7 @@
 #include "usart.h"
 
 /* USER CODE BEGIN 0 */
+#include "rs485_config.h"
 
 /* USER CODE END 0 */
 
@@ -65,6 +66,16 @@ void MX_UART5_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN UART5_Init 2 */
+  /* CubeMX keeps a numeric .ioc default. Apply the build setting here so
+   * regeneration preserves the authoritative bus rate. No traffic runs yet. */
+  if (huart5.Init.BaudRate != FW_RS485_BAUD)
+  {
+    huart5.Init.BaudRate = FW_RS485_BAUD;
+    if (HAL_UART_Init(&huart5) != HAL_OK)
+    {
+      Error_Handler();
+    }
+  }
 
   /* USER CODE END UART5_Init 2 */
 

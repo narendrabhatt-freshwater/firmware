@@ -68,14 +68,14 @@ target_include_directories(note_bank_vm_test PRIVATE
   ../../cmi_core/runtime/include)
 target_link_libraries(note_bank_vm_test PRIVATE script_runtime::berry m)
 add_dependencies(note_bank_vm_test shared_berry_program)
-add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/channel.fwsc"
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/channel.bec"
   COMMAND berry
           "${CMAKE_CURRENT_SOURCE_DIR}/../../cmi_core/examples/vm/channel/channel.be"
-          -o "${CMAKE_CURRENT_BINARY_DIR}/channel.fwsc"
+          -o "${CMAKE_CURRENT_BINARY_DIR}/channel.bec"
   DEPENDS berry
           "${CMAKE_CURRENT_SOURCE_DIR}/../../cmi_core/examples/vm/channel/channel.be")
 add_custom_target(channel_program DEPENDS
-  "${CMAKE_CURRENT_BINARY_DIR}/channel.fwsc")
+  "${CMAKE_CURRENT_BINARY_DIR}/channel.bec")
 add_dependencies(note_bank_vm_test channel_program)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(note_bank_vm_test PRIVATE -Wall -Wextra -Werror)
@@ -89,6 +89,11 @@ add_test(NAME channel_card.attack_bank_s8 COMMAND attack_bank_s8_test)
 add_test(NAME channel_card.wavetable_osc COMMAND wavetable_osc_test)
 add_test(NAME channel_card.attack_upload_guard COMMAND attack_upload_guard_test)
 add_test(NAME channel_card.note_bank_vm COMMAND note_bank_vm_test
-  "${CMAKE_CURRENT_BINARY_DIR}/script_runtime/channel_envelope.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/channel.fwsc"
-  "${CMAKE_CURRENT_BINARY_DIR}/script_runtime/oscillator_event.fwsc")
+  "${CMAKE_CURRENT_BINARY_DIR}/script_runtime/channel_envelope.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/channel.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/script_runtime/oscillator_event.bec")
+
+add_executable(rs485_timing_test rs485_timing_test.c)
+target_include_directories(rs485_timing_test PRIVATE ../Core/Inc/console)
+target_compile_options(rs485_timing_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+add_test(NAME channel_card.rs485_timing COMMAND rs485_timing_test)

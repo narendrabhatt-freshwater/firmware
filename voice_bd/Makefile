@@ -1,4 +1,4 @@
 .PHONY: all
 all:
 	cmake -S . -B .build
-	cmake --build .build --target voicebdtest --parallel 4
+	cmake --build .build --target voicebd --parallel 4

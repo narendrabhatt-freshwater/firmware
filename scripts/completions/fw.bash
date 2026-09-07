@@ -31,7 +31,7 @@ _fw_complete() {
       fi
       return
       ;;
-    --baud) COMPREPLY=( $(compgen -W "460800 115200 230400 9600" -- "${cur}") ); return ;;
+    --baud|-BAUD) COMPREPLY=( $(compgen -W "921600 115200 230400 9600" -- "${cur}") ); return ;;
     --timeout-ms) COMPREPLY=( $(compgen -W "300" -- "${cur}") ); return ;;
     --retries) COMPREPLY=( $(compgen -W "2" -- "${cur}") ); return ;;
   esac
@@ -41,7 +41,7 @@ _fw_complete() {
       if [[ ${COMP_CWORD} -eq 2 ]]; then
         COMPREPLY=( $(compgen -W "${cards_all}" -- "${cur}") )
       else
-        COMPREPLY=( $(compgen -W "--debug --release --force -f" -- "${cur}") )
+        COMPREPLY=( $(compgen -W "--debug --release -BAUD --force -f" -- "${cur}") )
       fi
       ;;
     flash)
