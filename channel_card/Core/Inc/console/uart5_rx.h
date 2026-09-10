@@ -18,6 +18,10 @@ extern "C"
   /** Arm the UART5 RX interrupt. Call once after MX_UART5_Init(). */
   void Uart5Rx_Init(void);
 
+  /** Discard queued RX bytes and latched receive errors. Main-loop only.
+   * Keeps baud configuration, TX state and lifetime drop counters intact. */
+  void Uart5Rx_Clear(void);
+
   int Uart5Rx_Transmit(const uint8_t *data, uint16_t size, uint32_t timeout_ms);
 
   /** Pop one buffered byte. Returns 1 and writes *out if a byte was

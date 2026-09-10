@@ -87,6 +87,17 @@ uint8_t Uart5Rx_Get(uint8_t *out)
   return 1u;
 }
 
+void Uart5Rx_Clear(void)
+{
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  UART5->RQR = USART_RQR_RXFRQ;
+  UART5->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF |
+               USART_ICR_PECF;
+  rx_tail = rx_head;
+  __set_PRIMASK(primask);
+}
+
 uint32_t Uart5Rx_DroppedCount(void)
 {
   return rx_dropped;

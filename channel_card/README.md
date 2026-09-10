@@ -234,9 +234,16 @@ Pitch tracking uses `fc = fbase × (noteHz / 261.625565)^k`. See
 | `vm <voice>` | RS485 or CDC | Query active state, target, ABI version, and fault for voice 0…7. |
 | `vm mem` | RS485 or CDC | Return shared VM arena and per-voice fault/cycle diagnostics. |
 | `vq` | RS485 or CDC | Query active/pending masks, BODY sessions, target fill, and exact writable credit. RS485 uses the fixed binary-compatible `vq7` response. |
+| `reset` | RS485 or CDC | Clear RS485 hardware RX FIFO, queued RX bytes, receive error flags, and partial command line; replies `ok:reset`. Does not reboot or clear audio/voice state. |
 | `usb` | RS485 or CDC | Query BODY transport and underrun counters. |
 | `usb 0` | RS485 or CDC | Clear BODY transport counters and return the new values. |
 | `cpuload [0\|1]` | RS485 or CDC | Query or enable the LED_Y DMA-refill scope probe. Low is busy; high is idle. |
+
+Send `c:reset\r` and wait for `ok:reset` before sending another RS485 command:
+bytes already queued behind reset are discarded. The USB CDC console can also
+issue `c:reset` to clear an incomplete RS485 line. The command must reach a
+working console; it cannot reset the host adapter or recover a disconnected bus.
+Lifetime RX-drop counters are preserved.
 
 `al`, `wl`, and `vmload` switch the CDC connection from line parsing to binary input
 until the declared byte count has arrived. Do not send another command during

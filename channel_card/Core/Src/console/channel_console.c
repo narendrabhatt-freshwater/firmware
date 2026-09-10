@@ -166,6 +166,11 @@ static int __attribute__((unused)) RS485_Send(const char *s)
 /* When a command arrives over the USB CDC console, replies must go back
  * over USB instead of the RS485 bus.  Console_ExecFromUSB() sets this
  * for the duration of the command. */
+/* Main-loop parser state; reset is also available from the USB console. */
+static uint8_t rs485_line[96];
+static uint8_t rs485_line_len;
+static uint32_t rs485_dropped_reported;
+
 static uint8_t console_via_usb = 0;
 
 /* RS485 path counters (internal; no console cmd). */
@@ -403,7 +408,7 @@ static void Console_Help(void)
   char b[256];
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   snprintf(b, sizeof b,
-           "ok: SAMPLE n0..n7 on sample key velocity @session | on key [velocity] [@session] | off | "
+           "ok: reset (RS485 RX) | SAMPLE n0..n7 on sample key velocity @session | on key [velocity] [@session] | off | "
            "al id n | wl wave n | vmload v n | vm [v] | ar id Hz | a | vq | "
            "usb | cpuload [0|1] | "
            "f0..f7 Hz [q] | fk0..fk7 k | g ch dB\r\n");
@@ -1031,6 +1036,17 @@ static void Console_Exec(char *line)
     return;
   }
 
+  /* Clear receive state before replying so the acknowledgement survives. */
+  if (strcmp(line, "reset") == 0)
+  {
+    Uart5Rx_Clear();
+    rs485_line_len = 0u;
+    rs485_line[0] = '\0';
+    rs485_dropped_reported = Uart5Rx_DroppedCount();
+    RS485_Reply("ok:reset\r\n");
+    return;
+  }
+
   /* ---- h / help / ? ---- */
   if (strcmp(line, "h") == 0 || strcmp(line, "help") == 0 ||
       strcmp(line, "?") == 0)
@@ -1251,17 +1267,14 @@ void Console_ExecFromUSB(char *line)
  * ASCII only (fractional nX Hz). Messages for other cards are dropped. */
 static void Console_Poll(void)
 {
-  static uint8_t cmd[96];
-  static uint8_t idx = 0;
-  static uint32_t dropped_reported = 0;
   uint8_t c;
 
   /* Fail loud on lost characters — but only when idle between lines.
    * Replying mid-command would itself drive the bus and lose more RX. */
   const uint32_t dropped = Uart5Rx_DroppedCount();
-  if (dropped != dropped_reported && idx == 0u)
+  if (dropped != rs485_dropped_reported && rs485_line_len == 0u)
   {
-    dropped_reported = dropped;
+    rs485_dropped_reported = dropped;
     RS485_Reply("err:rxdrop\r\n");
   }
 
@@ -1272,44 +1285,44 @@ static void Console_Poll(void)
 #if RS485_ECHO
       RS485_Send("\r\n");
 #endif
-      cmd[idx] = '\0';
+      rs485_line[rs485_line_len] = '\0';
 
       /* Card-address filtering: only execute if addressed to us.
        * No artificial post-Enter delay — production requires e:echo off. */
-      if (RS485_IsForMe((char *)cmd))
+      if (RS485_IsForMe((char *)rs485_line))
       {
         rs485_cmd_count++;
-        Console_Exec((char *)cmd);
+        Console_Exec((char *)rs485_line);
       }
       /* else: message for another card — silently ignore */
 
-      idx = 0;
+      rs485_line_len = 0;
     }
     else if (c == 0x08 || c == 0x7F) /* backspace */
     {
-      if (idx > 0)
+      if (rs485_line_len > 0)
       {
-        idx--;
+        rs485_line_len--;
 #if RS485_ECHO
         RS485_Send("\b \b");
 #endif
       }
     }
-    else if (c >= 32 && c < 127 && idx < sizeof(cmd) - 1)
+    else if (c >= 32 && c < 127 && rs485_line_len < sizeof(rs485_line) - 1)
     {
-      cmd[idx++] = (uint8_t)((c >= 'A' && c <= 'Z') ? c + 32 : c);
+      rs485_line[rs485_line_len++] = (uint8_t)((c >= 'A' && c <= 'Z') ? c + 32 : c);
       /* Multi-drop: Effect echoes every host keystroke onto the same wire.
        * Our IRQ RX now catches that echo mixed into the real frame, which
        * showed up as "cjc:n0…" (Channel then failed to parse). Whenever a
        * fresh "c:"/"e:"/"*:" address lands, discard everything before it. */
-      if (idx >= 2u && cmd[idx - 1u] == ':' &&
-          (cmd[idx - 2u] == (uint8_t)RS485_CARD_ID ||
-           cmd[idx - 2u] == (uint8_t)RS485_BROADCAST_ID ||
-           cmd[idx - 2u] == (uint8_t)'e'))
+      if (rs485_line_len >= 2u && rs485_line[rs485_line_len - 1u] == ':' &&
+          (rs485_line[rs485_line_len - 2u] == (uint8_t)RS485_CARD_ID ||
+           rs485_line[rs485_line_len - 2u] == (uint8_t)RS485_BROADCAST_ID ||
+           rs485_line[rs485_line_len - 2u] == (uint8_t)'e'))
       {
-        cmd[0] = cmd[idx - 2u];
-        cmd[1] = ':';
-        idx = 2u;
+        rs485_line[0] = rs485_line[rs485_line_len - 2u];
+        rs485_line[1] = ':';
+        rs485_line_len = 2u;
       }
 #if RS485_ECHO
       char e[2] = {(char)c, '\0'};
