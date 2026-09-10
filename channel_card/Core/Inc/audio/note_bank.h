@@ -79,6 +79,9 @@ extern "C"
   /** Playback duration until a BODY miss at the current observed rate. */
   uint32_t NoteBank_RemainingUs(uint8_t voice);
 
+  /** Card-side source-sample refill budget for a 5 ms playback interval. */
+  uint16_t NoteBank_RefillSamples5ms(uint8_t voice);
+
 
 #ifdef __cplusplus
 }

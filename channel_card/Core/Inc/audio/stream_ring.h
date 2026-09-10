@@ -85,6 +85,8 @@ extern "C"
 
   /** Last routed UAC sequence processed, including rejected routed frames. */
   uint16_t StreamRing_LastUacSequence(void);
+  void StreamRing_AudioFrame(void);
+  uint8_t StreamRing_UacAgeMs(void);
 
   /** Reserve a complete BODY burst without publishing it to the consumer.
    * @retval STREAM_RING_WRITE_OK reservation active

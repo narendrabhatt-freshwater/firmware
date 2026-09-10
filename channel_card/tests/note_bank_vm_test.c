@@ -182,11 +182,17 @@ int main(int argc,char **argv){
       NoteBank_PanicAll();
       check(NoteBank_NoteOn(0u,(uint8_t)key,127u)==0,"duration note accepted");
       prime_body(0u);boundary();
+      if(head==0u) {
+        uint32_t inc=(uint32_t)(NoteBank_GetFreq(0u)/260.0*65536.0+0.5);
+        uint16_t demand=(uint16_t)(((uint64_t)inc*240u+65535u)>>16);
+        check(NoteBank_RefillSamples5ms(0u)==demand,"card computes five-ms demand from its playback rate");
+      }
       uint32_t predicted=NoteBank_RemainingUs(0u), frames=0u;
       uint32_t last=predicted;
       if (head==0u && key==48u) {
         int8_t replacement[USB_STREAM_UAC_BODY_SAMPLES]={0};
         StreamRing_ArmPending(0u,0u,9u);
+        check(NoteBank_RefillSamples5ms(0u)==0u,"pending session cannot advertise old voice consumption");
         check(StreamRing_WriteVoice(0u,9u,1u,0u,replacement,sizeof replacement)==sizeof replacement,"stage pending data beside current playback");
         check(NoteBank_RemainingUs(0u)==predicted,"pending samples must not extend current playback duration");
       }
@@ -207,6 +213,7 @@ int main(int argc,char **argv){
   }
   NoteBank_PanicAll();
   check(NoteBank_RemainingUs(0u)==0u,"inactive voice has no deadline");
+  check(NoteBank_RefillSamples5ms(0u)==0u,"inactive voice has no refill demand");
   /* Underrun fallback must repeat audio, recover, and remain voice-local. */
   attack_lengths[0]=0u;
   check(NoteBank_NoteOnSampleSession(0u,0u,60u,127u,7u)==0,"start loop test session");

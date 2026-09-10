@@ -1040,6 +1040,31 @@ uint8_t NoteBank_AnyBankReferences(void)
   return 0u;
 }
 
+uint16_t NoteBank_RefillSamples5ms(uint8_t note)
+{
+  uint32_t inc;
+  uint64_t advance;
+  if (note >= NOTE_BANK_VOICES || note_active[note] == 0u ||
+      StreamRing_HasPending(note) != 0u) return 0u;
+  inc = note_observed_inc[note];
+  if (inc < note_inc[note]) inc = note_inc[note];
+  if (inc < note_inc_tgt[note]) inc = note_inc_tgt[note];
+  if (inc > PHASE_INC_MAX) inc = PHASE_INC_MAX;
+  advance = (uint64_t)inc * (NOTE_SAMPLE_RATE_HZ / 200u);
+  if (note_body_only[note] == 0u)
+  {
+    uint64_t boundary = (uint64_t)(note_play_alen[note] > SAMPLE_CROSSFADE_LEN
+        ? note_play_alen[note] - SAMPLE_CROSSFADE_LEN : 0u) << 16;
+    if (note_phase[note] < boundary)
+    {
+      uint64_t local = boundary - note_phase[note];
+      if (advance <= local) return 0u;
+      advance -= local;
+    }
+  }
+  return (uint16_t)((advance + PHASE_ONE - 1u) >> 16);
+}
+
 uint32_t NoteBank_RemainingUs(uint8_t note)
 {
   uint32_t inc;
@@ -1075,6 +1100,7 @@ uint32_t NoteBank_RemainingUs(uint8_t note)
 
 int32_t NoteBank_NextSample(void)
 {
+  StreamRing_AudioFrame();
   int64_t sum = 0;
   uint8_t i;
   for (i = 0u; i < NOTE_BANK_VOICES; i++)

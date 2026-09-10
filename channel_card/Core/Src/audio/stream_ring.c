@@ -48,6 +48,9 @@ static volatile uint32_t s_future_pkts;
 static volatile uint32_t s_full_pkts;
 static volatile uint32_t s_superseded_pkts;
 static volatile uint16_t s_last_uac_sequence;
+static volatile uint32_t s_audio_frames;
+static uint32_t s_last_uac_frame;
+static uint8_t s_have_uac;
 /* 0xFFFFFFFF = no consume sample since last clear. */
 static volatile uint32_t s_min_fill = 0xFFFFFFFFu;
 
@@ -66,6 +69,8 @@ static uint32_t StreamRing_PendingFilled(const StreamRing_t *r)
 void StreamRing_Init(void)
 {
   s_last_uac_sequence = 0u;
+  s_audio_frames = s_last_uac_frame = 0u;
+  s_have_uac = 0u;
   StreamRing_ResetAll();
 }
 
@@ -437,6 +442,8 @@ uint32_t StreamRing_WriteUac(const int8_t *packet)
       ++accepted;
     offset += counts[i];
   }
+  s_last_uac_frame = s_audio_frames;
+  s_have_uac = 1u;
   /* Main-loop USB ingestion cannot interleave a console snapshot here. */
   s_last_uac_sequence = (uint16_t)(uint8_t)packet[0] |
                        (uint16_t)((uint16_t)(uint8_t)packet[1] << 8u);
@@ -626,4 +633,13 @@ void StreamRing_StatsClear(void)
 void StreamRing_DropCountClear(void)
 {
   StreamRing_StatsClear();
+}
+
+/* The audio clock measures snapshot age without RS485/host timing guesses. */
+void StreamRing_AudioFrame(void) { ++s_audio_frames; }
+uint8_t StreamRing_UacAgeMs(void)
+{
+  uint32_t frames = s_audio_frames - s_last_uac_frame;
+  if (s_have_uac == 0u || frames >= 254u * 48u) return 255u;
+  return (uint8_t)((frames + 47u) / 48u);
 }

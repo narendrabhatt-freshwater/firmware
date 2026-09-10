@@ -408,9 +408,11 @@ struct card_status
     uint16_t buffer_capacity = 0u;
     uint16_t status_sequence = 0u;
     uint16_t last_usb_sequence = 0u;
+    uint8_t usb_age_ms = 255u;
     std::array<uint8_t, kVoiceCount> session_id{};
     std::array<uint32_t, kVoiceCount> remaining_us{};
     std::array<uint16_t, kVoiceCount> free_samples{};
+    std::array<uint16_t, kVoiceCount> refill_samples_5ms{};
 };
 
 /* ---- parse voice queue status -------------------------------------------- */
@@ -418,21 +420,28 @@ struct card_status
 bool parse_voice_queue_status(std::vector<uint8_t> const& raw,
     card_status& status)
 {
-    for (size_t start = 0; start + 53u <= raw.size(); ++start) {
+    for (size_t start = 0; start + 61u <= raw.size(); ++start) {
         uint8_t const* p = raw.data() + start;
         if (p[0] != 0xA5u || p[1] != 0x5Au || p[2] != 0x43u ||
-            p[3] != 0x08u || p[52] != '\n') continue;
+            p[3] != 0x0Cu || p[60] != '\n') continue;
         status.active_voice_mask = p[4];
         status.pending_voice_mask = p[5];
         status.buffer_capacity = read16(p + 6u);
-        status.status_sequence = read16(p + 8u);
+        status.status_sequence = p[8];
+        status.usb_age_ms = p[9];
         status.last_usb_sequence = read16(p + 10u);
-        if (status.buffer_capacity == 0u) return false;
+        if (status.buffer_capacity == 0u || status.buffer_capacity > 8191u) return false;
         for (size_t i = 0; i < kVoiceCount; ++i) {
-            size_t const at = 12u + i * 5u;
+            size_t const at = 12u + i * 6u;
             status.session_id[i] = p[at];
-            status.free_samples[i] = read16(p + at + 1u);
-            status.remaining_us[i] = static_cast<uint32_t>(read16(p + at + 3u)) * 100u;
+            status.free_samples[i] = uint16_t(p[at + 1u]) |
+                (uint16_t(p[at + 2u] & 0x1Fu) << 8u);
+            status.refill_samples_5ms[i] = uint16_t(p[at + 2u] >> 5u) |
+                (uint16_t(p[at + 3u]) << 3u) | (uint16_t(p[at + 4u] & 1u) << 11u);
+            if (status.refill_samples_5ms[i] > 3840u) return false;
+            uint16_t const duration = uint16_t(p[at + 4u] >> 1u) |
+                (uint16_t(p[at + 5u]) << 7u);
+            status.remaining_us[i] = static_cast<uint32_t>(duration) * 100u;
             if (status.free_samples[i] > status.buffer_capacity ||
                 (((status.active_voice_mask | status.pending_voice_mask) &
                   (1u << i)) != 0u && status.session_id[i] == 0xFFu))
@@ -489,10 +498,14 @@ public:
             // std::cerr << "bytes " << bytes.size() << std::endl;
             reply.insert(reply.end(), bytes.begin(), bytes.begin() + count);
             if (body == "vq") {
+                std::string const text(reply.begin(), reply.end());
+                if (text.find("err:syntax") != std::string::npos)
+                    return fail(voice_board_error_t::bad_reply,
+                        "Channel Card firmware must support the 61-byte vq reply");
                 for (size_t i = 0; i + 4u <= reply.size(); ++i) {
                     if (reply[i] != 0xA5u || reply[i + 1u] != 0x5Au ||
                         reply[i + 2u] != 0x43u) continue;
-                    if (reply[i + 3u] != 0x08u)
+                    if (reply[i + 3u] != 0x0Cu)
                         return fail(voice_board_error_t::bad_reply,
                             "invalid voice status reply header");
                     break;
@@ -541,12 +554,16 @@ struct voice_data
     bool active = false;
     bool waiting_for_first_packet = false;
     unsigned initial_samples_left = 0u;
-    bool confirmed_by_card = false;
+    bool filling_initial_buffer = false;
+    bool note_seen_in_status = false;
     uint8_t session_id = 0u;
     uint16_t sample_id = 0u;
     size_t body_position = 0u;
     unsigned available_sample_slots = 0u;
     bool pending = true;
+    unsigned refill_samples_5ms = 0u;
+    double refill_balance = 0.0;
+    std::chrono::steady_clock::time_point refill_at{};
     std::chrono::steady_clock::time_point deadline{};
 };
 
@@ -557,6 +574,7 @@ struct pending_packet
     uint8_t voice = 0u;
     uint8_t session = 0u;
     uint16_t samples = 0u;
+    std::chrono::steady_clock::time_point packet_at{};
 };
 
 /* State shared by the RtAudio callback and the status thread. */
@@ -576,8 +594,11 @@ struct stream_state
     std::array<int8_t, kUsbPacketByteCount> packet{};
     size_t packet_offset = kUsbPacketByteCount;
     uint8_t next_voice = 0u;
-    uint16_t last_status_sequence = 0u;
+    uint8_t last_status_sequence = 0u;
+    std::chrono::steady_clock::time_point acknowledged_packet_at{};
     bool status_ready = false;
+    unsigned buffer_capacity = 0u;
+    std::chrono::steady_clock::time_point next_packet_at{};
 
 /* ---- apply voice queue status -------------------------------------------- */
 
@@ -586,12 +607,13 @@ struct stream_state
     {
         std::lock_guard<std::mutex> lock(mutex);
         if (status_ready) {
-            uint16_t const distance = static_cast<uint16_t>(
+            uint8_t const distance = static_cast<uint8_t>(
                 status.status_sequence - last_status_sequence);
-            if (distance == 0u || distance >= 0x8000u) return;
+            if (distance == 0u || distance >= 0x80u) return;
         }
         last_status_sequence = status.status_sequence;
         status_ready = true;
+        buffer_capacity = status.buffer_capacity;
         if (!sequence_ready) {
             next_sequence = static_cast<uint16_t>(
                 status.last_usb_sequence + 1u);
@@ -603,6 +625,7 @@ struct stream_state
             uint16_t const distance = static_cast<uint16_t>(
                 status.last_usb_sequence - front.sequence);
             if (distance >= 0x8000u) break;
+            acknowledged_packet_at = front.packet_at;
             first_pending_packet =
                 (first_pending_packet + 1u) % kPendingPacketCapacity;
             --pending_packet_count;
@@ -628,19 +651,67 @@ struct stream_state
             if ((live_voice_mask & static_cast<uint8_t>(1u << voice)) == 0u ||
                     status.session_id[voice] != state.session_id) {
                 state.available_sample_slots = 0u;
-                if (state.confirmed_by_card &&
+                state.refill_samples_5ms = 0u;
+                if (state.note_seen_in_status &&
                     (live_voice_mask & (1u << voice)) == 0u)
                     state.active = false;
                 continue;
             }
-            state.confirmed_by_card = true;
+            state.note_seen_in_status = true;
             state.available_sample_slots = free_slots;
             state.pending = (status.pending_voice_mask & (1u << voice)) != 0u;
             state.deadline = requested_at +
                 std::chrono::microseconds(status.remaining_us[voice]);
             state.waiting_for_first_packet = state.pending;
+            state.refill_samples_5ms = !state.pending
+                ? status.refill_samples_5ms[voice] : 0u;
+            /* Map the status snapshot to the acknowledged USB packet. */
+            state.refill_at = acknowledged_packet_at != std::chrono::steady_clock::time_point{}
+                    && status.usb_age_ms != 255u
+                ? acknowledged_packet_at + std::chrono::milliseconds(status.usb_age_ms)
+                : std::max(requested_at, next_packet_at);
+            /* Account for outstanding samples in USB packet order. */
+            state.refill_balance = status.free_samples[voice];
+            for (size_t j = 0; j < pending_packet_count; ++j) {
+                auto const& sent = pending_packets[
+                    (first_pending_packet + j) % kPendingPacketCapacity];
+                if (sent.voice != voice) continue;
+                if (state.refill_samples_5ms && sent.packet_at > state.refill_at) {
+                    double elapsed_ms = std::chrono::duration<double, std::milli>(
+                        sent.packet_at - state.refill_at).count();
+                    state.refill_balance = std::min(double(buffer_capacity),
+                        state.refill_balance + elapsed_ms * state.refill_samples_5ms / 5.0);
+                    state.refill_at = sent.packet_at;
+                }
+                state.refill_balance -= sent.samples;
+            }
         }
 
+    }
+
+/* ---- update startup priority --------------------------------------------- */
+
+    void update_startup_priority(voice_data& voice)
+    {
+        if (!voice.active || !voice.filling_initial_buffer) return;
+        double const reserve = std::ceil(2.0 * voice.refill_samples_5ms / 5.0);
+        double const target = voice.pending || !voice.note_seen_in_status
+            ? double(buffer_capacity)
+            : std::min(double(buffer_capacity) - reserve,
+                double(std::max(kUsbPacketBodySampleCount, voice.refill_samples_5ms)));
+        double const buffered = voice.pending || !voice.note_seen_in_status
+            ? double(voice.body_position)
+            : voice.refill_samples_5ms
+                ? buffer_capacity - voice.refill_balance
+                : buffer_capacity - voice.available_sample_slots;
+        if (voice.note_seen_in_status && !voice.pending &&
+            std::ceil(buffered) >= target) {
+            voice.filling_initial_buffer = false;
+            voice.initial_samples_left = 0u;
+        } else {
+            voice.initial_samples_left = static_cast<unsigned>(
+                std::max(1.0, std::ceil(target - buffered)));
+        }
     }
 
 /* ---- prepare the next usb audio packet ----------------------------------- */
@@ -651,8 +722,29 @@ struct stream_state
         std::fill(packet.begin(), packet.end(), 0);
         packet[2] = packet[6] = static_cast<int8_t>(kUsbIdlePacketTag);
         packet_offset = 0u;
+        /* Advance the USB packet time. */
+        auto const packet_at = next_packet_at == std::chrono::steady_clock::time_point{}
+            ? now : next_packet_at;
+        next_packet_at = packet_at + std::chrono::milliseconds(1);
         if (!sequence_ready || pending_packet_count + 2u > kPendingPacketCapacity)
             return;
+        for (auto& voice : voices) {
+            if (!voice.active || voice.refill_samples_5ms == 0u) continue;
+            double const elapsed_ms = std::chrono::duration<double, std::milli>(
+                packet_at - voice.refill_at).count();
+            if (elapsed_ms > 0.0) {
+                voice.refill_balance = std::min(double(buffer_capacity),
+                    voice.refill_balance + elapsed_ms * voice.refill_samples_5ms / 5.0);
+                voice.refill_at = packet_at;
+            }
+            /* Calculate the refill allowance. */
+            double const reserve = std::ceil(2.0 * voice.refill_samples_5ms / 5.0);
+            double const allowance = voice.refill_balance - reserve;
+            voice.available_sample_slots = allowance > 0.0
+                ? static_cast<unsigned>(allowance) : 0u;
+        }
+        for (auto& voice : voices) update_startup_priority(voice);
+
         std::array<unsigned, kVoiceCount> queued_samples{};
         for (size_t i = 0u; i < pending_packet_count; ++i) {
             auto const& queued = pending_packets[
@@ -671,18 +763,47 @@ struct stream_state
             if (voices[v].active && voices[v].available_sample_slots != 0u &&
                 samples[voices[v].sample_id].body_size != 0u) candidates[count++] = v;
         }
+        auto protect = [&](uint8_t v) -> unsigned {
+            auto const& voice = voices[v];
+            if (voice.pending || voice.initial_samples_left) return 0u;
+            if (!voice.refill_samples_5ms)
+                return voice.deadline <= now + std::chrono::milliseconds(2)
+                    ? voice.available_sample_slots : 0u;
+            /* Calculate the playing voice's refill requirement. */
+            double const needed = std::ceil(3.0 * voice.refill_samples_5ms / 5.0) -
+                (buffer_capacity - voice.refill_balance);
+            return needed > 0.0 ? std::min(voice.available_sample_slots,
+                static_cast<unsigned>(std::ceil(needed))) : 0u;
+        };
+        bool const has_startup = std::any_of(
+            candidates.begin(), candidates.begin() + count,
+            [&](uint8_t v) { return voices[v].filling_initial_buffer; });
+        auto first_packet = [&](uint8_t v) {
+            return voices[v].filling_initial_buffer &&
+                voices[v].body_position < kUsbPacketBodySampleCount;
+        };
         auto before = [&](uint8_t a, uint8_t b) {
-                if ((voices[a].initial_samples_left != 0u) !=
-                    (voices[b].initial_samples_left != 0u))
-                    return voices[a].initial_samples_left != 0u;
-                if (urgent(a) != urgent(b)) return urgent(a);
-                if (urgent(a) && queued_samples[a] != queued_samples[b])
-                    return queued_samples[a] < queued_samples[b];
-                if (urgent(a) && voices[a].pending != voices[b].pending)
-                    return !voices[a].pending;
-                if (voices[a].pending && voices[b].pending) return false;
-                return voices[a].deadline < voices[b].deadline;
-            };
+            if (first_packet(a) != first_packet(b)) return first_packet(a);
+            if (has_startup && (protect(a) != 0u) != (protect(b) != 0u))
+                return protect(a) != 0u;
+            if ((voices[a].initial_samples_left != 0u) !=
+                (voices[b].initial_samples_left != 0u))
+                return voices[a].initial_samples_left != 0u;
+            if (urgent(a) != urgent(b)) return urgent(a);
+            if (voices[a].refill_samples_5ms && voices[b].refill_samples_5ms) {
+                double const coverage_a = (buffer_capacity - voices[a].refill_balance)
+                    / voices[a].refill_samples_5ms;
+                double const coverage_b = (buffer_capacity - voices[b].refill_balance)
+                    / voices[b].refill_samples_5ms;
+                if (coverage_a != coverage_b) return coverage_a < coverage_b;
+            }
+            if (urgent(a) && queued_samples[a] != queued_samples[b])
+                return queued_samples[a] < queued_samples[b];
+            if (urgent(a) && voices[a].pending != voices[b].pending)
+                return !voices[a].pending;
+            if (voices[a].pending && voices[b].pending) return false;
+            return voices[a].deadline < voices[b].deadline;
+        };
         /* Eight entries: insertion sort is bounded and never allocates. */
         for (size_t i = 1u; i < count; ++i) {
             auto const candidate = candidates[i];
@@ -695,20 +816,50 @@ struct stream_state
         }
         if (count == 0u) return;
         bool const initial = voices[candidates[0]].initial_samples_left != 0u;
-        size_t const blocks = count >= 2u && urgent(candidates[0]) &&
-            urgent(candidates[1]) && (!initial ||
-                voices[candidates[0]].available_sample_slots < kUsbPacketBodySampleCount)
-                    ? 2u : 1u;
+        size_t const blocks = count >= 2u &&
+            (!first_packet(candidates[0]) ||
+             voices[candidates[0]].available_sample_slots < kUsbPacketBodySampleCount) &&
+            ((voices[candidates[0]].filling_initial_buffer || voices[candidates[1]].filling_initial_buffer) ||
+             (urgent(candidates[0]) && urgent(candidates[1]) && (!initial ||
+                voices[candidates[0]].available_sample_slots < kUsbPacketBodySampleCount)))
+            ? 2u : 1u;
+
         std::array<unsigned, 2> sizes{};
         unsigned const budget = kUsbPacketBodySampleCount;
         sizes[0] = std::min(voices[candidates[0]].available_sample_slots,
                            blocks == 2u && !initial ? budget / 2u : budget);
         if (blocks == 2u) {
-            sizes[1] = std::min(voices[candidates[1]].available_sample_slots,
-                               budget - sizes[0]);
-            sizes[0] = std::min(voices[candidates[0]].available_sample_slots,
-                               budget - sizes[1]);
+            auto const& a = voices[candidates[0]];
+            auto const& b = voices[candidates[1]];
+            bool const starting_a = a.initial_samples_left != 0u;
+            bool const starting_b = b.initial_samples_left != 0u;
+            if ((a.filling_initial_buffer || b.filling_initial_buffer) && starting_a != starting_b) {
+                if (starting_a) {
+                    sizes[1] = std::min(protect(candidates[1]), budget);
+                    sizes[0] = std::min(a.available_sample_slots, budget - sizes[1]);
+                    sizes[1] = std::min(b.available_sample_slots, budget - sizes[0]);
+                } else {
+                    sizes[0] = std::min(protect(candidates[0]), budget);
+                    sizes[1] = std::min(b.available_sample_slots, budget - sizes[0]);
+                    sizes[0] = std::min(a.available_sample_slots, budget - sizes[1]);
+                }
+            } else {
+                if (!initial && a.refill_samples_5ms && b.refill_samples_5ms) {
+                    /* Divide the payload using the reported sample demand. */
+                    double const wanted = (a.refill_samples_5ms *
+                        (buffer_capacity - b.refill_balance + budget) -
+                        b.refill_samples_5ms * (buffer_capacity - a.refill_balance)) /
+                        (a.refill_samples_5ms + b.refill_samples_5ms);
+                    sizes[0] = std::min(a.available_sample_slots,
+                        static_cast<unsigned>(std::clamp(wanted, 0.0, double(budget))));
+                }
+                sizes[1] = std::min(voices[candidates[1]].available_sample_slots,
+                                   budget - sizes[0]);
+                sizes[0] = std::min(voices[candidates[0]].available_sample_slots,
+                                   budget - sizes[1]);
+            }
         }
+
         packet[0] = static_cast<int8_t>(next_sequence & 0xFFu);
         packet[1] = static_cast<int8_t>(next_sequence >> 8u);
         size_t offset = kUsbPacketHeaderByteCount;
@@ -728,10 +879,12 @@ struct stream_state
             offset += sizes[i];
             pending_packets[(first_pending_packet + pending_packet_count) %
                 kPendingPacketCapacity] = {next_sequence, chosen, voice.session_id,
-                    static_cast<uint16_t>(sizes[i])};
+                    static_cast<uint16_t>(sizes[i]), packet_at};
             ++pending_packet_count;
             voice.available_sample_slots -= sizes[i];
+            if (voice.refill_samples_5ms != 0u) voice.refill_balance -= sizes[i];
             voice.initial_samples_left -= std::min(voice.initial_samples_left, sizes[i]);
+            update_startup_priority(voice);
         }
         next_voice = static_cast<uint8_t>((candidates[blocks - 1u] + 1u) % kVoiceCount);
         ++next_sequence;
@@ -918,6 +1071,8 @@ struct device_context
             stream.pending_packet_count = 0u;
             stream.sequence_ready = false;
             stream.status_ready = false;
+            stream.next_packet_at = {};
+            stream.acknowledged_packet_at = {};
             stream.packet_offset = kUsbPacketByteCount;
         }
         connected.store(false);
@@ -942,7 +1097,8 @@ struct device_context
     void advance_poll()
     {
         auto const now = std::chrono::steady_clock::now();
-        do { next_poll += std::chrono::milliseconds(5); } while (next_poll <= now);
+        next_poll += std::chrono::milliseconds(5);
+        if (next_poll < now) next_poll = now;
     }
 
     void poll()
@@ -1124,6 +1280,7 @@ voice_board_result_t note_on(device_context* state, uint8_t voice,
         slot.available_sample_slots = free_slots;
         slot.waiting_for_first_packet = true;
         slot.initial_samples_left = kUsbPacketBodySampleCount;
+        slot.filling_initial_buffer = true;
         slot.session_id = session;
         slot.sample_id = sample;
         slot.body_position = 0u;

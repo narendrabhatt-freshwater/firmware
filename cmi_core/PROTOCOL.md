@@ -355,21 +355,21 @@ RS485 `vq` every 5 ms is the steady-state refill authority and lifecycle
 monitor. UAC OUT carries BODY data only.
 
 ```text
-RS485 vq reply, fixed 56-byte ABI1 binary frame
-offset  size  field
+RS485 vq reply: fixed 61-byte refill-budget status frame
 0       2     sync = a5 5a
 2       1     card = 43 ('C')
-3       1     type = 04 sequenced ABI1 generation status
+3       1     status message type = 0c
 4       1     active voice mask
 5       1     pending voice mask
-6       1     best refill voice, or 255
-7       1     reserved
-8       2     runtime ring capacity (uint16 LE; normally 4080)
-10      2     status sequence (uint16 LE)
-12      2     last processed UAC sequence
-14      40    eight records: session u8, target fill u16 LE, total writable u16 LE
-54      1     CRC-8/0x07 over bytes 0..53
-55      1     terminator = 0a
+6       2     runtime ring capacity (normally 4080 samples)
+8       1     wrapping status sequence
+9       1     age of last processed USB payload, rounded-up audio ms; 255 = unknown/expired
+10      2     last processed nonidle USB payload sequence
+12      48    eight records, six bytes each:
+                target session u8,
+                free slots u13 + five-ms refill budget u12 +
+                remaining time u15 in 100-microsecond units (packed LE)
+60      1     terminator = 0a
 ```
 
 RS485 `vq` is the sole refill permission. The host sends only complete
@@ -403,6 +403,36 @@ session instead of publishing it into the new ring.
 The `usb` bad-reason fields are reserved and read zero for the direct
 transport. Ring-capacity rejection remains visible as `drop` and
 playback starvation as `hold`.
+
+### Card-generated refill budget (`vq`)
+
+The `vq` command uses only the current packed format; old replies are not supported.
+`vq` requests a 61-byte type-`0x0C` reply. Bytes 0–11 retain the header,
+masks, capacity, an 8-bit status sequence, USB acknowledgement age and
+the 16-bit USB acknowledgement. Bytes 12–59
+contain eight six-byte records (voice 0 first); byte 60 is the newline terminator.
+Each record contains a session byte followed by five packed little-endian bytes:
+free space in bits 0–12, refill budget in bits 13–24, and duration in bits 25–39.
+The 15-bit duration retains 0.1 ms precision up to 3276.7 ms, covering the full
+4080-sample ring plus ATTACK even at the slowest supported playback speed.
+Free-space and budget counts remain exact. Each budget is the card's source-sample demand for 5 ms at its current playback settings,
+with local ATTACK coverage excluded. Inactive voices and pending replacements
+report zero. The maximum budget is 3840 samples per voice.
+
+`voice_bd` uses the latest card budget to pace USB refills between status
+replies, including delayed replies; the host does not derive playback pitch.
+Each fresh snapshot reconciles exact free space and acknowledged sequences.
+Outstanding samples remain charged even when their balance is negative.
+Snapshot age is measured on the card audio clock since the last nonidle USB
+packet was ingested, rounded up to milliseconds. Value 255 disables extrapolation
+from that acknowledgement. The host maps this age to the acknowledged packet's
+position on its 1 ms USB timeline, subtracts all outstanding samples, and allows
+for one USB block and one audio block of phase uncertainty. Pending or mismatched
+sessions cannot spend an old budget. The status sequence wraps at 256; the USB
+sequence still wraps at 65536. Abrupt card-side changes can still cause drops or underruns
+until the next status update; the existing nonfatal playback behavior applies.
+`voice_bd` requires the new 61-byte reply and polls every 5 ms; it does not
+fall back to the old reply.
 
 ### CDC vs RS485 (console)
 

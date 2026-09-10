@@ -24,14 +24,18 @@
 #include "voicebd.h"
 #include "options.h"
 #include <RtMidi.h>
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstring>
 #include <exception>
 #include <sysexits.h>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <thread>
 
@@ -40,6 +44,23 @@ char const* exe_name;
 char const version[] = "0.01";
 static char const product[] = "172-XXXX";
 char const name[] = "Channel card voice board test";
+constexpr uint32_t sample_rate_hz = 48000;
+constexpr double sample_root_hz = 261.625565; // C4, MIDI key 60.
+
+/* Nominal BODY demand; a custom card program can change the playback pitch. */
+void print_key_demand(unsigned voice, unsigned key)
+{
+    static char const* const notes[] = {
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+    };
+    double const hz = 440.0 * std::exp2((int(key) - 69) / 12.0);
+    double const speed = std::clamp(hz / sample_root_hz, 1.0 / 16.0, 16.0);
+    std::ostringstream line;
+    line << "key=" << key << " (" << notes[key % 12] << int(key / 12) - 1
+         << ") voice=" << voice << " required=" << std::fixed << std::setprecision(2)
+         << sample_rate_hz / 1000.0 * speed << " samples/ms (nominal BODY)\n";
+    std::cout << line.str() << std::flush;
+}
 
 /* ---- print usage --------------------------------------------------------- */
 
@@ -126,7 +147,7 @@ try
     };
     voice_board_t board;
     check(board.open(config));
-    check(board.load_sample(0, pcm));
+    check(board.load_sample(0, pcm, sample_rate_hz, sample_root_hz));
     RtMidiIn midi;
     midi.ignoreTypes(true, true, true);
     if (midi.getPortCount() == 0)
@@ -150,6 +171,7 @@ try
                 for (unsigned i = 0; i < 8; ++i)
                     if (keys[(next + i) % 8] < 0) { voice = (next + i) % 8; break; }
                 check(board.note_on(voice, 0, message[1], message[2]));
+                print_key_demand(voice, message[1]);
                 keys[voice] = key;
                 next = (voice + 1) % 8;
             } else if (type == 0x80 || (type == 0x90 && !message[2])) {

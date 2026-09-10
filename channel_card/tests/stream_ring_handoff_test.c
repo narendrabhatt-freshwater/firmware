@@ -41,9 +41,9 @@ int main(void)
   StreamRing_ArmPending(1u,20u,4u);
   Check(StreamRing_WriteVoice(1u,4u,1u,20u,new_body,USB_STREAM_UAC_BODY_SAMPLES)==USB_STREAM_UAC_BODY_SAMPLES,"credit initial frame");
   Check(StreamRing_FreeLevel(1u)==STREAM_RING_SAMPLES-USB_STREAM_UAC_BODY_SAMPLES,"credit includes both spans");
-  {unsigned i;for(i=1u;i<4u;++i)Check(StreamRing_WriteVoice(1u,4u,1u,20u,new_body,USB_STREAM_UAC_BODY_SAMPLES)==USB_STREAM_UAC_BODY_SAMPLES,"fill to exact frame credit");}
+  {unsigned i;for(i=1u;i<STREAM_RING_SAMPLES/USB_STREAM_UAC_BODY_SAMPLES;++i)Check(StreamRing_WriteVoice(1u,4u,1u,20u,new_body,USB_STREAM_UAC_BODY_SAMPLES)==USB_STREAM_UAC_BODY_SAMPLES,"fill to exact frame credit");}
   Check(StreamRing_FreeLevel(1u)==
-            STREAM_RING_SAMPLES-4u*USB_STREAM_UAC_BODY_SAMPLES&&
+            STREAM_RING_SAMPLES-(STREAM_RING_SAMPLES/USB_STREAM_UAC_BODY_SAMPLES)*USB_STREAM_UAC_BODY_SAMPLES&&
             StreamRing_WriteBegin(1u,4u,1u,20u,USB_STREAM_UAC_BODY_SAMPLES,&write)==STREAM_RING_WRITE_ERROR,
         "exact credit prevents complete-frame overfill");
   Check(StreamRing_FutureCount()==1u&&StreamRing_SupersededCount()==1u&&
@@ -103,5 +103,14 @@ int main(void)
   packet[2]=(int8_t)USB_STREAM_TAG_BASE; packet[4]=17;
   Check(StreamRing_WriteUac(packet)==1u && StreamRing_CurrentFill(0u)==1015u,
         "partial block appends only its declared samples");
+  Check(StreamRing_UacAgeMs()==0u,"newly ingested packet has zero audio age");
+  StreamRing_AudioFrame();
+  Check(StreamRing_UacAgeMs()==1u,"age rounds up a partial audio millisecond");
+  for(unsigned i=1;i<48u;++i) StreamRing_AudioFrame();
+  Check(StreamRing_UacAgeMs()==1u,"48 audio frames are one millisecond");
+  StreamRing_AudioFrame();
+  Check(StreamRing_UacAgeMs()==2u,"next audio frame advances rounded age");
+  for(unsigned i=0;i<255u*48u;++i) StreamRing_AudioFrame();
+  Check(StreamRing_UacAgeMs()==255u,"old acknowledgment expires rather than wrapping");
   return EXIT_SUCCESS;
 }

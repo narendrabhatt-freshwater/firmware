@@ -28,6 +28,12 @@ Set the three port names in `voice_board_config_t` in `voicebd.h` before buildin
 The program uses those names and MIDI input 0, loads the sample for all eight
 voices, and reports board errors before exiting with a nonzero status. Ctrl+C stops playback and exits.
 
+Each note-on prints its MIDI key, note name, assigned voice, and nominal BODY
+demand, for example `key=72 (C5) voice=0 required=96.00 samples/ms (nominal BODY)`.
+The estimate uses the uploaded sample's C4 root and the card's 1/16×–16× speed
+limits. Custom firmware programs that transpose or modulate pitch can change
+the actual demand.
+
 Startup assumes the card is idle. If voices are active, program upload fails with
 `err:vm-busy`; startup does not silence them or wait for their release.
 
@@ -46,9 +52,23 @@ Host implementation stays in `voicebd.h` and `voicebd.cpp`. The `vq` status
 reply reports all eight playback durations and free-slot counts without a
 status CRC. Pitch remains a card concern. USB Audio carries
 1008 bytes/ms: a ten-byte header and up to 998 source samples for one or two
-voices. RS485 polls every 5 ms; USB keeps running
-during serial transactions. Known free slots limit every send; acknowledged
-sequences reconcile samples in flight. See `../channel_card/docs/protocol.md`.
+voices. The host requests `vq` every 5 ms. Its reply includes
+one card-generated source-sample budget per voice for a 5 ms interval. The host
+spreads that budget over USB milliseconds and keeps using the latest budget
+through delayed polls; it never calculates playback pitch. Each new snapshot
+corrects the allowance by replaying samples still in flight in USB order.
+Free space is capped before each delivery, so an empty ring cannot earn
+credit for consuming missing samples. The card reports how much audio time has passed since ingesting the acknowledged
+USB packet. That places the snapshot on the host's USB packet timeline, without
+using the RS485 round-trip time. Callback jitter does not advance that timeline.
+The allowance accounts for the 1 ms USB and audio processing blocks. Voices
+with different demands share packets to equalize buffered playback time. A stopped, pending, or mismatched session cannot
+reuse the previous voice's budget. The bounded unacknowledged-packet ledger
+still stops sends if acknowledgements disappear for too long.
+
+The 61-byte `vq` reply is required; older firmware is rejected with an error.
+Polling remains at 5 ms. Late replies do not add another full polling interval.
+See `../channel_card/docs/protocol.md`.
 
 Tests live separately in `tests/stream_test.cpp`; production sources contain no
 self-test code or mock hooks. These tests cover the scheduler and status parser;
@@ -69,25 +89,35 @@ stalls or sudden card-side speed increases.
 `open()` reads initial voice timing and free space before loading programs.
 `channel.bec` contains the Berry note program.
 Each RS485 command is sent once and returns as soon as its complete reply
-arrives. A missing reply times out after 5 ms; commands are not retried.
-The 5 ms poll cadence is separate from this reply deadline. Delayed
+arrives. A missing reply times out after 50 ms; commands are not retried.
+The poll cadence is separate from this reply deadline. Delayed
 replies stretch the actual poll interval; USB keeps using its existing credit.
 
 On macOS the RS485 port requests low receive latency with `IOSSDATALAT` so
 short replies are not held in the serial driver's receive buffer. `open()`
 establishes the USB Audio stream before notes are played. Note-on sends
 `nX on <sample> <key> <velocity> @<session>` as one command. After its ACK,
-USB uses the last confirmed free-space credit to prioritize the new note's
-first 998 BODY samples. The card keeps the note pending until those samples
+USB uses the last confirmed free-space credit to begin filling the new note.
+The first full packet goes to the new note. Starting with the second packet,
+playing voices close to empty take precedence; otherwise startup priority
+continues while the new note is pending. Once the card confirms playback,
+the target is its five-ms sample demand (at least 998 samples), limited by ring
+capacity minus the USB/audio phase allowance. After the first packet, playing voices close to empty
+receive enough samples for the next packet and the two processing blocks first;
+the new voice receives the remaining packet space. Priority ends once its
+predicted buffered samples reach the target. This uses card demand, not host pitch. The card keeps the note pending until 998 samples
 arrive, then starts ATTACK at an audio boundary. Split blocks accumulate
 toward 998 samples. USB delivery latency therefore adds to note onset.
 Note-on does not issue an extra `vq`; scheduled polls run between commands
 when due.
 
-The binary `vq` reply is 53 bytes. Each of eight voices has a one-byte session,
-two-byte free-slot count, and two-byte remaining duration in 0.1 ms units.
+The binary `vq` reply is 61 bytes. Each voice has a one-byte session,
+five bytes packing an exact 13-bit free-space count, a 12-bit refill budget,
+and a 15-bit remaining duration in 0.1 ms units. The card ring holds 4080
+source samples per voice (85 ms at root pitch). Both card and host must use
+the type-0x0C packed reply.
 Duration rounds down, so quantization makes a deadline at most 0.1 ms earlier.
-At 921600 baud the reply occupies about 0.575 ms on the UART; USB-driver and
+At 921600 baud the reply occupies about 0.662 ms on the UART; USB-driver and
 scheduling delays are additional. USB sample delivery continues during polling.
 
 `open()` keeps the USB upload connection available until `close()`.

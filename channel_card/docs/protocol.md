@@ -141,7 +141,7 @@ lost on reset.
 | `usb 0`             | Clear those counters, then same reply                                 |
 
 Replies: `ok: ar <id> <Hz>`, `ok: a <n> <64 hex>`.
-USB CDC returns a readable `ok:vq11` diagnostic. RS485 returns the fixed 53-byte
+USB CDC returns a readable `ok:vq12` diagnostic. RS485 returns the fixed 61-byte
 frame described below.
 
 Playback pitch is on-card: `phase_inc = note_Hz / root_Hz`, 2-tap
@@ -352,30 +352,32 @@ The receiver recognizes the tag bytes at offsets 2 and 6 when aligning the
 logical millisecond payload to the audio-frame stream.
 
 ```text
-RS485 vq reply: fixed 53-byte time-status frame
+RS485 vq reply: fixed 61-byte refill-budget status frame
 0       2     sync = a5 5a
 2       1     card = 43 ('C')
-3       1     status message type = 08
+3       1     status message type = 0c
 4       1     active voice mask
 5       1     pending voice mask
 6       2     runtime ring capacity (normally 4080 samples)
-8       2     wrapping status sequence
+8       1     wrapping status sequence
+9       1     age of last processed USB payload, rounded-up audio ms; 255 = unknown/expired
 10      2     last processed nonidle USB payload sequence
-12      40    eight records, five bytes each:
-                target session u8, total free sample slots u16,
-                current playback remaining time in 100-microsecond units u16
-52      1     terminator = 0a
+12      48    eight records, six bytes each:
+                target session u8,
+                free slots u13 + five-ms refill budget u12 +
+                remaining time u15 in 100-microsecond units (packed LE)
+60      1     terminator = 0a
 ```
 
 The host selects refill voices using the timing and free-space fields.
 CDC returns readable
-`ok:vq11` fields in the order masks, capacity, status sequence, USB sequence,
-then eight session/remaining-us/free-slots triples.
+`ok:vq12` fields in the order masks, capacity, status sequence, USB sequence,
+then eight session/remaining-us/free-slots/refill-budget records.
 
-The binary duration is rounded down to 0.1 ms and saturated at 6553.5 ms;
+The binary duration is rounded down to 0.1 ms and saturated at 3276.7 ms;
 the host converts these time units to microseconds without calculating pitch.
-CDC diagnostics retain microseconds. A 53-byte reply takes approximately
-0.575 ms on a 921600-baud 8N1 UART, excluding USB and software delays.
+CDC diagnostics retain microseconds. A 61-byte reply takes approximately
+0.662 ms on a 921600-baud 8N1 UART, excluding USB and software delays.
 
 Time describes the currently playing note, including the remaining ATTACK and
 BODY data, with space reserved for the second interpolation tap. Pending data
@@ -427,6 +429,36 @@ USB/host stalls, rapid playback-speed changes, or unserviceable simultaneous
 deadlines can still exhaust audio. BODY underrun repeats the recent per-voice
 buffer until refill; ring overflow drops incoming blocks, and USB queue
 overflow discards the backlog and resynchronizes while playback continues.
+
+### Card-generated refill budget (`vq`)
+
+The `vq` command uses only the current packed format; old replies are not supported.
+`vq` requests a 61-byte type-`0x0C` reply. Bytes 0–11 retain the header,
+masks, capacity, an 8-bit status sequence, USB acknowledgement age and
+the 16-bit USB acknowledgement. Bytes 12–59
+contain eight six-byte records (voice 0 first); byte 60 is the newline terminator.
+Each record contains a session byte followed by five packed little-endian bytes:
+free space in bits 0–12, refill budget in bits 13–24, and duration in bits 25–39.
+The 15-bit duration retains 0.1 ms precision up to 3276.7 ms, covering the full
+4080-sample ring plus ATTACK even at the slowest supported playback speed.
+Free-space and budget counts remain exact. Each budget is the card's source-sample demand for 5 ms at its current playback settings,
+with local ATTACK coverage excluded. Inactive voices and pending replacements
+report zero. The maximum budget is 3840 samples per voice.
+
+`voice_bd` uses the latest card budget to pace USB refills between status
+replies, including delayed replies; the host does not derive playback pitch.
+Each fresh snapshot reconciles exact free space and acknowledged sequences.
+Outstanding samples remain charged even when their balance is negative.
+Snapshot age is measured on the card audio clock since the last nonidle USB
+packet was ingested, rounded up to milliseconds. Value 255 disables extrapolation
+from that acknowledgement. The host maps this age to the acknowledged packet's
+position on its 1 ms USB timeline, subtracts all outstanding samples, and allows
+for one USB block and one audio block of phase uncertainty. Pending or mismatched
+sessions cannot spend an old budget. The status sequence wraps at 256; the USB
+sequence still wraps at 65536. Abrupt card-side changes can still cause drops or underruns
+until the next status update; the existing nonfatal playback behavior applies.
+`voice_bd` requires the new 61-byte reply and polls every 5 ms; it does not
+fall back to the old reply.
 
 ### CDC vs RS485 (console)
 
