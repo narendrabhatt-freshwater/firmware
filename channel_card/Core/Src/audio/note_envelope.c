@@ -54,8 +54,8 @@ int NoteEnv_StartRamp(uint8_t voice, float target, float slope)
   envelope->step = envelope->amplitude < target
                        ? step
                        : (envelope->amplitude > target ? -step : 0.0f);
-  envelope->ramp_active = 1u;
-  envelope->ramp_end_pending = 0u;
+  envelope->ramp_active = envelope->amplitude != target;
+  envelope->ramp_end_pending = envelope->amplitude == target;
   return 0;
 }
 
