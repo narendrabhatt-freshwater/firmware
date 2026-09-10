@@ -35,7 +35,9 @@
 #include <IOKit/serial/ioss.h>
 #include <sys/ioctl.h>
 #endif
-
+#if defined(__linux__)
+#include <fstream>
+#endif
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -54,6 +56,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 namespace voice_board_detail {
 namespace {
@@ -230,6 +233,32 @@ public:
                 return false;
             }
         }
+#endif
+#if defined(__linux__)
+	if (!assert_dtr) {
+		std::string const tty = name.substr(name.find_last_of('/') + 1);
+		std::string const latency_path = "/sys/bus/usb-serial/devices/" +
+						tty +
+						"/latency_timer";
+		{
+			std::ofstream out(latency_path);
+			if (!out) {
+				error = "cannot set low-latency mode on " + name;
+				close();
+				return false;
+			}
+			out << "1/n";
+		}
+		{
+			std::ifstream in(latency_path);
+			unsigned latency = 0;
+			if (!(in >> latency) || latency != 1u) {
+				error = "failed to enable 1 ms latency on " + name;
+				close();
+				return false;
+			}
+		}
+	}
 #endif
         if (assert_dtr) (void)sp_set_dtr(port_, SP_DTR_ON);
         (void)sp_flush(port_, SP_BUF_BOTH);
@@ -452,11 +481,12 @@ public:
             return fail(voice_board_error_t::io_error, error);
         std::vector<uint8_t> reply;
         auto const stop_waiting_at = std::chrono::steady_clock::now() +
-            std::chrono::milliseconds(5);
+            std::chrono::milliseconds(50);
         std::array<uint8_t, 256> bytes{};
         while (std::chrono::steady_clock::now() < stop_waiting_at) {
             size_t const count = port_.read(
                 bytes.data(), bytes.size(), 1u);
+            // std::cerr << "bytes " << bytes.size() << std::endl;
             reply.insert(reply.end(), bytes.begin(), bytes.begin() + count);
             if (body == "vq") {
                 for (size_t i = 0; i + 4u <= reply.size(); ++i) {

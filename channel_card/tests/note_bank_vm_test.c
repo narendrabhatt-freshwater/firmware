@@ -207,5 +207,31 @@ int main(int argc,char **argv){
   }
   NoteBank_PanicAll();
   check(NoteBank_RemainingUs(0u)==0u,"inactive voice has no deadline");
+  /* Underrun fallback must repeat audio, recover, and remain voice-local. */
+  attack_lengths[0]=0u;
+  check(NoteBank_NoteOnSampleSession(0u,0u,60u,127u,7u)==0,"start loop test session");
+  {int8_t body[USB_STREAM_UAC_BODY_SAMPLES];for(unsigned i=0;i<sizeof body;++i)body[i]=(i&1u)?64:-64;
+   check(StreamRing_WriteVoice(0u,7u,1u,0u,body,sizeof body)==sizeof body,"load loop buffer");}
+  boundary();NoteBank_HoldCountClear();
+  for(unsigned i=0;i<2000u && NoteBank_HoldCount()==0u;++i)(void)NoteBank_NextSample();
+  check(NoteBank_HoldCount()!=0u&&NoteBank_IsActive(0u),"underrun keeps voice active");
+  {int positive=0,negative=0;
+   for(unsigned i=0;i<512u;++i){int32_t sample=NoteBank_NextSample();positive|=sample>0;negative|=sample<0;}
+   check(positive&&negative,"empty ring repeats changing audio rather than holding one sample");}
+  check(StreamRing_CurrentFill(0u)==0u,"replay does not consume refill capacity");
+  {int8_t silence[128]={0};uint32_t misses=NoteBank_HoldCount();
+   check(StreamRing_WriteVoice(0u,7u,0u,0u,silence,128u)==128u,"refill after underrun");
+   for(unsigned i=0;i<32u;++i)check(NoteBank_NextSample()==0,"refill replaces fallback immediately");
+   check(NoteBank_HoldCount()==misses,"refill stops underrun counting");}
+  NoteBank_PanicAll();
+  check(NoteBank_NoteOnSampleSession(0u,0u,60u,127u,8u)==0,"start empty replacement session");
+  {int8_t silence[USB_STREAM_UAC_BODY_SAMPLES]={0};
+   check(StreamRing_WriteVoice(0u,8u,1u,0u,silence,sizeof silence)==sizeof silence,"prime silent replacement");}
+  boundary();StreamRing_Advance(0u,StreamRing_CurrentFill(0u));
+  for(unsigned i=0;i<64u;++i)check(NoteBank_NextSample()==0,"new note cannot replay old note audio");
+  {int8_t single=64;
+   check(StreamRing_WriteVoice(0u,8u,0u,0u,&single,1u)==1u,"accept single available sample");
+   check(render_peak(64u)>0u,"single available sample can repeat without halting");}
+  NoteBank_PanicAll();
   free(program);puts("Channel shared Berry VM test passed");return 0;
 }

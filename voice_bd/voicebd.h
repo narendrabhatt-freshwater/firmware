@@ -62,12 +62,16 @@ struct controls_t {
     std::vector<uint8_t> switches; /* Switch values. */
 };
 
-struct voice_board_config_t {
+struct voice_board_config_t 
+{
     /* Program loaded into all eight voices by open(). */
     std::string bec_file = "channel.bec";
+
     /* USB-to-RS485 device, for example /dev/cu.usbserial-XXXX. */
     std::string rs485_port = "/dev/cu.usbserial-BG03CSYB";
+    // std::string rs485_port = "/dev/cu.usbserial-B0047GLI";
     /* USB port used to load the BEC and sample ATTACK data. */
+    // std::string upload_usb_port = "/dev/cu.usbmodem134203";
     std::string upload_usb_port = "/dev/cu.usbmodem13303";
     /* RtAudio device used for the USB BODY stream. */
     std::string stream_usb_port = "Channel Card BODY";
@@ -77,8 +81,8 @@ struct voice_board_config_t {
     uint8_t initial_attenuation_db = 0;
 };
 
-class voice_board_t {
-private:
+class voice_board_t 
+{
     struct impl_t;
     std::unique_ptr<impl_t> impl_;
 

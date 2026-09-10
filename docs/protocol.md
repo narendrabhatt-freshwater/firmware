@@ -308,9 +308,12 @@ Channel Card USB exposes **two** host-facing functions. Do not conflate them:
 The Channel device is class-compliant UAC2 so the operating system owns the
 audio endpoint lifecycle; there is no custom vendor/libusb isochronous pipe.
 The audio samples are transport words, not audible multichannel PCM. A primed
-BODY underrun increments `hold`, resets/mutes the DAC, latches the fault LEDs,
-and halts the Channel Card. A ring-capacity rejection does the same after
-incrementing `drop`. Reset or power-cycle the card after either fault.
+BODY underrun increments `hold` and repeats up to 256 recent source samples
+for that voice until new BODY data arrives. A voice with no saved BODY samples
+outputs silence. A ring-capacity rejection increments `drop` and discards the
+incoming block while queued audio keeps playing. USB packet-length queue
+overflow increments the bad-UAC counter, clears the USB byte backlog and
+boundary metadata together, and resynchronizes on new data without halting.
 The UAC topology has no Feature Unit and exposes no mute or volume controls.
 Each complete 21-channel int8 frame is independently routable. The host audio
 callback may produce multiple milliseconds at once, but USB transmits fixed
@@ -421,8 +424,9 @@ and after promotion. Note-off cancels pending replacement before
 Sample-end silence and release behavior are unchanged. Missing/invalid status
 grants no new credit. Aggregate demand above **998 source samples/ms**, excessive
 USB/host stalls, rapid playback-speed changes, or unserviceable simultaneous
-deadlines can still exhaust audio. BODY underrun and buffer overflow retain the
-existing latched production fault behavior; neither is silently recovered.
+deadlines can still exhaust audio. BODY underrun repeats the recent per-voice
+buffer until refill; ring overflow drops incoming blocks, and USB queue
+overflow discards the backlog and resynchronizes while playback continues.
 
 ### CDC vs RS485 (console)
 

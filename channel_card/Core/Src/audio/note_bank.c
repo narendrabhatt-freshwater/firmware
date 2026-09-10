@@ -47,6 +47,7 @@ _Static_assert(STREAM_RING_SAMPLES == 4080u,
 #define BODY_ADVANCE_PHASE ((INTERP_LEFT_TAPS + 1u) * PHASE_ONE)
 #define NOTE_SAMPLE_RATE_HZ 48000u
 #define NOTE_DEFAULT_SCALE 0.125
+#define BODY_LOOP_SAMPLES 256u
 
 static double note_freq_hz[NOTE_BANK_VOICES];
 static double note_scale[NOTE_BANK_VOICES];
@@ -57,6 +58,11 @@ static uint8_t note_active[NOTE_BANK_VOICES];
 static uint64_t note_phase[NOTE_BANK_VOICES];
 static uint32_t note_body_frac[NOTE_BANK_VOICES];
 static int32_t note_hold[NOTE_BANK_VOICES];
+/* Preserve recent source samples after the stream ring frees their storage. */
+static int8_t note_body_loop[NOTE_BANK_VOICES][BODY_LOOP_SAMPLES];
+static uint32_t note_loop_wr[NOTE_BANK_VOICES];
+static uint32_t note_loop_count[NOTE_BANK_VOICES];
+static uint32_t note_loop_phase[NOTE_BANK_VOICES];
 static uint32_t note_inc[NOTE_BANK_VOICES];
 static uint32_t note_observed_inc[NOTE_BANK_VOICES];
 static uint32_t note_inc_tgt[NOTE_BANK_VOICES];
@@ -204,19 +210,50 @@ static int NoteBank_InterpAttackBody(uint8_t note, uint16_t wid,
   return 0;
 }
 
-/**
- * Two-tap linear interpolation over the body FIFO. Count every miss at the
- * actual BODY boundary, including a late first frame. Continuing with the
- * last valid sample hides a broken USB stream and produces plausible but
- * incorrect audio, so production firmware fails closed here.
- */
-static int32_t NoteBank_BodyMiss(uint8_t note)
+static void NoteBank_RememberBody(uint8_t note, int8_t sample)
 {
+  note_body_loop[note][note_loop_wr[note]] = sample;
+  note_loop_wr[note] = (note_loop_wr[note] + 1u) % BODY_LOOP_SAMPLES;
+  if (note_loop_count[note] < BODY_LOOP_SAMPLES) note_loop_count[note]++;
+  note_loop_phase[note] = 0u;
+}
+
+/**
+ * A required BODY sample is unavailable in the stream ring. Count the
+ * underrun and repeat the recent buffer until new samples are available.
+ */
+static int32_t NoteBank_BodyMiss(uint8_t note, uint32_t increment)
+{
+  int8_t sample;
+  uint32_t count;
+  uint32_t start;
+  uint32_t index;
+  uint32_t next;
+  uint32_t phase;
+  int32_t s0;
+  int32_t s1;
   note_hold_miss++;
-#if defined(__arm__) || defined(__thumb__)
-  Error_Handler();
-#endif
-  return note_hold[note];
+  /* Include any remaining tail sample before releasing its ring storage. */
+  while (StreamRing_GetRel(note, 0u, &sample) == 0)
+  {
+    NoteBank_RememberBody(note, sample);
+    StreamRing_Advance(note, 1u);
+  }
+  /* Resume at the next received sample, without accumulating missing time. */
+  note_body_frac[note] = 0u;
+  note_body_skip[note] = 0u;
+  note_body_only[note] = 1u;
+  count = note_loop_count[note];
+  if (count == 0u) return 0;
+  phase = note_loop_phase[note];
+  start = (note_loop_wr[note] + BODY_LOOP_SAMPLES - count) % BODY_LOOP_SAMPLES;
+  index = phase >> 16;
+  next = (index + 1u) % count;
+  s0 = note_body_loop[note][(start + index) % BODY_LOOP_SAMPLES];
+  s1 = note_body_loop[note][(start + next) % BODY_LOOP_SAMPLES];
+  note_loop_phase[note] = (phase + increment) % (count * PHASE_ONE);
+  return (int32_t)((int64_t)s0 * 16777216 +
+                   (int64_t)(s1 - s0) * (phase & 0xFFFFu) * 256);
 }
 
 static int NoteBank_InterpBody(uint8_t note, int32_t *out)
@@ -258,6 +295,9 @@ static void NoteBank_AdvanceBody(uint8_t note, uint32_t increment)
     {
       break;
     }
+    int8_t sample;
+    if (StreamRing_GetRel(note, 0u, &sample) == 0)
+      NoteBank_RememberBody(note, sample);
     StreamRing_Advance(note, 1u);
     note_body_frac[note] -= PHASE_ONE;
   }
@@ -268,6 +308,9 @@ static void NoteBank_ClearPlayhead(uint8_t note)
   note_phase[note] = 0u;
   note_body_frac[note] = 0u;
   note_hold[note] = 0;
+  note_loop_wr[note] = 0u;
+  note_loop_count[note] = 0u;
+  note_loop_phase[note] = 0u;
   note_body_locked[note] = 0u;
   note_body_skip[note] = 0u;
   note_body_only[note] = 0u;
@@ -475,7 +518,7 @@ static int32_t NoteBank_Sample(uint8_t note, uint32_t increment)
   {
     if (NoteBank_InterpBody(note, &y) != 0)
     {
-      return NoteBank_BodyMiss(note);
+      return NoteBank_BodyMiss(note, increment);
     }
     NoteBank_AdvanceBody(note, increment);
     note_phase[note] = phase + (uint64_t)increment;
@@ -523,11 +566,11 @@ static int32_t NoteBank_Sample(uint8_t note, uint32_t increment)
 
   if (note_body_skip[note] != 0u)
   {
-    return NoteBank_BodyMiss(note);
+    return NoteBank_BodyMiss(note, increment);
   }
   if (NoteBank_InterpBody(note, &y) != 0)
   {
-    return NoteBank_BodyMiss(note);
+    return NoteBank_BodyMiss(note, increment);
   }
   note_body_only[note] = 1u;
   NoteBank_AdvanceBody(note, increment);
@@ -735,6 +778,9 @@ void NoteBank_Init(void)
     note_phase[i] = 0u;
     note_body_frac[i] = 0u;
     note_hold[i] = 0;
+    note_loop_wr[i] = 0u;
+    note_loop_count[i] = 0u;
+    note_loop_phase[i] = 0u;
     note_inc[i] = PHASE_ONE;
     note_inc_tgt[i] = PHASE_ONE;
     note_body_locked[i] = 0u;
@@ -797,6 +843,9 @@ void NoteBank_PanicAll(void)
     note_phase[i] = 0u;
     note_body_frac[i] = 0u;
     note_hold[i] = 0;
+    note_loop_wr[i] = 0u;
+    note_loop_count[i] = 0u;
+    note_loop_phase[i] = 0u;
     note_inc[i] = PHASE_ONE;
     note_inc_tgt[i] = PHASE_ONE;
     note_body_locked[i] = 0u;

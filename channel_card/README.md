@@ -156,10 +156,12 @@ parts, all commented in-place:
 - **BODY stream** is class-compliant synchronous UAC2 OUT: a 21-channel
   signed-int8 48 kHz carrier (1008 bytes/ms) for 48 kHz BODY/DAC data. Each
   millisecond has four routing/sequence bytes and 1004 BODY samples; exact
-  free-space `vq` permission arrives every 5 ms. A primed BODY underrun or ring-capacity drop
-  fails closed: the DAC is held in reset, both fixed LEDs plus RGB red latch
-  solid, and the CPU halts until reset/power-cycle. Malformed UAC transfers and
-  missed I2S1 refill deadlines use the same fault path. CH1 I2S is always the
+  free-space `vq` permission arrives every 5 ms. BODY underrun repeats up to 256 recent source
+  samples per voice until refill, or outputs silence if none have arrived.
+  Ring-capacity overflow drops the incoming block; USB packet-length queue
+  overflow clears the backlog and resynchronizes. Both keep playback running.
+  Malformed UAC transfers and I2S1 refill re-entry still halt the card with
+  the DAC held in reset and the fault LEDs latched. CH1 I2S is always the
   note-bank mix. The USB IRQ re-arms UAC OUT; the main loop parses BODY.
 - **I2S start order matters** — the I2S1 master must be running before
   the I2S2 slave is enabled, or the slave never shifts.

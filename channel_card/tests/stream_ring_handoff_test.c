@@ -49,6 +49,15 @@ int main(void)
   Check(StreamRing_FutureCount()==1u&&StreamRing_SupersededCount()==1u&&
             StreamRing_StaleCount()==1u&&StreamRing_FullCount()==1u,
         "future, superseded, stale and full frames must be counted separately");
+  Check(StreamRing_StartNote(1u)==0&&StreamRing_GetRel(1u,0u,&sample)==0&&sample==40,
+        "overflow preserves queued playback");
+  Check(StreamRing_WriteVoice(1u,4u,0u,20u,newer_body,USB_STREAM_UAC_BODY_SAMPLES)==0u,
+        "overflow during playback drops the incoming block");
+  Check(StreamRing_GetRel(1u,0u,&sample)==0&&sample==40,
+        "dropped block cannot overwrite unread audio");
+  StreamRing_Advance(1u,USB_STREAM_UAC_BODY_SAMPLES);
+  Check(StreamRing_WriteVoice(1u,4u,0u,20u,newer_body,USB_STREAM_UAC_BODY_SAMPLES)==USB_STREAM_UAC_BODY_SAMPLES,
+        "refills resume after playback frees space");
   StreamRing_ArmPending(2u,30u,5u);
   packet[2]=(int8_t)(USB_STREAM_TAG_BASE|USB_STREAM_TAG_SOF|2u);
   packet[3]=(int8_t)5u;

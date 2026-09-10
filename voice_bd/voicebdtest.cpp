@@ -129,7 +129,10 @@ try
     check(board.load_sample(0, pcm));
     RtMidiIn midi;
     midi.ignoreTypes(true, true, true);
+    if (midi.getPortCount() == 0)
+        throw std::runtime_error("No MIDI input ports found");
     midi.openPort(0);
+    std::cout << "MIDI 0: " << midi.getPortName(0) << '\n';
     std::signal(SIGINT, stop);
     std::signal(SIGTERM, stop);
     std::cout << "Ready. Play MIDI; Ctrl+C to exit.\n";

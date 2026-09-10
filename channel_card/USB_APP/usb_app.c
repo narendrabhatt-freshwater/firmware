@@ -31,10 +31,12 @@ static volatile uint16_t s_uac_lengths[USB_PACKET_LENGTH_QUEUE];
 static volatile uint8_t s_uac_length_wr;
 static volatile uint8_t s_uac_length_rd;
 static volatile uint32_t s_bad_uac;
+static volatile uint8_t s_uac_resync;
 
 static void USB_App_ResetUacAlignment(void)
 {
   s_uac_length_rd = s_uac_length_wr;
+  s_uac_resync = 0u;
   s_uac_logical_got = 0u;
   s_uac_synced = 0u;
 }
@@ -204,6 +206,16 @@ static void USB_App_DrainUac(void)
     USB_App_ResetUacAlignment();
     return;
   }
+  /* Protect the FIFO read and queue pop from an ISR overflow flush. Keep
+   * BODY parsing outside this short section so audio IRQs can run. */
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  if (s_uac_resync != 0u)
+  {
+    s_uac_logical_got = 0u;
+    s_uac_synced = 0u;
+    s_uac_resync = 0u;
+  }
   /* The ISR callback records each physical ISO OUT transfer length. Consume
    * exactly one such transfer here so FIFO batching cannot erase the USB
    * millisecond boundary that carries the tag. */
@@ -212,7 +224,10 @@ static void USB_App_DrainUac(void)
     const uint8_t rd = s_uac_length_rd;
     const uint16_t packet_bytes = s_uac_lengths[rd];
     if (tud_audio_available() < packet_bytes)
+    {
+      __set_PRIMASK(primask);
       return;
+    }
     if (packet_bytes == USB_STREAM_UAC_PACKET_BYTES)
     {
       const uint16_t n = tud_audio_read(s_uac_packet, packet_bytes);
@@ -222,9 +237,6 @@ static void USB_App_DrainUac(void)
         Error_Handler();
       }
       s_rx_bytes += n;
-      USB_App_ConsumeUacBytes(
-          (const int8_t *)(const void *)s_uac_packet,
-          USB_STREAM_UAC_PACKET_BYTES);
     }
     else
     {
@@ -248,7 +260,13 @@ static void USB_App_DrainUac(void)
       Error_Handler();
     }
     s_uac_length_rd = (uint8_t)((rd + 1u) % USB_PACKET_LENGTH_QUEUE);
+    __set_PRIMASK(primask);
+    USB_App_ConsumeUacBytes(
+        (const int8_t *)(const void *)s_uac_packet,
+        USB_STREAM_UAC_PACKET_BYTES);
+    return;
   }
+  __set_PRIMASK(primask);
 }
 
 void USB_App_TaskFromIsr(void)
@@ -383,8 +401,11 @@ bool tud_audio_rx_done_post_read_cb(uint8_t rhport, uint16_t nbytes,
   if (next == s_uac_length_rd)
   {
     s_bad_uac++;
-    /* Lost boundary metadata makes the buffered audio ambiguous. */
-    Error_Handler();
+    /* Drop the backlog, including this transfer, so bytes and boundary
+     * metadata restart together. Existing voice buffers keep playing. */
+    (void)tud_audio_clear_ep_out_ff();
+    s_uac_length_rd = s_uac_length_wr;
+    s_uac_resync = 1u;
     return true;
   }
   s_uac_lengths[s_uac_length_wr] = nbytes;
