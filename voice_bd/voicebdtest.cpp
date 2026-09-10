@@ -58,7 +58,7 @@ void print_key_demand(unsigned voice, unsigned key)
     std::ostringstream line;
     line << "key=" << key << " (" << notes[key % 12] << int(key / 12) - 1
          << ") voice=" << voice << " required=" << std::fixed << std::setprecision(2)
-         << sample_rate_hz / 1000.0 * speed << " samples/ms (nominal BODY)\n";
+         << sample_rate_hz / 1000.0 * speed << " samples/ms\n";
     std::cout << line.str() << std::flush;
 }
 

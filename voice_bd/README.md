@@ -38,6 +38,14 @@ modulation above 2×. Custom firmware programs can change the actual demand.
 Startup assumes the card is idle. If voices are active, program upload fails with
 `err:vm-busy`; startup does not silence them or wait for their release.
 
+For the reconnect experiment, startup sends `vq` immediately after opening RS485
+and retries timeouts for up to three total attempts, with no pause between them.
+Each attempt keeps the 50 ms reply timeout. No preliminary carriage return is
+sent. Driver errors and invalid replies stop the attempts immediately. Normal
+playback commands are not retried. Startup errors identify
+the adapter path. Each startup attempt is printed as `vq attempt N/3`.
+Timeouts include the received byte count; serial read failures report the driver error.
+
 Input: 48 kHz, 16-bit PCM WAV, mono or stereo. Build requires RtAudio 5.2 or 6,
 libserialport, CMake and pkg-config; other dependencies come from the repository.
 

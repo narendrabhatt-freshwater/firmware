@@ -490,7 +490,7 @@ public:
             return fail(voice_board_error_t::io_error, error);
         std::vector<uint8_t> reply;
         auto const stop_waiting_at = std::chrono::steady_clock::now() +
-            std::chrono::milliseconds(50);
+            std::chrono::milliseconds(5);
         std::array<uint8_t, 256> bytes{};
         while (std::chrono::steady_clock::now() < stop_waiting_at) {
             size_t const count = port_.read(
@@ -1150,9 +1150,11 @@ voice_board_result_t open_device(device_context* state,
     state->upload_usb_port_name = config.upload_usb_port;
     result = state->rs485.open(state->rs485_name, config.rs485_baud);
     if (!result) return result;
-    // Read initial voice timing and free space before accepting notes.
+    /* Send a clear command to clear the card-side input line. */
+    result = state->rs485.command("clear");
     result = state->query_status();
     if (!result) {
+        result.message = "RS485 startup on " + state->rs485_name + ": " + result.message;
         state->shutdown();
         return result;
     }
