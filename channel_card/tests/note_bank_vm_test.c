@@ -178,14 +178,18 @@ int main(int argc,char **argv){
   check(NoteBank_SetWaveId(0u,0u)==0,"duration test wave");
   for(unsigned head=0u;head<=512u;head+=512u) {
     attack_lengths[0]=head;
-    for(unsigned key=48u;key<=72u;key+=12u) {
+    for(unsigned key=48u;key<=127u;++key) {
       NoteBank_PanicAll();
       check(NoteBank_NoteOn(0u,(uint8_t)key,127u)==0,"duration note accepted");
       prime_body(0u);boundary();
       if(head==0u) {
-        uint32_t inc=(uint32_t)(NoteBank_GetFreq(0u)/260.0*65536.0+0.5);
+        double speed=NoteBank_GetFreq(0u)/260.0;
+        while(speed>2.0) speed*=0.5;
+        uint32_t inc=(uint32_t)(speed*65536.0+0.5);
         uint16_t demand=(uint16_t)(((uint64_t)inc*240u+65535u)>>16);
         check(NoteBank_RefillSamples5ms(0u)==demand,"card computes five-ms demand from its playback rate");
+        check(demand<=480u,"folded notes stay within 2x BODY bandwidth");
+        check(NoteBank_GetKey(0u)==key,"octave folding preserves the physical MIDI key");
       }
       uint32_t predicted=NoteBank_RemainingUs(0u), frames=0u;
       uint32_t last=predicted;

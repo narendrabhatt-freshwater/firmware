@@ -30,9 +30,10 @@ voices, and reports board errors before exiting with a nonzero status. Ctrl+C st
 
 Each note-on prints its MIDI key, note name, assigned voice, and nominal BODY
 demand, for example `key=72 (C5) voice=0 required=96.00 samples/ms (nominal BODY)`.
-The estimate uses the uploaded sample's C4 root and the card's 1/16×–16× speed
-limits. Custom firmware programs that transpose or modulate pitch can change
-the actual demand.
+The estimate uses the uploaded sample's C4 root and the card's 1/16× minimum
+speed. Rates above 2× are halved repeatedly to preserve the note's pitch class
+within one octave above the sample root. The card also folds sample frequency
+modulation above 2×. Custom firmware programs can change the actual demand.
 
 Startup assumes the card is idle. If voices are active, program upload fails with
 `err:vm-busy`; startup does not silence them or wait for their release.

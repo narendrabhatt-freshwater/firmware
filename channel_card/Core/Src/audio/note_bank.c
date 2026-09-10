@@ -40,7 +40,7 @@ _Static_assert(STREAM_RING_SAMPLES == 4080u,
 #define NOTE_AMP_Q15_MAX 32767
 #define PHASE_ONE (1u << 16)
 #define PHASE_INC_MIN (PHASE_ONE / 16u)
-#define PHASE_INC_MAX (PHASE_ONE * 16u)
+#define PHASE_INC_MAX (PHASE_ONE * 2u)
 /* ~1 octave in 20 ms @ 48 kHz. */
 #define PHASE_INC_SLEW 68u
 #define INTERP_LEFT_TAPS 0u
@@ -115,6 +115,17 @@ static int32_t NoteBank_ScaleToQ15(double scale)
   return (int32_t)(scale * (double)NOTE_AMP_Q15_MAX + 0.5);
 }
 
+/* Preserve pitch class while limiting streamed sample consumption to 2x.
+ * Fold before quantization so notes above the former 16x limit stay in tune. */
+static uint32_t NoteBank_FoldInc(double inc)
+{
+  if (!isfinite(inc))
+    return inc > 0.0 ? PHASE_INC_MAX : PHASE_INC_MIN;
+  while (inc > (double)PHASE_INC_MAX) inc *= 0.5;
+  if (inc < (double)PHASE_INC_MIN) inc = PHASE_INC_MIN;
+  return (uint32_t)(inc + 0.5);
+}
+
 static uint32_t NoteBank_HzToInc(uint16_t wave_id, double freq_hz)
 {
   float root;
@@ -126,15 +137,7 @@ static uint32_t NoteBank_HzToInc(uint16_t wave_id, double freq_hz)
     return PHASE_ONE;
   }
   inc = freq_hz / (double)root;
-  if (inc > 16.0)
-  {
-    inc = 16.0;
-  }
-  if (inc < (1.0 / 16.0))
-  {
-    inc = 1.0 / 16.0;
-  }
-  return (uint32_t)(inc * (double)PHASE_ONE + 0.5);
+  return NoteBank_FoldInc(inc * (double)PHASE_ONE);
 }
 
 static int32_t NoteBank_InterpAttack(uint16_t wid, uint64_t phase)
@@ -601,11 +604,7 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
                         (double)root_hz
                   : 0.0;
   delta_inc += (double)note_inc[note];
-  if (!isfinite(delta_inc))
-    delta_inc = delta_inc > 0.0 ? PHASE_INC_MAX : PHASE_INC_MIN;
-  if (delta_inc < (double)PHASE_INC_MIN) delta_inc = PHASE_INC_MIN;
-  if (delta_inc > (double)PHASE_INC_MAX) delta_inc = PHASE_INC_MAX;
-  frame_inc = (uint32_t)(delta_inc + 0.5);
+  frame_inc = NoteBank_FoldInc(delta_inc);
   note_observed_inc[note] = frame_inc;
   s = NoteBank_Sample(note, frame_inc);
   s = WavetableOsc_MixSample(note, s);
