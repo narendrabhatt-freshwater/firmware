@@ -79,6 +79,7 @@ int usage(int status)
         << "    sample.wav     48 kHz, 16-bit PCM WAV, mono or stereo\n"
         << "    program.bec    Firmware program (default: channel.bec in current directory)\n"
         << "\n    Uses MIDI input 0 and the device ports configured in voicebd.h.\n"
+        << "    Tests loadScript on voices 0-7 after opening the board.\n"
         << "    Play MIDI notes; press Ctrl+C to exit.\n\n";
     return status;
 }
@@ -147,6 +148,11 @@ try
     };
     voice_board_t board;
     check(board.open(config));
+    for (uint8_t voice = 0; voice < voice_board_t::voice_count; ++voice) {
+        check(board.loadScript(voice, config.bec_file));
+        std::cout << "loadScript: voice " << unsigned(voice)
+                  << " loaded " << config.bec_file << '\n';
+    }
     check(board.load_sample(0, pcm, sample_rate_hz, sample_root_hz));
     RtMidiIn midi;
     midi.ignoreTypes(true, true, true);

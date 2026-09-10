@@ -99,6 +99,8 @@ public:
     /* Silence the card and close the ports. */
     voice_board_result_t close();
     bool is_open() const;
+    /* Load a BEC program into voice 0..7 on an open board. */
+    voice_board_result_t loadScript(uint8_t voice_id, std::string const& path);
     /* Upload the ATTACK and retain 48 kHz mono signed-16 PCM BODY in memory. */
     voice_board_result_t load_sample(uint16_t sample_id,
         std::vector<int16_t> const& pcm,

@@ -1133,6 +1133,23 @@ void destroy(device_context* state)
     delete state;
 }
 
+/* ---- upload a BEC program to one voice ----------------------------------- */
+
+voice_board_result_t upload_script(device_context* state, uint8_t voice_id,
+    std::vector<uint8_t> const& bec)
+{
+    /* vmload rejects active voices with err:vm-busy. */
+    auto result = send_payload(state->upload_port,
+        "vmload " + std::to_string(voice_id),
+        bec.data(), bec.size(), "ok:vm");
+    if (!result) {
+        result.code = voice_board_error_t::bec_error;
+        result.message = "voice " + std::to_string(voice_id) +
+            " BEC upload failed: " + result.message;
+    }
+    return result;
+}
+
 /* ---- open the channel device --------------------------------------------- */
 
 voice_board_result_t open_device(device_context* state,
@@ -1164,15 +1181,9 @@ voice_board_result_t open_device(device_context* state,
         return fail(voice_board_error_t::io_error, error);
     }
     for (uint8_t voice = 0u; voice < kVoiceCount; ++voice) {
-        /* vmload rejects active voices with err:vm-busy. */
-        result = send_payload(state->upload_port,
-            "vmload " + std::to_string(voice),
-            bec.data(), bec.size(), "ok:vm");
+        result = upload_script(state, voice, bec);
         if (!result) {
             state->shutdown();
-            result.code = voice_board_error_t::bec_error;
-            result.message = "voice " + std::to_string(voice) +
-                " BEC upload failed: " + result.message;
             return result;
         }
     }
@@ -1208,6 +1219,21 @@ voice_board_result_t close_device(device_context* state)
 bool device_is_open(device_context const* state)
 {
     return state && state->connected.load();
+}
+
+/* ---- load a BEC program into the channel device -------------------------- */
+
+voice_board_result_t load_script(device_context* state, uint8_t voice_id,
+    std::string const& path)
+{
+    if (!device_is_open(state))
+        return fail(voice_board_error_t::not_connected,
+            "voice board is not connected");
+    std::vector<uint8_t> bec;
+    auto result = read_bec(path, bec);
+    if (!result) return result;
+    device_context::control_turn turn(state);
+    return upload_script(state, voice_id, bec);
 }
 
 /* ---- load a sample into the channel device ------------------------------- */
@@ -1423,6 +1449,18 @@ bool voice_board_t::is_open() const
 {
     return impl_ && impl_->context &&
         voice_board_detail::device_is_open(impl_->context);
+}
+
+/* ---- load a BEC program into one voice ----------------------------------- */
+
+voice_board_result_t voice_board_t::loadScript(
+    uint8_t voice_id, std::string const& path)
+{
+    if (!impl_ || !impl_->context) return unavailable();
+    if (voice_id >= voice_count)
+        return invalid_argument("voice must be 0..7");
+    if (path.empty()) return invalid_argument("BEC file is required");
+    return voice_board_detail::load_script(impl_->context, voice_id, path);
 }
 
 /* ---- load a sample into the voice board ---------------------------------- */
