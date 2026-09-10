@@ -22,12 +22,13 @@ endif()
 option(SCRIPT_RUNTIME_BUILD_HOST_TOOLS "Build Berry compiler and host qualification" ON)
 
 if(SCRIPT_RUNTIME_BUILD_HOST_TOOLS)
-add_library(berry_host OBJECT ${BERRY_SOURCES}
-    "${BERRY_ROOT}/default/be_port.c"
-    "${SCRIPT_RUNTIME_ROOT}/src/berry_runtime_modtab.c")
-target_include_directories(berry_host PUBLIC
-    "${BERRY_ROOT}/src" "${SCRIPT_RUNTIME_ROOT}/config/host")
-target_compile_options(berry_host PRIVATE -w)
+add_subdirectory("${SCRIPT_RUNTIME_ROOT}/../../berry_compiler"
+    "${CMAKE_CURRENT_BINARY_DIR}/berry_compiler")
+# Preserve the compiler location used by existing runtime build instructions.
+if(NOT BERRY_EXECUTABLE)
+  set_target_properties(berry PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+endif()
 endif()
 
 add_library(berry_runtime STATIC ${BERRY_SOURCES}
@@ -48,20 +49,6 @@ target_compile_options(script_runtime_berry_backend PRIVATE
 add_library(script_runtime::berry ALIAS script_runtime_berry_backend)
 
 if(SCRIPT_RUNTIME_BUILD_HOST_TOOLS)
-set(BERRY_EXECUTABLE "" CACHE FILEPATH "Use an existing standalone Berry compiler")
-if(BERRY_EXECUTABLE)
-  if(NOT EXISTS "${BERRY_EXECUTABLE}" OR IS_DIRECTORY "${BERRY_EXECUTABLE}")
-    message(FATAL_ERROR "BERRY_EXECUTABLE must name an existing berry executable")
-  endif()
-  add_executable(berry IMPORTED GLOBAL)
-  set_target_properties(berry PROPERTIES IMPORTED_LOCATION "${BERRY_EXECUTABLE}")
-else()
-add_executable(berry tools/berry.c)
-target_include_directories(berry PRIVATE "${SCRIPT_RUNTIME_ROOT}/include")
-target_link_libraries(berry PRIVATE berry_host freshwater::vm m)
-target_compile_options(berry PRIVATE -Wall -Wextra -Werror -pedantic)
-endif()
-
 enable_testing()
 add_executable(shared_berry_runtime_test tests/shared_runtime_test.c)
 target_link_libraries(shared_berry_runtime_test PRIVATE script_runtime::berry)

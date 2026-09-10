@@ -108,6 +108,10 @@ matrix, and verifies at least 20% heap headroom over the measured peak.
 The standalone `berry` compiler takes `.be` source and emits an upload-ready
 `.bec` program containing Channel ABI2 Berry bytecode and the firmware header:
 
+Its source and standalone build instructions live in
+[`berry_compiler/`](../../berry_compiler/README.md) at the repository root.
+The runtime build above also builds that compiler:
+
 ```sh
 build/shared-berry/berry cmi_core/runtime/examples/channel_envelope.be \
   -o build/shared-berry/channel_envelope.bec

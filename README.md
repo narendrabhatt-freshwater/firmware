@@ -14,6 +14,10 @@ vendored inside each card. The VM contract and runtime are shared from
 `cmi_core/` so firmware and host code use the same source. The `cmi_control`
 application also links this core library — see §6.
 
+To build the Berry script compiler on a teammate's computer, see
+[`berry_compiler/`](berry_compiler/README.md). It is a separate host build and
+does not require the STM32 toolchain.
+
 ---
 
 ## 1. Tools to install
