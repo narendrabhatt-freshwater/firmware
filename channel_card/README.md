@@ -162,7 +162,10 @@ parts, all commented in-place:
   overflow clears the backlog and resynchronizes. Both keep playback running.
   Malformed UAC transfers and I2S1 refill re-entry still halt the card with
   the DAC held in reset and the fault LEDs latched. CH1 I2S is always the
-  note-bank mix. The USB IRQ re-arms UAC OUT; the main loop parses BODY.
+  note-bank mix. The USB IRQ (priority 0) schedules the TinyUSB task in PendSV
+  (priority 1) to re-arm UAC OUT; the main loop parses BODY. USB can preempt
+  PendSV to service receive status during endpoint shutdown. PendSV shares
+  TIM7/SPI2 priority and preempts the DMA mixer (priority 2).
 - **I2S start order matters** — the I2S1 master must be running before
   the I2S2 slave is enabled, or the slave never shifts.
 - **I2S2 slave workarounds** — UDR wedge clearing via the TIM7 pump, and

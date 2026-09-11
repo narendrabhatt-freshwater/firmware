@@ -3,8 +3,8 @@
  * @file    usb_app.h
  * @brief   TinyUSB application layer: UAC2 BODY + CDC console.
  *
- * TinyUSB task service runs from the USB ISR so UAC ISO OUT is re-armed before
- * the next SOF. BODY parsing and CDC line handling run in USB_App_Task().
+ * TinyUSB task service runs from PendSV, below the USB IRQ and above the DMA
+ * mixer, to re-arm UAC promptly. BODY parsing and CDC run in USB_App_Task().
  ******************************************************************************
  */
 
@@ -27,8 +27,8 @@ extern "C"
      */
     void USB_App_Task(void);
 
-    /** Re-arm the UAC endpoint from OTG_HS_IRQHandler (tud_task only). */
-    void USB_App_TaskFromIsr(void);
+    /** TinyUSB task consumer; called only from PendSV_Handler. */
+    void USB_App_DeferredTask(void);
 
     void USB_CDC_WriteStr(const char *s);
 

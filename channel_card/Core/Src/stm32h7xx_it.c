@@ -173,7 +173,7 @@ void DebugMon_Handler(void)
 void PendSV_Handler(void)
 {
   /* USER CODE BEGIN PendSV_IRQn 0 */
-
+  USB_App_DeferredTask();
   /* USER CODE END PendSV_IRQn 0 */
   /* USER CODE BEGIN PendSV_IRQn 1 */
 
@@ -241,8 +241,9 @@ void OTG_HS_IRQHandler(void)
    * rhport 0: this part has a single USB core, which TinyUSB's STM32
    * port maps onto controller index 0. */
   tud_int_handler(0);
-  /* UAC ISO OUT has no retry; arm the next transfer before the next SOF. */
-  USB_App_TaskFromIsr();
+  /* Run the task promptly, but let this IRQ preempt endpoint shutdown waits.
+   * Assign only PENDSVSET: a request made during PendSV schedules another pass. */
+  SCB->ICSR = SCB_ICSR_PENDSVSET_Msk;
   return;
 
   /* USER CODE END OTG_HS_IRQn 0 */

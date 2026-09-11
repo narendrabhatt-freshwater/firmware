@@ -16,7 +16,6 @@
 static uint32_t s_sample_freq = CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE;
 static uint8_t s_clock_valid = 1u;
 static audio_control_range_4_n_t(1) s_sample_freq_range;
-static volatile uint8_t s_tud_from_isr;
 
 static uint32_t s_rx_msg;
 static uint32_t s_rx_bytes;
@@ -103,6 +102,10 @@ static void USB_LowLevel_Init(void)
   HAL_PWREx_EnableUSBVoltageDetector();
   __HAL_RCC_USB_OTG_HS_CLK_ENABLE();
   HAL_NVIC_SetPriority(OTG_HS_IRQn, 0, 0);
+  /* Below USB so RX status can unblock task waits; above the DMA mixer (2).
+   * Match the TIM7/SPI2 audio service priority (1), preserving serialization
+   * with audio start/stop callbacks. PendSV still preempts a busy main loop. */
+  HAL_NVIC_SetPriority(PendSV_IRQn, 1, 0);
   HAL_NVIC_EnableIRQ(OTG_HS_IRQn);
 }
 
@@ -269,13 +272,12 @@ static void USB_App_DrainUac(void)
   __set_PRIMASK(primask);
 }
 
-void USB_App_TaskFromIsr(void)
+void USB_App_DeferredTask(void)
 {
-  if (s_tud_from_isr != 0u)
-    return;
-  s_tud_from_isr = 1u;
+  /* Sole task consumer. PendSV cannot preempt itself; USB may enqueue events
+   * and pend another pass while this runs. TinyUSB's OS-none queue protects
+   * task reads by briefly masking the USB IRQ. */
   tud_task();
-  s_tud_from_isr = 0u;
 }
 
 void USB_App_Task(void)

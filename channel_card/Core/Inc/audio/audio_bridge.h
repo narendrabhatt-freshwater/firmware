@@ -36,7 +36,7 @@ extern "C"
 
   /**
    * @brief Clear I2S buffers and start I2S1 (+I2S2) DMA.
-   * @note Called from tud_mount in the main-loop TinyUSB task.
+   * @note Called from the audio interface callback in the PendSV TinyUSB task.
    */
   void Audio_Bridge_Start(void);
 
