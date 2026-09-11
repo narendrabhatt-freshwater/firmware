@@ -55,6 +55,31 @@ Use `-h` to display the version, product identifier, and usage.
 The voice board API returns `voice_board_result_t` with an error code and message.
 The test program checks these results and prints failures before exiting.
 
+## Replacing a playing sample
+
+`load_sample()` can replace a sample while its notes are playing. It uploads the
+new attack directly into card memory while USB audio, status polling and MIDI
+continue. Once the upload and root-pitch command succeed, the host swaps its PCM
+under the audio mutex. Old allocations are freed outside that mutex.
+
+Each note keeps its next source position, measured in the full PCM sample.
+Prepared packets and audio already queued on the card finish unchanged. A shorter
+replacement continues if the position fits; otherwise the host stops sending
+BODY data and sends the normal note-off. No envelope restart or replacement
+crossfade is added. Attack and BODY updates are independent, so a brief audible
+discontinuity is possible. The existing attack/BODY overlap remains unchanged.
+
+The host retains the PCM prefix as well as the BODY so a replacement with a
+longer attack can still supply any preserved source position. New notes start
+BODY streaming at the replacement's attack-minus-overlap origin.
+
+Use the updated channel firmware together with `voicebd`: older firmware rejects
+attack uploads while bank memory is in use. Playback may read a mixture of old
+and new attack bytes during upload. An incomplete upload leaves those bytes
+partially overwritten with the previous length; a missing acknowledgement may
+leave length completion unknown. Upload failure retains the host PCM. Errors after attack publication
+identify partial completion; they do not imply rollback or close the device.
+
 ## Streaming protocol
 
 Host implementation stays in `voicebd.h` and `voicebd.cpp`. The `vq` status
@@ -89,6 +114,12 @@ c++ -std=c++17 -Wall -Wextra -Werror \
   $(pkg-config --libs rtaudio libserialport) -o /tmp/voicebd-stream-test
 /tmp/voicebd-stream-test
 ```
+
+The hardware reliability test also accepts mode `swaps` (after WAV and BEC
+arguments). It repeatedly replaces a shared sample with equal, shorter and
+64-sample versions while other voices play, then retriggers to verify recovery.
+Run it only after installing the updated channel firmware; listen for persistent
+noise or stuck notes and inspect card diagnostics. Brief swap clicks are allowed.
 
 Hardware acceptance still requires measuring actual USB/poll timing and checking
 zero `hold`/overflow faults under the intended workload. The scheduler cannot

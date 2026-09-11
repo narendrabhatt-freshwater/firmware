@@ -493,9 +493,17 @@ Constraints:
 
 The host never supplies a physical bank ID for an oscillator. Channel firmware
 maps `wl 0..7` into its reserved storage and returns the same logical number.
-`al` cannot write reserved wavetable storage. Uploads are rejected while
-active, pending, or queued notes may reference the bank. Oscillator tables
-must contain 2…512 periodic samples.
+`al` cannot write reserved wavetable storage. Sample attack uploads overwrite
+live storage directly while playback and note admission continue. Playback may
+read mixed old and new bytes during transfer. Completion updates the length and
+loaded state together; partial or aborted uploads leave partially overwritten
+bytes with the previous length. The table address never changes. Existing notes
+keep their phase and BODY join; new notes use the completed length. This is
+independent of host BODY replacement.
+
+`wl` remains rejected while active, pending, or queued notes may reference the
+bank, and blocks note admission during upload. Oscillator tables must contain
+2…512 periodic samples. Only one CDC upload may be active at a time.
 
 **Console reply API (what the card writes):** exactly two success lines
 for a full transfer — nothing in between, even if USB delivers the

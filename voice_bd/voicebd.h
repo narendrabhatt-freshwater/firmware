@@ -72,7 +72,7 @@ struct voice_board_config_t
     // std::string rs485_port = "/dev/cu.usbserial-B0047GLI";
     /* USB port used to load the BEC and sample ATTACK data. */
     // std::string upload_usb_port = "/dev/cu.usbmodem134203";
-    std::string upload_usb_port = "/dev/cu.usbmodem13303";
+    std::string upload_usb_port = "/dev/cu.usbmodem13203";
     /* RtAudio device used for the USB BODY stream. */
     std::string stream_usb_port = "Channel Card BODY";
     /* RS485 baud rate. */
@@ -101,7 +101,10 @@ public:
     bool is_open() const;
     /* Load a BEC program into voice 0..7 on an open board. */
     voice_board_result_t loadScript(uint8_t voice_id, std::string const& path);
-    /* Upload the ATTACK and retain 48 kHz mono signed-16 PCM BODY in memory. */
+    /* Upload ATTACK and retain 48 kHz mono signed-16 PCM for BODY streaming.
+     * Active replacements preserve the next source position; positions outside
+     * the new sample trigger note-off. Queued audio is left intact. Requires
+     * channel firmware allowing live attack uploads for replacement while playing. */
     voice_board_result_t load_sample(uint16_t sample_id,
         std::vector<int16_t> const& pcm,
         uint32_t source_sample_rate_hz = 48000,

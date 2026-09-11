@@ -47,8 +47,10 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
 endif()
 
 add_executable(attack_upload_guard_test
+  ../Core/Src/audio/attack_bank.c
   attack_upload_guard_test.c
   ../Core/Src/console/attack_upload.c)
+target_link_libraries(attack_upload_guard_test PRIVATE m)
 target_include_directories(attack_upload_guard_test PRIVATE
   ../Core/Inc/audio ../Core/Inc/console ../USB_APP
   ../../cmi_core/shared/vm/include)

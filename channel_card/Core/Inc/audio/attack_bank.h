@@ -44,14 +44,14 @@ extern "C"
    */
   int AttackBank_Load(uint16_t wave_id, const uint8_t *data, uint32_t nbytes);
 
-  /** Direct write pointer for CDC upload (ATTACK_BANK_LEN int8). */
+  /** Direct live write pointer for one serialized main-loop upload (ATTACK_BANK_LEN int8). */
   int8_t *AttackBank_WritePtr(uint16_t wave_id);
 
-  /** Prevent note admission while CDC is modifying shared bank storage. */
+  /** Prevent note admission during guarded oscillator wavetable uploads. */
   void AttackBank_SetWriteActive(uint8_t active);
   uint8_t AttackBank_WriteIsActive(void);
 
-  /** Mark head present; nsamp is the real table length (not a hold-pad). */
+  /** Main-loop-only update of completed head length and loaded state. */
   int AttackBank_Commit(uint16_t wave_id, uint32_t nsamp);
 
   uint8_t AttackBank_IsLoaded(uint16_t wave_id);

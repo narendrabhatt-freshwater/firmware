@@ -14,9 +14,9 @@ int stream_self_test()
     using clock = std::chrono::steady_clock;
     auto const now = clock::now();
     stream_state stream;
-    stream.samples[0].body_size = 20000;
-    stream.samples[0].body.reset(new int16_t[20000]);
-    std::fill_n(stream.samples[0].body.get(), 20000, 37 * 256);
+    stream.samples[0].pcm_size = 20000;
+    stream.samples[0].pcm.reset(new int16_t[20000]);
+    std::fill_n(stream.samples[0].pcm.get(), 20000, 37 * 256);
     auto arm = [&](unsigned v, unsigned session = 1u) {
         stream.voices[v] = {};
         stream.voices[v].active = true;
@@ -37,9 +37,9 @@ int stream_self_test()
     auto block_count = [&](unsigned i) {
         return read16(reinterpret_cast<uint8_t const*>(stream.packet.data()) + 4u + i * 4u);
     };
-    stream.samples[0].body[0] = -32768;
-    stream.samples[0].body[1] = 32767;
-    stream.samples[0].body[2] = -1;
+    stream.samples[0].pcm[0] = -32768;
+    stream.samples[0].pcm[1] = 32767;
+    stream.samples[0].pcm[2] = -1;
     auto idle_status = status(0, 65534, 0);
     stream.apply_status(idle_status, now);
     check(stream.voices[0].available_sample_slots == 4080,
@@ -156,8 +156,8 @@ int stream_self_test()
     // protecting a playing voice. No key or root frequency enters this test.
     for (unsigned rate : {12u,48u}) {
         stream_state startup;
-        startup.samples[0].body_size=20000;
-        startup.samples[0].body.reset(new int16_t[20000]{});
+        startup.samples[0].pcm_size=20000;
+        startup.samples[0].pcm.reset(new int16_t[20000]{});
         for(auto v:{0u,1u}) { startup.voices[v].active=true; startup.voices[v].session_id=1; }
         startup.voices[1].filling_initial_buffer=true;
         auto q=status(1,0,3); q.pending_voice_mask=2;
@@ -185,8 +185,8 @@ int stream_self_test()
     }
     // Paced USB delivery uses the acknowledged packet's audio age, not RTT.
     stream_state paced;
-    paced.samples[0].body_size = 20000;
-    paced.samples[0].body.reset(new int16_t[20000]{});
+    paced.samples[0].pcm_size = 20000;
+    paced.samples[0].pcm.reset(new int16_t[20000]{});
     paced.voices[0].active = true;
     paced.voices[0].session_id = 1;
     auto full = status(1, 0, 1);
@@ -212,8 +212,8 @@ int stream_self_test()
           "pending replacement cannot spend the old voice budget");
     // Aged snapshots must not count audio consumed before the snapshot twice.
     stream_state aged;
-    aged.samples[0].body_size = 20000;
-    aged.samples[0].body.reset(new int16_t[20000]{});
+    aged.samples[0].pcm_size = 20000;
+    aged.samples[0].pcm.reset(new int16_t[20000]{});
     aged.voices[0].active = true; aged.voices[0].session_id = 1;
     auto age_status = status(255, 0, 1);
     age_status.refill_samples_5ms[0] = 1920;
@@ -236,8 +236,8 @@ int stream_self_test()
                        std::array<unsigned,8>{600,300,0,0,0,0,0,0},
                        std::array<unsigned,8>{600,40,40,40,40,40,40,40}}) {
         stream_state model;
-        model.samples[0].body_size = 500000;
-        model.samples[0].body.reset(new int16_t[500000]{});
+        model.samples[0].pcm_size = 500000;
+        model.samples[0].pcm.reset(new int16_t[500000]{});
         std::array<int,8> fill{};
         uint8_t mask=0;
         for(unsigned v=0;v<8;++v) if(rates[v]) {
@@ -337,6 +337,86 @@ int stream_self_test()
     check(!parse_voice_queue_status(raw,parsed), "previous budget format rejected");
     raw.resize(53); raw[3]=8; raw[52]='\n';
     check(!parse_voice_queue_status(raw,parsed), "legacy reply rejected");
+    // Replacement keeps absolute source positions, even before a longer new
+    // attack's BODY origin. Old packets and transport accounting stay intact.
+    auto replacement = [](size_t length, int16_t value) {
+        sample_data sample;
+        sample.pcm_size = length;
+        sample.loaded = true;
+        sample.pcm.reset(new int16_t[length]);
+        std::fill_n(sample.pcm.get(), length, value);
+        return sample;
+    };
+    device_context swap_device;
+    auto& swaps = swap_device.stream;
+    auto initial = replacement(3000, 256);
+    swap_device.replace_sample(0, initial);
+    for (unsigned i = 0; i < 3; ++i) {
+        swaps.voices[i].active = true;
+        swaps.voices[i].sample_id = i == 2 ? 1 : 0;
+        swaps.voices[i].session_id = 7;
+        swaps.voices[i].source_position = 20 + i * 80;
+    }
+    swaps.packet.fill(9);
+    swaps.packet_offset = 30;
+    swaps.pending_packet_count = 1;
+    for (size_t length : {3000u, 4000u, 2000u}) {
+        auto next = replacement(length, 512);
+        auto result = swap_device.replace_sample(0, next);
+        check(bool(result) && swaps.voices[0].source_position == 20 &&
+                  swaps.voices[1].source_position == 100,
+              "valid positions survive equal, longer and shorter replacements");
+        check(swaps.packet[0] == 9 && swaps.packet_offset == 30 &&
+                  swaps.pending_packet_count == 1 && swaps.voices[0].session_id == 7,
+              "replacement preserves prepared audio, accounting and session");
+    }
+    swaps.sequence_ready = true;
+    swaps.pending_packet_count = 0;
+    swaps.voices[0].available_sample_slots = 1;
+    swaps.make_packet(now);
+    check(swaps.packet[10] == 2 && swaps.voices[0].source_position == 21,
+          "next packet reads replacement at preserved position before BODY origin");
+    auto short_sample = replacement(21, 768);
+    auto result = swap_device.replace_sample(0, short_sample);
+    check(!result && result.message.find("replacement note-off failed") != std::string::npos && !swaps.voices[0].active &&
+              !swaps.voices[1].active && swaps.voices[2].active,
+          "positions at or beyond new end release only voices using that sample");
+    swaps.voices[0].available_sample_slots = 100;
+    swaps.make_packet(now);
+    check(read16(reinterpret_cast<uint8_t const*>(swaps.packet.data()) + 4) == 0,
+          "stopped replacement cannot enqueue more BODY samples");
+    // Exercise the same lock/lifetime pattern as load_sample against render.
+    device_context concurrent_device;
+    auto& concurrent = concurrent_device.stream;
+    auto seed = replacement(4096, 256);
+    concurrent_device.replace_sample(0, seed);
+    concurrent.voices[0].active = true;
+    concurrent.voices[0].source_position = 480;
+    concurrent.voices[0].stream_origin = 480;
+    concurrent.sequence_ready = true;
+    std::atomic<bool> rendering{false};
+    std::thread audio([&] {
+        rendering.store(true);
+        int8_t output[1008];
+        for (unsigned i = 0; i < 2000; ++i) {
+            {
+                std::lock_guard<std::mutex> lock(concurrent.mutex);
+                concurrent.pending_packet_count = 0;
+                concurrent.voices[0].available_sample_slots = 1;
+            }
+            concurrent.render(output, sizeof output);
+        }
+    });
+    while (!rendering.load()) std::this_thread::yield();
+    for (unsigned i = 0; i < 2000; ++i) {
+        auto next = replacement(4096 + i % 2, 512);
+        device_context::control_turn turn(&concurrent_device);
+        concurrent_device.replace_sample(0, next);
+    }
+    audio.join();
+    check(concurrent.voices[0].source_position == 2480,
+          "concurrent replacement preserves rendering progress and allocation lifetime");
+
     // A queued note-off advertises priority while a query owns the control lock.
     device_context device;
     auto const scheduled_poll = device.next_poll;
@@ -364,6 +444,38 @@ int stream_self_test()
     device.next_poll = clock::now() - std::chrono::milliseconds(20);
     device.advance_poll();
     check(device.next_poll <= clock::now(), "late reply cannot postpone an already due poll");
+    // A delayed or failed upload owns only CDC serialization. Both MIDI and
+    // the status worker can still obtain the control lock, and render can run.
+    {
+        std::lock_guard<std::mutex> uploading(device.upload_mutex);
+        command_ran.store(false);
+        std::thread control([&] {
+            device_context::control_turn turn(&device);
+            command_ran.store(true);
+        });
+        control.join();
+        check(command_ran.load(), "MIDI progresses while upload is pending");
+        check(device.control_mutex.try_lock(), "upload does not block status lock");
+        device.control_mutex.unlock();
+        int8_t output[32];
+        device.stream.render(output, sizeof output);
+    }
+    // A real failed send on an unopened CDC port must not publish host PCM.
+    device.connected.store(true);
+    auto retained = replacement(1000, 256);
+    device.replace_sample(0, retained);
+    auto const* retained_pcm = device.stream.samples[0].pcm.get();
+    device.stream.voices[0].active = true;
+    device.stream.voices[0].source_position = 600;
+    std::vector<int16_t> failed_pcm(800, 512);
+    auto failed = load_sample(&device, 0, failed_pcm, 261.625565);
+    check(!failed && device.connected.load() &&
+              device.stream.samples[0].pcm.get() == retained_pcm &&
+              device.stream.voices[0].source_position == 600 &&
+              device.stream.voices[0].active &&
+              failed.message.find("old BODY retained") != std::string::npos,
+          "upload failure preserves PCM and live state without disconnecting");
+    device.connected.store(false);
     return 0;
 }
 } // namespace voice_board_detail

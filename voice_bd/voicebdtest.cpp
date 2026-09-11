@@ -33,6 +33,10 @@
 #include <exception>
 #include <sysexits.h>
 #include <fstream>
+#include <filesystem>
+#include <poll.h>
+#include <termios.h>
+#include <unistd.h>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -80,7 +84,7 @@ int usage(int status)
         << "    program.bec    Firmware program (default: channel.bec in current directory)\n"
         << "\n    Uses MIDI input 0 and the device ports configured in voicebd.h.\n"
         << "    Tests loadScript on voices 0-7 after opening the board.\n"
-        << "    Play MIDI notes; press Ctrl+C to exit.\n\n";
+        << "    Play MIDI notes; O: orchestra, S: sine, P: square, T: triangle, W: sawtooth, A: attack replacement test; Ctrl+C exits.\n\n";
     return status;
 }
 
@@ -89,7 +93,29 @@ int usage(int status)
 volatile std::sig_atomic_t stopped = 0;
 void stop(int) { stopped = 1; }
 
-/* Assumes a valid 48 kHz PCM16 mono/stereo WAV. */
+/* Read terminal keys immediately, restoring the terminal on normal exit/errors.
+ * Keep ISIG enabled so Ctrl+C still goes through the termination handler. */
+struct terminal_keys {
+    termios saved{};
+    bool changed = false;
+    terminal_keys() {
+        if (tcgetattr(STDIN_FILENO, &saved) != 0) return;
+        termios mode = saved;
+        mode.c_lflag &= ~(ICANON | ECHO);
+        changed = tcsetattr(STDIN_FILENO, TCSANOW, &mode) == 0;
+    }
+    ~terminal_keys() {
+        if (changed) tcsetattr(STDIN_FILENO, TCSANOW, &saved);
+    }
+    int read_key() const {
+        pollfd input{STDIN_FILENO, POLLIN, 0};
+        char key;
+        return poll(&input, 1, 0) > 0 && (input.revents & POLLIN) &&
+            read(STDIN_FILENO, &key, 1) == 1 ? key : -1;
+    }
+};
+
+/* Assumes a valid PCM16 mono/stereo WAV; convert its rate to 48 kHz. */
 std::vector<int16_t> read_wav(char const* path)
 {
     std::ifstream file(path, std::ios::binary);
@@ -102,6 +128,7 @@ std::vector<int16_t> read_wav(char const* path)
     };
     file.ignore(12);
     unsigned channels = 0;
+    uint32_t rate = sample_rate_hz;
     for (;;) {
         char tag[4];
         file.read(tag, 4);
@@ -109,7 +136,8 @@ std::vector<int16_t> read_wav(char const* path)
         if (std::string(tag, 4) == "fmt ") {
             file.ignore(2);
             channels = number(2);
-            file.ignore(12);
+            rate = number(4);
+            file.ignore(8);
             file.ignore(uint64_t(size) - 16 + (size & 1));
         } else if (std::string(tag, 4) == "data") {
             std::vector<int16_t> pcm(size / (2 * channels));
@@ -121,7 +149,19 @@ std::vector<int16_t> read_wav(char const* path)
                 }
                 sample = sum / int(channels);
             }
-            return pcm;
+            if (rate == 0) throw std::runtime_error("invalid WAV sample rate");
+            if (rate == sample_rate_hz || pcm.empty()) return pcm;
+            std::vector<int16_t> converted(
+                uint64_t(pcm.size()) * sample_rate_hz / rate);
+            for (size_t i = 0; i < converted.size(); ++i) {
+                double const position = double(i) * rate / sample_rate_hz;
+                size_t const at = static_cast<size_t>(position);
+                double const fraction = position - at;
+                converted[i] = static_cast<int16_t>(std::lround(
+                    pcm[at] * (1.0 - fraction) +
+                    pcm[std::min(at + 1, pcm.size() - 1)] * fraction));
+            }
+            return converted;
         } else file.ignore(uint64_t(size) + (size & 1));
     }
 }
@@ -132,6 +172,13 @@ try
 {
     char const* const slash = std::strrchr(argv[0], '/');
     exe_name = slash ? slash + 1 : argv[0];
+    auto const base_path = std::filesystem::path(argv[0]).parent_path();
+    auto const orchestra_path =
+        base_path / "orch01.vc_SV001.wav";
+    auto const sine_path = base_path / "sample.wav";
+    auto const square_path = base_path / "square.wav";
+    auto const sawtooth_path = base_path / "sawtooth.wav";
+    auto const triangle_path = base_path / "triangle.wav";
     bool help(false);
     opt_skip                                    /* skip over filename         */
     opt_begin(null)                             /* begin processing options   */
@@ -162,12 +209,70 @@ try
     std::cout << "MIDI 0: " << midi.getPortName(0) << '\n';
     std::signal(SIGINT, stop);
     std::signal(SIGTERM, stop);
-    std::cout << "Ready. Play MIDI; Ctrl+C to exit.\n";
+    std::cout << "Ready. Play MIDI; A tests replacement during attack; Ctrl+C to exit.\n";
+    terminal_keys keyboard;
     std::array<int, 8> keys;
     keys.fill(-1);
     unsigned next = 0;
     std::vector<unsigned char> message;
     while (!stopped) {
+        int const keypress = keyboard.read_key();
+        switch (keypress) {
+            case 'a':
+            case 'A': {
+                std::cout << "Attack replacement test: square to sawtooth..." << std::endl;
+                auto const original = read_wav(square_path.c_str());
+                auto const replacement = read_wav(sine_path.c_str());
+                check(board.load_sample(0, original, sample_rate_hz, sample_root_hz));
+                check(board.note_on(0, 0, 12, 100));
+                // Key 12 stretches the 512-sample attack to about 171 ms.
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                check(board.note_off(0));
+                keys[0] = -1;
+                std::cout << "Attack replacement test finished. Play MIDI to check recovery.\n";
+                break;
+            }
+            case 'o':
+            case 'O': {
+                std::cout << "Loading orchestral sample into sample 0...\n";
+                auto const replacement = read_wav(orchestra_path.c_str());
+                check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
+                break;
+            }
+            case 's':
+            case 'S': {
+                std::cout << "Loading sine wave sample into sample 0...\n";
+                auto const replacement = read_wav(sine_path.c_str());
+                check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
+                break;
+            }
+            case 'p':
+            case 'P': {
+                std::cout << "Loading square wave sample into sample 0...\n";
+                auto const replacement = read_wav(square_path.c_str());
+                check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
+                break;
+            }
+            case 't':
+            case 'T': {
+                std::cout << "Loading triangle wave sample into sample 0...\n";
+                auto const replacement = read_wav(triangle_path.c_str());
+                check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
+                break;
+            }
+            case 'w':
+            case 'W': {
+                std::cout << "Loading sawtooth wave sample into sample 0...\n";
+                auto const replacement = read_wav(sawtooth_path.c_str());
+                check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
+                break;
+            }
+            default:
+                break;
+        }
+
         midi.getMessage(&message);
         if (message.size() >= 3) {
             unsigned const type = message[0] & 0xf0;

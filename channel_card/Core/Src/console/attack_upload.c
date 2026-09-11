@@ -45,26 +45,18 @@ static int AttackUpload_BeginResolved(uint16_t wave_id, uint32_t nbytes,
   {
     return -1;
   }
-  if (s_active != 0u || NoteBank_AnyBankReferences() != 0u)
+  if (s_active != 0u ||
+      (wavetable_upload != 0u && NoteBank_AnyBankReferences() != 0u))
   {
     return -1;
   }
 
-  AttackBank_SetWriteActive(1u);
+  AttackBank_SetWriteActive(wavetable_upload);
   s_dst = AttackBank_WritePtr(wave_id);
   if (s_dst == NULL)
   {
     AttackBank_SetWriteActive(0u);
     return -1;
-  }
-
-  {
-    uint32_t i;
-    uint8_t *dst_bytes = (uint8_t *)s_dst;
-    for (i = 0u; i < ATTACK_BANK_BYTES; i++)
-    {
-      dst_bytes[i] = 0u;
-    }
   }
 
   s_id = wave_id;
@@ -123,6 +115,10 @@ uint32_t AttackUpload_Feed(const uint8_t *buf, uint32_t len)
 
   if (s_got >= s_need)
   {
+    /* Keep the old length during transfer. Only the completed upload updates
+     * metadata; the payload itself overwrites live storage as bytes arrive. */
+    for (i = s_need; i < ATTACK_BANK_BYTES; i++) s_dst[i] = 0;
+
     if (AttackBank_Commit(s_id, s_need) != 0)
     {
       USB_CDC_WriteStr("err:range\r\n");

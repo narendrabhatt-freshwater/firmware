@@ -544,8 +544,9 @@ public:
 
 struct sample_data
 {
-    std::unique_ptr<int16_t[]> body;
-    size_t body_size = 0u;
+    // Retain the prefix too: a replacement may move BODY origin past a live cursor.
+    std::unique_ptr<int16_t[]> pcm;
+    size_t pcm_size = 0u;
     bool loaded = false;
 };
 
@@ -558,7 +559,8 @@ struct voice_data
     bool note_seen_in_status = false;
     uint8_t session_id = 0u;
     uint16_t sample_id = 0u;
-    size_t body_position = 0u;
+    size_t source_position = 0u;
+    size_t stream_origin = 0u;
     unsigned available_sample_slots = 0u;
     bool pending = true;
     unsigned refill_samples_5ms = 0u;
@@ -599,6 +601,7 @@ struct stream_state
     bool status_ready = false;
     unsigned buffer_capacity = 0u;
     std::chrono::steady_clock::time_point next_packet_at{};
+
 
 /* ---- apply voice queue status -------------------------------------------- */
 
@@ -700,7 +703,7 @@ struct stream_state
             : std::min(double(buffer_capacity) - reserve,
                 double(std::max(kUsbPacketBodySampleCount, voice.refill_samples_5ms)));
         double const buffered = voice.pending || !voice.note_seen_in_status
-            ? double(voice.body_position)
+            ? double(voice.source_position - voice.stream_origin)
             : voice.refill_samples_5ms
                 ? buffer_capacity - voice.refill_balance
                 : buffer_capacity - voice.available_sample_slots;
@@ -760,8 +763,9 @@ struct stream_state
         };
         for (uint8_t i = 0u; i < kVoiceCount; ++i) {
             uint8_t v = static_cast<uint8_t>((next_voice + i) % kVoiceCount);
-            if (voices[v].active && voices[v].available_sample_slots != 0u &&
-                samples[voices[v].sample_id].body_size != 0u) candidates[count++] = v;
+            if (voices[v].active &&
+                voices[v].available_sample_slots != 0u &&
+                samples[voices[v].sample_id].pcm_size != 0u) candidates[count++] = v;
         }
         auto protect = [&](uint8_t v) -> unsigned {
             auto const& voice = voices[v];
@@ -780,7 +784,7 @@ struct stream_state
             [&](uint8_t v) { return voices[v].filling_initial_buffer; });
         auto first_packet = [&](uint8_t v) {
             return voices[v].filling_initial_buffer &&
-                voices[v].body_position < kUsbPacketBodySampleCount;
+                voices[v].source_position - voices[v].stream_origin < kUsbPacketBodySampleCount;
         };
         auto before = [&](uint8_t a, uint8_t b) {
             if (first_packet(a) != first_packet(b)) return first_packet(a);
@@ -874,8 +878,8 @@ struct stream_state
             packet[at + 2u] = static_cast<int8_t>(sizes[i] & 0xFFu);
             packet[at + 3u] = static_cast<int8_t>(sizes[i] >> 8u);
             for (unsigned j = 0u; j < sizes[i] &&
-                    voice.body_position < sample.body_size; ++j)
-                packet[offset + j] = static_cast<int8_t>(sample.body[voice.body_position++] >> 8);
+                    voice.source_position < sample.pcm_size; ++j)
+                packet[offset + j] = static_cast<int8_t>(sample.pcm[voice.source_position++] >> 8);
             offset += sizes[i];
             pending_packets[(first_pending_packet + pending_packet_count) %
                 kPendingPacketCapacity] = {next_sequence, chosen, voice.session_id,
@@ -931,6 +935,7 @@ struct device_context
     std::atomic<bool> connected{false};
     std::atomic<bool> worker_running{false};
     std::thread worker;
+    std::mutex upload_mutex;
     std::mutex control_mutex;
     std::condition_variable control_changed;
     std::atomic<unsigned> waiting_commands{0u};
@@ -1045,6 +1050,7 @@ struct device_context
 
     void shutdown()
     {
+        std::lock_guard<std::mutex> upload_lock(upload_mutex);
         worker_running.store(false);
         control_changed.notify_all();
         if (worker.joinable() && worker.get_id() != std::this_thread::get_id())
@@ -1076,6 +1082,31 @@ struct device_context
             stream.packet_offset = kUsbPacketByteCount;
         }
         connected.store(false);
+    }
+
+    // Caller holds a control turn, so note-on cannot intervene before note-off.
+    voice_board_result_t replace_sample(uint16_t id, sample_data& replacement)
+    {
+        {
+            std::lock_guard<std::mutex> lock(stream.mutex);
+            std::swap(stream.samples[id], replacement);
+        }
+        replacement.pcm.reset(); // Free old PCM outside the audio lock.
+        auto result = ok();
+        for (uint8_t i = 0; i < kVoiceCount; ++i) {
+            std::unique_lock<std::mutex> lock(stream.mutex);
+            auto& voice = stream.voices[i];
+            if (!voice.active || voice.sample_id != id ||
+                    voice.source_position < stream.samples[id].pcm_size) continue;
+            voice.active = false;
+            lock.unlock();
+            auto off = rs485.command("n" + std::to_string(i) + " off");
+            if (!off && result) {
+                result = off;
+                result.message = "sample committed; replacement note-off failed: " + off.message;
+            }
+        }
+        return result;
     }
 
 /* ---- poll channel card status -------------------------------------------- */
@@ -1232,7 +1263,7 @@ voice_board_result_t load_script(device_context* state, uint8_t voice_id,
     std::vector<uint8_t> bec;
     auto result = read_bec(path, bec);
     if (!result) return result;
-    device_context::control_turn turn(state);
+    std::lock_guard<std::mutex> upload_lock(state->upload_mutex);
     return upload_script(state, voice_id, bec);
 }
 
@@ -1247,39 +1278,39 @@ voice_board_result_t load_sample(device_context* state, uint16_t sample_id,
             "voice board is not connected");
     if (pcm.empty())
         return fail(voice_board_error_t::sample_error, "sample PCM is empty");
-    device_context::control_turn turn(state);
-    {
-        std::lock_guard<std::mutex> lock(state->stream.mutex);
-        for (auto const& voice : state->stream.voices)
-            if (voice.active && voice.sample_id == sample_id)
-                return fail(voice_board_error_t::sample_error,
-                    "sample is currently in use");
-    }
     size_t const attack_size = std::min<size_t>(kAttackSampleCount, pcm.size());
-    size_t const body_start = attack_size -
-        std::min<size_t>(kCrossfadeSampleCount, attack_size);
     std::array<int8_t, kAttackSampleCount> attack{};
     for (size_t i = 0; i < attack_size; ++i)
         attack[i] = static_cast<int8_t>(pcm[i] >> 8);
-    size_t const body_size = pcm.size() - body_start;
-    std::unique_ptr<int16_t[]> body(new int16_t[body_size]);
-    std::memcpy(body.get(), pcm.data() + body_start, body_size * sizeof(int16_t));
+    sample_data replacement;
+    replacement.pcm_size = pcm.size();
+    replacement.loaded = true;
+    replacement.pcm.reset(new int16_t[pcm.size()]);
+    std::copy(pcm.begin(), pcm.end(), replacement.pcm.get());
+
+    // CDC has its own serialization: a slow upload must not hold up vq or MIDI.
+    std::lock_guard<std::mutex> upload_lock(state->upload_mutex);
     auto result = send_payload(state->upload_port, "al " + std::to_string(sample_id),
         reinterpret_cast<uint8_t const*>(attack.data()), attack_size, "ok:attack");
     if (!result) {
         result.code = voice_board_error_t::sample_error;
+        result.message = "attack upload failed (commit may be unknown); old BODY retained: " +
+            result.message;
         return result;
     }
+
+    // Serialize publication and releases with note-on so a release cannot
+    // reach a newly triggered session. No USB wait holds this control turn.
+    device_context::control_turn turn(state);
     result = state->rs485.command("ar " + std::to_string(sample_id) + " " +
         std::to_string(root_pitch_hz));
-    if (!result) return result;
-    {
-        std::lock_guard<std::mutex> lock(state->stream.mutex);
-        auto& sample = state->stream.samples[sample_id];
-        sample.body.swap(body);
-        sample.body_size = body_size;
-        sample.loaded = true;
+    if (!result) {
+        result.message = "attack committed; root update failed; old BODY retained: " +
+            result.message;
+        return result;
     }
+    result = state->replace_sample(sample_id, replacement);
+    if (!result) return result;
     return ok("sample " + std::to_string(sample_id) + " loaded");
 }
 
@@ -1311,7 +1342,11 @@ voice_board_result_t note_on(device_context* state, uint8_t voice,
         slot.filling_initial_buffer = true;
         slot.session_id = session;
         slot.sample_id = sample;
-        slot.body_position = 0u;
+        size_t const attack_size = std::min<size_t>(
+            kAttackSampleCount, state->stream.samples[sample].pcm_size);
+        slot.source_position = attack_size -
+            std::min<size_t>(kCrossfadeSampleCount, attack_size);
+        slot.stream_origin = slot.source_position;
     }
     std::string const note = "n" + std::to_string(voice) + " on " +
         std::to_string(sample) + " " + std::to_string(key) + " " +

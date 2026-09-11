@@ -38,8 +38,8 @@ int main(int argc, char** argv) {
    pcm[i]=int16_t(value);
   }
   std::string const mode = argc > 3 ? argv[3] : "burst";
-  if(mode != "burst" && mode != "steady" && mode != "startups")
-   throw std::runtime_error("mode must be burst, steady, or startups");
+  if(mode != "burst" && mode != "steady" && mode != "startups" && mode != "swaps")
+   throw std::runtime_error("mode must be burst, steady, startups, or swaps");
   unsigned const key = argc > 4 ? std::stoul(argv[4]) : 60u;
   if(key > 127u) throw std::runtime_error("key must be 0..127");
   voice_board_t board;
@@ -68,7 +68,26 @@ int main(int argc, char** argv) {
   };
   std::cout<<"Program "<<config.bec_file<<", mode "<<mode<<", eight sample slots, no MIDI\n"<<std::flush;
   auto const begin=clock::now();
-  if(mode=="steady") {
+  if(mode=="swaps") {
+   for(uint8_t v=0;v<8;++v)on(v,static_cast<uint8_t>(key));
+   // Voice 1 shares the replaced sample; voices 2..7 must keep playing.
+   check(board.note_on(1,0,static_cast<uint8_t>(key),100));
+   auto changed=pcm;
+   std::reverse(changed.begin(),changed.end());
+   for(unsigned round=0;round<30;++round) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    size_t length=round%3==0 ? changed.size() :
+        round%3==1 ? std::max<size_t>(1,changed.size()/2) : std::min<size_t>(64,changed.size());
+    std::vector<int16_t> next(changed.begin(),changed.begin()+length);
+    check(board.load_sample(0,next));
+    check(board.note_off(0));
+    check(board.note_off(1));
+    // Restore and retrigger after every short replacement to verify recovery.
+    check(board.load_sample(0,pcm));
+    check(board.note_on(0,0,static_cast<uint8_t>(key),100));
+    check(board.note_on(1,0,static_cast<uint8_t>(key),100));
+   }
+  } else if(mode=="steady") {
    for(uint8_t v=0;v<8;++v)on(v,static_cast<uint8_t>(key));
    std::this_thread::sleep_for(std::chrono::seconds(30));
   } else if(mode=="startups") {

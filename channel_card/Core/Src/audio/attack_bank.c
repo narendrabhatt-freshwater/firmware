@@ -7,6 +7,10 @@
 
 #include "attack_bank.h"
 
+#if defined(__arm__) || defined(__thumb__)
+#include "main.h"
+#endif
+
 #include <math.h>
 #include <string.h>
 
@@ -80,44 +84,40 @@ int AttackBank_Load(uint16_t wave_id, const uint8_t *data, uint32_t nbytes)
   {
     return -1;
   }
-  memcpy(s_data[wave_id], data, nbytes);
-  if (nbytes < ATTACK_BANK_BYTES)
-  {
-    memset((uint8_t *)s_data[wave_id] + nbytes, 0,
-           ATTACK_BANK_BYTES - nbytes);
-  }
-  s_len[wave_id] = nbytes;
-  s_loaded[wave_id] = 1u;
-  return 0;
+  int8_t *dst = AttackBank_WritePtr(wave_id);
+  if (dst == NULL) return -1;
+  memcpy(dst, data, nbytes);
+  memset(dst + nbytes, 0, ATTACK_BANK_BYTES - nbytes);
+  return AttackBank_Commit(wave_id, nbytes);
 }
 
 int8_t *AttackBank_WritePtr(uint16_t wave_id)
 {
-  if (wave_id >= ATTACK_BANK_COUNT)
-  {
-    return NULL;
-  }
+  if (wave_id >= ATTACK_BANK_COUNT) return NULL;
   return s_data[wave_id];
 }
 
 const int8_t *AttackBank_Table(uint16_t wave_id)
 {
-  if (wave_id >= ATTACK_BANK_COUNT)
-  {
-    return NULL;
-  }
+  if (wave_id >= ATTACK_BANK_COUNT) return NULL;
   return s_data[wave_id];
 }
 
 int AttackBank_Commit(uint16_t wave_id, uint32_t nsamp)
 {
-  if (wave_id >= ATTACK_BANK_COUNT || nsamp == 0u ||
-      nsamp > ATTACK_BANK_LEN)
-  {
-    return -1;
-  }
+  if (wave_id >= ATTACK_BANK_COUNT ||
+      nsamp == 0u || nsamp > ATTACK_BANK_LEN) return -1;
+#if defined(__arm__) || defined(__thumb__)
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  __DMB();
+#endif
   s_len[wave_id] = nsamp;
   s_loaded[wave_id] = 1u;
+#if defined(__arm__) || defined(__thumb__)
+  __DMB();
+  __set_PRIMASK(primask);
+#endif
   return 0;
 }
 
@@ -309,7 +309,7 @@ int32_t AttackBank_NextSample(uint8_t voice)
 
 int32_t AttackBank_SampleAt(uint16_t wave_id, uint32_t index)
 {
-  if (wave_id >= ATTACK_BANK_COUNT || index >= ATTACK_BANK_LEN ||
+  if (wave_id >= ATTACK_BANK_COUNT || index >= s_len[wave_id] ||
       s_loaded[wave_id] == 0u)
   {
     return 0;
