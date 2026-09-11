@@ -1368,7 +1368,7 @@ voice_board_result_t note_off(device_context* state, uint8_t voice)
     return result;
 }
 
-/* ---- release all channel voices ------------------------------------------ */
+/* ---- hard-stop all channel voices and reset Berry state ------------------ */
 
 voice_board_result_t all_notes_off(device_context* state)
 {
@@ -1377,6 +1377,14 @@ voice_board_result_t all_notes_off(device_context* state)
             "voice board is not connected");
     device_context::control_turn turn(state);
     auto const result = state->rs485.command("n off");
+    if (result) {
+        std::lock_guard<std::mutex> lock(state->stream.mutex);
+        for (auto& voice : state->stream.voices) {
+            auto const session = voice.session_id;
+            voice = {};
+            voice.session_id = session;
+        }
+    }
     return result;
 }
 

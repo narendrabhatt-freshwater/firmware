@@ -78,9 +78,7 @@ Result Core::Impl::AllNotesOff()
   }
   if (card.ok()) {
     (void)voices.AllOff();
-    for (uint8_t voice = 0; voice < 8u; ++voice) {
-      samples.Mixer().NoteOff(voice);
-    }
+    samples.Mixer().AllNotesOff();
   }
   return FromCard(card);
 }

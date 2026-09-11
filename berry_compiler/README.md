@@ -20,6 +20,16 @@ On Windows the executable is `berry.exe`. Replace the example path with your
 own `.be` script. The `.bec` output includes the firmware upload header,
 ABI version, and checksum, ready to upload to the Channel Card.
 
+To cross-compile for Linux ARM64, install Zig (`brew install zig` on macOS), then run:
+
+```sh
+make linux
+```
+
+This produces the static Linux executable `berry.linux-arm64`. Copy it beside
+`series2.be` on the Linux machine. Plain `make` builds for the current machine; each
+target has its own object directory, so switching targets needs no clean.
+
 `make clean` removes the Make build and executable. CMake is also supported:
 
 ```sh

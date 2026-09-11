@@ -79,6 +79,18 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/channel.bec"
 add_custom_target(channel_program DEPENDS
   "${CMAKE_CURRENT_BINARY_DIR}/channel.bec")
 add_dependencies(note_bank_vm_test channel_program)
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/hard_stop_state.bec"
+  COMMAND berry "${CMAKE_CURRENT_SOURCE_DIR}/hard_stop_state.be"
+          -o "${CMAKE_CURRENT_BINARY_DIR}/hard_stop_state.bec"
+  DEPENDS berry "${CMAKE_CURRENT_SOURCE_DIR}/hard_stop_state.be")
+add_custom_target(hard_stop_program DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/hard_stop_state.bec")
+add_dependencies(note_bank_vm_test hard_stop_program)
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/envelope_limits.bec"
+  COMMAND berry "${CMAKE_CURRENT_SOURCE_DIR}/envelope_limits.be"
+          -o "${CMAKE_CURRENT_BINARY_DIR}/envelope_limits.bec"
+  DEPENDS berry "${CMAKE_CURRENT_SOURCE_DIR}/envelope_limits.be")
+add_custom_target(envelope_limits_program DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/envelope_limits.bec")
+add_dependencies(note_bank_vm_test envelope_limits_program)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
   target_compile_options(note_bank_vm_test PRIVATE -Wall -Wextra -Werror)
 endif()
@@ -93,7 +105,9 @@ add_test(NAME channel_card.attack_upload_guard COMMAND attack_upload_guard_test)
 add_test(NAME channel_card.note_bank_vm COMMAND note_bank_vm_test
   "${CMAKE_CURRENT_BINARY_DIR}/script_runtime/channel_envelope.bec"
   "${CMAKE_CURRENT_BINARY_DIR}/channel.bec"
-  "${CMAKE_CURRENT_BINARY_DIR}/script_runtime/oscillator_event.bec")
+  "${CMAKE_CURRENT_BINARY_DIR}/script_runtime/oscillator_event.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/hard_stop_state.bec"
+  "${CMAKE_CURRENT_BINARY_DIR}/envelope_limits.bec")
 
 add_executable(rs485_timing_test rs485_timing_test.c)
 target_include_directories(rs485_timing_test PRIVATE ../Core/Inc/console)

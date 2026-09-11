@@ -26,6 +26,11 @@ extern "C"
 
   void NoteBank_PanicAll(void);
 
+  /** Queue a hard stop, Berry state reset and LED-off for the next audio boundary.
+   * Loaded programs and settings are preserved. Note-on returns busy until
+   * this request has been consumed. */
+  void NoteBank_AllNotesOff(void);
+
   /** Raw MIDI-key/velocity note-on. Script may override standard MIDI pitch. */
   int NoteBank_NoteOn(uint8_t note, uint8_t key, uint8_t velocity);
 

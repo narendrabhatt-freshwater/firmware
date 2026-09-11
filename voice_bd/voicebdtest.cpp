@@ -29,6 +29,7 @@
 #include <chrono>
 #include <cmath>
 #include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <sysexits.h>
@@ -48,6 +49,10 @@ char const* exe_name;
 char const version[] = "0.01";
 static char const product[] = "172-XXXX";
 char const name[] = "Channel card voice board test";
+// Change to 2..8 for polyphony; 1 sends every press/release directly to voice 0.
+constexpr unsigned num_voices = 8;
+static_assert(num_voices >= 1 && num_voices <= voice_board_t::voice_count,
+              "num_voices must be between 1 and 8");
 constexpr uint32_t sample_rate_hz = 48000;
 constexpr double sample_root_hz = 261.625565; // C4, MIDI key 60.
 
@@ -84,7 +89,8 @@ int usage(int status)
         << "    program.bec    Firmware program (default: channel.bec in current directory)\n"
         << "\n    Uses MIDI input 0 and the device ports configured in voicebd.h.\n"
         << "    Tests loadScript on voices 0-7 after opening the board.\n"
-        << "    Play MIDI notes; O: orchestra, S: sine, P: square, T: triangle, W: sawtooth, A: attack replacement test; Ctrl+C exits.\n\n";
+        << "    MIDI voices: " << num_voices << " (1 = direct mono, 2..8 = polyphony).\n"
+        << "    O: orchestra, S: sine, P: square, T: triangle, W: sawtooth, A: attack replacement test; R: compile/upload series2.be; Space: hard stop/reset; Ctrl+C exits.\n\n";
     return status;
 }
 
@@ -209,90 +215,140 @@ try
     std::cout << "MIDI 0: " << midi.getPortName(0) << '\n';
     std::signal(SIGINT, stop);
     std::signal(SIGTERM, stop);
-    std::cout << "Ready. Play MIDI; A tests replacement during attack; Ctrl+C to exit.\n";
+    std::cout << "Ready. MIDI voices: " << num_voices
+              << "; Space stops all notes/reset state; R compiles/uploads series2.be; A tests replacement during attack; Ctrl+C to exit.\n";
     terminal_keys keyboard;
-    std::array<int, 8> keys;
+    // Used only in polyphonic mode: MIDI channel/key owning each voice.
+    std::array<int, num_voices> keys;
     keys.fill(-1);
     unsigned next = 0;
     std::vector<unsigned char> message;
     while (!stopped) {
-        int const keypress = keyboard.read_key();
-        switch (keypress) {
-            case 'a':
-            case 'A': {
-                std::cout << "Attack replacement test: square to sawtooth..." << std::endl;
-                auto const original = read_wav(square_path.c_str());
-                auto const replacement = read_wav(sine_path.c_str());
-                check(board.load_sample(0, original, sample_rate_hz, sample_root_hz));
-                check(board.note_on(0, 0, 12, 100));
-                // Key 12 stretches the 512-sample attack to about 171 ms.
-                std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                check(board.note_off(0));
-                keys[0] = -1;
-                std::cout << "Attack replacement test finished. Play MIDI to check recovery.\n";
-                break;
-            }
-            case 'o':
-            case 'O': {
-                std::cout << "Loading orchestral sample into sample 0...\n";
-                auto const replacement = read_wav(orchestra_path.c_str());
-                check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
-                break;
-            }
-            case 's':
-            case 'S': {
-                std::cout << "Loading sine wave sample into sample 0...\n";
-                auto const replacement = read_wav(sine_path.c_str());
-                check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
-                break;
-            }
-            case 'p':
-            case 'P': {
-                std::cout << "Loading square wave sample into sample 0...\n";
-                auto const replacement = read_wav(square_path.c_str());
-                check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
-                break;
-            }
-            case 't':
-            case 'T': {
-                std::cout << "Loading triangle wave sample into sample 0...\n";
-                auto const replacement = read_wav(triangle_path.c_str());
-                check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
-                break;
-            }
-            case 'w':
-            case 'W': {
-                std::cout << "Loading sawtooth wave sample into sample 0...\n";
-                auto const replacement = read_wav(sawtooth_path.c_str());
-                check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
-                break;
-            }
-            default:
-                break;
-        }
-
-        midi.getMessage(&message);
-        if (message.size() >= 3) {
-            unsigned const type = message[0] & 0xf0;
-            int const key = ((message[0] & 15) << 8) | message[1];
-            if (type == 0x90 && message[2]) {
-                unsigned voice = next;
-                for (unsigned i = 0; i < 8; ++i)
-                    if (keys[(next + i) % 8] < 0) { voice = (next + i) % 8; break; }
-                check(board.note_on(voice, 0, message[1], message[2]));
-                print_key_demand(voice, message[1]);
-                keys[voice] = key;
-                next = (voice + 1) % 8;
-            } else if (type == 0x80 || (type == 0x90 && !message[2])) {
-                for (unsigned i = 0; i < 8; ++i)
-                    if (keys[i] == key) {
-                        check(board.note_off(i));
-                        keys[i] = -1;
+        try {
+            int const keypress = keyboard.read_key();
+            switch (keypress) {
+                case 'r':
+                case 'R': {
+                    check(board.all_notes_off());
+                    keys.fill(-1);
+                    next = 0;
+                    std::cout << "Compiling series2.be..." << std::endl;
+#if defined(__linux__)
+                    char const* command = "./berry.linux-arm64 series2.be -o series2.bec";
+#else
+                    char const* command = "./berry series2.be -o series2.bec";
+#endif
+                    if (std::system(command) == 0) {
+                        for (uint8_t voice = 0; voice < voice_board_t::voice_count; ++voice)
+                            check(board.load_script(voice, "series2.bec"));
+                        std::cout << "series2.bec loaded into voices 0-7." << std::endl;
+                    } else {
+                        std::cerr << "Compilation failed; no program uploaded.\n";
                     }
+                    do { midi.getMessage(&message); } while (!message.empty());
+                    break;
+                }
+                case ' ': {
+                    check(board.all_notes_off());
+                    keys.fill(-1);
+                    next = 0;
+                    std::cout << "All notes stopped; Berry state reset.\n";
+                    break;
+                }
+                case 'a':
+                case 'A': {
+                    std::cout << "Attack replacement test: square to sawtooth..." << std::endl;
+                    auto const original = read_wav(square_path.c_str());
+                    auto const replacement = read_wav(sine_path.c_str());
+                    check(board.load_sample(0, original, sample_rate_hz, sample_root_hz));
+                    check(board.note_on(0, 0, 12, 100));
+                    // Key 12 stretches the 512-sample attack to about 171 ms.
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    check(board.note_off(0));
+                    keys[0] = -1;
+                    std::cout << "Attack replacement test finished. Play MIDI to check recovery.\n";
+                    break;
+                }
+                case 'o':
+                case 'O': {
+                    std::cout << "Loading orchestral sample into sample 0...\n";
+                    auto const replacement = read_wav(orchestra_path.c_str());
+                    check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
+                    break;
+                }
+                case 's':
+                case 'S': {
+                    std::cout << "Loading sine wave sample into sample 0...\n";
+                    auto const replacement = read_wav(sine_path.c_str());
+                    check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
+                    break;
+                }
+                case 'p':
+                case 'P': {
+                    std::cout << "Loading square wave sample into sample 0...\n";
+                    auto const replacement = read_wav(square_path.c_str());
+                    check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
+                    break;
+                }
+                case 't':
+                case 'T': {
+                    std::cout << "Loading triangle wave sample into sample 0...\n";
+                    auto const replacement = read_wav(triangle_path.c_str());
+                    check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
+                    break;
+                }
+                case 'w':
+                case 'W': {
+                    std::cout << "Loading sawtooth wave sample into sample 0...\n";
+                    auto const replacement = read_wav(sawtooth_path.c_str());
+                    check(board.load_sample(0, replacement, sample_rate_hz, sample_root_hz));
+                    break;
+                }
+                default:
+                    break;
             }
-        } else std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+            midi.getMessage(&message);
+            if (message.size() >= 3) {
+                unsigned const type = message[0] & 0xf0;
+                if constexpr (num_voices == 1) {
+                    // No key tracking: even releases after Space reach the board.
+                    if (type == 0x90 && message[2]) {
+                        check(board.note_on(0, 0, message[1], message[2]));
+                        print_key_demand(0, message[1]);
+                    } else if (type == 0x80 || (type == 0x90 && !message[2])) {
+                        check(board.note_off(0));
+                    }
+                } else {
+                    int const key = ((message[0] & 15) << 8) | message[1];
+                    if (type == 0x90 && message[2]) {
+                        unsigned voice = next;
+                        // Prefer an unassigned voice; otherwise steal in round-robin order.
+                        for (unsigned i = 0; i < num_voices; ++i) {
+                            unsigned const candidate = (next + i) % num_voices;
+                            if (keys[candidate] < 0) { voice = candidate; break; }
+                        }
+                        next = (voice + 1) % num_voices;
+                        keys[voice] = -1;
+                        check(board.note_on(voice, 0, message[1], message[2]));
+                        print_key_demand(voice, message[1]);
+                        keys[voice] = key;
+                    } else if (type == 0x80 || (type == 0x90 && !message[2])) {
+                        for (unsigned voice = 0; voice < num_voices; ++voice) {
+                            if (keys[voice] == key) {
+                                keys[voice] = -1;
+                                check(board.note_off(voice));
+                            }
+                        }
+                    }
+                }
+            } else std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } catch (std::exception const& error) {
+            std::cerr << exe_name << ": " << error.what()
+                      << "; fix series2.be and press R to reload.\n";
+        }
     }
     board.close();
 }

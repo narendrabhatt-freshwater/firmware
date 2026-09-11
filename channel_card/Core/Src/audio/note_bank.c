@@ -98,6 +98,7 @@ static volatile uint32_t note_cmd_inc[NOTE_BANK_VOICES];
 static volatile float note_cmd_hz[NOTE_BANK_VOICES];
 /* An explicit nX off must win over a late BODY session-start. */
 static volatile uint8_t note_gate_requested[NOTE_BANK_VOICES];
+static volatile uint8_t note_all_off_requested;
 
 static inline int32_t NoteBank_Saturate(int64_t sum);
 static int NoteBank_VmDispatch(FwVmChannelHandler handler, uint8_t note);
@@ -477,7 +478,10 @@ static void NoteBank_DrainCmd(uint8_t note)
     note_next_pending[note] = 0u;
     note_next_key[note] = 0u;
     note_next_velocity[note] = 0u;
-    if (ChannelVm_IsActive(note) == 0u) NoteBank_HardOff(note);
+    /* A late key release after a hard stop must not re-enter Berry and
+     * dirty its freshly reset state. Pending startup was cancelled above. */
+    if (note_active[note] == 0u || ChannelVm_IsActive(note) == 0u)
+      NoteBank_HardOff(note);
     else (void)NoteBank_VmDispatch(FW_VM_CHANNEL_HANDLER_NOTE_OFF, note);
     return;
   }
@@ -674,8 +678,6 @@ static int NoteBank_VmSet(void *context, uint8_t note, float amplitude)
 static int NoteBank_VmRamp(void *context, uint8_t note, float target, float slope)
 {
   (void)context;
-  if (!isfinite(slope) || !(slope / (float)NOTE_SAMPLE_RATE_HZ > 0.0f))
-    return -1;
   return NoteEnv_StartRamp(note, target, slope);
 }
 static int NoteBank_VmStartNoteAt(void *context, uint8_t note,
@@ -766,6 +768,7 @@ void NoteBank_Init(void)
 {
   uint8_t i;
   ChannelVmNativeOps vm_ops = {0};
+  note_all_off_requested = 0u;
 
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
@@ -825,6 +828,11 @@ void NoteBank_Init(void)
   WavetableOsc_Init();
 }
 
+void NoteBank_AllNotesOff(void)
+{
+  note_all_off_requested = 1u;
+}
+
 void NoteBank_PanicAll(void)
 {
   uint8_t i;
@@ -878,7 +886,7 @@ static int NoteBank_NoteOnBound(uint8_t note, uint8_t key, uint8_t velocity,
   {
     return -1;
   }
-  if (ChannelVm_UploadIsBusy() != 0u)
+  if (ChannelVm_UploadIsBusy() != 0u || note_all_off_requested != 0u)
   {
     return -3;
   }
@@ -1116,6 +1124,23 @@ void NoteBank_VmBoundaryBegin(void)
 {
   uint8_t i;
   ChannelVm_BoundaryBegin();
+  if (note_all_off_requested != 0u)
+  {
+    /* Retire every old command/session before rendering any voice. No script
+     * callback runs here; stopped ramps must not dispatch completion events. */
+    for (i = 0u; i < NOTE_BANK_VOICES; i++)
+    {
+      note_cmd[i] = NOTE_CMD_NONE;
+      note_gate_requested[i] = 0u;
+      NoteBank_HardOff(i);
+    }
+    ChannelVm_ResetStateAll();
+    /* LED output is latched in its driver, not in Berry's state slots. The
+     * normal ramp-end handler is bypassed, so clear that output here too. */
+    (void)ChannelLed_Set(0.0f, 0.0f, 0.0f, 0.0f);
+    note_all_off_requested = 0u;
+    return;
+  }
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
     NoteBank_DrainCmd(i);

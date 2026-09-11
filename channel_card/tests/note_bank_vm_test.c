@@ -1,4 +1,5 @@
 #include "note_bank.h"
+#include "channel_vm.h"
 #include "note_envelope.h"
 #include "stream_ring.h"
 #include "usb_stream.h"
@@ -12,6 +13,7 @@ static int8_t attack_tables[ATTACK_BANK_COUNT][ATTACK_BANK_LEN];
 static uint32_t attack_lengths[ATTACK_BANK_COUNT];
 static uint8_t attack_write_active;
 static int32_t last_filter_sample;
+static float led_red, led_green, led_blue, led_brightness;
 float AttackBank_GetRootHz(uint16_t id){(void)id;return 260.0f;}
 uint32_t AttackBank_GetLen(uint16_t id){return id<ATTACK_BANK_COUNT?attack_lengths[id]:0u;}
 const int8_t *AttackBank_Table(uint16_t id){return id<ATTACK_BANK_COUNT?attack_tables[id]:NULL;}
@@ -20,15 +22,112 @@ uint8_t AttackBank_WriteIsActive(void){return attack_write_active;}
 void AttackBank_Stop(uint8_t note){(void)note;} void AttackBank_StopAll(void){}
 int32_t NoteFilter_Process(uint8_t note,int32_t sample){(void)note;last_filter_sample=sample;return sample;}
 void NoteFilter_Reset(uint8_t note){(void)note;} void NoteFilter_OnNoteFreq(uint8_t note,double hz){(void)note;(void)hz;}
-int ChannelLed_Set(float red,float green,float blue,float brightness){(void)red;(void)green;(void)blue;(void)brightness;return 0;}
+int ChannelLed_Set(float red,float green,float blue,float brightness){led_red=red;led_green=green;led_blue=blue;led_brightness=brightness;return 0;}
 static uint8_t *read_file(const char *path,size_t *size){FILE*f=fopen(path,"rb");long n;uint8_t*p;check(f!=NULL,"open FWSC");fseek(f,0,SEEK_END);n=ftell(f);rewind(f);p=malloc((size_t)n);check(p!=NULL&&fread(p,1,(size_t)n,f)==(size_t)n,"read FWSC");fclose(f);*size=(size_t)n;return p;}
 static void boundary(void){NoteBank_VmBoundaryBegin();for(unsigned i=0;i<48u;++i)(void)NoteBank_NextSample();NoteBank_VmBoundaryEnd();}
 static void boundaries(unsigned count){while(count--)boundary();}
 static uint32_t render_peak(unsigned count){uint32_t peak=0u;NoteBank_VmBoundaryBegin();for(unsigned i=0;i<count;++i){int64_t s=NoteBank_NextSample();uint32_t a=(uint32_t)(s<0?-s:s);if(a>peak)peak=a;}NoteBank_VmBoundaryEnd();return peak;}
 static void prime_body(uint8_t note){int8_t body[USB_STREAM_UAC_BODY_SAMPLES];for(unsigned i=0u;i<USB_STREAM_UAC_BODY_SAMPLES;++i)body[i]=(int8_t)((i&1u)!=0u?64:-64);check(StreamRing_WriteVoice(note,0xFFu,1u,NoteBank_GetWaveId(note),body,USB_STREAM_UAC_BODY_SAMPLES)==USB_STREAM_UAC_BODY_SAMPLES,"prime production BODY");}
 static void prime_silent_body(uint8_t note){int8_t body[USB_STREAM_UAC_BODY_SAMPLES]={0};check(StreamRing_WriteVoice(note,0xFFu,1u,NoteBank_GetWaveId(note),body,USB_STREAM_UAC_BODY_SAMPLES)==USB_STREAM_UAC_BODY_SAMPLES,"prime silent BODY");}
+static void hard_stop_case(const char *path)
+{
+  size_t size;
+  uint8_t *program = read_file(path, &size);
+  uint32_t dispatches[NOTE_BANK_VOICES];
+  NoteBank_PanicAll();
+  for (uint8_t v = 0u; v < NOTE_BANK_VOICES; ++v) {
+    check(NoteBank_VmUploadBegin(v)==0 && NoteBank_VmUploadFeed(v,program,size)==0 &&
+          NoteBank_VmUploadCommit(v)==0, "load hard-stop program");
+  }
+  for (uint8_t v = 0u; v < NOTE_BANK_VOICES; ++v) {
+    check(NoteBank_NoteOn(v,60u,127u)==0,"start all eight voices");
+    prime_body(v);
+  }
+  boundary();
+  for (uint8_t v = 0u; v < NOTE_BANK_VOICES; ++v) {
+    check(NoteBank_IsActive(v),"all voices sounding before hard stop");
+    check(NoteBank_NoteOnSession(v,62u,127u,13u)==0,"queue tagged replacement");
+    dispatches[v] = ChannelVm_Metrics(v)->dispatches;
+  }
+  check(led_brightness>0.0f,"script lights LED before hard stop");
+  NoteBank_AllNotesOff();
+  check(NoteBank_AnyActive(),"hard stop waits for audio boundary");
+  check(NoteBank_NoteOn(0u,64u,127u)==-3,"new note waits for queued hard stop");
+  check(render_peak(48u)==0u,"hard stop renders silence from first frame");
+  check(led_red==0.0f && led_green==0.0f && led_blue==0.0f && led_brightness==0.0f,
+        "hard stop clears latched LED output without script callbacks");
+  check(!NoteBank_AnyBankReferences(),"hard stop clears active and queued notes");
+  check(NoteBank_VmActiveMask()==0xffu,"hard stop retains all programs");
+  for (uint8_t v = 0u; v < NOTE_BANK_VOICES; ++v) {
+    int8_t body[USB_STREAM_UAC_BODY_SAMPLES]={0};
+    check(NoteEnv_Amplitude(v)==0.0f,"hard stop clears envelope");
+    check(ChannelVm_Metrics(v)->dispatches==dispatches[v],"hard stop invokes no Berry handlers");
+    check(StreamRing_WriteVoice(v,13u,1u,NoteBank_GetWaveId(v),body,sizeof body)==0u,
+          "late replacement BODY rejected");
+  }
+  NoteBank_AllNotesOff();
+  check(render_peak(48u)==0u,"repeated hard stop remains silent");
+  for (uint8_t v = 0u; v < NOTE_BANK_VOICES; ++v)
+    check(NoteBank_NoteOff(v)==0,"late key release accepted harmlessly");
+  check(render_peak(48u)==0u,"late key releases stay silent");
+  for (uint8_t v = 0u; v < NOTE_BANK_VOICES; ++v)
+    check(ChannelVm_Metrics(v)->dispatches==dispatches[v],"late release does not dirty Berry state");
+
+  for (uint8_t v = 0u; v < NOTE_BANK_VOICES; ++v) {
+    check(NoteBank_NoteOn(v,65u,127u)==0,"restart without script reload");
+    prime_body(v);
+  }
+  boundary();
+  for (uint8_t v = 0u; v < NOTE_BANK_VOICES; ++v) {
+    check(NoteBank_IsActive(v) && !StreamRing_HasPending(v) && NoteEnv_Amplitude(v)>0.0f,
+          "reset Berry state starts next note immediately");
+  }
+  check(led_brightness>0.0f,"next note can light LED again without reload");
+  NoteBank_AllNotesOff();
+  check(render_peak(48u)==0u,"hard stop clears sounding voices");
+  /* Also cancel startup before the first BODY packet arrives. */
+  check(NoteBank_NoteOnSession(0u,60u,127u,14u)==0,"queue startup without BODY");
+  NoteBank_AllNotesOff();
+  check(render_peak(48u)==0u && !NoteBank_AnyBankReferences(),"cancel unstarted note");
+  {
+    int8_t body[USB_STREAM_UAC_BODY_SAMPLES]={0};
+    check(StreamRing_WriteVoice(0u,14u,1u,NoteBank_GetWaveId(0u),body,sizeof body)==0u,
+          "late startup BODY rejected");
+  }
+  free(program);
+}
+static void envelope_limits_case(const char *path)
+{
+  size_t size;
+  uint8_t *program = read_file(path, &size);
+  NoteEnv_Init();StreamRing_Init();NoteBank_Init();
+  for (uint8_t v = 0u; v < NOTE_BANK_VOICES; ++v)
+    check(NoteBank_VmUploadBegin(v)==0 && NoteBank_VmUploadFeed(v,program,size)==0 &&
+          NoteBank_VmUploadCommit(v)==0,"load envelope limits program");
+  for (uint8_t key = 60u; key <= 63u; ++key) {
+    for (uint8_t v = 0u; v < NOTE_BANK_VOICES; ++v) {
+      check(NoteBank_NoteOn(v,key,127u)==0,"reuse voice with extreme envelope parameters");
+      prime_body(v);
+    }
+    boundary();
+    for (uint8_t v = 0u; v < NOTE_BANK_VOICES; ++v) {
+      check(NoteBank_IsActive(v) && NoteEnv_Amplitude(v)==1.0f,"extreme attack reaches full amplitude");
+      check(NoteBank_NoteOff(v)==0,"release with extreme slope");
+    }
+    boundary();
+    for (uint8_t v = 0u; v < NOTE_BANK_VOICES; ++v)
+      check(!NoteBank_IsActive(v) && NoteEnv_Amplitude(v)==0.0f &&
+            NoteBank_VmIsActive(v) && NoteBank_VmFault(v)==FW_VM_FAULT_NONE,
+            "extreme release ends note and retains program");
+  }
+  free(program);
+}
+
 int main(int argc,char **argv){
-  uint8_t *program;size_t size;check(argc==4,"program paths required");program=read_file(argv[1],&size);
+  uint8_t *program;size_t size;check(argc==6,"program paths required");program=read_file(argv[1],&size);
+  envelope_limits_case(argv[5]);
+  NoteEnv_Init();StreamRing_Init();NoteBank_Init();
+  hard_stop_case(argv[2]);hard_stop_case(argv[4]);
   NoteEnv_Init();StreamRing_Init();NoteBank_Init();check(NoteBank_VmActiveMask()==0u,"reset has no programs");
   check(NoteBank_NoteOn(0u,60u,127u)==-2,"note reports no program");boundary();check(!NoteBank_IsActive(0u),"no-program silent");
   check(NoteBank_VmUploadBegin(0u)==0&&NoteBank_VmUploadFeed(0u,program,size)==0&&NoteBank_VmUploadCommit(0u)==0,"valid FWSC activates");
@@ -170,6 +269,10 @@ int main(int argc,char **argv){
    check(NoteBank_NoteOn(0u,69u,127u)==0,"oscillator note accepted");prime_silent_body(0u);boundary();
    {uint32_t peak=render_peak(64u);check(NoteBank_IsActive(0u)&&peak>110000000u&&peak<125000000u,"sample and eight oscillators must be averaged before voice gain");
     check(last_filter_sample>900000000&&last_filter_sample<1000000000,"averaged source mix must feed the existing filter");}
+   NoteBank_AllNotesOff();
+   check(render_peak(48u)==0u && NoteBank_VmIsActive(0u),"hard stop silences oscillators and retains program");
+   check(NoteBank_NoteOn(0u,69u,127u)==0,"oscillator restarts after hard stop");prime_silent_body(0u);boundary();
+   check(render_peak(48u)>0u,"oscillator sounds again without reload");
    check(NoteBank_NoteOff(0u)==0,"oscillator note off accepted");boundary();check(!NoteBank_IsActive(0u),"oscillator note end clears the voice");free(oscillator_program);}
   attack_lengths[255]=0u;check(NoteBank_NoteOn(0u,69u,127u)==0,"invalid oscillator note posts");prime_silent_body(0u);boundary();
   check(!NoteBank_IsActive(0u)&&!NoteBank_VmIsActive(0u)&&NoteBank_VmFault(0u)==FW_VM_FAULT_HOST_CALL,"unloaded oscillator table must fault and silence only its voice");

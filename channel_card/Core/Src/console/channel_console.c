@@ -318,7 +318,7 @@ static const SwitchDef_t switches[] = {
  *
  *   h / help / ?      — command list
  *   n0..n7 on <key> [velocity] [@session] / off — MIDI gate
- *   n off             — release all 8 voices
+ *   n off             — hard-stop all 8 voices and reset Berry state
  *   al <id> <len>     — CDC signed-int8 attack upload (1..ATTACK_BANK_BYTES)
  *   wl <wave> <len>   — CDC logical wavetable upload (wave 0..7, len 2..512)
  *   vmload <v> <len>  — CDC Berry ABI2 upload; vm [v|mem] — status
@@ -394,22 +394,19 @@ static void Console_NoteOn(uint8_t note, uint8_t key, uint8_t velocity,
               result == -2 ? "err:no-program\r\n" : "err:range\r\n");
 }
 
-/** Release every voice. */
+/** Hard-stop every voice and reset Berry state without unloading programs. */
 static void Console_AllNotesOff(void)
 {
-  for (uint8_t i = 0; i < NOTE_BANK_VOICES; i++)
-  {
-    NoteBank_NoteOff(i);
-  }
+  NoteBank_AllNotesOff();
 }
 
 static void Console_Help(void)
 {
-  char b[256];
+  char b[320];
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   snprintf(b, sizeof b,
            "ok: reset (RS485 RX) | SAMPLE n0..n7 on sample key velocity @session | on key [velocity] [@session] | off | "
-           "al id n | wl wave n | vmload v n | vm [v] | ar id Hz | a | vq | "
+           "n off | al id n | wl wave n | vmload v n | vm [v] | ar id Hz | a | vq | "
            "usb | cpuload [0|1] | "
            "f0..f7 Hz [q] | fk0..fk7 k | g ch dB\r\n");
   RS485_Reply(b);
@@ -751,7 +748,7 @@ static void Console_CmdVoiceQuery(void)
   RS485_Reply(b);
 }
 
-/** n off: release all voices. */
+/** n off: hard-stop all voices and reset Berry state at the next boundary. */
 static void Console_CmdNoteAll(char *line)
 {
   if (strcmp(line, "n off") != 0) { RS485_Reply("err:syntax\r\n"); return; }

@@ -29,6 +29,7 @@ typedef struct {
 void ChannelVm_Init(const ChannelVmNativeOps *ops);
 void ChannelVm_Stop(uint8_t voice);
 void ChannelVm_StopAll(void);
+void ChannelVm_ResetStateAll(void);
 uint8_t ChannelVm_IsActive(uint8_t voice);
 uint8_t ChannelVm_ActiveMask(void);
 FwVmFault ChannelVm_Fault(uint8_t voice);

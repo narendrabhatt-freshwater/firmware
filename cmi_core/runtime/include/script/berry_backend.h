@@ -71,6 +71,8 @@ typedef struct ScriptBerryRuntime {
 void script_berry_init(ScriptBerryRuntime *, const ScriptBerryNativeOps *);
 void script_berry_stop(ScriptBerryRuntime *, uint8_t voice);
 void script_berry_stop_all(ScriptBerryRuntime *);
+/* Audio-boundary operation: preserve programs, readiness and faults. */
+void script_berry_reset_state_all(ScriptBerryRuntime *);
 uint8_t script_berry_is_active(const ScriptBerryRuntime *, uint8_t voice);
 uint8_t script_berry_active_mask(const ScriptBerryRuntime *);
 FwVmFault script_berry_fault(const ScriptBerryRuntime *, uint8_t voice);

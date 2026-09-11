@@ -150,5 +150,25 @@ int main(int argc,char **argv){
       (mem->arena_peak/5u>2048u?mem->arena_peak/5u:2048u)+1023u)/1024u)*1024u));
   assert(mock.output_hash==UINT32_C(0x687dca85));
   assert(mock.oscillators==0u);
+  {
+    void *vm = runtime.vm;
+    uint8_t active = runtime.active_mask;
+    FwVmFault faults[FW_SCRIPT_CHANNEL_VOICE_COUNT];
+    FwVmMetrics metrics[FW_SCRIPT_CHANNEL_VOICE_COUNT];
+    memcpy(faults,runtime.voice_fault,sizeof faults);
+    memcpy(metrics,runtime.voice_metrics,sizeof metrics);
+    for(unsigned v=0;v<FW_SCRIPT_CHANNEL_VOICE_COUNT;++v)
+      for(unsigned slot=0;slot<FW_SCRIPT_CHANNEL_STATE_VALUES;++slot)
+        runtime.state[v][slot]=(float)(slot+1u);
+    script_berry_reset_state_all(&runtime);
+    script_berry_reset_state_all(&runtime);
+    for(unsigned v=0;v<FW_SCRIPT_CHANNEL_VOICE_COUNT;++v)
+      for(unsigned slot=0;slot<FW_SCRIPT_CHANNEL_STATE_VALUES;++slot)
+        assert(runtime.state[v][slot]==0.0f);
+    assert(runtime.vm==vm && runtime.active_mask==active && runtime.shared_valid);
+    assert(memcmp(faults,runtime.voice_fault,sizeof faults)==0);
+    assert(memcmp(metrics,runtime.voice_metrics,sizeof metrics)==0);
+  }
+
   free(program);fault_matrix(argv[1],argv[2],argv[3],argv[4],argv[5]);pitch_tracking(argv[6]);oscillator_config(argv[7],argv[8],argv[9],argv[10]);routing_config(argv[11]);large_program_capacity(argv[12]);exhausted_replacement_preserves(argv[1],argv[13]);payload_limits();puts("fault_matrix_ok");return 0;
 }

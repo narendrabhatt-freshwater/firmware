@@ -351,6 +351,7 @@ void script_berry_stop(ScriptBerryRuntime *r,uint8_t voice){
   if(r->shared_valid&&vm&&be_getglobal(vm,"_fw_programs")){be_pushint(vm,voice);be_pushnil(vm);(void)be_setindex(vm,-3);be_pop(vm,3);}
   silence(r,voice,FW_VM_FAULT_NO_PROGRAM);
 }
+void script_berry_reset_state_all(ScriptBerryRuntime *r){memset(r->state,0,sizeof(r->state));}
 void script_berry_stop_all(ScriptBerryRuntime *r){for(uint8_t v=0;v<FW_SCRIPT_CHANNEL_VOICE_COUNT;++v)script_berry_stop(r,v);}
 uint8_t script_berry_is_active(const ScriptBerryRuntime *r,uint8_t v){return v<FW_SCRIPT_CHANNEL_VOICE_COUNT&&(r->active_mask&(1u<<v))!=0u;}
 uint8_t script_berry_active_mask(const ScriptBerryRuntime *r){return r->active_mask;}

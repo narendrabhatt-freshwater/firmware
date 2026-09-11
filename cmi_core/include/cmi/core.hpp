@@ -163,6 +163,7 @@ public:
   Result sampleNoteOn(uint8_t voice, uint8_t midi_key, uint16_t sample_id,
                       uint8_t velocity = 127u);
   Result noteOff(uint8_t voice);
+  /** Hard-stop all voices and reset Berry state; keep loaded programs. */
   Result allNotesOff();
 
   Result setMidiSampleMap(const std::array<uint16_t, 128> &sample_ids);

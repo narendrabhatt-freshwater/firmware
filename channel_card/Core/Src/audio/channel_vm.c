@@ -30,6 +30,7 @@ void ChannelVm_Init(const ChannelVmNativeOps *ops)
 }
 void ChannelVm_Stop(uint8_t voice) { script_berry_stop(&s_runtime, voice); }
 void ChannelVm_StopAll(void) { script_berry_stop_all(&s_runtime); }
+void ChannelVm_ResetStateAll(void) { script_berry_reset_state_all(&s_runtime); }
 uint8_t ChannelVm_IsActive(uint8_t voice) { return script_berry_is_active(&s_runtime, voice); }
 uint8_t ChannelVm_ActiveMask(void) { return script_berry_active_mask(&s_runtime); }
 FwVmFault ChannelVm_Fault(uint8_t voice) { return script_berry_fault(&s_runtime, voice); }

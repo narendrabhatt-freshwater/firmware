@@ -115,7 +115,7 @@ public:
         uint8_t midi_key, uint8_t velocity = 127);
     /* Release one voice. */
     voice_board_result_t note_off(uint8_t voice_id);
-    /* Release all voices. */
+    /* Hard-stop all voices and reset Berry state; keep loaded programs. */
     voice_board_result_t all_notes_off();
     /* Set output attenuation in dB (0..127). */
     voice_board_result_t set_attenuation(uint8_t attenuation_db);

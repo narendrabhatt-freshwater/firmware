@@ -13,7 +13,9 @@ extern "C" {
  * envelope policy and section sequencing belong exclusively to VM programs. */
 void NoteEnv_Init(void);
 void NoteEnv_Stop(uint8_t voice);
+/* Finite amplitudes and ramp targets are clamped to 0..1. */
 int NoteEnv_SetAmplitude(uint8_t voice, float amplitude);
+/* Slope magnitude is speed; zero jumps to target and queues ramp completion. */
 int NoteEnv_StartRamp(uint8_t voice, float target, float slope);
 float NoteEnv_Amplitude(uint8_t voice);
 float NoteEnv_RenderSample(uint8_t voice);
