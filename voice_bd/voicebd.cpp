@@ -1202,7 +1202,6 @@ voice_board_result_t open_device(device_context* state,
     result = state->rs485.command("clear");
     result = state->query_status();
     if (!result) {
-        result.message = "RS485 startup on " + state->rs485_name + ": " + result.message;
         state->shutdown();
         return result;
     }
@@ -1271,7 +1270,7 @@ voice_board_result_t load_script(device_context* state, uint8_t voice_id,
 
 voice_board_result_t load_sample(device_context* state, uint16_t sample_id,
     std::vector<int16_t> const& pcm,
-    double root_pitch_hz)
+    double /*root_pitch_hz*/)
 {
     if (!device_is_open(state))
         return fail(voice_board_error_t::not_connected,
@@ -1294,21 +1293,12 @@ voice_board_result_t load_sample(device_context* state, uint16_t sample_id,
         reinterpret_cast<uint8_t const*>(attack.data()), attack_size, "ok:attack");
     if (!result) {
         result.code = voice_board_error_t::sample_error;
-        result.message = "attack upload failed (commit may be unknown); old BODY retained: " +
+        result.message = "attack upload failed; old BODY retained: " +
             result.message;
         return result;
     }
 
-    // Serialize publication and releases with note-on so a release cannot
-    // reach a newly triggered session. No USB wait holds this control turn.
     device_context::control_turn turn(state);
-    result = state->rs485.command("ar " + std::to_string(sample_id) + " " +
-        std::to_string(root_pitch_hz));
-    if (!result) {
-        result.message = "attack committed; root update failed; old BODY retained: " +
-            result.message;
-        return result;
-    }
     result = state->replace_sample(sample_id, replacement);
     if (!result) return result;
     return ok("sample " + std::to_string(sample_id) + " loaded");
@@ -1488,7 +1478,7 @@ bool voice_board_t::is_open() const
 
 /* ---- load a BEC program into one voice ----------------------------------- */
 
-voice_board_result_t voice_board_t::loadScript(
+voice_board_result_t voice_board_t::load_script(
     uint8_t voice_id, std::string const& path)
 {
     if (!impl_ || !impl_->context) return unavailable();

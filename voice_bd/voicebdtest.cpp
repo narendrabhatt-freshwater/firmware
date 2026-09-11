@@ -196,11 +196,11 @@ try
     voice_board_t board;
     check(board.open(config));
     for (uint8_t voice = 0; voice < voice_board_t::voice_count; ++voice) {
-        check(board.loadScript(voice, config.bec_file));
-        std::cout << "loadScript: voice " << unsigned(voice)
+        check(board.load_script(voice, config.bec_file));
+        std::cout << "load_script: voice " << unsigned(voice)
                   << " loaded " << config.bec_file << '\n';
     }
-    check(board.load_sample(0, pcm, sample_rate_hz, sample_root_hz));
+    check(board.load_sample(0, pcm));
     RtMidiIn midi;
     midi.ignoreTypes(true, true, true);
     if (midi.getPortCount() == 0)

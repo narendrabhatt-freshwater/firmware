@@ -100,7 +100,7 @@ public:
     voice_board_result_t close();
     bool is_open() const;
     /* Load a BEC program into voice 0..7 on an open board. */
-    voice_board_result_t loadScript(uint8_t voice_id, std::string const& path);
+    voice_board_result_t load_script(uint8_t voice_id, std::string const& path);
     /* Upload ATTACK and retain 48 kHz mono signed-16 PCM for BODY streaming.
      * Active replacements preserve the next source position; positions outside
      * the new sample trigger note-off. Queued audio is left intact. Requires
