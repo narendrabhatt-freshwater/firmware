@@ -5,9 +5,11 @@ def on_note_on(key, velocity)
     state hold_amplitude
     state attack_slope
     state decay
-    var attack = 1
+    state led_level
+    var attack = 20
     var level = 1
-    decay = 1
+    decay = 200
+    led_level = velocity / 127.0
 
     hold_amplitude = level
     attack_slope = attack * (velocity / 127.0)
@@ -28,6 +30,7 @@ def on_note_on(key, velocity)
         stage = 1
         ramp(hold_amplitude, attack_slope)
     end
+    led(0, 1, 0, led_level)
 end
 
 def on_note_off()
@@ -46,8 +49,10 @@ def on_ramp_end()
             stage = 1
             ramp(hold_amplitude, attack_slope)
         end
+        led(0, 1, 0, led_level)
     elif stage == 3
         stage = 0
+        led(0, 0, 0, 0)
         note_end()
     elif stage == 1
         stage = 2
