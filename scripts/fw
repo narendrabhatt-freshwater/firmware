@@ -81,9 +81,6 @@ usage() {
     "  fw console  [channel|effect] [--port PATH]"
     "  fw log      [channel|effect] [--port PATH]"
     "  fw send     [channel|effect] <command...> [--port PATH]"
-    "  fw cli [--sample FILE ...]          automatic interactive session"
-    "  fw play     [PROJECT] [--rs485 PORT] [options]"
-    "  fw control  [run] | build"
     "  fw clean    [channel|effect|all]"
     "  fw status   [--debug|--release]"
     "  fw help"
@@ -109,20 +106,10 @@ usage() {
     "  fw send channel help    send one command, print reply"
     "  fw send channel status"
     ""
-    "Performance CLI (uploads everything, opens MIDI, watches channel.be)"
-    "  fw cli --sample FILE --root-hz HZ   example script + your sample"
-    "  fw play my-sound --rs485 /dev/cu.usbserial-0001"
-    "  fw play build                       build the performance CLI"
-    "  fw play --help                      project layout and all options"
-    ""
-    "Control GUI (cmi_control — Dear ImGui + GLFW, macOS/Linux/Windows)"
-    "  fw control build                  build cmi_control (FetchContent once)"
-    "  fw control                        run GUI (builds if needed)"
-    ""
     "SVN publishing (docs/reference/svn_publishing.md)"
     "  fw svn-publish <product> <wc> [--tag vX.Y] [--dry-run]"
     "                                    export a product dir into its SVN trunk"
-    "                                    products: channel_card effect_card cmi_core cmi_control"
+    "                                    products: channel_card effect_card berry_compiler voice_bd"
     ""
     "Cards"
     "  channel    channel_MCU   STM32H725   /dev/cu.usbmodemCHCARD*"
@@ -138,7 +125,6 @@ usage() {
     "  fw console channel"
     "  fw log effect"
     "  fw send channel help"
-    "  fw control"
     "  fw flash channel --port USB1"
     "  fw build all --release"
     "  fw build channel --force"
@@ -1210,165 +1196,6 @@ _set_port_arg() {
   fi
 }
 
-# ── Control GUI (cmi_control — Dear ImGui + GLFW) ─────────────────────
-
-control_dir() { echo "$ROOT/cmi_control"; }
-control_bin() {
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    echo "$(control_dir)/build/CMI Control.app/Contents/MacOS/CMI Control"
-  else
-    echo "$(control_dir)/build/cmi_control"
-  fi
-}
-
-cmd_control_build() {
-  local dir bin
-  dir="$(control_dir)"
-  bin="$(control_bin)"
-  need_cmd cmake
-  info "build CMI Control (Dear ImGui + GLFW, Release)"
-  (
-    cd "$dir"
-    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-    cmake --build build --config Release
-  )
-  ok "$(relpath "$bin")"
-}
-
-ensure_control_built() {
-  local bin changed
-  bin="$(control_bin)"
-  changed=""
-  if [[ -x "$bin" ]]; then
-    changed="$(find "$ROOT/cmi_control" "$ROOT/cmi_core" \
-      -path '*/build/*' -prune -o -type f \
-      \( -name '*.cpp' -o -name '*.hpp' -o -name '*.c' -o -name '*.h' \
-         -o -name 'CMakeLists.txt' \) -newer "$bin" -print -quit)"
-  fi
-  if [[ ! -x "$bin" || -n "$changed" ]]; then
-    warn "CMI Control is missing or changed — building"
-    cmd_control_build
-  fi
-}
-
-cmd_control() {
-  local sub="${1:-run}"
-  if [[ "$sub" == "build" ]]; then
-    cmd_control_build
-    return
-  fi
-  if [[ "$sub" == "-h" || "$sub" == "--help" || "$sub" == "help" ]]; then
-    usage
-    return
-  fi
-  if [[ "$sub" == "run" ]]; then
-    shift || true
-  fi
-  ensure_control_built
-  # Launch via the .app on macOS so CFBundleName feeds the menu bar / About.
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    local app
-    app="$(control_dir)/build/CMI Control.app"
-    if [[ -d "$app" ]]; then
-      exec open -n "$app" --args "$@"
-    fi
-  fi
-  exec "$(control_bin)" "$@"
-}
-
-# ── Performance CLI (automatic assets + MIDI) ───────────────────────────────
-
-play_dir() { echo "$ROOT/cmi_core"; }
-play_build_dir() { echo "$(play_dir)/build/cli"; }
-play_bin() { echo "$(play_build_dir)/cmi-play"; }
-
-cmd_play_build() {
-  need_cmd cmake
-  info "build CMI Play CLI (Release)"
-  cmake -S "$(play_dir)" -B "$(play_build_dir)" \
-    -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
-  cmake --build "$(play_build_dir)" --config Release --parallel
-  ok "$(relpath "$(play_bin)")"
-}
-
-ensure_play_built() {
-  local bin changed
-  bin="$(play_bin)"
-  changed=""
-  if [[ -x "$bin" ]]; then
-    changed="$(find "$ROOT/cmi_core" \
-      -path '*/build/*' -prune -o -type f \
-      \( -name '*.cpp' -o -name '*.hpp' -o -name '*.c' -o -name '*.h' \
-         -o -name 'CMakeLists.txt' \) -newer "$bin" -print -quit)"
-  fi
-  if [[ ! -x "$bin" || -n "$changed" ]]; then
-    warn "CMI Play CLI is missing or changed — building"
-    cmd_play_build
-  fi
-}
-
-resolve_rs485_adapter() {
-  if [[ -n "${FW_RS485_PORT:-}" ]]; then
-    [[ -e "$FW_RS485_PORT" ]] || die "RS485 port not found: $FW_RS485_PORT"
-    echo "$FW_RS485_PORT"
-    return
-  fi
-  local candidates=() p
-  shopt -s nullglob
-  candidates=(/dev/cu.usbserial* /dev/cu.SLAB_USBtoUART* /dev/cu.wchusbserial* \
-              /dev/ttyUSB* /dev/serial/by-id/*)
-  shopt -u nullglob
-  local usable=()
-  for p in "${candidates[@]+"${candidates[@]}"}"; do
-    [[ "$p" =~ CHCARD|EFCARD ]] || usable+=("$p")
-  done
-  if [[ ${#usable[@]} -eq 1 ]]; then
-    echo "${usable[0]}"
-    return
-  fi
-  if [[ ${#usable[@]} -gt 1 ]]; then
-    warn "multiple possible RS485 adapters"
-    for p in "${usable[@]}"; do printf '\r  %s\n' "$p" >&2; done
-  fi
-  die "cannot auto-select RS485 adapter; pass --rs485 PORT (or set FW_RS485_PORT)"
-}
-
-cmd_play() {
-  if [[ "${1:-}" == "build" ]]; then
-    shift
-    [[ $# -eq 0 ]] || die "usage: fw play build"
-    cmd_play_build
-    return
-  fi
-  ensure_play_built
-
-  local args=("$@") have_rs485=0 have_cdc=0 informational=0 i
-  for ((i = 0; i < ${#args[@]}; ++i)); do
-    case "${args[$i]}" in
-      --rs485) have_rs485=1 ;;
-      --cdc) have_cdc=1 ;;
-      --help|-h|--list-midi) informational=1 ;;
-    esac
-  done
-  if [[ "$informational" -eq 0 ]]; then
-    if [[ "$have_rs485" -eq 0 ]]; then
-      local detected_rs485
-      detected_rs485="$(resolve_rs485_adapter)"
-      args+=(--rs485 "$detected_rs485")
-    fi
-    if [[ "$have_cdc" -eq 0 ]]; then
-      local detected_cdc
-      detected_cdc="$(resolve_serial_port channel)"
-      args+=(--cdc "$detected_cdc")
-    fi
-  fi
-  exec "$(play_bin)" "${args[@]}"
-}
-
-cmd_cli() {
-  cmd_play "$ROOT/cmi_core/examples/vm/channel" "$@"
-}
-
 # ── main ─────────────────────────────────────────────────────────────────────
 
 main() {
@@ -1387,9 +1214,6 @@ main() {
     console|shell|repl) cmd_console "$@" ;;
     log|logs|follow|tail) cmd_log "$@" ;;
     send|cmd) cmd_send "$@" ;;
-    cli) cmd_cli "$@" ;;
-    play|perform|session) cmd_play "$@" ;;
-    control|gui) cmd_control "$@" ;;
     svn-publish) exec "$ROOT/scripts/svn_publish.sh" "$@" ;;
     clean)  cmd_clean "$@" ;;
     status|info) cmd_status "$@" ;;

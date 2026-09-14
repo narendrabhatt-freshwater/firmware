@@ -23,8 +23,8 @@ The build override is applied in a CubeMX-preserved USER CODE section.
 | --------------------------------------------------- | --------------------------------------------------------- | -------------- |
 | Channel / Effect firmware                           | Product protocol (addressing, commands, `ok`/`err`)       | Yes            |
 | USB↔RS485 adapter + any terminal                    | Maintenance / bring-up                                    | Enough for lab |
-| [`cmi_control`](../../cmi_control)           | Supported example: MIDI + full console + preview scope   | No             |
-| [`cmi_core`](../../cmi_core) | C++17 core library: cards, VM, waves, MIDI, and USB audio | Host apps |
+| [`voice_bd`](../../voice_bd) | Standalone MIDI, sample upload, and USB BODY streaming | Playback |
+| `175-mainframe` | Mainframe application using the synchronized voicebd implementation | Mainframe |
 
 **Implication:** control framing remains terminal-friendly. Voice commands are
 ASCII (`c:n3 on 69` + Enter). Compact `[C] ok` replies stay human-readable.
@@ -32,13 +32,11 @@ ASCII (`c:n3 on 69` + Enter). Compact `[C] ok` replies stay human-readable.
 ```mermaid
 flowchart LR
   Term[Any serial terminal]
-  Gui[cmi_control]
-  Lib[cmi_core]
+  App[voice_bd or mainframe app]
   Bus[RS485 adapter 921600 8N1]
   CC[Channel Card]
   EC[Effect Card]
-  Gui --> Lib
-  Lib --> Bus
+  App --> Bus
   Term --> Bus
   Bus --> CC
   Bus --> EC
@@ -50,7 +48,7 @@ One shared D+/D- multi-drop bus. Operators:
 
 | Operator                                 | Role                     |
 | ---------------------------------------- | ------------------------ |
-| Rockchip CPU card (future) / host SDK app | Production voice/control |
+| Rockchip CPU card / voice_bd app | Production voice/control |
 | PC + terminal                            | Maintenance              |
 
 Addresses: `c:` Channel, `e:` Effect, `*:` / bare = broadcast.
@@ -85,8 +83,7 @@ the note authority and exact-credit `vq` polling.
 
 `e:ec 0` / `e:ec 1` — runtime keystroke bus echo (firmware default
 **off**). Production and burst TX require echo off. With device echo off,
-enable **local** echo in the terminal. Any client can type `e:ec 0`
-(including `cmi_control`).
+enable **local** echo in the terminal. Any serial terminal can type `e:ec 0`.
 
 ### Half-duplex
 
@@ -114,11 +111,12 @@ block forever. Session bootstrap aborts if required steps fail.
 IRQ RX, DE/RE turnaround, `Console_Poll` / `Console_Exec`, compact replies.
 Same command set over USB CDC (no `[C]` tag on CDC).
 
-## Host library
+## Host application
 
-[`cmi_core`](../../cmi_core) exposes the `cmi::Core` host API. Transport,
-wire-format, MIDI, VM, sample, and audio-streaming components remain internal to
-the library. `cmi_control` is the repository application using the same core.
+[`voice_bd`](../../voice_bd) owns serial control, uploads, and USB audio streaming.
+The mainframe uses a copy of `voicebd.cpp`; synchronize it explicitly with
+`scripts/sync_voicebd.sh <mainframe-root>`. Platform/device configuration stays
+in each application's `voicebd.h`.
 
 ## Command reference
 

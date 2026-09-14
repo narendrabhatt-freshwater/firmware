@@ -38,8 +38,7 @@ fw_configure_rs485(${CMAKE_PROJECT_NAME} PRIVATE)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
-set(SCRIPT_RUNTIME_BUILD_HOST_TOOLS OFF CACHE BOOL "" FORCE)
-add_subdirectory(../cmi_core/runtime ${CMAKE_CURRENT_BINARY_DIR}/script_runtime)
+add_subdirectory(runtime ${CMAKE_CURRENT_BINARY_DIR}/script_runtime)
 
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
@@ -93,8 +92,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Inc/console
     ThirdParty/tinyusb/src
     USB_APP
-    ../cmi_core/shared/vm/include
-    ../cmi_core/runtime/include
+    runtime/vm/include
+    runtime/include
 )
 
 # Add project symbols (macros)

@@ -11,7 +11,7 @@
 **/.cache/
 compile_commands.json
 
-# Dear ImGui window-layout state (cmi_control writes it to the launch cwd)
+# Local window-layout state from previous host applications
 imgui.ini
 
 # Local photo dumps, not part of the product tree

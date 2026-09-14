@@ -113,23 +113,6 @@ The 61-byte `vq` reply is required; older firmware is rejected with an error.
 Polling remains at 5 ms. Late replies do not add another full polling interval.
 See `../channel_card/docs/protocol.md`.
 
-Tests live separately in `tests/stream_test.cpp`; production sources contain no
-self-test code or mock hooks. These tests cover the scheduler and status parser;
-serial/audio integration requires hardware. Run without opening any device:
-
-```sh
-c++ -std=c++17 -Wall -Wextra -Werror \
-  $(pkg-config --cflags rtaudio libserialport) tests/stream_test.cpp \
-  $(pkg-config --libs rtaudio libserialport) -o /tmp/voicebd-stream-test
-/tmp/voicebd-stream-test
-```
-
-The hardware reliability test also accepts mode `swaps` (after WAV and BEC
-arguments). It repeatedly replaces a shared sample with equal, shorter and
-64-sample versions while other voices play, then retriggers to verify recovery.
-Run it only after installing the updated channel firmware; listen for persistent
-noise or stuck notes and inspect card diagnostics. Brief swap clicks are allowed.
-
 Hardware acceptance still requires measuring actual USB/poll timing and checking
 zero `hold`/overflow faults under the intended workload. The scheduler cannot
 guarantee uninterrupted audio above 998 source samples/ms or during excessive
@@ -176,19 +159,10 @@ loop converts only the BODY samples being transmitted to signed eight-bit.
 The retained BODY uses two bytes per sample. Replacing it releases the previous
 allocation outside the streaming-state lock.
 
-Hardware workload test (no MIDI, unoptimized host):
+## Mainframe synchronization
 
-```sh
-c++ -O0 -g -std=c++17 -Wall -Wextra -Werror \
-  $(pkg-config --cflags rtaudio libserialport) tests/reliability_test.cpp voicebd.cpp \
-  $(pkg-config --libs rtaudio libserialport) -o /tmp/voicebd-reliability-test
-/tmp/voicebd-reliability-test sample.wav test.bec burst
-/tmp/voicebd-reliability-test sample.wav test.bec startups 60
-/tmp/voicebd-reliability-test sample.wav test.bec steady 72
-```
-
-`burst` sends 4096 note-ons with interleaved note-offs; `startups` repeats 64
-eight-voice starts/releases; `steady` holds eight voices for 30 seconds. The
-optional key applies to `startups` and `steady`. Tests use 40 dB attenuation.
-Inspect card `usb`, `vm mem`, and `fault` diagnostics as well as host exit status.
-After a latched fault, use the reset button and read `fault` before clearing it.
+`voice_bd/voicebd.cpp` is the authoritative implementation. From the firmware
+repository root, run `scripts/sync_voicebd.sh /path/to/175-mainframe` to copy it
+into the existing `mas/voicebd.cpp`. The command shows the diff, skips identical
+files, and saves a backup before replacement. It never changes `voicebd.h`
+or commits to SVN. Synchronization does not run during `make`.

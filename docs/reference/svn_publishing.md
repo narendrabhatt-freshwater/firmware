@@ -13,8 +13,8 @@ Each product maps to one SVN repository's trunk content:
 | ------------------ | -------------- | ------ |
 | `channel_card/` | `channel_card` | exists |
 | `effect_card/`  | `effect_card`  | exists |
-| `cmi_core/` | `cmi_core` | create when needed |
-| `cmi_control/`  | `cmi_control`  | create when needed |
+| `berry_compiler/` | `berry_compiler` | create when needed |
+| `voice_bd/` | `voice_bd` | create when needed |
 
 ## Release flow
 
@@ -34,13 +34,11 @@ The script (`scripts/svn_publish.sh`):
 - rsyncs the product directory over `trunk/` (`--delete`, so removals
   propagate), excluding build output, tool caches, IDE/agent metadata
   (`.vscode/`, `.settings/`, `.github/`, Eclipse project files),
-  `.gitignore` files and — for `cmi_control` — the generated `waves/`
-  banks;
+  `.gitignore` files and generated host build outputs;
 - copies the shared docs the export needs to stand alone into
-  `trunk/docs/`: `protocol.md` (must match `$PRODUCT/docs/protocol.md`
-  when that file exists), the root README as `firmware_handbook.md`
+  `trunk/docs/`: `protocol.md` (card copies must match except for relative scripting links), the root README as `firmware_handbook.md`
   for the cards, the filter reference and diagrams for the Channel
-  card, `rs485_console_architecture.md` for the host products;
+  card, `rs485_console_architecture.md` for `voice_bd`;
 - registers adds/removals with `svn add` / `svn rm` and commits with
   the git SHA and branch in the message;
 - with `--tag vX.Y`, copies `^/trunk` to `^/tags/vX.Y`.
@@ -70,3 +68,6 @@ svn mkdir <repo-url>/trunk <repo-url>/tags -m "Repository layout."
 svn checkout <repo-url> ~/svn/<product>
 fw svn-publish <product> ~/svn/<product>
 ```
+
+Channel Card includes its runtime in its own export. Effect Card has no VM
+dependency.

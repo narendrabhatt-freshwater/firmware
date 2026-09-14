@@ -49,8 +49,8 @@ Everything needed to build is included; the build downloads nothing.
 Use a compiler from the same firmware revision as the target device.
 
 For maintainers: `vendor/berry`, `config/berry_conf.h`, and
-`shared/src/berry_runtime_modtab.c` are snapshots from `cmi_core/runtime`.
+`shared/src/berry_runtime_modtab.c` are snapshots from `channel_card/runtime`.
 The other shared C sources and `freshwater` headers come from
-`cmi_core/shared/vm`; `script/script_runtime.h` comes from the runtime include
+`channel_card/runtime/vm`; `script/script_runtime.h` comes from the runtime include
 directory. Refresh these copies when the corresponding firmware sources
-change, and qualify the compiler against the runtime tests.
+change, and verify the compiler by compiling a retained Channel Card script and building the firmware.

@@ -5,7 +5,7 @@ _fw_complete() {
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-  local cmds="build flash list console log send cli play control clean status help"
+  local cmds="build flash list console log send clean status help"
   local cards_all="channel effect all"
   local cards_one="channel effect"
   local kinds="usb stlink uart all"
@@ -73,22 +73,7 @@ _fw_complete() {
         COMPREPLY=( $(compgen -W "${serial_flags}" -- "${cur}") )
       fi
       ;;
-    control|gui)
-      COMPREPLY=( $(compgen -W "run build" -- "${cur}") )
-      ;;
-    cli|play|perform|session)
-      case "${prev}" in
-        --midi) COMPREPLY=( $(compgen -W "auto off" -- "${cur}") ) ;;
-        --attenuation) COMPREPLY=( $(compgen -W "0 6 12 24" -- "${cur}") ) ;;
-        --baud) COMPREPLY=( $(compgen -W "921600" -- "${cur}") ) ;;
-        --rs485|--cdc|--script|--sample|--samples|--wavetables|--audio)
-          COMPREPLY=( $(compgen -f -- "${cur}") ) ;;
-        *)
-          COMPREPLY=( $(compgen -W "build --rs485 --cdc --script --sample --samples --wavetables --midi --audio --attenuation --baud --no-watch --list-midi --help" -- "${cur}") )
-          COMPREPLY+=( $(compgen -d -- "${cur}") )
-          ;;
-      esac
-      ;;
+
   esac
 }
 

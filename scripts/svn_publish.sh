@@ -6,7 +6,7 @@
 # Usage:
 #   svn_publish.sh <product> <svn-working-copy> [--tag vX.Y] [--dry-run]
 #
-#   <product>            channel_card | effect_card | cmi_core | cmi_control
+#   <product>            channel_card | effect_card | berry_compiler | voice_bd
 #   <svn-working-copy>   checkout of the SVN repo ROOT (must contain trunk/;
 #                        tags/ is required only when --tag is used)
 #   --tag vX.Y           after committing trunk, svn copy trunk -> tags/vX.Y
@@ -38,8 +38,8 @@ while [ $# -gt 0 ]; do
 done
 
 case "$PRODUCT" in
-  channel_card|effect_card|cmi_core|cmi_control) ;;
-  *) err "unknown product '$PRODUCT' (channel_card | effect_card | cmi_core | cmi_control)" ;;
+  channel_card|effect_card|berry_compiler|voice_bd) ;;
+  *) err "unknown product '$PRODUCT' (channel_card | effect_card | berry_compiler | voice_bd)" ;;
 esac
 
 command -v svn   >/dev/null || err "svn not found on PATH"
@@ -62,11 +62,13 @@ GIT_SHA="$(git -C "$ROOT" rev-parse --short HEAD)"
 GIT_BRANCH="$(git -C "$ROOT" branch --show-current)"
 
 # Not exported: build output, tool caches, IDE and agent metadata, git
-# metadata (SVN uses svn:ignore), local photo dumps, and generated
-# binary wave banks (cmi_control). Binary docs (.docx/.pdf/.drawio)
+# metadata (SVN uses svn:ignore) and local photo dumps. Binary docs (.docx/.pdf/.drawio)
 # never ship — see docs/README.md.
 EXCLUDES=(
   --exclude 'build/'
+  --exclude '.build/'
+  --exclude 'voicebd'
+  --exclude 'channel.bec'
   --exclude '.cache/'
   --exclude '.vscode/'
   --exclude '.settings/'
@@ -81,9 +83,6 @@ EXCLUDES=(
   --exclude 'imgui.ini'
   --exclude 'docs/img/'
 )
-if [ "$PRODUCT" = "cmi_control" ]; then
-  EXCLUDES+=(--exclude 'waves/')
-fi
 
 RSYNC_FLAGS=(-a --delete --exclude '.svn/')
 [ "$DRY" = 1 ] && RSYNC_FLAGS+=(-n -v)
@@ -102,14 +101,17 @@ copy_doc() { # copy_doc <src-rel-to-root> <dst-rel-to-trunk-docs>
     cp "$ROOT/$1" "$DOCS_DIR/$2"
   fi
 }
-# Card trees carry their own docs/protocol.md; it must match the
-# shared copy or the SVN trunk would disagree with the monorepo spec.
+# Card trees carry their own docs/protocol.md; content must match the
+# shared copy, allowing only relative scripting-link differences.
 if [ -f "$SRC/docs/protocol.md" ]; then
-  if ! cmp -s "$ROOT/docs/protocol.md" "$SRC/docs/protocol.md"; then
+  if ! cmp -s <(sed -E 's@\]\([^)]*SCRIPTING.md\)@](SCRIPTING.md)@g' "$ROOT/docs/protocol.md") \
+              <(sed -E 's@\]\([^)]*SCRIPTING.md\)@](SCRIPTING.md)@g' "$SRC/docs/protocol.md"); then
     err "docs/protocol.md differs from $PRODUCT/docs/protocol.md — keep them identical"
   fi
 fi
-copy_doc docs/protocol.md protocol.md
+if [ ! -f "$SRC/docs/protocol.md" ]; then
+  copy_doc docs/protocol.md protocol.md
+fi
 case "$PRODUCT" in
   channel_card)
     copy_doc README.md firmware_handbook.md
@@ -123,7 +125,7 @@ case "$PRODUCT" in
     copy_doc README.md firmware_handbook.md
     copy_doc docs/diagrams/card_data_flow.md diagrams/card_data_flow.md
     ;;
-  cmi_core|cmi_control)
+  voice_bd)
     copy_doc docs/reference/rs485_console_architecture.md reference/rs485_console_architecture.md
     ;;
 esac

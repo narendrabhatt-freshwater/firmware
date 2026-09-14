@@ -1,7 +1,0 @@
-build/
-.cache/
-_deps/
-imgui.ini
-
-# Generated sample banks (rebuild with scripts/gen_wave_bank.py)
-waves/

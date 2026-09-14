@@ -1,9 +1,10 @@
 # Freshwater documentation
 
-`protocol.md` is the single normative host ↔ card wire contract. Identical
+`protocol.md` is the single normative host ↔ card wire contract. Matching
 copies ship in each card tree (`channel_card/docs/protocol.md`,
 `effect_card/docs/protocol.md`) so an SVN trunk stands alone. Keep those
-three files in lockstep. Everything else is grouped below.
+three files in lockstep; relative scripting-document links can differ by location.
+Everything else is grouped below.
 
 | Location | Contents |
 | -------- | -------- |
