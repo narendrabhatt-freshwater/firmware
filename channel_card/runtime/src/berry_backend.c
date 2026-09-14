@@ -205,12 +205,18 @@ static int native_start_note(bvm *vm){
   if(argc==1){
     value=checked_float(vm,1);
     if(value<=0.0f)native_error(vm,FW_VM_FAULT_BAD_HOST_ARGUMENT,"pitch must be positive");
-    if(!s_runtime->ops.start_note_at||s_runtime->ops.start_note_at(s_runtime->ops.context,s_runtime->current_voice,value)!=0)
-      native_error(vm,FW_VM_FAULT_HOST_CALL,"start note failed");
   }else{
-    if(!s_runtime->ops.start_note||s_runtime->ops.start_note(s_runtime->ops.context,s_runtime->current_voice)!=0)
-      native_error(vm,FW_VM_FAULT_HOST_CALL,"start note failed");
+    float key=0.0f;
+    /* Resolve the fallback only when the script starts the pending note.
+     * Receiving a key must never retune the still-audible old voice. */
+    if(!s_runtime->ops.read_input||s_runtime->ops.read_input(s_runtime->ops.context,s_runtime->current_voice,FW_VM_CHANNEL_INPUT_PENDING_KEY,&key)!=0)
+      native_error(vm,FW_VM_FAULT_HOST_CALL,"pending key unavailable");
+    if(!isfinite(key)||key<0.0f||key>=FW_SCRIPT_CHANNEL_KEY_COUNT||floorf(key)!=key)
+      native_error(vm,FW_VM_FAULT_BAD_HOST_ARGUMENT,"invalid pending key");
+    value=fw_vm_channel_standard_hz((uint8_t)key);
   }
+  if(!s_runtime->ops.start_note_at||s_runtime->ops.start_note_at(s_runtime->ops.context,s_runtime->current_voice,value)!=0)
+    native_error(vm,FW_VM_FAULT_HOST_CALL,"start note failed");
   be_pushnil(vm);be_return(vm);
 }
 static int native_note_end(bvm *vm){return native_noarg(vm,s_runtime->ops.note_end,"note end failed");}

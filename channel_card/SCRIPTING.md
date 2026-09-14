@@ -75,8 +75,7 @@ end
 
 `on_note_on(key, velocity)` runs when a transport-ready note is pending. `key`
 is the physical MIDI key from `0` through `127`; `velocity` is the raw MIDI
-velocity from `1` through `127`. The handler must call `start_note()` or
-`start_note(frequency)` to promote that pending note, or `discard_pending()` to
+velocity from `1` through `127`. The handler must call `start_note()` or `start_note(frequency)` to promote that pending note, or `discard_pending()` to
 reject it. Velocity zero is handled as note-off before dispatch.
 
 `on_note_off()` runs when the host releases the voice. Firmware first cancels
@@ -95,8 +94,7 @@ actions.
 | `input(id)` | Returns the selected live voice value as a number. |
 | `set_amplitude(value)` | Immediately sets amplitude to `0.0..1.0` and cancels the current ramp. |
 | `ramp(target, slope)` | Ramps to `target` in `0.0..1.0`. `slope` is a positive amplitude change per second. |
-| `start_note()` | Starts the pending note with standard MIDI pitch. Fails when no note is pending. |
-| `start_note(frequency)` | Overrides the pending pitch with a positive frequency in Hz and starts the note. |
+| `start_note(frequency)` | Starts the pending note at the script-supplied positive finite frequency in Hz. Omitting the argument looks up standard pitch for the pending key at activation. |
 | `discard_pending()` | Removes the pending note without changing the current note; primarily used when `on_note_on()` rejects a transport-ready note. |
 | `osc(wave, frequency)` | Appends a pending-note oscillator using logical wavetable `0..7` at an absolute frequency greater than 0 and no greater than 24,000 Hz, and returns an opaque note-local handle. |
 | `route(source, OUTPUT, weight)` | Sends a pending oscillator's audio to the voice output with a nonnegative finite mix weight. |
@@ -140,7 +138,7 @@ Calling `osc()` returns a positive opaque handle, which may be assigned or
 ignored. Handles are exactly representable in persistent float32 state.
 They survive pending promotion but become invalid on discard,
 note end, replacement, fault, or panic. The declaration and zeroed phases
-become active when `start_note()` promotes the pending note. An older note
+become active when `start_note(frequency)` promotes the pending note. An older note
 keeps its own oscillators while a replacement waits for a voice-steal fade.
 There is no predefined oscillator-count constant in the Berry ABI or the
 firmware implementation. Each `osc()` call dynamically allocates one small
@@ -153,7 +151,7 @@ def on_note_on(key, velocity)
     var fundamental = pitch_for_key(key)
     var carrier = osc(0, fundamental)
     osc(1, fundamental * 2) # ignoring the handle is valid
-    start_note()
+    start_note(pitch_for_key(key))
 end
 ```
 
@@ -177,7 +175,7 @@ target between silence and its full level; gain 0.5 moves it between silence
 and half level. Multiple amplitude modulators multiply.
 Connections and handles must belong to the pending
 note; duplicates, self-routes, and cycles fault the
-voice. The complete graph becomes active at `start_note()` and follows the
+voice. The complete graph becomes active at `start_note(frequency)` and follows the
 note's normal discard, replacement, end, fault, and panic lifecycle.
 
 ```berry
@@ -186,7 +184,7 @@ def on_note_on(key, velocity)
     var carrier = osc(1, pitch_for_key(key))
     modulate(modulator, carrier, FREQUENCY, 250) # +/-250 Hz
     route(carrier, OUTPUT, 0.5)
-    start_note()
+    start_note(pitch_for_key(key))
 end
 ```
 
@@ -266,3 +264,8 @@ invalidates the shared VM.
 
 Production examples are in
 [`channel.be`](../voice_bd/channel.be).
+
+Firmware queues key/velocity without a default pitch. `start_note(frequency)`
+uses script-supplied Hz; `start_note()` looks up the pending key at activation.
+`INPUT_PENDING_FREQUENCY` is zero before activation. Store explicit pitch in
+named state if activation is deferred to `on_ramp_end()`.

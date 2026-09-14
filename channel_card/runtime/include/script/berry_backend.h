@@ -21,7 +21,6 @@ typedef struct {
   int (*read_input)(void *, uint8_t, FwVmChannelInput, float *);
   int (*set_amplitude)(void *, uint8_t, float);
   int (*ramp)(void *, uint8_t, float, float);
-  int (*start_note)(void *, uint8_t);
   int (*note_end)(void *, uint8_t);
   void (*silence_voice)(void *, uint8_t, FwVmFault);
   int (*set_led)(void *, uint8_t, float, float, float, float);

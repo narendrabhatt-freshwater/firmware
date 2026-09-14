@@ -49,9 +49,10 @@ firmware-side oscillator descriptor.
 `route(source, OUTPUT, weight)` and `modulate(source, target, control, amount)`
 record native pending-note edges;
 Berry does not execute during per-sample graph rendering.
-`start_note()` commits the default pending pitch, while
-`start_note(frequency)` atomically overrides it with a positive Hz value and
-commits the note. Direct frequency selection does not depend on the lookup.
+`start_note(frequency)` uses a positive finite Hz value chosen by the script
+and commits the pending note atomically. With no argument, `start_note()` looks
+up standard pitch for the pending key at activation. No pitch is selected on
+receipt of the note command. `pitch_for_key(key)` is also available explicitly.
 The linker retains the existing 16 KiB native stack reserve.
 
 All sanctioned envelope and two-, eight-, and ten-oscillator paths measured at most 53 Berry

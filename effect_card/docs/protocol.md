@@ -350,8 +350,8 @@ pending generation; matching SOF data fills it, and Berry receives
 `on_note_on` only after a complete BODY frame exists. Berry then decides when
 to call `start_note()`, which atomically promotes pending. No native crash
 duration or release reservation exists.
-`start_note(frequency)` may atomically replace the pending playback pitch while
-promoting it; zero-argument `start_note()` keeps the default. `pitch_for_key(key)`
+`start_note(frequency)` applies the supplied pitch while promoting the note;
+zero-argument `start_note()` looks up the pending key at activation. `pitch_for_key(key)`
 returns standard MIDI pitch (A4 = 440 Hz) when a script wants a reference;
 direct Hz selection may ignore it.
 Superseded or late same-wave sessions are stale. Untagged `nX` is available

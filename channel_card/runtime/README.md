@@ -39,21 +39,25 @@ constants are `INPUT_NOTE_ID`, `INPUT_FREQUENCY`, `INPUT_GAIN`, `INPUT_GATE`,
 Scripts implement pitch-dependent envelope policy themselves with allocation-free
 `pow()` and a two-argument `ramp()`.
 
-`start_note()` atomically promotes a transport-ready pending generation;
+`start_note(frequency)` atomically promotes a transport-ready pending generation;
 `discard_pending()` lets `on_note_on()` reject it without touching the current
 voice, and `note_end()` ends the current voice. Note-off automatically discards
 any waiting replacement. Crash/retrigger timing belongs entirely to the script.
 
-Every pending note initially uses standard MIDI pitch with A4 = 440 Hz.
-`pitch_for_key(key)` exposes that frequency as an optional reference.
-`start_note()` uses the default, while `start_note(frequency)`
-atomically overrides it with any positive frequency in Hz and promotes the
-pending note without requiring the lookup.
+The firmware queues key and velocity without calculating a default pitch.
+`start_note(frequency)` uses the positive finite Hz value supplied by the script.
+`start_note()` looks up the pending key's standard MIDI frequency (A4 = 440 Hz)
+only when the script activates it. Both paths switch pitch atomically with the
+replacement; neither changes the still-audible old voice's pitch.
+`pitch_for_key(key)` remains available to scripts for explicit tuning choices.
+Before activation, `INPUT_PENDING_FREQUENCY` is zero because no frequency has
+been selected yet. Store an explicit pitch in script state across fade callbacks.
+Existing zero-argument programs remain supported; the container format is unchanged.
 
 `osc(wave, frequency_hz)` appends a pending-note oscillator and returns a
 positive opaque handle that scripts may assign or ignore. Logical wave IDs
 `0..7` map to reserved attack-bank IDs `248..255`. Frequency must be finite,
-positive, and no greater than 24 kHz. Declarations must precede `start_note()`;
+positive, and no greater than 24 kHz. Declarations must precede `start_note(frequency)`;
 handles remain valid through promotion and provide future modulation identity.
 Berry and firmware expose no predefined oscillator count. Each call allocates
 one firmware-side descriptor dynamically, independently of wavetable size, and

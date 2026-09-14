@@ -31,7 +31,7 @@ extern "C"
    * this request has been consumed. */
   void NoteBank_AllNotesOff(void);
 
-  /** Raw MIDI-key/velocity note-on. Script may override standard MIDI pitch. */
+  /** Raw MIDI-key/velocity note-on. Script selects playback pitch when it starts the pending note. */
   int NoteBank_NoteOn(uint8_t note, uint8_t key, uint8_t velocity);
 
   /** Streamed note-on variant. The session is bound to nX before its ACK so
