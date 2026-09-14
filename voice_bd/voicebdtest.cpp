@@ -233,7 +233,7 @@ try
                     keys.fill(-1);
                     next = 0;
                     std::cout << "Compiling series2.be..." << std::endl;
-#if defined(__linux__)
+#if defined(__linux__) && defined(__aarch64__)
                     char const* command = "./berry.linux-arm64 series2.be -o series2.bec";
 #else
                     char const* command = "./berry series2.be -o series2.bec";

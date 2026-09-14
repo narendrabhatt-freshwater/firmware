@@ -19,7 +19,9 @@ fi
 platform=$(uname -s)
 compiler=./berry
 if [ "$platform" = Linux ]; then
-    compiler=./berry.linux-arm64
+    case "$(uname -m)" in
+        aarch64|arm64) compiler=./berry.linux-arm64 ;;
+    esac
 fi
 
 for name in attack level decay; do

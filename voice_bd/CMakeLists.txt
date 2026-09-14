@@ -6,19 +6,28 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 find_package(PkgConfig REQUIRED)
+find_package(Threads REQUIRED)
 pkg_check_modules(AUDIO REQUIRED IMPORTED_TARGET rtaudio>=5.2)
 pkg_check_modules(SERIAL REQUIRED IMPORTED_TARGET libserialport)
+pkg_check_modules(MIDI REQUIRED IMPORTED_TARGET rtmidi)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    pkg_check_modules(ALSA REQUIRED IMPORTED_TARGET alsa)
+endif()
 
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(RTMIDI_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-set(RTMIDI_API_JACK OFF CACHE BOOL "" FORCE)
-add_subdirectory(../cmi_core/third_party/rtmidi rtmidi EXCLUDE_FROM_ALL)
-add_subdirectory(../cmi_core/runtime runtime EXCLUDE_FROM_ALL)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+    set(BERRY_EXECUTABLE "${CMAKE_CURRENT_SOURCE_DIR}/berry.linux-arm64")
+else()
+    set(BERRY_EXECUTABLE "${CMAKE_CURRENT_SOURCE_DIR}/berry")
+endif()
+if(NOT EXISTS "${BERRY_EXECUTABLE}" OR IS_DIRECTORY "${BERRY_EXECUTABLE}")
+    message(FATAL_ERROR "Place an executable Berry compiler for this machine at ${BERRY_EXECUTABLE}.")
+endif()
 
-set(CHANNEL_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../cmi_core/examples/vm/channel/channel.be")
+set(CHANNEL_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/channel.be")
 add_custom_command(OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/channel.bec"
-    COMMAND berry "${CHANNEL_SOURCE}" -o "${CMAKE_CURRENT_SOURCE_DIR}/channel.bec"
-    DEPENDS berry "${CHANNEL_SOURCE}")
+    COMMAND "${BERRY_EXECUTABLE}" "${CHANNEL_SOURCE}" -o "${CMAKE_CURRENT_SOURCE_DIR}/channel.bec"
+    DEPENDS "${BERRY_EXECUTABLE}" "${CHANNEL_SOURCE}"
+    VERBATIM)
 add_custom_target(voicebd_program DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/channel.bec")
 
 add_executable(voicebd voicebdtest.cpp voicebd.cpp)
@@ -26,5 +35,9 @@ target_compile_features(voicebd PRIVATE cxx_std_17)
 target_compile_options(voicebd PRIVATE -Wall -Wextra)
 set_target_properties(voicebd PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(voicebd PRIVATE PkgConfig::AUDIO PkgConfig::SERIAL rtmidi)
+target_link_libraries(voicebd PRIVATE
+    PkgConfig::AUDIO PkgConfig::SERIAL PkgConfig::MIDI Threads::Threads)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(voicebd PRIVATE PkgConfig::ALSA)
+endif()
 add_dependencies(voicebd voicebd_program)

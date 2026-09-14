@@ -36,7 +36,8 @@
 #include <sys/ioctl.h>
 #endif
 #if defined(__linux__)
-#include <fstream>
+#include <alsa/asoundlib.h>
+#include <cstdlib>
 #endif
 #include <algorithm>
 #include <array>
@@ -46,6 +47,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -105,6 +107,102 @@ voice_board_result_t fail(voice_board_error_t code, std::string message)
     return {code, std::move(message)};
 }
 
+#if defined(__linux__)
+
+/* ---- add an ALSA/RtAudio name if it is useful and not already present ---- */
+
+void add_audio_name(std::vector<std::string>& names, std::string name)
+{
+    if (name.empty() || std::find(names.begin(), names.end(), name) != names.end())
+        return;
+    names.push_back(std::move(name));
+}
+
+/* ---- resolve a USB VID:PID to its current ALSA device names ------------- */
+
+voice_board_result_t resolve_usb_audio_device(std::string const& usb_id,
+    std::vector<std::string>& rtaudio_names)
+{
+    int matched_card = -1;
+    for (int card = 0; card < 32; ++card) {
+        std::ifstream input(
+            "/proc/asound/card" + std::to_string(card) + "/usbid");
+        if (!input)
+            continue;
+        std::string id;
+        input >> id;
+        if (id != usb_id)
+            continue;
+        if (matched_card >= 0) {
+            return fail(
+                voice_board_error_t::device_ambiguous,
+                "multiple ALSA devices found with USB ID " + usb_id);
+        }
+        matched_card = card;
+    }
+    if (matched_card < 0) {
+        return fail(
+            voice_board_error_t::device_not_found,
+            "USB audio device not found: " + usb_id);
+    }
+    char control_name[32];
+    std::snprintf(control_name, sizeof(control_name), "hw:%d", matched_card);
+    snd_ctl_t* control = nullptr;
+    if (snd_ctl_open(&control, control_name, 0) < 0) {
+        return fail(
+            voice_board_error_t::audio_error,
+            "cannot open ALSA card for USB device " + usb_id);
+    }
+
+    snd_ctl_card_info_t* card_info = nullptr;
+    snd_ctl_card_info_alloca(&card_info);
+    if (snd_ctl_card_info(control, card_info) < 0) {
+        snd_ctl_close(control);
+        return fail(
+            voice_board_error_t::audio_error,
+            "cannot get ALSA card information for USB device " + usb_id);
+    }
+
+    /* RtAudio 5 reports the hw name, while RtAudio 6 reports a pretty
+     * "card (pcm)" name.  Record both forms.  In particular, the ALSA card
+     * display name is not necessarily the value returned by
+     * snd_card_get_name(), which was the reason VID:PID resolution could
+     * succeed while the following RtAudio name comparison failed. */
+    int device = -1;
+    while (snd_ctl_pcm_next_device(control, &device) >= 0 && device >= 0) {
+        snd_pcm_info_t* pcm_info = nullptr;
+        snd_pcm_info_alloca(&pcm_info);
+        snd_pcm_info_set_device(pcm_info, static_cast<unsigned>(device));
+        snd_pcm_info_set_subdevice(pcm_info, 0u);
+        snd_pcm_info_set_stream(pcm_info, SND_PCM_STREAM_PLAYBACK);
+        if (snd_ctl_pcm_info(control, pcm_info) < 0) continue;
+
+        std::string const suffix = "," + std::to_string(device);
+        add_audio_name(rtaudio_names, "hw:" +
+            std::string(snd_ctl_card_info_get_id(card_info)) + suffix);
+        add_audio_name(rtaudio_names, "hw:" +
+            std::string(snd_ctl_card_info_get_name(card_info)) + suffix);
+        add_audio_name(rtaudio_names,
+            std::string(snd_ctl_card_info_get_name(card_info)) + " (" +
+            snd_pcm_info_get_id(pcm_info) + ")");
+    }
+    snd_ctl_close(control);
+
+    char* card_name = nullptr;
+    if (snd_card_get_name(matched_card, &card_name) >= 0 && card_name) {
+        add_audio_name(rtaudio_names, "hw:" + std::string(card_name) + ",0");
+        std::free(card_name);
+    }
+    if (rtaudio_names.empty()) {
+        return fail(
+            voice_board_error_t::audio_error,
+            "no playback PCM found on ALSA card for USB device " + usb_id);
+    }
+    return ok();
+}
+
+#endif
+
 /* ---- match an audio stream device name ----------------------------------- */
 
 bool stream_name_matches(std::string const& device_name,
@@ -116,6 +214,17 @@ bool stream_name_matches(std::string const& device_name,
     return device_name.compare(name_start, requested_name.size(),
         requested_name) == 0 &&
         device_name[name_start - 1u] == ' ';
+}
+
+/* ---- match any resolved audio stream device name ------------------------ */
+
+bool stream_name_matches(std::string const& device_name,
+    std::vector<std::string> const& requested_names)
+{
+    return std::any_of(requested_names.begin(), requested_names.end(),
+        [&](std::string const& requested_name) {
+            return stream_name_matches(device_name, requested_name);
+        });
 }
 
 /* ---- read a little-endian 16 bit value ----------------------------------- */
@@ -247,7 +356,7 @@ public:
 				close();
 				return false;
 			}
-			out << "1/n";
+			out << "1\n";
 		}
 		{
 			std::ifstream in(latency_path);
@@ -977,6 +1086,18 @@ struct device_context
         unsigned selected = 0u;
         bool found = false;
         std::string available_devices;
+#if defined(__linux__)
+        std::vector<std::string> stream_names;
+        std::cerr << "Channel Card audio: resolving USB ID \""
+                  << config.stream_usb_port << "\"\n";
+        auto const resolved = resolve_usb_audio_device(
+            config.stream_usb_port, stream_names);
+        if (!resolved)
+            return resolved;
+        for (auto const& name : stream_names)
+            std::cerr << "Channel Card audio: acceptable RtAudio name \""
+                      << name << "\"\n";
+#endif
 #if defined(RTAUDIO_VERSION_MAJOR) && RTAUDIO_VERSION_MAJOR >= 6
         auto const device_ids = audio.getDeviceIds();
 #else
@@ -984,16 +1105,29 @@ struct device_context
         for (unsigned id = 0; id < device_ids.size(); ++id) device_ids[id] = id;
 #endif
         for (unsigned id : device_ids) {
+            std::cerr << "Channel Card audio: probing RtAudio device "
+                      << id << "\n";
             RtAudio::DeviceInfo const info = audio.getDeviceInfo(id);
 #if !defined(RTAUDIO_VERSION_MAJOR) || RTAUDIO_VERSION_MAJOR < 6
             if (!info.probed) continue;
 #endif
+                std::cerr   << "RtAudio device " << id
+                            << ": \"" << info.name << "\""
+                            << " outputs=" << info.outputChannels
+                            << " inputs=" << info.inputChannels
+                            << "\n";
+
             if (info.outputChannels < kUsbAudioChannelCount) continue;
             if (!available_devices.empty()) available_devices += ", ";
             available_devices += info.name;
-            bool const matches =
-                stream_name_matches(info.name, config.stream_usb_port);
+#if defined(__linux__)
+            bool const matches = stream_name_matches(info.name, stream_names);
+#else
+            bool const matches = stream_name_matches(info.name, config.stream_usb_port);
+#endif
             if (matches) {
+                std::cerr << "Channel Card audio: matched RtAudio device "
+                          << id << " (\"" << info.name << "\")\n";
                 if (found)
                     return fail(voice_board_error_t::device_ambiguous,
                     "multiple stream devices named " +
@@ -1013,6 +1147,9 @@ struct device_context
         output.nChannels = kUsbAudioChannelCount;
         output.firstChannel = 0u;
         unsigned frames = kUsbAudioFramesPerMillisecond;
+        std::cerr << "Channel Card audio: opening RtAudio device " << selected
+                  << " with " << kUsbAudioChannelCount << " channels, "
+                  << frames << " frames\n";
 #if defined(RTAUDIO_VERSION_MAJOR) && RTAUDIO_VERSION_MAJOR >= 6
         RtAudioErrorType const opened =
 #endif
@@ -1025,6 +1162,8 @@ struct device_context
                     static_cast<int8_t*>(out), count * kUsbAudioChannelCount);
                     return 0;
                 }, this);
+        std::cerr << "Channel Card audio: openStream returned; frames="
+                  << frames << "\n";
 #if defined(RTAUDIO_VERSION_MAJOR) && RTAUDIO_VERSION_MAJOR >= 6
         if (opened != RTAUDIO_NO_ERROR)
             return fail(voice_board_error_t::audio_error, audio.getErrorText());
@@ -1034,8 +1173,10 @@ struct device_context
             audio.closeStream();
             return fail(voice_board_error_t::audio_error, error);
         }
+        std::cerr << "Channel Card audio: startStream returned successfully\n";
 #else
         audio.startStream();
+        std::cerr << "Channel Card audio: startStream returned successfully\n";
 #endif
         return ok();
     }
@@ -1368,7 +1509,7 @@ voice_board_result_t note_off(device_context* state, uint8_t voice)
     return result;
 }
 
-/* ---- hard-stop all channel voices and reset Berry state ------------------ */
+/* ---- release all channel voices ------------------------------------------ */
 
 voice_board_result_t all_notes_off(device_context* state)
 {

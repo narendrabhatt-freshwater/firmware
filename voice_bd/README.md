@@ -1,5 +1,19 @@
 # voicebd
 
+This folder builds independently; no sibling repository folders are required.
+Install the development packages on Debian/Ubuntu:
+
+```sh
+sudo apt install build-essential cmake pkg-config librtaudio-dev librtmidi-dev libserialport-dev libasound2-dev
+```
+
+On macOS, install `cmake`, `pkg-config`, `rtaudio`, `rtmidi`, and `libserialport`
+with Homebrew. This folder includes `berry` for macOS ARM64 and
+`berry.linux-arm64` for Linux ARM64 (including Rockchip). The build, R key,
+and `series2patch.sh` automatically select the Linux ARM64 binary on that
+platform and `berry` otherwise. Other platforms need a compatible Freshwater
+Berry compiler placed here as `berry`. Keep the binaries executable.
+
 ```sh
 cd voice_bd
 make
@@ -11,16 +25,11 @@ An optional second argument selects the firmware program:
 read from the current working directory.
 
 `make` produces `voicebd` and `channel.bec` in this folder. Intermediate
-build files go in `.build`.
+build files go in `.build`. When copying the folder to another machine, omit
+`.build` and the generated `voicebd` and `channel.bec` files so they are rebuilt.
 
-To use the standalone compiler in `175-mainframe/mas`, configure from this folder:
-
-```sh
-cmake -S . -B .build -DBERRY_EXECUTABLE="$PWD/../../175-mainframe/mas/berry"
-make
-```
-
-The build runs `berry channel.be -o channel.bec`. The compiled program includes
+The build runs the selected local Berry compiler with `channel.be -o channel.bec` using the included
+`channel.be`. The compiled program includes
 the firmware header and checksum required by the uploader. External compilers
 must emit this same format.
 
