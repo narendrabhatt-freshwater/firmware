@@ -57,6 +57,10 @@ struct voice_board_result_t {
     explicit operator bool() const { return ok(); }
 };
 
+/* USB-only diagnostic; opens its own connection. Close normal playback first.
+ * Reports verified payload throughput and host round-trip timing, not DAC latency. */
+voice_board_result_t voice_board_usb_benchmark(std::string const& port, unsigned seconds = 5);
+
 /* Reserved for per-channel controls. These values are not sent yet. */
 struct controls_t {
     uint8_t pb = 64;               /* Pitch bend, centred at 64. */
@@ -73,12 +77,8 @@ struct voice_board_config_t
     /* USB-to-RS485 device, for example /dev/cu.usbserial-XXXX. */
     // std::string rs485_port = "/dev/cu.usbserial-BG03CSYB";
     std::string rs485_port = RS485_DEV; // "/dev/cu.usbserial-B0047GLI";
-    /* USB port used to load the BEC and sample ATTACK data. */
-    // std::string upload_usb_port = "/dev/cu.usbmodem134203";
-    // std::string upload_usb_port = "/dev/cu.usbmodem3143103";
-    std::string upload_usb_port = CHANNEL1_DEV; // "/dev/cu.usbmodem113103";
-    /* RtAudio device used for the USB BODY stream. */
-    std::string stream_usb_port = CHANNEL1_NAME; // "Channel Card BODY";
+    /* One binary CDC port for BEC/ATTACK uploads and all eight BODY voices. */
+    std::string usb_port = CHANNEL1_DEV;
     /* RS485 baud rate. */
     uint32_t rs485_baud = 921600;
     /* Output attenuation in dB: 0 is loudest. */
@@ -98,7 +98,7 @@ public:
     voice_board_t& operator=(voice_board_t&&) noexcept;
     voice_board_t(voice_board_t const&) = delete;
     voice_board_t& operator=(voice_board_t const&) = delete;
-    /* Open the ports (including the reusable USB upload connection) and load the BEC. */
+    /* Open the ports (including the shared USB data connection) and load the BEC. */
     voice_board_result_t open(voice_board_config_t const& config);
     /* Silence the card and close the ports. */
     voice_board_result_t close();

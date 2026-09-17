@@ -9,7 +9,8 @@ project's own `README.md`; the host↔card wire contract lives in
 | Channel Card | `channel_card/` | STM32H725xG | `channel_MCU` | `channel_MCU.ioc` |
 | Effect Card  | `effect_card/`  | STM32H743xx | `effect_card` | `effect_card.ioc` |
 
-Channel Card includes its HAL, CMSIS, TinyUSB, and Berry runtime dependencies.
+Channel Card includes HAL, CMSIS and Berry; its custom CDC layer uses HAL PCD.
+Effect Card retains TinyUSB.
 Effect Card no longer links the unused VM library. The old host library and
 GUI have been retired.
 Use [`voice_bd`](voice_bd/README.md) for standalone playback or the application
@@ -128,24 +129,23 @@ by a regeneration once, which is why they now live in the top-level file.
 
 ### 4.3 `Middlewares/` belongs to CubeMX — third-party code goes in `ThirdParty/`
 
-CubeMX manages and prunes `Middlewares/`. TinyUSB was deleted from there
-twice by regenerations, so it now lives in **`ThirdParty/`**, which
-CubeMX does not touch. Keep it that way.
+CubeMX manages and prunes `Middlewares/`. Effect Card TinyUSB lives in
+**`ThirdParty/`**, which CubeMX does not touch. Channel Card USB is custom
+application code under `USB_APP/`.
 
 ### 4.4 Do not enable the ST USB Device middleware
 
-USB is owned by **TinyUSB** on both cards. In CubeMX:
+USB is owned by the custom CDC layer on Channel Card and TinyUSB on Effect Card.
+In CubeMX:
 
 - Connectivity → **USB_OTG_xS: Device_Only**
 - NVIC → **OTG global interrupt: enabled**
 - Middleware → **USB_DEVICE class: Disable**
 
-Enabling ST's USB Device class pulls in a second stack that fights
-TinyUSB for the same peripheral. The generated
-`MX_USB_OTG_xS_PCD_Init()` is harmless and expected — TinyUSB re-owns
-the core registers in `USB_App_Init()`, and `HAL_PCD_Start()` is never
-called. The USB interrupt is routed to `tud_int_handler()` from a USER
-CODE block in `stm32h7xx_it.c`.
+Do not enable a second USB middleware stack. Channel Card uses the generated
+`MX_USB_OTG_HS_PCD_Init()`, custom CDC setup in `USB_App_Init()`, and
+`HAL_PCD_IRQHandler()` directly. Effect Card continues using TinyUSB and its
+`tud_int_handler()` IRQ routing. Keep hand-written code in USER CODE sections.
 
 ### 4.5 Post-regeneration checklist
 
@@ -154,7 +154,7 @@ CODE blocks, but check anyway):
 
 - [ ] `USB_App_Init()` called in `main()`
 - [ ] `USB_App_Task()` called in the main `while(1)` loop
-- [ ] `tud_int_handler(0)` in the OTG IRQ handler in `stm32h7xx_it.c`
+- [ ] HAL PCD IRQ handler on Channel; `tud_int_handler(0)` on Effect
 - [ ] Hand-written sources still listed in the **top-level** `CMakeLists.txt`
 - [ ] Project builds and the board still enumerates over USB
 
@@ -185,21 +185,15 @@ mainframe synchronization.
 └── build/Debug/              ← build output (.elf/.hex/.bin)
 ```
 
-**TinyUSB versions differ per card** (deliberately):
-
-- Effect Card → `ThirdParty/tinyusb-0.18`
-- Channel Card → `ThirdParty/tinyusb` (0.17)
-
-The Effect Card was upgraded for dwc2 isochronous-IN fixes. Do not
-unify the versions without re-testing audio on both cards. Both vendor
-trees are pruned to `src/` + license; a 0.17 rollback for the Effect
-Card is recoverable from version-control history.
+Effect Card retains TinyUSB 0.18 for its isochronous microphone fixes.
+Channel Card has no TinyUSB dependency or audio USB interface.
 
 ---
 
 ## 6. Consoles — how to talk to the boards
 
-Both cards run line-based consoles over RS485 and USB CDC. The complete live
+Both cards run line-based RS485 consoles. Effect Card also has a USB CDC
+console; Channel Card USB is binary-only for BODY and uploads. The complete live
 command references are in the
 [`Channel Card README`](channel_card/README.md#console-command-reference) and
 [`Effect Card README`](effect_card/README.md#console-command-reference).
@@ -228,8 +222,9 @@ See [`docs/protocol.md`](docs/protocol.md) (host↔card protocol) and
 (bus framing).
 Per-voice digital LPF: [`docs/reference/note_filter_butterworth.md`](docs/reference/note_filter_butterworth.md).
 
-**USB CDC** — same Channel Card parser on `/dev/cu.usbmodem*`.
-Effect Card CDC runs its own console (`fw console effect`).
+**USB CDC** — Channel Card binary transport on `/dev/cu.usbmodem*` or
+`/dev/ttyACM*`. Use RS485 for Channel text commands. Effect Card CDC runs
+its own console (`fw console effect`).
 
 **Playback application** — install system dependencies and build from
 [`voice_bd/`](voice_bd/README.md):
@@ -271,19 +266,16 @@ If a device behaves strangely after a firmware change: Device Manager →
 
 ---
 
-## 8. Known-good baseline
+## 8. Transport validation status
 
-Both cards currently build clean (no warnings) and are working on
-hardware:
+Channel Card now uses one binary CDC connection for eight SAMPLE voices and
+uploads. It retains the 48 kHz signed-int8 source format, 4080-sample rings,
+script-controlled playback, DAC/CV output and RS485 control/status. Its custom
+USB device implementation replaces TinyUSB; the host no longer uses RtAudio.
 
-- **Channel Card** — 8 SAMPLE voices: 10-channel, 48 kHz signed-int8 UAC2
-  carries packed BODY data (1004 B per tagged packet) into per-voice sustain
-  rings; attack heads
-  uploaded over CDC; CS4304 DAC out; DC control voltages on CH2–CH4 (0 V
-  at boot); RS485 + USB CDC consoles.
-- **Effect Card** — 8-channel capture from two TLV320ADC6140 ADCs over
-  TDM/SAI, one selectable channel streamed to the PC (UAC2 microphone,
-  mono 32-bit 96 kHz), 48 V phantom rail control, RS485 + USB CDC
-  consoles.
-- **`voice_bd`** — standalone MIDI, sample upload, and USB BODY streaming
-  application. See [`voice_bd/README.md`](voice_bd/README.md).
+Debug/Release builds and native protocol/scheduler tests are available. Physical
+USB enumeration, throughput and playback latency require qualification on the
+board; see [the validation procedure](channel_card/docs/cdc_validation.md).
+
+Effect Card remains the existing mono 32-bit 96 kHz UAC2 microphone with CDC
+console, eight ADC inputs and 48 V rail control.

@@ -24,19 +24,26 @@
 #include "voicebd.h"
 
 /*
- * RS485 carries note and status commands. CDC is used for BEC and ATTACK
- * uploads. The sample BODY is streamed over USB audio.
+ * RS485 carries note and status commands. One binary CDC connection carries
+ * chunked BEC/ATTACK uploads and credit-controlled BODY samples.
  */
 
-#include <RtAudio.h>
+#include <poll.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <cerrno>
 #include <libserialport.h>
 #if defined(__APPLE__)
 // To change macOS serial latency from the default 16 ms to 1 ms.
 #include <IOKit/serial/ioss.h>
 #include <sys/ioctl.h>
+#include <pthread.h>
+#include <pthread/qos.h>
+#include <mach/mach.h>
+#include <mach/mach_time.h>
+#include <mach/thread_policy.h>
 #endif
 #if defined(__linux__)
-#include <alsa/asoundlib.h>
 #include <cstdlib>
 #endif
 #include <algorithm>
@@ -61,7 +68,28 @@
 #include <iostream>
 
 namespace voice_board_detail {
-namespace {
+
+/* Match the scheduling needs of an audio callback without an audio library.
+ * Workers block on I/O/timers at idle; the time constraint reserves up to
+ * 250 us of CPU per 1 ms period and remains preemptible. OS scheduling is
+ * best effort, so sustained playback still needs qualification on each host. */
+static void prioritize_stream_thread()
+{
+#if defined(__APPLE__)
+    (void)pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    mach_timebase_info_data_t timebase{};
+    if (mach_timebase_info(&timebase)!=KERN_SUCCESS || !timebase.numer) return;
+    thread_time_constraint_policy_data_t policy{};
+    policy.period=static_cast<uint32_t>(1000000ull*timebase.denom/timebase.numer);
+    policy.computation=policy.period/4u;
+    policy.constraint=policy.period;
+    policy.preemptible=TRUE;
+    mach_port_t thread=mach_thread_self();
+    (void)thread_policy_set(thread, THREAD_TIME_CONSTRAINT_POLICY,
+        reinterpret_cast<thread_policy_t>(&policy), THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+    (void)mach_port_deallocate(mach_task_self(),thread);
+#endif
+}
 
 /* Channel Card wire-format constants. */
 
@@ -70,21 +98,16 @@ constexpr unsigned kSampleSlotCount = 248u;
 constexpr unsigned kSampleRate = 48000u;
 constexpr unsigned kAttackSampleCount = 512u;
 constexpr unsigned kCrossfadeSampleCount = 32u;
-constexpr unsigned kUsbAudioChannelCount = 21u;
-constexpr unsigned kUsbAudioFramesPerMillisecond = 48u;
-constexpr unsigned kUsbPacketByteCount =
-    kUsbAudioChannelCount * kUsbAudioFramesPerMillisecond;
-constexpr unsigned kUsbPacketHeaderByteCount = 10u;
-constexpr unsigned kUsbPacketBodySampleCount =
-    kUsbPacketByteCount - kUsbPacketHeaderByteCount;
-constexpr uint8_t kUsbPacketTag = 0xA0u;
-constexpr uint8_t kUsbStartOfVoiceFlag = 0x08u;
-constexpr uint8_t kUsbIdlePacketTag = 0xFFu;
+constexpr unsigned kUsbHeaderBytes=8u;
+constexpr unsigned kUsbPayloadMax=1024u;
+constexpr unsigned kPrimeSamples=998u;
+enum : uint8_t { kHello=1, kBody, kUploadBegin, kUploadData, kUploadAbort, kReply, kProbe };
 constexpr uint8_t kSessionIdWrap = 255u;
 constexpr size_t kBecHeaderBytes = 20u;
 constexpr size_t kBecMaxPayload = 16384u;
 /* Enough history to cover packets sent between status replies. */
-constexpr size_t kPendingPacketCapacity = 256u;
+constexpr size_t kPendingPacketCapacity = 64u;
+constexpr unsigned kPendingWireBytes = 8u * (kUsbHeaderBytes + kUsbPayloadMax);
 constexpr std::array<uint8_t, 4> kBecMagic{{0x46u, 0x57u, 0x53u, 0x43u}};
 
 /*******************************************************************************
@@ -107,126 +130,6 @@ voice_board_result_t fail(voice_board_error_t code, std::string message)
     return {code, std::move(message)};
 }
 
-#if defined(__linux__)
-
-/* ---- add an ALSA/RtAudio name if it is useful and not already present ---- */
-
-void add_audio_name(std::vector<std::string>& names, std::string name)
-{
-    if (name.empty() || std::find(names.begin(), names.end(), name) != names.end())
-        return;
-    names.push_back(std::move(name));
-}
-
-/* ---- resolve a USB VID:PID to its current ALSA device names ------------- */
-
-voice_board_result_t resolve_usb_audio_device(std::string const& usb_id,
-    std::vector<std::string>& rtaudio_names)
-{
-    int matched_card = -1;
-    for (int card = 0; card < 32; ++card) {
-        std::ifstream input(
-            "/proc/asound/card" + std::to_string(card) + "/usbid");
-        if (!input)
-            continue;
-        std::string id;
-        input >> id;
-        if (id != usb_id)
-            continue;
-        if (matched_card >= 0) {
-            return fail(
-                voice_board_error_t::device_ambiguous,
-                "multiple ALSA devices found with USB ID " + usb_id);
-        }
-        matched_card = card;
-    }
-    if (matched_card < 0) {
-        return fail(
-            voice_board_error_t::device_not_found,
-            "USB audio device not found: " + usb_id);
-    }
-    char control_name[32];
-    std::snprintf(control_name, sizeof(control_name), "hw:%d", matched_card);
-    snd_ctl_t* control = nullptr;
-    if (snd_ctl_open(&control, control_name, 0) < 0) {
-        return fail(
-            voice_board_error_t::audio_error,
-            "cannot open ALSA card for USB device " + usb_id);
-    }
-
-    snd_ctl_card_info_t* card_info = nullptr;
-    snd_ctl_card_info_alloca(&card_info);
-    if (snd_ctl_card_info(control, card_info) < 0) {
-        snd_ctl_close(control);
-        return fail(
-            voice_board_error_t::audio_error,
-            "cannot get ALSA card information for USB device " + usb_id);
-    }
-
-    /* RtAudio 5 reports the hw name, while RtAudio 6 reports a pretty
-     * "card (pcm)" name.  Record both forms.  In particular, the ALSA card
-     * display name is not necessarily the value returned by
-     * snd_card_get_name(), which was the reason VID:PID resolution could
-     * succeed while the following RtAudio name comparison failed. */
-    int device = -1;
-    while (snd_ctl_pcm_next_device(control, &device) >= 0 && device >= 0) {
-        snd_pcm_info_t* pcm_info = nullptr;
-        snd_pcm_info_alloca(&pcm_info);
-        snd_pcm_info_set_device(pcm_info, static_cast<unsigned>(device));
-        snd_pcm_info_set_subdevice(pcm_info, 0u);
-        snd_pcm_info_set_stream(pcm_info, SND_PCM_STREAM_PLAYBACK);
-        if (snd_ctl_pcm_info(control, pcm_info) < 0) continue;
-
-        std::string const suffix = "," + std::to_string(device);
-        add_audio_name(rtaudio_names, "hw:" +
-            std::string(snd_ctl_card_info_get_id(card_info)) + suffix);
-        add_audio_name(rtaudio_names, "hw:" +
-            std::string(snd_ctl_card_info_get_name(card_info)) + suffix);
-        add_audio_name(rtaudio_names,
-            std::string(snd_ctl_card_info_get_name(card_info)) + " (" +
-            snd_pcm_info_get_id(pcm_info) + ")");
-    }
-    snd_ctl_close(control);
-
-    char* card_name = nullptr;
-    if (snd_card_get_name(matched_card, &card_name) >= 0 && card_name) {
-        add_audio_name(rtaudio_names, "hw:" + std::string(card_name) + ",0");
-        std::free(card_name);
-    }
-    if (rtaudio_names.empty()) {
-        return fail(
-            voice_board_error_t::audio_error,
-            "no playback PCM found on ALSA card for USB device " + usb_id);
-    }
-    return ok();
-}
-
-#endif
-
-/* ---- match an audio stream device name ----------------------------------- */
-
-bool stream_name_matches(std::string const& device_name,
-    std::string const& requested_name)
-{
-    if (device_name == requested_name) return true;
-    if (device_name.size() <= requested_name.size()) return false;
-    size_t const name_start = device_name.size() - requested_name.size();
-    return device_name.compare(name_start, requested_name.size(),
-        requested_name) == 0 &&
-        device_name[name_start - 1u] == ' ';
-}
-
-/* ---- match any resolved audio stream device name ------------------------ */
-
-bool stream_name_matches(std::string const& device_name,
-    std::vector<std::string> const& requested_names)
-{
-    return std::any_of(requested_names.begin(), requested_names.end(),
-        [&](std::string const& requested_name) {
-            return stream_name_matches(device_name, requested_name);
-        });
-}
-
 /* ---- read a little-endian 16 bit value ----------------------------------- */
 
 uint16_t read16(uint8_t const* p)
@@ -244,6 +147,9 @@ uint32_t read32(uint8_t const* p)
         (static_cast<uint32_t>(p[2]) << 16u) |
         (static_cast<uint32_t>(p[3]) << 24u);
 }
+
+void write16(uint8_t* p,uint16_t n) { p[0]=static_cast<uint8_t>(n); p[1]=static_cast<uint8_t>(n>>8); }
+void write32(uint8_t* p,uint32_t n) { write16(p,static_cast<uint16_t>(n)); write16(p+2,static_cast<uint16_t>(n>>16)); }
 
 /* ---- calculate the payload crc32 ----------------------------------------- */
 
@@ -293,6 +199,9 @@ private:
     struct sp_port* port_ = nullptr;
     bool opened_ = false;
     enum sp_return result_ = SP_OK;
+#if defined(VOICEBD_TRANSPORT_TEST)
+    int test_fd_=-1;
+#endif
 
 public:
     serial_port() = default;
@@ -369,7 +278,13 @@ public:
 		}
 	}
 #endif
-        if (assert_dtr) (void)sp_set_dtr(port_, SP_DTR_ON);
+        if (assert_dtr) {
+            // Explicitly start a new framed connection, even when the OS leaves DTR set.
+            if (sp_set_dtr(port_,SP_DTR_OFF)!=SP_OK || sp_flush(port_,SP_BUF_BOTH)!=SP_OK ||
+                sp_set_dtr(port_,SP_DTR_ON)!=SP_OK) {
+                error="resetting CDC connection failed"; close(); return false;
+            }
+        }
         (void)sp_flush(port_, SP_BUF_BOTH);
         return true;
     }
@@ -378,6 +293,9 @@ public:
 
     void close()
     {
+#if defined(VOICEBD_TRANSPORT_TEST)
+        if (test_fd_>=0) { ::close(test_fd_); test_fd_=-1; }
+#endif
         if (!port_) return;
         if (opened_) (void)sp_close(port_);
         sp_free_port(port_);
@@ -419,6 +337,33 @@ public:
 
 /* ---- flush serial input -------------------------------------------------- */
 
+#if defined(VOICEBD_TRANSPORT_TEST)
+    void adopt_test_fd(int fd) { test_fd_=fd; (void)fcntl(fd,F_SETFL,O_NONBLOCK); }
+#endif
+    int fd() const {
+#if defined(VOICEBD_TRANSPORT_TEST)
+        if (test_fd_>=0) return test_fd_;
+#endif
+        int handle=-1; if (port_) (void)sp_get_port_handle(port_,&handle); return handle;
+    }
+    int read_nonblocking(void* data,size_t n) {
+#if defined(VOICEBD_TRANSPORT_TEST)
+        if (test_fd_>=0) {
+            int rc=static_cast<int>(::read(test_fd_,data,std::min<size_t>(n,13)));
+            return rc<0 && (errno==EAGAIN || errno==EWOULDBLOCK) ? 0 : rc;
+        }
+#endif
+        return sp_nonblocking_read(port_,data,n);
+    }
+    int write_nonblocking(void const* data,size_t n) {
+#if defined(VOICEBD_TRANSPORT_TEST)
+        if (test_fd_>=0) {
+            int rc=static_cast<int>(::write(test_fd_,data,std::min<size_t>(n,17)));
+            return rc<0 && (errno==EAGAIN || errno==EWOULDBLOCK) ? 0 : rc;
+        }
+#endif
+        return sp_nonblocking_write(port_,data,n);
+    }
     void flush() { if (opened_) (void)sp_flush(port_, SP_BUF_INPUT); }
 /* ---- test whether the serial port is open -------------------------------- */
 
@@ -426,50 +371,108 @@ public:
 
 };
 
+/* Ordered diagnostic barriers measure data reaching firmware, rather than the
+ * host kernel accepting a write. No RS485 or voice state is involved. */
+voice_board_result_t usb_benchmark(serial_port& port, unsigned seconds)
+{
+    using clock = std::chrono::steady_clock;
+    uint16_t id=0;
+    auto exchange = [&](uint8_t type, std::vector<uint8_t> bytes,
+                        std::vector<uint8_t>& reply) -> voice_board_result_t {
+        ++id;
+        size_t header=bytes.size();
+        bytes.resize(header+8+(type==kHello ? 1 : 0),0);
+        bytes[header]=type; write16(bytes.data()+header+6,id);
+        if(type==kHello) { bytes[header+4]=1; bytes[header+8]=1; }
+        size_t sent=0, received=0, need=8;
+        std::array<uint8_t,1032> response{};
+        auto deadline=clock::now()+std::chrono::seconds(3);
+        while(received<need) {
+            auto left=std::chrono::duration_cast<std::chrono::milliseconds>(deadline-clock::now()).count();
+            if(left<=0) return fail(voice_board_error_t::timeout,"USB diagnostic timed out");
+            pollfd fd{port.fd(),static_cast<short>(POLLIN | (sent<bytes.size() ? POLLOUT : 0)),0};
+            int ready=::poll(&fd,1,static_cast<int>(left));
+            if(ready<0 && errno==EINTR) continue;
+            if(ready<0 || (fd.revents&(POLLERR|POLLHUP|POLLNVAL)))
+                return fail(voice_board_error_t::io_error,"USB diagnostic disconnected");
+            if(fd.revents&POLLOUT) {
+                int n=port.write_nonblocking(bytes.data()+sent,bytes.size()-sent);
+                if(n<0) return fail(voice_board_error_t::io_error,"USB diagnostic write failed");
+                sent+=static_cast<size_t>(n);
+            }
+            if(fd.revents&POLLIN) {
+                int n=port.read_nonblocking(response.data()+received,need-received);
+                if(n<0) return fail(voice_board_error_t::io_error,"USB diagnostic read failed");
+                received+=static_cast<size_t>(n);
+                if(received==8 && need==8) {
+                    unsigned size=read16(response.data()+4);
+                    if(response[0]!=kReply || response[1] || response[2] || response[3]!=type ||
+                       read16(response.data()+6)!=id || size==0 || size>kUsbPayloadMax)
+                        return fail(voice_board_error_t::bad_reply,"Invalid USB diagnostic reply");
+                    need=8+size;
+                }
+            }
+        }
+        if(sent!=bytes.size() || response[8])
+            return fail(voice_board_error_t::bad_reply,"Firmware rejected USB diagnostic");
+        reply.assign(response.begin()+8,response.begin()+need);
+        return ok();
+    };
+    std::vector<uint8_t> reply;
+    auto result=exchange(kHello,{},reply);
+    if(!result) return result;
+    if(reply.size()!=12 || reply[1]!=1 || reply[2]!=8 || reply[3]!=1 ||
+       read32(reply.data()+4)!=48000 || read16(reply.data()+8)!=1024 || read16(reply.data()+10)!=998)
+        return fail(voice_board_error_t::bad_reply,"Incompatible USB diagnostic capabilities");
+    uint32_t total_bytes=0,total_blocks=0,hash=2166136261u;
+    auto batch = [&](unsigned count) -> voice_board_result_t {
+        std::vector<uint8_t> data(count*1032,0);
+        for(unsigned b=0;b<count;++b) {
+            uint8_t* frame=data.data()+b*1032;
+            frame[0]=kProbe; write16(frame+4,1024);
+            for(unsigned i=0;i<1024;++i) {
+                frame[8+i]=static_cast<uint8_t>(i+total_blocks);
+                hash=(hash^frame[8+i])*16777619u;
+            }
+            total_bytes+=1024; ++total_blocks;
+        }
+        auto r=exchange(kProbe,std::move(data),reply);
+        if(!r) return r;
+        if(reply.size()!=13 || read32(reply.data()+1)!=total_bytes ||
+           read32(reply.data()+5)!=total_blocks || read32(reply.data()+9)!=hash)
+            return fail(voice_board_error_t::bad_reply,"USB diagnostic byte count/checksum mismatch");
+        return ok();
+    };
+    // Eight blocks reflect the normal outstanding limit. Larger batches expose
+    // raw transport headroom without a USB acknowledgement after every 8 KiB.
+    auto throughput = [&](unsigned count, double& rate) -> voice_board_result_t {
+        auto start=clock::now(); uint32_t before=total_bytes;
+        do { auto r=batch(count); if(!r)return r; }
+        while(clock::now()-start<std::chrono::milliseconds(seconds*500));
+        rate=(total_bytes-before)/std::chrono::duration<double>(clock::now()-start).count()/1000.0;
+        return ok();
+    };
+    double eight_rate=0,bulk_rate=0;
+    result=throughput(8,eight_rate); if(!result)return result;
+    result=throughput(32,bulk_rate); if(!result)return result;
+    auto start=clock::now();
+    std::array<double,64> timing{};
+    for(auto& ms:timing) {
+        start=clock::now(); result=batch(1); if(!result) return result;
+        ms=std::chrono::duration<double,std::milli>(clock::now()-start).count();
+    }
+    std::sort(timing.begin(),timing.end());
+    char report[384];
+    std::snprintf(report,sizeof report,
+        "USB verified payload: %.1f kB/s (8-block batches), %.1f kB/s (32-block batches); "
+        "1024-byte + barrier round trip: "
+        "p50 %.3f ms, p95 %.3f ms, p99/max %.3f ms (64 observations). "
+        "Counts and checksum passed. This does not measure note-to-DAC latency.",
+        eight_rate,bulk_rate,timing[31],timing[60],timing[63]);
+    return ok(report);
+}
+
 /* ---- wait for a serial response ------------------------------------------ */
-
-bool wait_for(serial_port& port, char const* wanted, std::string& received,
-    unsigned timeout_ms)
-{
-    auto const stop_waiting_at = std::chrono::steady_clock::now() +
-        std::chrono::milliseconds(timeout_ms);
-    std::array<uint8_t, 256> bytes{};
-    while (std::chrono::steady_clock::now() < stop_waiting_at) {
-        size_t const count = port.read(bytes.data(), bytes.size(), 20u);
-        received.append(reinterpret_cast<char const*>(bytes.data()), count);
-        if (received.find(wanted) != std::string::npos) return true;
-        if (received.find("err:") != std::string::npos) return false;
-    }
-    return false;
-}
-
-/* ---- send an upload payload ---------------------------------------------- */
-
-voice_board_result_t send_payload(serial_port& port, std::string const& command,
-    uint8_t const* data, size_t size,
-    char const* completion)
-{
-    port.flush();
-    std::string error;
-    std::string const line = "c:" + command + " " + std::to_string(size) + "\r";
-    if (!port.write(line.data(), line.size(), error))
-        return fail(voice_board_error_t::io_error, error);
-    std::string reply;
-    if (!wait_for(port, "ok:ready", reply, 2000u))
-        return fail(voice_board_error_t::bad_reply,
-            reply.empty() ? "card did not become ready for upload" : reply);
-    reply.clear();
-    for (size_t offset = 0; offset < size;) {
-        size_t const count = std::min<size_t>(512u, size - offset);
-        if (!port.write(data + offset, count, error))
-            return fail(voice_board_error_t::io_error, error);
-        offset += count;
-    }
-    if (!wait_for(port, completion, reply, 3000u))
-        return fail(voice_board_error_t::bad_reply,
-            reply.empty() ? "card did not confirm upload" : reply);
-    return ok();
-}
 
 /*******************************************************************************
 
@@ -647,7 +650,7 @@ public:
 
 /*******************************************************************************
 
-                        u s b   a u d i o   s t r e a m
+                        u s b   b o d y   s t r e a m
 
 *******************************************************************************/
 
@@ -664,7 +667,6 @@ struct voice_data
     bool active = false;
     bool waiting_for_first_packet = false;
     unsigned initial_samples_left = 0u;
-    bool filling_initial_buffer = false;
     bool note_seen_in_status = false;
     uint8_t session_id = 0u;
     uint16_t sample_id = 0u;
@@ -673,354 +675,356 @@ struct voice_data
     unsigned available_sample_slots = 0u;
     bool pending = true;
     unsigned refill_samples_5ms = 0u;
-    double refill_balance = 0.0;
-    std::chrono::steady_clock::time_point refill_at{};
+    double refill_balance = 0;
+    std::chrono::steady_clock::time_point refill_at{}, forecast_until{};
     std::chrono::steady_clock::time_point deadline{};
 };
 
-/* A USB packet that the card has not acknowledged yet. */
-struct pending_packet
-{
-    uint16_t sequence = 0u;
-    uint8_t voice = 0u;
-    uint8_t session = 0u;
-    uint16_t samples = 0u;
-    std::chrono::steady_clock::time_point packet_at{};
+/* BODY blocks remain charged until a vq snapshot acknowledges processing them. */
+struct pending_packet {
+    uint16_t sequence;
+    uint8_t voice, session;
+    uint16_t samples;
 };
-
-/* State shared by the RtAudio callback and the status thread. */
-
-struct stream_state
-{
+struct stream_state {
     std::mutex mutex;
     std::array<sample_data, kSampleSlotCount> samples;
     std::array<voice_data, kVoiceCount> voices;
-
-    /* Sent packets stay here until the card reports their sequence numbers. */
     std::array<pending_packet, kPendingPacketCapacity> pending_packets{};
-    size_t first_pending_packet = 0u;
-    size_t pending_packet_count = 0u;
-    uint16_t next_sequence = 0u;
-    bool sequence_ready = false;
-    std::array<int8_t, kUsbPacketByteCount> packet{};
-    size_t packet_offset = kUsbPacketByteCount;
-    uint8_t next_voice = 0u;
-    uint8_t last_status_sequence = 0u;
-    std::chrono::steady_clock::time_point acknowledged_packet_at{};
-    bool status_ready = false;
-    unsigned buffer_capacity = 0u;
-    std::chrono::steady_clock::time_point next_packet_at{};
-
-
-/* ---- apply voice queue status -------------------------------------------- */
+    size_t first_pending_packet=0, pending_packet_count=0;
+    uint16_t next_sequence=0;
+    uint8_t next_voice=0, last_status_sequence=0;
+    bool sequence_ready=false, status_ready=false;
+    unsigned buffer_capacity=0;
+    std::chrono::steady_clock::time_point last_status_at{};
 
     void apply_status(card_status const& status,
-        std::chrono::steady_clock::time_point requested_at)
+        std::chrono::steady_clock::time_point requested_at,
+        std::chrono::steady_clock::time_point received_at=std::chrono::steady_clock::now())
     {
         std::lock_guard<std::mutex> lock(mutex);
-        if (status_ready) {
-            uint8_t const distance = static_cast<uint8_t>(
-                status.status_sequence - last_status_sequence);
-            if (distance == 0u || distance >= 0x80u) return;
+        if (status_ready && requested_at-last_status_at<std::chrono::milliseconds(500)) {
+            uint8_t distance=static_cast<uint8_t>(status.status_sequence-last_status_sequence);
+            if (!distance || distance>=0x80u) return;
         }
-        last_status_sequence = status.status_sequence;
-        status_ready = true;
-        buffer_capacity = status.buffer_capacity;
+        last_status_sequence=static_cast<uint8_t>(status.status_sequence);
+        status_ready=true; last_status_at=requested_at; buffer_capacity=status.buffer_capacity;
         if (!sequence_ready) {
-            next_sequence = static_cast<uint16_t>(
-                status.last_usb_sequence + 1u);
-            sequence_ready = true;
+            next_sequence=static_cast<uint16_t>(status.last_usb_sequence+1u);
+            sequence_ready=true;
         }
-        /* Drop packets already consumed by the card. */
-        while (pending_packet_count != 0u) {
-            auto const& front = pending_packets[first_pending_packet];
-            uint16_t const distance = static_cast<uint16_t>(
-                status.last_usb_sequence - front.sequence);
-            if (distance >= 0x8000u) break;
-            acknowledged_packet_at = front.packet_at;
-            first_pending_packet =
-                (first_pending_packet + 1u) % kPendingPacketCapacity;
+        while (pending_packet_count) {
+            auto const& front=pending_packets[first_pending_packet];
+            if (static_cast<uint16_t>(status.last_usb_sequence-front.sequence)>=0x8000u) break;
+            first_pending_packet=(first_pending_packet+1u)%kPendingPacketCapacity;
             --pending_packet_count;
         }
-        std::array<unsigned, kVoiceCount> samples_in_flight{};
-        for (size_t i = 0; i < pending_packet_count; ++i) {
-            auto const& packet = pending_packets[
-                (first_pending_packet + i) % kPendingPacketCapacity];
-            samples_in_flight[packet.voice] += packet.samples;
+        std::array<unsigned,kVoiceCount> in_flight{};
+        for (size_t i=0;i<pending_packet_count;++i) {
+            auto const& sent=pending_packets[(first_pending_packet+i)%kPendingPacketCapacity];
+            in_flight[sent.voice]+=sent.samples;
         }
-        uint8_t const live_voice_mask = static_cast<uint8_t>(
-            status.active_voice_mask | status.pending_voice_mask);
-        for (uint8_t voice = 0; voice < kVoiceCount; ++voice) {
-            auto& state = voices[voice];
-            unsigned const free_slots =
-                status.free_samples[voice] > samples_in_flight[voice]
-                    ? status.free_samples[voice] - samples_in_flight[voice]
-                    : 0u;
-            if (!state.active) {
-                state.available_sample_slots = free_slots;
+        uint8_t live=static_cast<uint8_t>(status.active_voice_mask|status.pending_voice_mask);
+        for (uint8_t v=0;v<kVoiceCount;++v) {
+            auto& voice=voices[v];
+            voice.available_sample_slots=status.free_samples[v]>in_flight[v]
+                ? status.free_samples[v]-in_flight[v] : 0;
+            voice.refill_balance=static_cast<double>(status.free_samples[v])-in_flight[v];
+            voice.refill_at=received_at;
+            voice.forecast_until=received_at+std::chrono::milliseconds(5);
+            if (!voice.active) continue;
+            if (!(live&(1u<<v)) || status.session_id[v]!=voice.session_id) {
+                voice.available_sample_slots=0; voice.refill_samples_5ms=0;
+                if (voice.note_seen_in_status && !(live&(1u<<v))) voice.active=false;
                 continue;
             }
-            if ((live_voice_mask & static_cast<uint8_t>(1u << voice)) == 0u ||
-                    status.session_id[voice] != state.session_id) {
-                state.available_sample_slots = 0u;
-                state.refill_samples_5ms = 0u;
-                if (state.note_seen_in_status &&
-                    (live_voice_mask & (1u << voice)) == 0u)
-                    state.active = false;
-                continue;
-            }
-            state.note_seen_in_status = true;
-            state.available_sample_slots = free_slots;
-            state.pending = (status.pending_voice_mask & (1u << voice)) != 0u;
-            state.deadline = requested_at +
-                std::chrono::microseconds(status.remaining_us[voice]);
-            state.waiting_for_first_packet = state.pending;
-            state.refill_samples_5ms = !state.pending
-                ? status.refill_samples_5ms[voice] : 0u;
-            /* Map the status snapshot to the acknowledged USB packet. */
-            state.refill_at = acknowledged_packet_at != std::chrono::steady_clock::time_point{}
-                    && status.usb_age_ms != 255u
-                ? acknowledged_packet_at + std::chrono::milliseconds(status.usb_age_ms)
-                : std::max(requested_at, next_packet_at);
-            /* Account for outstanding samples in USB packet order. */
-            state.refill_balance = status.free_samples[voice];
-            for (size_t j = 0; j < pending_packet_count; ++j) {
-                auto const& sent = pending_packets[
-                    (first_pending_packet + j) % kPendingPacketCapacity];
-                if (sent.voice != voice) continue;
-                if (state.refill_samples_5ms && sent.packet_at > state.refill_at) {
-                    double elapsed_ms = std::chrono::duration<double, std::milli>(
-                        sent.packet_at - state.refill_at).count();
-                    state.refill_balance = std::min(double(buffer_capacity),
-                        state.refill_balance + elapsed_ms * state.refill_samples_5ms / 5.0);
-                    state.refill_at = sent.packet_at;
-                }
-                state.refill_balance -= sent.samples;
-            }
-        }
-
-    }
-
-/* ---- update startup priority --------------------------------------------- */
-
-    void update_startup_priority(voice_data& voice)
-    {
-        if (!voice.active || !voice.filling_initial_buffer) return;
-        double const reserve = std::ceil(2.0 * voice.refill_samples_5ms / 5.0);
-        double const target = voice.pending || !voice.note_seen_in_status
-            ? double(buffer_capacity)
-            : std::min(double(buffer_capacity) - reserve,
-                double(std::max(kUsbPacketBodySampleCount, voice.refill_samples_5ms)));
-        double const buffered = voice.pending || !voice.note_seen_in_status
-            ? double(voice.source_position - voice.stream_origin)
-            : voice.refill_samples_5ms
-                ? buffer_capacity - voice.refill_balance
-                : buffer_capacity - voice.available_sample_slots;
-        if (voice.note_seen_in_status && !voice.pending &&
-            std::ceil(buffered) >= target) {
-            voice.filling_initial_buffer = false;
-            voice.initial_samples_left = 0u;
-        } else {
-            voice.initial_samples_left = static_cast<unsigned>(
-                std::max(1.0, std::ceil(target - buffered)));
+            voice.note_seen_in_status=true;
+            voice.pending=(status.pending_voice_mask&(1u<<v))!=0;
+            voice.deadline=requested_at+std::chrono::microseconds(status.remaining_us[v]);
+            voice.refill_samples_5ms=voice.pending ? 0 : status.refill_samples_5ms[v];
         }
     }
 
-/* ---- prepare the next usb audio packet ----------------------------------- */
-
-    void make_packet(std::chrono::steady_clock::time_point now =
-                         std::chrono::steady_clock::now())
-    {
-        std::fill(packet.begin(), packet.end(), 0);
-        packet[2] = packet[6] = static_cast<int8_t>(kUsbIdlePacketTag);
-        packet_offset = 0u;
-        /* Advance the USB packet time. */
-        auto const packet_at = next_packet_at == std::chrono::steady_clock::time_point{}
-            ? now : next_packet_at;
-        next_packet_at = packet_at + std::chrono::milliseconds(1);
-        if (!sequence_ready || pending_packet_count + 2u > kPendingPacketCapacity)
-            return;
-        for (auto& voice : voices) {
-            if (!voice.active || voice.refill_samples_5ms == 0u) continue;
-            double const elapsed_ms = std::chrono::duration<double, std::milli>(
-                packet_at - voice.refill_at).count();
-            if (elapsed_ms > 0.0) {
-                voice.refill_balance = std::min(double(buffer_capacity),
-                    voice.refill_balance + elapsed_ms * voice.refill_samples_5ms / 5.0);
-                voice.refill_at = packet_at;
-            }
-            /* Calculate the refill allowance. */
-            double const reserve = std::ceil(2.0 * voice.refill_samples_5ms / 5.0);
-            double const allowance = voice.refill_balance - reserve;
-            voice.available_sample_slots = allowance > 0.0
-                ? static_cast<unsigned>(allowance) : 0u;
-        }
-        for (auto& voice : voices) update_startup_priority(voice);
-
-        std::array<unsigned, kVoiceCount> queued_samples{};
-        for (size_t i = 0u; i < pending_packet_count; ++i) {
-            auto const& queued = pending_packets[
-                (first_pending_packet + i) % kPendingPacketCapacity];
-            if (queued.session == voices[queued.voice].session_id)
-                queued_samples[queued.voice] += queued.samples;
-        }
-        std::array<uint8_t, kVoiceCount> candidates{};
-        size_t count = 0u;
-        auto urgent = [&](uint8_t v) {
-            return voices[v].initial_samples_left != 0u || voices[v].pending ||
-                voices[v].deadline <= now + std::chrono::milliseconds(10);
-        };
-        for (uint8_t i = 0u; i < kVoiceCount; ++i) {
-            uint8_t v = static_cast<uint8_t>((next_voice + i) % kVoiceCount);
-            if (voices[v].active &&
-                voices[v].available_sample_slots != 0u &&
-                samples[voices[v].sample_id].pcm_size != 0u) candidates[count++] = v;
-        }
-        auto protect = [&](uint8_t v) -> unsigned {
-            auto const& voice = voices[v];
-            if (voice.pending || voice.initial_samples_left) return 0u;
-            if (!voice.refill_samples_5ms)
-                return voice.deadline <= now + std::chrono::milliseconds(2)
-                    ? voice.available_sample_slots : 0u;
-            /* Calculate the playing voice's refill requirement. */
-            double const needed = std::ceil(3.0 * voice.refill_samples_5ms / 5.0) -
-                (buffer_capacity - voice.refill_balance);
-            return needed > 0.0 ? std::min(voice.available_sample_slots,
-                static_cast<unsigned>(std::ceil(needed))) : 0u;
-        };
-        bool const has_startup = std::any_of(
-            candidates.begin(), candidates.begin() + count,
-            [&](uint8_t v) { return voices[v].filling_initial_buffer; });
-        auto first_packet = [&](uint8_t v) {
-            return voices[v].filling_initial_buffer &&
-                voices[v].source_position - voices[v].stream_origin < kUsbPacketBodySampleCount;
-        };
-        auto before = [&](uint8_t a, uint8_t b) {
-            if (first_packet(a) != first_packet(b)) return first_packet(a);
-            if (has_startup && (protect(a) != 0u) != (protect(b) != 0u))
-                return protect(a) != 0u;
-            if ((voices[a].initial_samples_left != 0u) !=
-                (voices[b].initial_samples_left != 0u))
-                return voices[a].initial_samples_left != 0u;
-            if (urgent(a) != urgent(b)) return urgent(a);
-            if (voices[a].refill_samples_5ms && voices[b].refill_samples_5ms) {
-                double const coverage_a = (buffer_capacity - voices[a].refill_balance)
-                    / voices[a].refill_samples_5ms;
-                double const coverage_b = (buffer_capacity - voices[b].refill_balance)
-                    / voices[b].refill_samples_5ms;
-                if (coverage_a != coverage_b) return coverage_a < coverage_b;
-            }
-            if (urgent(a) && queued_samples[a] != queued_samples[b])
-                return queued_samples[a] < queued_samples[b];
-            if (urgent(a) && voices[a].pending != voices[b].pending)
-                return !voices[a].pending;
-            if (voices[a].pending && voices[b].pending) return false;
-            return voices[a].deadline < voices[b].deadline;
-        };
-        /* Eight entries: insertion sort is bounded and never allocates. */
-        for (size_t i = 1u; i < count; ++i) {
-            auto const candidate = candidates[i];
-            size_t j = i;
-            while (j != 0u && before(candidate, candidates[j - 1u])) {
-                candidates[j] = candidates[j - 1u];
-                --j;
-            }
-            candidates[j] = candidate;
-        }
-        if (count == 0u) return;
-        bool const initial = voices[candidates[0]].initial_samples_left != 0u;
-        size_t const blocks = count >= 2u &&
-            (!first_packet(candidates[0]) ||
-             voices[candidates[0]].available_sample_slots < kUsbPacketBodySampleCount) &&
-            ((voices[candidates[0]].filling_initial_buffer || voices[candidates[1]].filling_initial_buffer) ||
-             (urgent(candidates[0]) && urgent(candidates[1]) && (!initial ||
-                voices[candidates[0]].available_sample_slots < kUsbPacketBodySampleCount)))
-            ? 2u : 1u;
-
-        std::array<unsigned, 2> sizes{};
-        unsigned const budget = kUsbPacketBodySampleCount;
-        sizes[0] = std::min(voices[candidates[0]].available_sample_slots,
-                           blocks == 2u && !initial ? budget / 2u : budget);
-        if (blocks == 2u) {
-            auto const& a = voices[candidates[0]];
-            auto const& b = voices[candidates[1]];
-            bool const starting_a = a.initial_samples_left != 0u;
-            bool const starting_b = b.initial_samples_left != 0u;
-            if ((a.filling_initial_buffer || b.filling_initial_buffer) && starting_a != starting_b) {
-                if (starting_a) {
-                    sizes[1] = std::min(protect(candidates[1]), budget);
-                    sizes[0] = std::min(a.available_sample_slots, budget - sizes[1]);
-                    sizes[1] = std::min(b.available_sample_slots, budget - sizes[0]);
-                } else {
-                    sizes[0] = std::min(protect(candidates[0]), budget);
-                    sizes[1] = std::min(b.available_sample_slots, budget - sizes[0]);
-                    sizes[0] = std::min(a.available_sample_slots, budget - sizes[1]);
-                }
-            } else {
-                if (!initial && a.refill_samples_5ms && b.refill_samples_5ms) {
-                    /* Divide the payload using the reported sample demand. */
-                    double const wanted = (a.refill_samples_5ms *
-                        (buffer_capacity - b.refill_balance + budget) -
-                        b.refill_samples_5ms * (buffer_capacity - a.refill_balance)) /
-                        (a.refill_samples_5ms + b.refill_samples_5ms);
-                    sizes[0] = std::min(a.available_sample_slots,
-                        static_cast<unsigned>(std::clamp(wanted, 0.0, double(budget))));
-                }
-                sizes[1] = std::min(voices[candidates[1]].available_sample_slots,
-                                   budget - sizes[0]);
-                sizes[0] = std::min(voices[candidates[0]].available_sample_slots,
-                                   budget - sizes[1]);
-            }
-        }
-
-        packet[0] = static_cast<int8_t>(next_sequence & 0xFFu);
-        packet[1] = static_cast<int8_t>(next_sequence >> 8u);
-        size_t offset = kUsbPacketHeaderByteCount;
-        for (size_t i = 0u; i < blocks; ++i) {
-            uint8_t const chosen = candidates[i];
-            auto& voice = voices[chosen];
-            auto& sample = samples[voice.sample_id];
-            size_t const at = 2u + 4u * i;
-            packet[at] = static_cast<int8_t>(kUsbPacketTag |
-                (voice.waiting_for_first_packet ? kUsbStartOfVoiceFlag : 0u) | chosen);
-            packet[at + 1u] = static_cast<int8_t>(voice.session_id);
-            packet[at + 2u] = static_cast<int8_t>(sizes[i] & 0xFFu);
-            packet[at + 3u] = static_cast<int8_t>(sizes[i] >> 8u);
-            for (unsigned j = 0u; j < sizes[i] &&
-                    voice.source_position < sample.pcm_size; ++j)
-                packet[offset + j] = static_cast<int8_t>(sample.pcm[voice.source_position++] >> 8);
-            offset += sizes[i];
-            pending_packets[(first_pending_packet + pending_packet_count) %
-                kPendingPacketCapacity] = {next_sequence, chosen, voice.session_id,
-                    static_cast<uint16_t>(sizes[i]), packet_at};
-            ++pending_packet_count;
-            voice.available_sample_slots -= sizes[i];
-            if (voice.refill_samples_5ms != 0u) voice.refill_balance -= sizes[i];
-            voice.initial_samples_left -= std::min(voice.initial_samples_left, sizes[i]);
-            update_startup_priority(voice);
-        }
-        next_voice = static_cast<uint8_t>((candidates[blocks - 1u] + 1u) % kVoiceCount);
-        ++next_sequence;
-    }
-
-/* ---- render the usb audio stream ----------------------------------------- */
-
-    void render(int8_t* output, size_t size)
-    {
+    unsigned poll_interval_ms() {
         std::lock_guard<std::mutex> lock(mutex);
-        size_t written = 0u;
-        while (written < size) {
-            if (packet_offset == kUsbPacketByteCount) make_packet();
-            size_t const count = std::min(size - written,
-                kUsbPacketByteCount - packet_offset);
-            std::copy_n(packet.data() + packet_offset, count, output + written);
-            packet_offset += count;
-            written += count;
+        unsigned demand=0;
+        for (auto const& voice:voices)
+            if (voice.active) demand=std::max(demand,voice.refill_samples_5ms);
+        // Four polls per ring of source data at high pitch. Default remains
+        // 5 ms; the card supplies demand, so host never computes pitch.
+        return demand ? std::clamp(buffer_capacity*5u/(4u*demand),1u,5u) : 5u;
+    }
+
+    int refill_wake_ms() {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto now=std::chrono::steady_clock::now();
+        for (auto const& v:voices)
+            if(v.active && v.refill_samples_5ms && now<v.forecast_until) return 1;
+        return -1;
+    }
+
+    bool urgent() {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto now=std::chrono::steady_clock::now();
+        for (auto const& v:voices)
+            if (v.active && v.available_sample_slots &&
+                (v.initial_samples_left || (!v.pending && v.deadline<=now+std::chrono::milliseconds(10)))) return true;
+        return false;
+    }
+
+    /* Called only by the USB worker. No allocation, waits or serial I/O under
+     * this lock. Credits include the partially written block immediately. */
+    size_t make_block(uint8_t *out,
+                      std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now(),
+                      size_t capacity=kUsbHeaderBytes+kUsbPayloadMax) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!sequence_ready || pending_packet_count>=kPendingPacketCapacity || capacity<=kUsbHeaderBytes) return 0;
+        std::array<unsigned,kVoiceCount> queued{}, all_queued{};
+        unsigned wire_bytes=0;
+        for (size_t i=0;i<pending_packet_count;++i) {
+            auto const& packet=pending_packets[(first_pending_packet+i)%kPendingPacketCapacity];
+            wire_bytes+=kUsbHeaderBytes+packet.samples;
+            all_queued[packet.voice]+=packet.samples;
+            if (packet.session==voices[packet.voice].session_id) queued[packet.voice]+=packet.samples;
         }
+        if (wire_bytes+kUsbHeaderBytes>=kPendingWireBytes) return 0;
+        // Preserve the previous five-ms demand forecast and two-ms reserve.
+        // Anchor at receipt (conservative for USB), never a synthetic ISO clock.
+        for (uint8_t i=0;i<kVoiceCount;++i) {
+            auto& v=voices[i];
+            if(!v.active || !v.refill_samples_5ms)continue;
+            auto until=std::min(now,v.forecast_until);
+            double ms=std::chrono::duration<double,std::milli>(until-v.refill_at).count();
+            if(ms>0) {
+                double ceiling=static_cast<double>(buffer_capacity)-all_queued[i];
+                v.refill_balance=std::min(ceiling,v.refill_balance+ms*v.refill_samples_5ms/5.0);
+                v.refill_at=until;
+            }
+            double allowance=v.refill_balance-std::ceil(2.0*v.refill_samples_5ms/5.0);
+            v.available_sample_slots=allowance>0 ? static_cast<unsigned>(allowance) : 0;
+        }
+        uint8_t chosen=kVoiceCount;
+        auto rank=[&](voice_data const& v) {
+            if (!v.pending && v.deadline<=now+std::chrono::milliseconds(3)) return 0;
+            if (v.initial_samples_left) return 1;
+            return 2;
+        };
+        for (uint8_t i=0;i<kVoiceCount;++i) {
+            uint8_t v=static_cast<uint8_t>((next_voice+i)%kVoiceCount);
+            auto const& candidate=voices[v];
+            if (!candidate.active || !candidate.available_sample_slots || !samples[candidate.sample_id].pcm_size) continue;
+            unsigned batch=std::min(candidate.refill_samples_5ms,kUsbPayloadMax);
+            if(!candidate.initial_samples_left && batch && candidate.available_sample_slots<batch &&
+               candidate.deadline>now+std::chrono::milliseconds(3)) continue;
+            if (chosen==kVoiceCount || rank(candidate)<rank(voices[chosen]) ||
+                (rank(candidate)==rank(voices[chosen]) &&
+                 (queued[v]<queued[chosen] || (queued[v]==queued[chosen] && !candidate.pending &&
+                  candidate.deadline<voices[chosen].deadline)))) chosen=v;
+        }
+        if (chosen==kVoiceCount) return 0;
+        auto& v=voices[chosen];
+        auto const& sample=samples[v.sample_id];
+        unsigned count=std::min({v.available_sample_slots,kUsbPayloadMax,
+            kPendingWireBytes-wire_bytes-kUsbHeaderBytes, static_cast<unsigned>(capacity-kUsbHeaderBytes)});
+        if (v.initial_samples_left) count=std::min(count,v.initial_samples_left);
+        out[0]=kBody; out[1]=chosen; out[2]=v.session_id;
+        out[3]=v.waiting_for_first_packet ? 1u : 0u;
+        write16(out+4,static_cast<uint16_t>(count)); write16(out+6,next_sequence);
+        for (unsigned i=0;i<count;++i)
+            out[kUsbHeaderBytes+i]=v.source_position<sample.pcm_size
+                ? static_cast<uint8_t>(sample.pcm[v.source_position++]>>8) : 0u;
+        pending_packets[(first_pending_packet+pending_packet_count)%kPendingPacketCapacity]=
+            {next_sequence,chosen,v.session_id,static_cast<uint16_t>(count)};
+        ++pending_packet_count; ++next_sequence;
+        v.available_sample_slots-=count;
+        v.refill_balance-=count;
+        v.initial_samples_left-=std::min(v.initial_samples_left,count);
+        v.waiting_for_first_packet=false;
+        next_voice=static_cast<uint8_t>((chosen+1u)%kVoiceCount);
+        return kUsbHeaderBytes+count;
     }
 };
 
-} // namespace
+/* One worker owns all CDC bytes. poll() waits for fd readiness or an explicit
+ * wakeup from MIDI/status/upload; it never imposes a streaming timer. */
+class usb_link {
+    serial_port port_;
+    stream_state *stream_=nullptr;
+    std::thread worker_;
+    std::atomic<bool> running_{false}, streaming_{false};
+    int wake_[2]={-1,-1};
+    std::mutex mutex_, request_mutex_;
+    std::condition_variable done_;
+    std::vector<uint8_t> request_, response_;
+    uint16_t request_id_=0;
+    uint8_t request_type_=0;
+    bool request_pending_=false, request_sent_=false, request_done_=false;
+    std::string error_;
+    std::chrono::steady_clock::time_point request_deadline_;
+
+    void set_error(std::string message) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        error_=std::move(message); running_=false; done_.notify_all();
+    }
+    void run() {
+        prioritize_stream_thread();
+        std::array<uint8_t,kPendingWireBytes> output{};
+        std::array<uint8_t,kUsbHeaderBytes+kUsbPayloadMax> input{};
+        size_t size=0, sent=0, received=0, needed=kUsbHeaderBytes;
+        auto write_deadline=std::chrono::steady_clock::now();
+        while (running_) {
+            if (sent==size) {
+                size=sent=0;
+                bool have_request;
+                { std::lock_guard<std::mutex> lock(mutex_); have_request=request_pending_ && !request_sent_; }
+                if (streaming_) {
+                    while (output.size()-size>kUsbHeaderBytes && (!have_request || stream_->urgent())) {
+                        size_t n=stream_->make_block(output.data()+size,std::chrono::steady_clock::now(),output.size()-size);
+                        if(!n)break;
+                        size+=n;
+                    }
+                }
+                if (!size && have_request) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    std::copy(request_.begin(),request_.end(),output.begin());
+                    size=request_.size(); request_sent_=true;
+                }
+                if (!size && streaming_) size=stream_->make_block(output.data());
+                write_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);
+            }
+            int timeout=streaming_ ? stream_->refill_wake_ms() : -1;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (request_pending_) {
+                    auto left=std::chrono::duration_cast<std::chrono::milliseconds>(request_deadline_-std::chrono::steady_clock::now()).count();
+                    int ms=static_cast<int>(std::max<int64_t>(0,left));
+                    timeout=timeout<0 ? ms : std::min(timeout,ms);
+                }
+            }
+            if (size>sent) {
+                auto left=std::chrono::duration_cast<std::chrono::milliseconds>(write_deadline-std::chrono::steady_clock::now()).count();
+                int ms=static_cast<int>(std::max<int64_t>(0,left));
+                timeout=timeout<0 ? ms : std::min(timeout,ms);
+            }
+            pollfd fds[2]={{port_.fd(),static_cast<short>(POLLIN|(size>sent ? POLLOUT : 0)),0},{wake_[0],POLLIN,0}};
+            int ready=::poll(fds,2,timeout);
+            if (ready<0) { if (errno==EINTR) continue; set_error("CDC poll failed"); break; }
+            if (!running_) break;
+            if (fds[1].revents&POLLIN) { uint8_t wake_bytes[64]; while (::read(wake_[0],wake_bytes,sizeof wake_bytes)>0) {} }
+            if (fds[0].revents&(POLLERR|POLLHUP|POLLNVAL)) { set_error("CDC disconnected"); break; }
+            if (fds[0].revents&POLLIN) {
+                int n=port_.read_nonblocking(input.data()+received,needed-received);
+                if (n<0) { set_error("CDC read failed"); break; }
+                received+=static_cast<size_t>(n);
+                if (received==kUsbHeaderBytes && needed==kUsbHeaderBytes) {
+                    unsigned payload=read16(input.data()+4);
+                    if (input[0]!=kReply || !payload || payload>kUsbPayloadMax) { set_error("invalid CDC reply framing"); break; }
+                    needed=kUsbHeaderBytes+payload;
+                }
+                if (received==needed) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (!request_pending_ || !request_sent_ || read16(input.data()+6)!=request_id_ ||
+                        input[3]!=request_type_ || input[1]!=request_[1] || input[2]!=0 || input[8]>1) {
+                        error_="unexpected CDC reply; BODY rejected or protocol lost"; running_=false; done_.notify_all(); break;
+                    }
+                    response_.assign(input.begin()+kUsbHeaderBytes,input.begin()+needed);
+                    request_done_=true; request_pending_=false; done_.notify_all();
+                    received=0; needed=kUsbHeaderBytes;
+                }
+            }
+            if (size>sent && (fds[0].revents&POLLOUT)) {
+                int n=port_.write_nonblocking(output.data()+sent,size-sent);
+                if (n<0) { set_error("CDC write failed"); break; }
+                sent+=static_cast<size_t>(n);
+            }
+            /* Deadlines also apply when the fd is continuously ready. */
+            if (size>sent && std::chrono::steady_clock::now()>=write_deadline) { set_error("CDC write stalled"); break; }
+            bool expired;
+            { std::lock_guard<std::mutex> lock(mutex_); expired=request_pending_ && std::chrono::steady_clock::now()>=request_deadline_; }
+            if (expired) { set_error("CDC reply timed out; reopen connection"); break; }
+        }
+    }
+public:
+    ~usb_link() { close(); }
+    bool good() const { return running_; }
+    void wake() {
+        uint8_t b=1;
+        if (wake_[1]>=0) { auto ignored=::write(wake_[1],&b,1); (void)ignored; }
+    }
+    void enable_streaming() { streaming_=true; wake(); }
+    voice_board_result_t open(std::string const& path,stream_state& stream) {
+        close(); std::string error;
+        if (!port_.open(path,115200,true,error)) return fail(voice_board_error_t::io_error,error);
+        return start_worker(stream);
+    }
+#if defined(VOICEBD_TRANSPORT_TEST)
+    voice_board_result_t open_test_fd(int fd,stream_state& stream) {
+        close(); port_.adopt_test_fd(fd); return start_worker(stream);
+    }
+#endif
+private:
+    voice_board_result_t start_worker(stream_state& stream) {
+        if (::pipe(wake_)<0) { port_.close(); return fail(voice_board_error_t::io_error,"CDC wake pipe failed"); }
+        for (int fd:wake_) {
+            if (fcntl(fd,F_SETFL,fcntl(fd,F_GETFL)|O_NONBLOCK)<0 || fcntl(fd,F_SETFD,FD_CLOEXEC)<0) {
+                close(); return fail(voice_board_error_t::io_error,"CDC wake pipe setup failed");
+            }
+        }
+        stream_=&stream; error_.clear(); request_pending_=request_sent_=request_done_=false;
+        running_=true; worker_=std::thread([this]{run();});
+        std::vector<uint8_t> caps;
+        auto result=request(kHello,0,{1},&caps);
+        if (result && (caps.size()!=12 || caps[1]!=1 || caps[2]!=kVoiceCount || caps[3]!=1 ||
+            read32(caps.data()+4)!=kSampleRate || read16(caps.data()+8)!=kUsbPayloadMax ||
+            read16(caps.data()+10)!=kPrimeSamples)) result=fail(voice_board_error_t::bad_reply,"incompatible CDC firmware capabilities");
+        if (!result) close();
+        return result;
+    }
+public:
+    void close() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            running_=false; streaming_=false; done_.notify_all();
+        }
+        wake();
+        if (worker_.joinable()) worker_.join();
+        port_.close();
+        for (int& fd:wake_) { if (fd>=0) ::close(fd); fd=-1; }
+    }
+    voice_board_result_t request(uint8_t type,uint8_t target,std::vector<uint8_t> const& payload,
+                                 std::vector<uint8_t>* response=nullptr) {
+        std::lock_guard<std::mutex> serial(request_mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (!running_) return fail(voice_board_error_t::io_error,error_.empty() ? "CDC is closed" : error_);
+        request_.assign(kUsbHeaderBytes+payload.size(),0);
+        request_[0]=type; request_[1]=target;
+        write16(request_.data()+4,static_cast<uint16_t>(payload.size()));
+        write16(request_.data()+6,++request_id_); request_type_=type;
+        std::copy(payload.begin(),payload.end(),request_.begin()+kUsbHeaderBytes);
+        response_.clear(); request_done_=request_sent_=false; request_pending_=true;
+        request_deadline_=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+        wake(); done_.wait(lock,[this]{return request_done_ || !running_;});
+        if (!request_done_) return fail(voice_board_error_t::io_error,error_.empty() ? "CDC closed during request" : error_);
+        if (response) *response=response_;
+        if (response_[0]) return fail(voice_board_error_t::bad_reply,std::string(response_.begin()+1,response_.end()));
+        return ok();
+    }
+    voice_board_result_t upload(uint8_t kind,uint8_t target,uint8_t const* data,size_t size) {
+        std::vector<uint8_t> begin(5); begin[0]=kind; write32(begin.data()+1,static_cast<uint32_t>(size));
+        auto result=request(kUploadBegin,target,begin);
+        if (!result) return result;
+        for (size_t offset=0;offset<size;) {
+            size_t n=std::min<size_t>(512,size-offset);
+            std::vector<uint8_t> part(4+n); write32(part.data(),static_cast<uint32_t>(offset));
+            std::copy_n(data+offset,n,part.data()+4);
+            result=request(kUploadData,target,part);
+            if (!result) { if (running_) (void)request(kUploadAbort,target,{}); return result; }
+            offset+=n;
+        }
+        return ok();
+    }
+};
+
 
 /*******************************************************************************
 
@@ -1032,15 +1036,9 @@ struct device_context
 {
     voice_board_config_t config;
     std::string rs485_name;
-    std::string upload_usb_port_name;
     rs485_link rs485;
-    serial_port upload_port;
+    usb_link usb;
     stream_state stream;
-#if defined(__linux__)
-    RtAudio audio{RtAudio::LINUX_ALSA};
-#else
-    RtAudio audio;
-#endif
     std::atomic<bool> connected{false};
     std::atomic<bool> worker_running{false};
     std::thread worker;
@@ -1075,118 +1073,6 @@ struct device_context
 
     ~device_context() { shutdown(); }
 
-/* ---- start the usb audio stream ------------------------------------------ */
-
-    voice_board_result_t start_audio()
-#if !defined(RTAUDIO_VERSION_MAJOR) || RTAUDIO_VERSION_MAJOR < 6
-    try
-#endif
-    {
-        if (audio.isStreamRunning()) return ok();
-        unsigned selected = 0u;
-        bool found = false;
-        std::string available_devices;
-#if defined(__linux__)
-        std::vector<std::string> stream_names;
-        std::cerr << "Channel Card audio: resolving USB ID \""
-                  << config.stream_usb_port << "\"\n";
-        auto const resolved = resolve_usb_audio_device(
-            config.stream_usb_port, stream_names);
-        if (!resolved)
-            return resolved;
-        for (auto const& name : stream_names)
-            std::cerr << "Channel Card audio: acceptable RtAudio name \""
-                      << name << "\"\n";
-#endif
-#if defined(RTAUDIO_VERSION_MAJOR) && RTAUDIO_VERSION_MAJOR >= 6
-        auto const device_ids = audio.getDeviceIds();
-#else
-        std::vector<unsigned> device_ids(audio.getDeviceCount());
-        for (unsigned id = 0; id < device_ids.size(); ++id) device_ids[id] = id;
-#endif
-        for (unsigned id : device_ids) {
-            std::cerr << "Channel Card audio: probing RtAudio device "
-                      << id << "\n";
-            RtAudio::DeviceInfo const info = audio.getDeviceInfo(id);
-#if !defined(RTAUDIO_VERSION_MAJOR) || RTAUDIO_VERSION_MAJOR < 6
-            if (!info.probed) continue;
-#endif
-                std::cerr   << "RtAudio device " << id
-                            << ": \"" << info.name << "\""
-                            << " outputs=" << info.outputChannels
-                            << " inputs=" << info.inputChannels
-                            << "\n";
-
-            if (info.outputChannels < kUsbAudioChannelCount) continue;
-            if (!available_devices.empty()) available_devices += ", ";
-            available_devices += info.name;
-#if defined(__linux__)
-            bool const matches = stream_name_matches(info.name, stream_names);
-#else
-            bool const matches = stream_name_matches(info.name, config.stream_usb_port);
-#endif
-            if (matches) {
-                std::cerr << "Channel Card audio: matched RtAudio device "
-                          << id << " (\"" << info.name << "\")\n";
-                if (found)
-                    return fail(voice_board_error_t::device_ambiguous,
-                    "multiple stream devices named " +
-                    config.stream_usb_port);
-                selected = id;
-                found = true;
-            }
-        }
-        if (!found) {
-            if (available_devices.empty()) available_devices = "none";
-            return fail(voice_board_error_t::device_not_found,
-                "stream device not found: " + config.stream_usb_port +
-                    "; available 21-channel outputs: " + available_devices);
-        }
-        RtAudio::StreamParameters output;
-        output.deviceId = selected;
-        output.nChannels = kUsbAudioChannelCount;
-        output.firstChannel = 0u;
-        unsigned frames = kUsbAudioFramesPerMillisecond;
-        std::cerr << "Channel Card audio: opening RtAudio device " << selected
-                  << " with " << kUsbAudioChannelCount << " channels, "
-                  << frames << " frames\n";
-#if defined(RTAUDIO_VERSION_MAJOR) && RTAUDIO_VERSION_MAJOR >= 6
-        RtAudioErrorType const opened =
-#endif
-        audio.openStream(
-            &output, nullptr, RTAUDIO_SINT8, kSampleRate, &frames,
-                [](void* out, void*, unsigned count, double,
-                    RtAudioStreamStatus,
-            void* user) -> int {
-                static_cast<device_context *>(user)->stream.render(
-                    static_cast<int8_t*>(out), count * kUsbAudioChannelCount);
-                    return 0;
-                }, this);
-        std::cerr << "Channel Card audio: openStream returned; frames="
-                  << frames << "\n";
-#if defined(RTAUDIO_VERSION_MAJOR) && RTAUDIO_VERSION_MAJOR >= 6
-        if (opened != RTAUDIO_NO_ERROR)
-            return fail(voice_board_error_t::audio_error, audio.getErrorText());
-        RtAudioErrorType const started = audio.startStream();
-        if (started != RTAUDIO_NO_ERROR) {
-            std::string const error = audio.getErrorText();
-            audio.closeStream();
-            return fail(voice_board_error_t::audio_error, error);
-        }
-        std::cerr << "Channel Card audio: startStream returned successfully\n";
-#else
-        audio.startStream();
-        std::cerr << "Channel Card audio: startStream returned successfully\n";
-#endif
-        return ok();
-    }
-#if !defined(RTAUDIO_VERSION_MAJOR) || RTAUDIO_VERSION_MAJOR < 6
-    catch (RtAudioError const& error) {
-        if (audio.isStreamOpen()) audio.closeStream();
-        return fail(voice_board_error_t::audio_error, error.getMessage());
-    }
-#endif
-
 /* ---- shut down the channel device ---------------------------------------- */
 
     void shutdown()
@@ -1196,17 +1082,7 @@ struct device_context
         control_changed.notify_all();
         if (worker.joinable() && worker.get_id() != std::this_thread::get_id())
             worker.join();
-#if defined(RTAUDIO_VERSION_MAJOR) && RTAUDIO_VERSION_MAJOR >= 6
-        if (audio.isStreamRunning()) (void)audio.stopStream();
-#else
-        try {
-            if (audio.isStreamRunning()) audio.stopStream();
-        } catch (RtAudioError const&) {
-            /* Continue closing resources even if stopping the driver failed. */
-        }
-#endif
-        if (audio.isStreamOpen()) audio.closeStream();
-        upload_port.close();
+        usb.close();
         if (rs485.is_open()) {
             if (connected.load()) (void)rs485.command("n off");
             rs485.close();
@@ -1218,9 +1094,6 @@ struct device_context
             stream.pending_packet_count = 0u;
             stream.sequence_ready = false;
             stream.status_ready = false;
-            stream.next_packet_at = {};
-            stream.acknowledged_packet_at = {};
-            stream.packet_offset = kUsbPacketByteCount;
         }
         connected.store(false);
     }
@@ -1232,7 +1105,7 @@ struct device_context
             std::lock_guard<std::mutex> lock(stream.mutex);
             std::swap(stream.samples[id], replacement);
         }
-        replacement.pcm.reset(); // Free old PCM outside the audio lock.
+        replacement.pcm.reset(); // Free old PCM outside the stream lock.
         auto result = ok();
         for (uint8_t i = 0; i < kVoiceCount; ++i) {
             std::unique_lock<std::mutex> lock(stream.mutex);
@@ -1262,6 +1135,7 @@ struct device_context
             if (parse_voice_queue_status(raw, status))
                 stream.apply_status(status, requested_at);
             else result = fail(voice_board_error_t::bad_reply, "invalid voice status reply");
+            usb.wake();
         }
         return result;
     }
@@ -1269,12 +1143,13 @@ struct device_context
     void advance_poll()
     {
         auto const now = std::chrono::steady_clock::now();
-        next_poll += std::chrono::milliseconds(5);
+        next_poll += std::chrono::milliseconds(stream.poll_interval_ms());
         if (next_poll < now) next_poll = now;
     }
 
     void poll()
     {
+        prioritize_stream_thread();
         std::unique_lock<std::mutex> lock(control_mutex);
         while (worker_running.load()) {
             if (waiting_commands.load() != 0u) {
@@ -1311,9 +1186,7 @@ voice_board_result_t upload_script(device_context* state, uint8_t voice_id,
     std::vector<uint8_t> const& bec)
 {
     /* vmload rejects active voices with err:vm-busy. */
-    auto result = send_payload(state->upload_port,
-        "vmload " + std::to_string(voice_id),
-        bec.data(), bec.size(), "ok:vm");
+    auto result = state->usb.upload(3,voice_id,bec.data(),bec.size());
     if (!result) {
         result.code = voice_board_error_t::bec_error;
         result.message = "voice " + std::to_string(voice_id) +
@@ -1329,14 +1202,16 @@ voice_board_result_t open_device(device_context* state,
 {
     if (!state) return fail(voice_board_error_t::io_error,
         "voice board state is unavailable");
-    if (state->connected.load()) return ok("already connected");
+    if (state->connected.load()) {
+        if (state->usb.good()) return ok("already connected");
+        state->shutdown();
+    }
     /* Read the program first so a bad file cannot disturb the card. */
     std::vector<uint8_t> bec;
     auto result = read_bec(config.bec_file, bec);
     if (!result) return result;
     state->config = config;
     state->rs485_name = config.rs485_port;
-    state->upload_usb_port_name = config.upload_usb_port;
     result = state->rs485.open(state->rs485_name, config.rs485_baud);
     if (!result) return result;
     /* Send a clear command to clear the card-side input line. */
@@ -1346,11 +1221,8 @@ voice_board_result_t open_device(device_context* state,
         state->shutdown();
         return result;
     }
-    std::string error;
-    if (!state->upload_port.open(state->upload_usb_port_name, 115200u, true, error)) {
-        state->shutdown();
-        return fail(voice_board_error_t::io_error, error);
-    }
+    result=state->usb.open(config.usb_port,state->stream);
+    if (!result) { state->shutdown(); return result; }
     for (uint8_t voice = 0u; voice < kVoiceCount; ++voice) {
         result = upload_script(state, voice, bec);
         if (!result) {
@@ -1365,11 +1237,7 @@ voice_board_result_t open_device(device_context* state,
         result.message = "Channel gain setup failed: " + result.message;
         return result;
     }
-    result = state->start_audio();
-    if (!result) {
-        state->shutdown();
-        return result;
-    }
+    state->usb.enable_streaming();
     state->connected.store(true);
     state->next_poll = std::chrono::steady_clock::now();
     state->worker_running.store(true);
@@ -1389,7 +1257,7 @@ voice_board_result_t close_device(device_context* state)
 
 bool device_is_open(device_context const* state)
 {
-    return state && state->connected.load();
+    return state && state->connected.load() && state->usb.good();
 }
 
 /* ---- load a BEC program into the channel device -------------------------- */
@@ -1428,10 +1296,10 @@ voice_board_result_t load_sample(device_context* state, uint16_t sample_id,
     replacement.pcm.reset(new int16_t[pcm.size()]);
     std::copy(pcm.begin(), pcm.end(), replacement.pcm.get());
 
-    // CDC has its own serialization: a slow upload must not hold up vq or MIDI.
+    // Upload transactions share CDC with BODY but never hold up vq or MIDI.
     std::lock_guard<std::mutex> upload_lock(state->upload_mutex);
-    auto result = send_payload(state->upload_port, "al " + std::to_string(sample_id),
-        reinterpret_cast<uint8_t const*>(attack.data()), attack_size, "ok:attack");
+    auto result = state->usb.upload(1,static_cast<uint8_t>(sample_id),
+        reinterpret_cast<uint8_t const*>(attack.data()),attack_size);
     if (!result) {
         result.code = voice_board_error_t::sample_error;
         result.message = "attack upload failed; old BODY retained: " +
@@ -1454,8 +1322,7 @@ voice_board_result_t note_on(device_context* state, uint8_t voice,
     if (!device_is_open(state))
         return fail(voice_board_error_t::not_connected,
             "voice board is not connected");
-    auto result = state->start_audio();
-    if (!result) return result;
+    auto result = ok();
     device_context::control_turn turn(state);
     uint8_t session = 0u;
     {
@@ -1469,8 +1336,7 @@ voice_board_result_t note_on(device_context* state, uint8_t voice,
         slot = {};
         slot.available_sample_slots = free_slots;
         slot.waiting_for_first_packet = true;
-        slot.initial_samples_left = kUsbPacketBodySampleCount;
-        slot.filling_initial_buffer = true;
+        slot.initial_samples_left = kPrimeSamples;
         slot.session_id = session;
         slot.sample_id = sample;
         size_t const attack_size = std::min<size_t>(
@@ -1493,6 +1359,7 @@ voice_board_result_t note_on(device_context* state, uint8_t voice,
         std::lock_guard<std::mutex> lock(state->stream.mutex);
         state->stream.voices[voice].active = true;
     }
+    state->usb.wake();
     return ok("voice " + std::to_string(voice) + " started");
 }
 
@@ -1500,7 +1367,8 @@ voice_board_result_t note_on(device_context* state, uint8_t voice,
 
 voice_board_result_t note_off(device_context* state, uint8_t voice)
 {
-    if (!device_is_open(state))
+    // RS485 remains usable for stopping notes after a USB transport failure.
+    if (!state || !state->connected.load() || !state->rs485.is_open())
         return fail(voice_board_error_t::not_connected,
             "voice board is not connected");
     device_context::control_turn turn(state);
@@ -1513,7 +1381,7 @@ voice_board_result_t note_off(device_context* state, uint8_t voice)
 
 voice_board_result_t all_notes_off(device_context* state)
 {
-    if (!device_is_open(state))
+    if (!state || !state->connected.load() || !state->rs485.is_open())
         return fail(voice_board_error_t::not_connected,
             "voice board is not connected");
     device_context::control_turn turn(state);
@@ -1597,10 +1465,8 @@ voice_board_result_t voice_board_t::open(voice_board_config_t const& config)
         return invalid_argument("BEC file is required");
     if (config.rs485_port.empty())
         return invalid_argument("RS485 port name is required");
-    if (config.upload_usb_port.empty())
-        return invalid_argument("upload USB port is required");
-    if (config.stream_usb_port.empty())
-        return invalid_argument("stream USB port is required");
+    if (config.usb_port.empty())
+        return invalid_argument("USB data port is required");
     if (config.rs485_baud == 0u)
         return invalid_argument("RS485 baud rate must be positive");
     if (config.initial_attenuation_db > 127u)
@@ -1696,4 +1562,14 @@ voice_board_result_t voice_board_t::set_attenuation(uint8_t attenuation_db)
     if (attenuation_db > 127u)
         return invalid_argument("attenuation must be 0..127 dB");
     return voice_board_detail::set_attenuation(impl_->context, attenuation_db);
+}
+
+voice_board_result_t voice_board_usb_benchmark(std::string const& path, unsigned seconds)
+{
+    using namespace voice_board_detail;
+    if(path.empty() || seconds<1 || seconds>60)
+        return fail(voice_board_error_t::invalid_argument,"USB benchmark requires a port and 1..60 seconds");
+    serial_port port; std::string error;
+    if(!port.open(path,115200,true,error)) return fail(voice_board_error_t::io_error,error);
+    return usb_benchmark(port,seconds);
 }

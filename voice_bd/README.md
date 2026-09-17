@@ -4,10 +4,10 @@ This folder builds independently; no sibling repository folders are required.
 Install the development packages on Debian/Ubuntu:
 
 ```sh
-sudo apt install build-essential cmake pkg-config librtaudio-dev librtmidi-dev libserialport-dev libasound2-dev
+sudo apt install build-essential cmake pkg-config librtmidi-dev libserialport-dev libasound2-dev
 ```
 
-On macOS, install `cmake`, `pkg-config`, `rtaudio`, `rtmidi`, and `libserialport`
+On macOS, install `cmake`, `pkg-config`, `rtmidi`, and `libserialport`
 with Homebrew. This folder includes `berry` for macOS ARM64 and
 `berry.linux-arm64` for Linux ARM64 (including Rockchip). The build, R key,
 and `series2patch.sh` automatically select the Linux ARM64 binary on that
@@ -33,7 +33,8 @@ The build runs the selected local Berry compiler with `channel.be -o channel.bec
 the firmware header and checksum required by the uploader. External compilers
 must emit this same format.
 
-Set the three port names in `voice_board_config_t` in `voicebd.h` before building.
+Set the two port names in `voice_board_config_t` in `voicebd.h` before building.
+Override them at runtime with `--usb-port PORT --rs485-port PORT`.
 The program uses those names and MIDI input 0, loads the sample for all eight
 voices, and reports board errors before exiting with a nonzero status. Ctrl+C stops playback and exits.
 
@@ -47,18 +48,13 @@ modulation above 2×. Custom firmware programs can change the actual demand.
 Startup assumes the card is idle. If voices are active, program upload fails with
 `err:vm-busy`; startup does not silence them or wait for their release.
 
-For the reconnect experiment, startup sends `vq` immediately after opening RS485
-and retries timeouts for up to three total attempts, with no pause between them.
-Each attempt keeps the 50 ms reply timeout. No preliminary carriage return is
-sent. Driver errors and invalid replies stop the attempts immediately. Normal
-playback commands are not retried. Startup errors identify
-the adapter path. Each startup attempt is printed as `vq attempt N/3`.
-Timeouts include the received byte count; serial read failures report the driver error.
+Startup reads `vq` before uploading programs. RS485 transactions retain their
+existing 5 ms reply timeout and are not automatically retried. CDC HELLO/upload
+requests have a 3-second reply deadline; stalled partial writes time out after
+one second and require reopening the connection.
 
-Input: 48 kHz, 16-bit PCM WAV, mono or stereo. Build requires RtAudio 5.2 or 6,
-libserialport, CMake and pkg-config; other dependencies come from the repository.
+Input: 48 kHz, 16-bit PCM WAV, mono or stereo. Build requires RtMidi, libserialport, CMake and pkg-config; other dependencies come from the repository.
 
-The command-line parser uses the local `options.h` header.
 Use `-h` to display the version, product identifier, and usage.
 
 The voice board API returns `voice_board_result_t` with an error code and message.
@@ -67,9 +63,9 @@ The test program checks these results and prints failures before exiting.
 ## Replacing a playing sample
 
 `load_sample()` can replace a sample while its notes are playing. It uploads the
-new attack directly into card memory while USB audio, status polling and MIDI
+new attack directly into card memory while USB BODY streaming, status polling and MIDI
 continue. Once the upload and root-pitch command succeed, the host swaps its PCM
-under the audio mutex. Old allocations are freed outside that mutex.
+under the stream mutex. Old allocations are freed outside that mutex.
 
 Each note keeps its next source position, measured in the full PCM sample.
 Prepared packets and audio already queued on the card finish unchanged. A shorter
@@ -91,78 +87,75 @@ identify partial completion; they do not imply rollback or close the device.
 
 ## Streaming protocol
 
-Host implementation stays in `voicebd.h` and `voicebd.cpp`. The `vq` status
-reply reports all eight playback durations and free-slot counts without a
-status CRC. Pitch remains a card concern. USB Audio carries
-1008 bytes/ms: a ten-byte header and up to 998 source samples for one or two
-voices. The host requests `vq` every 5 ms. Its reply includes
-one card-generated source-sample budget per voice for a 5 ms interval. The host
-spreads that budget over USB milliseconds and keeps using the latest budget
-through delayed polls; it never calculates playback pitch. Each new snapshot
-corrects the allowance by replaying samples still in flight in USB order.
-Free space is capped before each delivery, so an empty ring cannot earn
-credit for consuming missing samples. The card reports how much audio time has passed since ingesting the acknowledged
-USB packet. That places the snapshot on the host's USB packet timeline, without
-using the RS485 round-trip time. Callback jitter does not advance that timeline.
-The allowance accounts for the 1 ms USB and audio processing blocks. Voices
-with different demands share packets to equalize buffered playback time. A stopped, pending, or mismatched session cannot
-reuse the previous voice's budget. The bounded unacknowledged-packet ledger
-still stops sends if acknowledgements disappear for too long.
+One `voice_board_config_t::usb_port` selects the binary CDC port for all eight
+voices, attacks and scripts. The old audio-device name and separate upload port
+are removed. RS485 continues to carry controls and the existing 61-byte `vq`
+reply. Linux/macOS use native CDC drivers and libserialport; RtAudio is not used.
+Use this host with protocol-v1 firmware (`cafe:4032`); HELLO rejects incompatible
+firmware. Re-enumeration can change the OS port suffix/path, so update the port
+configuration for the board's unchanged `CHCARD-<UID>` identity.
 
-The 61-byte `vq` reply is required; older firmware is rejected with an error.
-Polling remains at 5 ms. Late replies do not add another full polling interval.
-See `../channel_card/docs/protocol.md`.
+The USB worker uses nonblocking I/O, a readiness wait and explicit MIDI/status
+wakeups. Active voices retain five-ms demand forecasting with a two-ms reserve;
+the worker may wake between status replies to refill them. There are no audio
+callbacks, timed idle packets or `sp_drain()` calls per USB block. Each BODY block carries an
+eight-byte header and up to 1024 signed-int8 source samples for one voice.
+No blocks are sent when there is nothing to stream or upload. A released note
+still needs data during its script-defined tail; `n off` hard-stops all voices.
 
-Hardware acceptance still requires measuring actual USB/poll timing and checking
-zero `hold`/overflow faults under the intended workload. The scheduler cannot
-guarantee uninterrupted audio above 998 source samples/ms or during excessive
-stalls or sudden card-side speed increases.
+On macOS the USB and status workers request interactive QoS and a preemptible
+real-time policy (1 ms period, up to 250 microseconds of CPU per period). This
+replaces the scheduling previously provided by the audio callback. The workers
+still sleep when idle; scheduling policy does not send USB data. Linux uses the
+host's normal thread policy and needs separate hardware timing qualification.
+Note-off and all-notes-off remain available over RS485 after USB failure.
 
-`open()` reads initial voice timing and free space before loading programs.
-`channel.bec` contains the Berry note program.
-Each RS485 command is sent once and returns as soon as its complete reply
-arrives. A missing reply times out after 50 ms; commands are not retried.
-The poll cadence is separate from this reply deadline. Delayed
-replies stretch the actual poll interval; USB keeps using its existing credit.
+`vq` supplies exact writable credit. Prepared/unacknowledged samples, including
+older sessions, remain charged against the physical voice ring. At most 8256
+wire bytes are outstanding, with ready blocks batched into each USB write.
+Prediction lasts at most five ms after fresh status; firmware retains a block
+that does not yet fit, applying backpressure without dropping or overwriting it. Refills favor endangered voices, new-note priming
+and voices with fewer samples in flight; upload chunks use spare capacity.
+Polling is normally 5 ms and shortens to 1 ms for high card-reported per-voice
+demand. A note-on ACK immediately wakes USB using existing credit. The card still
+starts a note after its first 998 BODY samples, at an audio boundary.
 
-On macOS the RS485 port requests low receive latency with `IOSSDATALAT` so
-short replies are not held in the serial driver's receive buffer. `open()`
-establishes the USB Audio stream before notes are played. Note-on sends
-`nX on <sample> <key> <velocity> @<session>` as one command. After its ACK,
-USB uses the last confirmed free-space credit to begin filling the new note.
-The first full packet goes to the new note. Starting with the second packet,
-playing voices close to empty take precedence; otherwise startup priority
-continues while the new note is pending. Once the card confirms playback,
-the target is its five-ms sample demand (at least 998 samples), limited by ring
-capacity minus the USB/audio phase allowance. After the first packet, playing voices close to empty
-receive enough samples for the next packet and the two processing blocks first;
-the new voice receives the remaining packet space. Priority ends once its
-predicted buffered samples reach the target. This uses card demand, not host pitch. The card keeps the note pending until 998 samples
-arrive, then starts ATTACK at an audio boundary. Split blocks accumulate
-toward 998 samples. USB delivery latency therefore adds to note onset.
-Note-on does not issue an extra `vq`; scheduled polls run between commands
-when due.
+Sample loading keeps the existing signed-16 host PCM and converts only the
+transmitted attack/BODY bytes to signed eight-bit. Failed attack uploads leave
+host PCM unchanged; partial attack writes on the card are not rolled back.
+Script upload restrictions and validation remain owned by firmware.
 
-The binary `vq` reply is 61 bytes. Each voice has a one-byte session,
-five bytes packing an exact 13-bit free-space count, a 12-bit refill budget,
-and a 15-bit remaining duration in 0.1 ms units. The card ring holds 4080
-source samples per voice (85 ms at root pitch). Both card and host must use
-the type-0x0C packed reply.
-Duration rounds down, so quantization makes a deadline at most 0.1 ms earlier.
-At 921600 baud the reply occupies about 0.662 ms on the UART; USB-driver and
-scheduling delays are additional. USB sample delivery continues during polling.
+Hardware acceptance must measure actual delivery gaps and note-on latency and
+show zero `hold`, `full`, `drop`, `bad`, and late-refill increments at supported
+loads. Host tests do not prove USB bus timing. See
+[`CDC qualification`](../channel_card/docs/cdc_validation.md) and
+[`wire protocol`](../docs/protocol.md).
 
-`open()` keeps the USB upload connection available until `close()`.
-`load_sample()` converts and uploads at most 512 ATTACK samples, stores one copy
-of the signed-16 PCM BODY, and sends the sample's root pitch. The packet-fill
-loop converts only the BODY samples being transmitted to signed eight-bit.
-The retained BODY uses two bytes per sample. Replacing it releases the previous
-allocation outside the streaming-state lock.
+Run the host/firmware-ring integration tests without a board:
+
+```sh
+cmake -S voice_bd -B /tmp/voicebd-tests
+cmake --build /tmp/voicebd-tests --target voicebd_transport_test
+ctest --test-dir /tmp/voicebd-tests --output-on-failure
+```
 
 ## Mainframe synchronization
+
+The mainframe is not migrated by this change. Its `voicebd.h` configuration and
+build dependencies must be updated together with `voicebd.cpp` before using the
+new firmware; the existing sync script copies only the implementation.
 
 `voice_bd/voicebd.cpp` is the authoritative implementation. From the firmware
 repository root, run `scripts/sync_voicebd.sh /path/to/175-mainframe` to copy it
 into the existing `mas/voicebd.cpp`. The command shows the diff, skips identical
 files, and saves a backup before replacement. It never changes `voicebd.h`
 or commits to SVN. Synchronization does not run during `make`.
+
+## USB-only hardware check
+
+Close normal playback and run `./voicebd --usb-bench /dev/cu.usbmodemXXXXX 5`
+(on Linux use the board's `/dev/ttyACM*` path). New protocol-v1 firmware is
+required. No RS485 adapter or MIDI input is needed. The diagnostic verifies
+byte/block counts and a rolling checksum, then reports sustained payload
+throughput in eight- and 32-block batches and 64 host-to-firmware round trips. The test does not play notes;
+its timing is not a note-to-DAC measurement.

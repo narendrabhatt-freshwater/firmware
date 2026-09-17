@@ -70,16 +70,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/console/vm_upload.c
     Core/Src/audio/audio_bridge.c
     Core/Src/audio/channel_vm.c
-    # TinyUSB core + device stack.  Kept in ThirdParty/ (NOT
-    # Middlewares/, which CubeMX manages and prunes on regeneration).
-    ThirdParty/tinyusb/src/tusb.c
-    ThirdParty/tinyusb/src/common/tusb_fifo.c
-    ThirdParty/tinyusb/src/device/usbd.c
-    ThirdParty/tinyusb/src/device/usbd_control.c
-    ThirdParty/tinyusb/src/class/audio/audio_device.c
-    ThirdParty/tinyusb/src/class/cdc/cdc_device.c
-    ThirdParty/tinyusb/src/portable/synopsys/dwc2/dcd_dwc2.c
-    # USB application layer (descriptors + UAC2 BODY + CDC)
+    # Custom CDC device over the STM32 HAL PCD peripheral driver.
+    USB_APP/usb_device.c
     USB_APP/usb_descriptors.c
     USB_APP/usb_app.c
 )
@@ -90,15 +82,9 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Inc/audio
     Core/Inc/drivers
     Core/Inc/console
-    ThirdParty/tinyusb/src
     USB_APP
     runtime/vm/include
     runtime/include
-)
-
-# Add project symbols (macros)
-target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
-    CFG_TUSB_MCU=OPT_MCU_STM32H7
 )
 
 # Remove wrong libob.a library dependency when using cpp files

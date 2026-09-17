@@ -68,9 +68,8 @@ _estack = ORIGIN(DTCMRAM) + LENGTH(DTCMRAM);    /* end of RAM */
 _sstack = _estack - _Min_Stack_Size;
 /* Generate a link error if heap and stack don't fit into RAM */
 _Min_Heap_Size = 0x200;      /* required amount of heap  */
-/* TinyUSB control/audio handling and newlib scanf can nest below interrupt
-   context. Reserve enough space to make a stack/.bss collision a link-time
-   error instead of intermittent CDC/UAC corruption. */
+/* USB parsing and console handling can nest below audio/USB interrupts.
+   Reserve enough stack to catch a stack/.bss collision at link time. */
 _Min_Stack_Size = 0x4000; /* required amount of stack */
 
 /* Define output sections */
@@ -217,16 +216,6 @@ SECTIONS
   PROVIDE( __tls_size_align = (__tls_size + __tls_align - 1) & ~(__tls_align - 1) );
   PROVIDE( __arm32_tls_tcb_offset = MAX(8, __tls_align) );
   PROVIDE( __arm64_tls_tcb_offset = MAX(16, __tls_align) );
-
-  /* TinyUSB clears this interface explicitly in vendord_init(). Keep its
-     large RX FIFO and endpoint buffers in USB-accessible AXI SRAM rather
-     than consuming the DTCM needed by the per-voice audio rings. This must
-     precede the catch-all .bss output section. */
-  .usb_buffer (NOLOAD) : ALIGN(4)
-  {
-    *(.bss._vendord_itf)
-    . = ALIGN(4);
-  } >RAM_D1
 
   .bss (NOLOAD) : ALIGN(4)
   {

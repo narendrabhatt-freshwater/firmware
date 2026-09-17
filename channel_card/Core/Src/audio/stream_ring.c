@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  * @file    stream_ring.c
- * @brief   Per-voice body FIFO filled from packed UAC2 BODY bursts.
+ * @brief   Per-voice body FIFO filled from binary CDC BODY blocks.
  ******************************************************************************
  */
 
@@ -10,6 +10,9 @@
 
 #include <stddef.h>
 #include <string.h>
+#if defined(__arm__) || defined(__thumb__)
+#include "main.h"
+#endif
 
 #define STREAM_RING_STORAGE_SAMPLES STREAM_RING_SAMPLES
 
@@ -22,12 +25,12 @@ typedef struct
   volatile uint32_t split;
   volatile uint32_t wr;
   volatile uint8_t consuming;
-  uint8_t current_session;
+  volatile uint8_t current_session;
   volatile uint8_t pending_armed;
   volatile uint8_t pending_session;
-  uint16_t current_wave_id;
+  volatile uint16_t current_wave_id;
   volatile uint16_t pending_wave_id;
-  uint32_t generation;
+  volatile uint32_t generation;
   int8_t data[STREAM_RING_STORAGE_SAMPLES];
 } StreamRing_t;
 
@@ -47,10 +50,10 @@ static volatile uint32_t s_stale_pkts;
 static volatile uint32_t s_future_pkts;
 static volatile uint32_t s_full_pkts;
 static volatile uint32_t s_superseded_pkts;
-static volatile uint16_t s_last_uac_sequence;
+static volatile uint16_t s_last_body_sequence;
 static volatile uint32_t s_audio_frames;
-static uint32_t s_last_uac_frame;
-static uint8_t s_have_uac;
+static uint32_t s_last_body_frame;
+static uint8_t s_have_body;
 /* 0xFFFFFFFF = no consume sample since last clear. */
 static volatile uint32_t s_min_fill = 0xFFFFFFFFu;
 
@@ -68,9 +71,9 @@ static uint32_t StreamRing_PendingFilled(const StreamRing_t *r)
 
 void StreamRing_Init(void)
 {
-  s_last_uac_sequence = 0u;
-  s_audio_frames = s_last_uac_frame = 0u;
-  s_have_uac = 0u;
+  s_last_body_sequence = 0u;
+  s_audio_frames = s_last_body_frame = 0u;
+  s_have_body = 0u;
   StreamRing_ResetAll();
 }
 
@@ -239,7 +242,7 @@ int StreamRing_WriteBegin(uint8_t voice, uint8_t session, uint8_t sof,
                          session != r->current_session))
   {
     /* A fresh vq authorized this refill, but note-off/new-note invalidated its
-     * session before the ISO bytes arrived. It is valid transport data, but
+     * session before the CDC bytes arrived. It is valid transport data, but
      * it must not repopulate the ring. */
     s_stale_pkts++;
     return STREAM_RING_WRITE_STALE;
@@ -272,6 +275,11 @@ uint8_t StreamRing_WriteIsCurrent(const StreamRing_Write_t *write)
     return 0u;
   }
   r = StreamRing_At(write->voice);
+  /* Promotion preserves the reserved storage and session. The I2S ISR may
+   * promote a primed pending note while main copies its next BODY block. */
+  if (write->pending && r->generation == write->generation + 1u &&
+      !r->pending_armed && r->current_session == write->session &&
+      r->wr == write->start_wr) return 1u;
   return (r->generation == write->generation &&
           ((write->pending != 0u && r->pending_armed != 0u &&
             r->pending_session == write->session &&
@@ -338,11 +346,6 @@ uint32_t StreamRing_WriteCommit(StreamRing_Write_t *write)
     return 0u;
   }
   r = StreamRing_At(write->voice);
-  if (StreamRing_WriteIsCurrent(write) == 0u)
-  {
-    write->active = 0u;
-    return 0u;
-  }
   for (i = 0u; i < write->nsamp; i++)
   {
     uint32_t idx = (write->start_wr + i) % STREAM_RING_SAMPLES;
@@ -352,7 +355,24 @@ uint32_t StreamRing_WriteCommit(StreamRing_Write_t *write)
       break;
     }
   }
+  /* Only the final generation check/publication masks interrupts; sample
+   * copying and zero inspection above remain preemptible. */
+#if defined(__arm__) || defined(__thumb__)
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+#endif
+  if (StreamRing_WriteIsCurrent(write) == 0u) {
+    write->active = 0u;
+#if defined(__arm__) || defined(__thumb__)
+    __set_PRIMASK(primask);
+#endif
+    return 0u;
+  }
+  __atomic_thread_fence(__ATOMIC_RELEASE);
   r->wr = write->start_wr + write->nsamp;
+#if defined(__arm__) || defined(__thumb__)
+  __set_PRIMASK(primask);
+#endif
   if (write->pending != 0u && write->sof != 0u) s_sof_pkts++;
   s_rx_pkts++;
   if (all_zero != 0u)
@@ -407,53 +427,35 @@ uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
   return StreamRing_WriteCommit(&write);
 }
 
-uint32_t StreamRing_WriteUac(const int8_t *packet)
+int StreamRing_WriteBody(uint8_t voice, uint8_t session, uint8_t sof,
+                         uint16_t sequence, const int8_t *samples, uint16_t count)
 {
-  uint16_t counts[2];
-  uint8_t voices[2];
-  uint32_t offset = USB_STREAM_UAC_HEADER_BYTES;
-  uint32_t accepted = 0u;
-  if (packet == NULL) return 0u;
-  /* Validate the entire layout before either block can change a ring. */
-  for (unsigned i = 0u; i < 2u; ++i)
-  {
-    const uint8_t *d = (const uint8_t *)packet + 2u + 4u * i;
-    counts[i] = (uint16_t)d[2] | (uint16_t)((uint16_t)d[3] << 8u);
-    voices[i] = d[0] & USB_STREAM_TAG_VOICE_MASK;
-    if (counts[i] != 0u &&
-        ((d[0] & USB_STREAM_TAG_MASK) != USB_STREAM_TAG_BASE ||
-         d[1] == 0xFFu)) return 0u;
-  }
-  if ((uint32_t)counts[0] + counts[1] > USB_STREAM_UAC_BODY_SAMPLES ||
-      (counts[0] != 0u && counts[1] != 0u && voices[0] == voices[1]))
-    return 0u;
-  if (counts[0] == 0u && counts[1] == 0u) return 0u;
-  for (unsigned i = 0u; i < 2u; ++i)
-  {
-    const uint8_t *d = (const uint8_t *)packet + 2u + 4u * i;
-    uint8_t sof = (d[0] & USB_STREAM_TAG_SOF) != 0u;
-    StreamRing_t *r = StreamRing_At(voices[i]);
-    uint16_t wave = (r->pending_armed != 0u &&
-                    (sof != 0u || d[1] == r->pending_session))
-                       ? r->pending_wave_id : r->current_wave_id;
-    if (counts[i] != 0u &&
-        StreamRing_WriteVoice(voices[i], d[1], sof, wave,
-                             packet + offset, counts[i]) == counts[i])
-      ++accepted;
-    offset += counts[i];
-  }
-  s_last_uac_frame = s_audio_frames;
-  s_have_uac = 1u;
-  /* Main-loop USB ingestion cannot interleave a console snapshot here. */
-  s_last_uac_sequence = (uint16_t)(uint8_t)packet[0] |
-                       (uint16_t)((uint16_t)(uint8_t)packet[1] << 8u);
+  if (voice >= SAMPLE_VOICES || !samples || !count || count > USB_STREAM_PAYLOAD_MAX) return -1;
+  StreamRing_t *r = StreamRing_At(voice);
+  uint16_t wave = (r->pending_armed && (sof || session == r->pending_session))
+      ? r->pending_wave_id : r->current_wave_id;
+  StreamRing_Write_t write;
+  int rc = StreamRing_WriteBegin(voice, session, sof, wave, count, &write);
+  int accepted = 0;
+  if (rc == STREAM_RING_WRITE_OK) {
+    uint32_t copied = 0;
+    while (copied < count) {
+      uint32_t n;
+      int8_t *dst = StreamRing_WriteSpan(&write, &n);
+      if (!dst || !n) { StreamRing_WriteAbort(&write); break; }
+      memcpy(dst, samples + copied, n);
+      if (StreamRing_WriteAdvance(&write, n) != 0) { StreamRing_WriteAbort(&write); break; }
+      copied += n;
+    }
+    if (copied == count) accepted = StreamRing_WriteCommit(&write) == count;
+  } else if (rc == STREAM_RING_WRITE_ERROR) accepted = -1;
+  s_last_body_frame = s_audio_frames;
+  s_have_body = 1u;
+  s_last_body_sequence = sequence;
   return accepted;
 }
 
-uint16_t StreamRing_LastUacSequence(void)
-{
-  return s_last_uac_sequence;
-}
+uint16_t StreamRing_LastBodySequence(void) { return s_last_body_sequence; }
 
 int StreamRing_GetRel(uint8_t voice, uint32_t offset, int8_t *out)
 {
@@ -637,9 +639,9 @@ void StreamRing_DropCountClear(void)
 
 /* The audio clock measures snapshot age without RS485/host timing guesses. */
 void StreamRing_AudioFrame(void) { ++s_audio_frames; }
-uint8_t StreamRing_UacAgeMs(void)
+uint8_t StreamRing_BodyAgeMs(void)
 {
-  uint32_t frames = s_audio_frames - s_last_uac_frame;
-  if (s_have_uac == 0u || frames >= 254u * 48u) return 255u;
+  uint32_t frames = s_audio_frames - s_last_body_frame;
+  if (s_have_body == 0u || frames >= 254u * 48u) return 255u;
   return (uint8_t)((frames + 47u) / 48u);
 }

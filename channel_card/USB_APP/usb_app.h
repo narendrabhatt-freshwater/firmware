@@ -1,13 +1,4 @@
-/**
- ******************************************************************************
- * @file    usb_app.h
- * @brief   TinyUSB application layer: UAC2 BODY + CDC console.
- *
- * TinyUSB task service runs from PendSV, below the USB IRQ and above the DMA
- * mixer, to re-arm UAC promptly. BODY parsing and CDC run in USB_App_Task().
- ******************************************************************************
- */
-
+/* Binary CDC application layer. Call USB_App_Task from the main loop. */
 #ifndef USB_APP_H
 #define USB_APP_H
 
@@ -20,25 +11,17 @@ extern "C"
 
     void USB_App_Init(void);
 
-    /**
-     * @brief Drain UAC BODY into the rings and poll CDC.
-     * @note Call from main. Call again after ChannelConsole_Poll() so a
-     *       long RS485 TX cannot sit on a full UAC RX FIFO.
-     */
     void USB_App_Task(void);
-
-    /** TinyUSB task consumer; called only from PendSV_Handler. */
-    void USB_App_DeferredTask(void);
 
     void USB_CDC_WriteStr(const char *s);
 
     uint32_t USB_App_RxMsgCount(void);
     uint32_t USB_App_RxByteCount(void);
-    uint32_t USB_App_UacWindowCount(void);
+    uint32_t USB_App_BlockCount(void);
     uint32_t USB_App_BadCount(void);
-    /** Reserved reason counters; direct transport reports routing faults in 2. */
+    /** Transport faults are counted in reason 4. */
     uint32_t USB_App_BadReasonCount(uint8_t reason);
-    /** Reserved PACK sequence field; direct transport returns 0xFFFF. */
+    /** Last processed BODY sequence. */
     uint16_t USB_App_LastPackSequence(void);
     void USB_App_StatsClear(void);
 

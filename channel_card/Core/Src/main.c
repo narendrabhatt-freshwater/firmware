@@ -125,10 +125,7 @@ int main(void)
   MX_USB_OTG_HS_PCD_Init();
   /* USER CODE BEGIN 2 */
 
-  /* USB is owned by TinyUSB (UAC2 int16 BODY + CDC console) — see USB_APP/.
-   * ST's MX_USB_DEVICE_Init() is gone with the USB_DEVICE middleware;
-   * USB_App_Init() does the clocks, PHY power and NVIC itself.
-   * Kept inside USER CODE so CubeMX regeneration preserves it. */
+  /* Custom CDC device uses the generated HAL PCD and embedded Full-Speed PHY. */
   USB_App_Init();
 
   /* --- Power-on status sequence: flash fixed red/yellow LEDs only.
@@ -161,8 +158,7 @@ int main(void)
     HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_SET);
   }
 
-  /* Only CH1 (USB audio) follows the host volume slider; CH2-CH4 (test
-   * tones) stay at full scale (0 dB + their Trim, if any). */
+  /* CH1 carries the note mix; CH2-CH4 carry control voltages. */
   hcs4304.MasterMask = 0x01;
   CS4304_SetVolume(&hcs4304, hcs4304.Volume); /* re-apply with the mask */
 
@@ -170,10 +166,7 @@ int main(void)
   Audio_Bridge_SetDacHandle(&hcs4304);
   ChannelConsole_SetDacHandle(&hcs4304);
 
-  /* DAC is ready. USB audio will start when host begins streaming. */
-  /* I2S DMA is started in AUDIO_Init_HS() when USB audio is activated. */
-
-  /* Start I2S DMA for standalone playback */
+  /* DAC timing runs independently of USB traffic and enumeration. */
   Audio_StartPlayback();
 
   /* Default DC level 0 for CH2-CH4 (true 0 V via the per-channel zero
@@ -210,9 +203,9 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-    USB_App_Task();        /* UAC BODY drain + CDC */
+    USB_App_Task();        /* Binary CDC BODY/uploads */
     ChannelConsole_Poll(); /* RS485 console + LED chaser */
-    USB_App_Task();        /* drain UAC FIFO after a console TX */
+    USB_App_Task();        /* Drain CDC after a console TX */
   }
   /* USER CODE END 3 */
 }

@@ -455,7 +455,7 @@ static void NoteBank_DrainCmd(uint8_t note)
       NoteBank_HardOff(note);
       return;
     }
-    if (StreamRing_PendingFill(note) < USB_STREAM_UAC_BODY_SAMPLES) return;
+    if (StreamRing_PendingFill(note) < USB_STREAM_PRIME_SAMPLES) return;
     note_cmd[note] = NOTE_CMD_NONE;
     NoteBank_StartVoice(note, note_cmd_key[note], note_cmd_velocity[note]);
     (void)NoteBank_VmDispatch(FW_VM_CHANNEL_HANDLER_NOTE_ON, note);

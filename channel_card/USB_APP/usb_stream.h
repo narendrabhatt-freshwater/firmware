@@ -1,52 +1,24 @@
-/**
- * @file usb_stream.h
- * @brief Direct BODY samples carried in each 1 ms Channel Card UAC2 packet.
- *
- * The USB interface is class-compliant UAC2 (21ch, int8, 48 kHz).
- * Each 1 ms USB packet has ten metadata bytes followed by up to 998 signed BODY
- * samples.
- * The fixed header carries two counted blocks, without a CRC.
- */
-
+/* Channel Card binary CDC protocol, version 1. No USB packet boundaries on wire. */
 #ifndef USB_STREAM_H
 #define USB_STREAM_H
-
 #include <stdint.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#define USB_STREAM_VID 0xCafe
-#define USB_STREAM_PID 0x4031
-
-/* Session identities 0..254; 0xFF is the unarmed sentinel. */
+#define USB_STREAM_VID 0xCAFEu
+#define USB_STREAM_PID 0x4032u
+#define USB_STREAM_VERSION 1u
+#define USB_STREAM_HEADER_BYTES 8u
+#define USB_STREAM_PAYLOAD_MAX 1024u
 #define USB_STREAM_SESSION_MOD 255u
 #define USB_STREAM_NSAMP_MAX 4096u
-
-#define USB_STREAM_UAC_CHANNELS 21u
-#define USB_STREAM_UAC_SAMPLE_BYTES 1u
-#define USB_STREAM_UAC_AUDIO_FRAME_BYTES                              \
-  (USB_STREAM_UAC_CHANNELS * USB_STREAM_UAC_SAMPLE_BYTES)
-#define USB_STREAM_UAC_RATE_HZ 48000u
-#define USB_STREAM_UAC_FRAMES_PER_MS (USB_STREAM_UAC_RATE_HZ / 1000u)
-#define USB_STREAM_UAC_PACKET_BYTES                                   \
-  (USB_STREAM_UAC_AUDIO_FRAME_BYTES * USB_STREAM_UAC_FRAMES_PER_MS)
-#define USB_STREAM_UAC_EP_MAX_BYTES USB_STREAM_UAC_PACKET_BYTES
-
-/* Payload: sequence u16, then two descriptors at offsets 2 and 6.
- * Descriptor: tag = 0xA0 | SOF[3] | voice[2:0], session u8, count u16. */
-#define USB_STREAM_TAG_MASK 0xF0u
-#define USB_STREAM_TAG_BASE 0xA0u
-#define USB_STREAM_TAG_IDLE 0xFFu
-#define USB_STREAM_TAG_SOF 0x08u
-#define USB_STREAM_TAG_VOICE_MASK 0x07u
-#define USB_STREAM_UAC_HEADER_BYTES 10u
-#define USB_STREAM_UAC_BODY_SAMPLES \
-  (USB_STREAM_UAC_PACKET_BYTES - USB_STREAM_UAC_HEADER_BYTES)
-
-#ifdef __cplusplus
-}
+#define USB_STREAM_PRIME_SAMPLES 998u
+#define USB_STREAM_FLAG_START 1u
+/* Header: type, target, session, flags, payload length LE16, sequence LE16. */
+enum { USB_MSG_HELLO = 1, USB_MSG_BODY, USB_MSG_UPLOAD_BEGIN,
+       USB_MSG_UPLOAD_DATA, USB_MSG_UPLOAD_ABORT, USB_MSG_REPLY, USB_MSG_PROBE };
+enum { USB_UPLOAD_ATTACK = 1, USB_UPLOAD_WAVE, USB_UPLOAD_SCRIPT };
+static inline uint16_t USB_Read16(const uint8_t *p)
+{ return (uint16_t)p[0] | ((uint16_t)p[1] << 8); }
+static inline uint32_t USB_Read32(const uint8_t *p)
+{ return (uint32_t)USB_Read16(p) | ((uint32_t)USB_Read16(p + 2) << 16); }
+static inline void USB_Write16(uint8_t *p, uint16_t n)
+{ p[0] = (uint8_t)n; p[1] = (uint8_t)(n >> 8); }
 #endif
-
-#endif /* USB_STREAM_H */

@@ -1,175 +1,43 @@
-/* USB descriptors — Channel Card composite
- *   ITF0/1: synchronous UAC2 output (21ch int8, 48 kHz)
- *   ITF2/3: CDC-ACM console
- *
- * PID 0x4031 identifies the signed-8-bit descriptor revision.
- */
-#include "stm32h7xx_hal.h"
-#include "tusb.h"
+/* Single CDC ACM function; no audio interfaces. */
+#include "usb_device.h"
 #include "usb_stream.h"
-
+#include "stm32h7xx_hal.h"
 #include <stdio.h>
 #include <string.h>
-
-#define TUD_AUDIO_SPEAKER_MULTICH_SYNC_DESC_LEN                            \
-  (TUD_AUDIO_SPEAKER_MONO_FB_DESC_LEN -                                   \
-   (TUD_AUDIO_DESC_FEATURE_UNIT_ONE_CHANNEL_LEN) -                         \
-   TUD_AUDIO_DESC_STD_AS_ISO_FB_EP_LEN)
-
-tusb_desc_device_t const desc_device = {
-    .bLength = sizeof(tusb_desc_device_t),
-    .bDescriptorType = TUSB_DESC_DEVICE,
-    .bcdUSB = 0x0200,
-    .bDeviceClass = TUSB_CLASS_MISC,
-    .bDeviceSubClass = MISC_SUBCLASS_COMMON,
-    .bDeviceProtocol = MISC_PROTOCOL_IAD,
-    .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
-    .idVendor = USB_STREAM_VID,
-    .idProduct = USB_STREAM_PID,
-    .bcdDevice = 0x0200,
-    .iManufacturer = 0x01,
-    .iProduct = 0x02,
-    .iSerialNumber = 0x03,
-    .bNumConfigurations = 0x01,
+static const uint8_t device[] = {
+  18,1,0,2,0xEF,2,1,64,
+  USB_STREAM_VID & 255, USB_STREAM_VID >> 8,
+  USB_STREAM_PID & 255, USB_STREAM_PID >> 8,
+  0,3,1,2,3,1
 };
-
-uint8_t const *tud_descriptor_device_cb(void)
+static const uint8_t configuration[] = {
+  9,2,75,0,2,1,0,0x80,50,
+  8,11,0,2,2,2,1,0,
+  9,4,0,0,1,2,2,1,0,
+  5,0x24,0,0x10,1,
+  5,0x24,1,0,1,
+  4,0x24,2,2,
+  5,0x24,6,0,1,
+  7,5,0x82,3,8,0,16,
+  9,4,1,0,2,0x0A,0,0,0,
+  7,5,0x01,2,64,0,0,
+  7,5,0x81,2,64,0,0
+};
+_Static_assert(sizeof(configuration) == 75, "CDC descriptor length");
+const uint8_t *USB_Descriptor(uint8_t type, uint8_t index, uint16_t *size)
 {
-  return (uint8_t const *)&desc_device;
-}
-
-enum {
-  ITF_NUM_AUDIO_CONTROL = 0,
-  ITF_NUM_AUDIO_STREAMING,
-  ITF_NUM_CDC,
-  ITF_NUM_CDC_DATA,
-  ITF_NUM_TOTAL
-};
-
-#define CONFIG_TOTAL_LEN                                                   \
-  (TUD_CONFIG_DESC_LEN + TUD_AUDIO_SPEAKER_MULTICH_SYNC_DESC_LEN +         \
-   TUD_CDC_DESC_LEN)
-#define EPNUM_AUDIO_OUT 0x01
-#define EPNUM_CDC_NOTIF 0x82
-#define EPNUM_CDC_OUT 0x03
-#define EPNUM_CDC_IN 0x83
-uint8_t const desc_configuration[] = {
-    TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
-#define _SPK_ITF ITF_NUM_AUDIO_CONTROL
-    TUD_AUDIO_DESC_IAD(_SPK_ITF, 0x02, 0x00),
-    TUD_AUDIO_DESC_STD_AC(_SPK_ITF, 0x00, 4),
-    TUD_AUDIO_DESC_CS_AC(
-        0x0200, AUDIO_FUNC_DESKTOP_SPEAKER,
-        TUD_AUDIO_DESC_CLK_SRC_LEN + TUD_AUDIO_DESC_INPUT_TERM_LEN +
-            TUD_AUDIO_DESC_OUTPUT_TERM_LEN,
-        AUDIO_CS_AS_INTERFACE_CTRL_LATENCY_POS),
-    TUD_AUDIO_DESC_CLK_SRC(0x04, AUDIO_CLOCK_SOURCE_ATT_INT_FIX_CLK,
-                           (AUDIO_CTRL_R << AUDIO_CLOCK_SOURCE_CTRL_CLK_FRQ_POS),
-                           0x01, 0x00),
-    TUD_AUDIO_DESC_INPUT_TERM(0x01, AUDIO_TERM_TYPE_USB_STREAMING, 0x00, 0x04,
-                              0x15, AUDIO_CHANNEL_CONFIG_NON_PREDEFINED, 0x00,
-                              0, 0x00),
-    TUD_AUDIO_DESC_OUTPUT_TERM(0x03, AUDIO_TERM_TYPE_OUT_DESKTOP_SPEAKER, 0x01,
-                               0x01, 0x04, 0x0000, 0x00),
-    TUD_AUDIO_DESC_STD_AS_INT((uint8_t)(_SPK_ITF + 1), 0x00, 0x00, 0x00),
-    TUD_AUDIO_DESC_STD_AS_INT((uint8_t)(_SPK_ITF + 1), 0x01, 0x01, 0x00),
-    TUD_AUDIO_DESC_CS_AS_INT(0x01, AUDIO_CTRL_NONE, AUDIO_FORMAT_TYPE_I,
-                             AUDIO_DATA_FORMAT_TYPE_I_PCM, 0x15,
-                             AUDIO_CHANNEL_CONFIG_NON_PREDEFINED, 0x00),
-    TUD_AUDIO_DESC_TYPE_I_FORMAT(CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX,
-                                 CFG_TUD_AUDIO_FUNC_1_RESOLUTION_RX),
-    TUD_AUDIO_DESC_STD_AS_ISO_EP(
-        EPNUM_AUDIO_OUT,
-        (uint8_t)(TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_SYNCHRONOUS |
-                  TUSB_ISO_EP_ATT_DATA),
-        CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX, 0x01),
-    TUD_AUDIO_DESC_CS_AS_ISO_EP(
-        AUDIO_CS_AS_ISO_DATA_EP_ATT_NON_MAX_PACKETS_OK, AUDIO_CTRL_NONE,
-        AUDIO_CS_AS_ISO_DATA_EP_LOCK_DELAY_UNIT_UNDEFINED, 0x0000),
-#undef _SPK_ITF
-    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 5, EPNUM_CDC_NOTIF, 8, EPNUM_CDC_OUT,
-                       EPNUM_CDC_IN, 64),
-};
-
-TU_VERIFY_STATIC(sizeof(desc_configuration) == CONFIG_TOTAL_LEN,
-                 "CONFIG_TOTAL_LEN mismatch");
-TU_VERIFY_STATIC(TUD_AUDIO_SPEAKER_MULTICH_SYNC_DESC_LEN ==
-                     CFG_TUD_AUDIO_FUNC_1_DESC_LEN,
-                 "audio desc mismatch");
-TU_VERIFY_STATIC(USB_STREAM_UAC_PACKET_BYTES ==
-                     CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX *
-                         CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX *
-                         USB_STREAM_UAC_FRAMES_PER_MS,
-                 "nominal UAC packet must be 1008 bytes");
-TU_VERIFY_STATIC(CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX >=
-                     USB_STREAM_UAC_PACKET_BYTES,
-                 "UAC endpoint must hold the nominal packet");
-TU_VERIFY_STATIC(CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX <= 1023,
-                 "FS ISO packet must be <= 1023");
-
-uint8_t const *tud_descriptor_configuration_cb(uint8_t index)
-{
-  (void)index;
-  return desc_configuration;
-}
-
-enum {
-  STRID_LANGID = 0,
-  STRID_MANUFACTURER,
-  STRID_PRODUCT,
-  STRID_SERIAL,
-  STRID_AUDIO_ITF,
-  STRID_CDC_ITF
-};
-
-char const *string_desc_arr[] = {
-    (const char[]){0x09, 0x04},
-    "Freshwater",
-    "Channel Card Audio",
-    NULL,
-    "Channel Card BODY",
-    "Channel Card Console",
-};
-
-static uint16_t _desc_str[32 + 1];
-static char serial_number[32];
-
-static const char *USB_SerialNumber(void)
-{
-  if (serial_number[0] == '\0')
-  {
-    (void)snprintf(serial_number, sizeof serial_number,
-                   "CHCARD-%08lX%08lX%08lX",
-                   (unsigned long)HAL_GetUIDw0(),
-                   (unsigned long)HAL_GetUIDw1(),
-                   (unsigned long)HAL_GetUIDw2());
-  }
-  return serial_number;
-}
-
-uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid)
-{
-  (void)langid;
-  size_t chr_count;
-  if (index == STRID_LANGID)
-  {
-    memcpy(&_desc_str[1], string_desc_arr[0], 2);
-    chr_count = 1;
-  }
-  else
-  {
-    size_t const count = sizeof(string_desc_arr) / sizeof(string_desc_arr[0]);
-    size_t const max_count = sizeof(_desc_str) / sizeof(_desc_str[0]) - 1;
-    if (index >= count)
-      return NULL;
-    const char *str =
-        index == STRID_SERIAL ? USB_SerialNumber() : string_desc_arr[index];
-    chr_count = strlen(str);
-    if (chr_count > max_count)
-      chr_count = max_count;
-    for (size_t i = 0; i < chr_count; i++)
-      _desc_str[1 + i] = str[i];
-  }
-  _desc_str[0] = (uint16_t)((TUSB_DESC_STRING << 8) | (2 * chr_count + 2));
-  return _desc_str;
+  static uint8_t string[66];
+  char serial[32];
+  const char *text;
+  if (type == 1 && index == 0) { *size = sizeof(device); return device; }
+  if (type == 2 && index == 0) { *size = sizeof(configuration); return configuration; }
+  if (type != 3 || index > 3) return NULL;
+  if (index == 0) { string[0]=4; string[1]=3; string[2]=9; string[3]=4; *size=4; return string; }
+  (void)snprintf(serial, sizeof serial, "CHCARD-%08lX%08lX%08lX",
+    (unsigned long)HAL_GetUIDw0(), (unsigned long)HAL_GetUIDw1(), (unsigned long)HAL_GetUIDw2());
+  text = index == 1 ? "Freshwater" : index == 2 ? "Channel Card Data" : serial;
+  *size = (uint16_t)(2 + 2 * strlen(text));
+  string[0] = (uint8_t)*size; string[1] = 3;
+  for (unsigned i=0; text[i]; ++i) { string[2+2*i]=(uint8_t)text[i]; string[3+2*i]=0; }
+  return string;
 }

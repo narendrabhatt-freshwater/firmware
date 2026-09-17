@@ -27,11 +27,11 @@ BUILD_BAUD=""
 
 # Serial console / log
 SERIAL_PORT="${FW_SERIAL_PORT:-}"     # e.g. /dev/cu.usbmodemCHCARD_<hardware-uid>3
-SERIAL_BAUD="${FW_SERIAL_BAUD:-115200}"
+SERIAL_BAUD="${FW_SERIAL_BAUD:-921600}"
 SEND_WAIT_SECS="${FW_SEND_WAIT:-1.5}"
 
 # Running firmware USB IDs (placeholders — see USB_APP/usb_descriptors.c)
-CHANNEL_VID_PID="cafe:4031"
+CHANNEL_VID_PID="cafe:4032"
 EFFECT_VID_PID="cafe:4015"
 
 # Print one line; leading \r resets column (fixes staircase when terminal
@@ -100,8 +100,8 @@ usage() {
     "  --no-verify             skip verify"
     "  --no-start              skip run-after-write"
     ""
-    "Serial / logs (per card, over USB CDC)"
-    "  fw console channel      interactive USB CDC console (Ctrl-A K to quit screen)"
+    "Serial / logs (Channel RS485; Effect CDC)"
+    "  fw console channel      RS485 console; pass --port for the adapter"
     "  fw log effect           follow CDC output (Ctrl-C to stop)"
     "  fw send channel help    send one command, print reply"
     "  fw send channel status"
@@ -899,6 +899,9 @@ list_cdc_ports() {
 # Resolve USB CDC path for a card. Prefers cu.* over tty.* on macOS.
 resolve_serial_port() {
   local card="$1"
+  if [[ "$card" == "channel" && -z "$SERIAL_PORT" ]]; then
+    die "Channel USB is binary-only. Pass --port for the RS485 adapter (921600 baud)."
+  fi
   if [[ -n "$SERIAL_PORT" ]]; then
     [[ -e "$SERIAL_PORT" ]] || die "serial port not found: $SERIAL_PORT"
     echo "$SERIAL_PORT"
@@ -914,7 +917,7 @@ resolve_serial_port() {
   local matches=()
   local pat=
   case "$card" in
-    channel) pat='CHCARD|chcard|Cafe.*4031|cafe.*4031' ;;
+    channel) pat='CHCARD|chcard|Cafe.*4032|cafe.*4032' ;;
     effect)  pat='EFCARD|efcard|Cafe.*4015|cafe.*4015' ;;
     *) die "serial needs channel|effect" ;;
   esac
@@ -997,7 +1000,7 @@ cmd_console() {
   hdr "Console"
   row "card" "$card"
   row "port" "$port"
-  row "baud" "$SERIAL_BAUD (CDC — any)"
+  row "baud" "$SERIAL_BAUD"
   outn
   info "type help  |  quit: Ctrl-A then K (screen)  or  Ctrl-C"
   outn

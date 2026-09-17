@@ -26,6 +26,7 @@
 
 #include "main.h"
 #include "usart.h"
+#include "usb_app.h"
 
 /** Power of two so the wrap is a mask, not a modulo. 2048 B holds several
  * full 16-voice note bursts (~20 B each) so a mash of On+Off chords cannot
@@ -42,6 +43,8 @@ static volatile uint16_t rx_head;
 static volatile uint16_t rx_tail;
 static volatile uint32_t rx_dropped;
 static volatile uint8_t tx_complete;
+static const uint8_t * volatile tx_next;
+static volatile uint16_t tx_left;
 
 void Uart5Rx_Init(void)
 {
@@ -107,27 +110,24 @@ int Uart5Rx_Transmit(const uint8_t *data, uint16_t size, uint32_t timeout_ms)
 {
   uint32_t const started = HAL_GetTick();
   if (data == NULL || size == 0u) return -1;
-  tx_complete = 0u;
-  UART5->ICR = USART_ICR_TCCF;
-  for (uint16_t i = 0u; i < size; ++i)
-  {
-    while ((UART5->ISR & USART_ISR_TXE_TXFNF) == 0u)
-      if (HAL_GetTick() - started >= timeout_ms) return -1;
-    if (i + 1u == size)
-    {
-      uint32_t const primask = __get_PRIMASK();
-      __disable_irq();
-      UART5->TDR = data[i];
-      UART5->CR1 |= USART_CR1_TCIE;
-      __set_PRIMASK(primask);
-    }
-    else UART5->TDR = data[i];
-  }
+  uint32_t const primask=__get_PRIMASK(); __disable_irq();
+  UART5->CR1 &= ~(USART_CR1_TCIE | USART_CR1_TXEIE_TXFNFIE);
+  tx_complete=0u; tx_next=data; tx_left=size;
+  UART5->ICR=USART_ICR_TCCF;
+  UART5->CR1 |= USART_CR1_TXEIE_TXFNFIE;
+  __set_PRIMASK(primask);
+  /* RX/TC already run above the mixer. Feed TX there too, so a mixer callback
+   * cannot leave gaps in a 61-byte status reply. The stack buffer remains live
+   * until TC. USB dispatch cannot recurse into this RS485-only transmitter. */
   while (tx_complete == 0u)
   {
-    if (HAL_GetTick() - started >= timeout_ms)
+    USB_App_Task();
+    if (!tx_complete && HAL_GetTick()-started >= timeout_ms)
     {
-      UART5->CR1 &= ~USART_CR1_TCIE;
+      uint32_t saved=__get_PRIMASK(); __disable_irq();
+      UART5->CR1 &= ~(USART_CR1_TCIE | USART_CR1_TXEIE_TXFNFIE);
+      tx_left=0u;
+      __set_PRIMASK(saved);
       return -1;
     }
   }
@@ -144,6 +144,19 @@ void UART5_IRQHandler(void)
     UART5->CR1 &= ~USART_CR1_TCIE;
     UART5->ICR = USART_ICR_TCCF;
     tx_complete = 1u;
+  }
+
+  if ((UART5->CR1 & USART_CR1_TXEIE_TXFNFIE) != 0u)
+  {
+    while (tx_left && (UART5->ISR & USART_ISR_TXE_TXFNF))
+    {
+      UART5->TDR=*tx_next++; --tx_left;
+    }
+    if (!tx_left)
+    {
+      UART5->CR1 &= ~USART_CR1_TXEIE_TXFNFIE;
+      UART5->CR1 |= USART_CR1_TCIE;
+    }
   }
 
   if (isr & USART_ISR_ORE)

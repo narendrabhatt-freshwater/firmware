@@ -1,416 +1,181 @@
-/* Channel Card direct tagged UAC2 BODY transport + CDC console. */
-
+/* Binary-only CDC: BODY + chunked uploads, with controls/status on RS485. */
 #include "usb_app.h"
-#include "audio_bridge.h"
+#include "usb_device.h"
+#include "usb_protocol.h"
 #include "attack_upload.h"
-#include "channel_console.h"
 #include "vm_upload.h"
-#include "main.h"
 #include "stream_ring.h"
-#include "tusb.h"
-#include "usb_stream.h"
-
-#include <stdbool.h>
+#include "main.h"
+#include <stdio.h>
 #include <string.h>
+static USB_Parser parser;
+static uint32_t link_epoch, last_rx_ms, upload_ms;
+static uint32_t rx_messages, rx_bytes, blocks, bad;
+static uint8_t hello, failed, upload_kind, upload_target;
+static uint32_t upload_total, upload_offset;
+static uint16_t body_sequence;
+static uint32_t probe_bytes, probe_blocks, probe_hash;
+static char upload_reply[96];
+static uint8_t reply[USB_STREAM_HEADER_BYTES+128];
+static uint16_t reply_size;
 
-static uint32_t s_sample_freq = CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE;
-static uint8_t s_clock_valid = 1u;
-static audio_control_range_4_n_t(1) s_sample_freq_range;
-
-static uint32_t s_rx_msg;
-static uint32_t s_rx_bytes;
-static uint32_t s_uac_windows;
-static uint8_t s_uac_packet[USB_STREAM_UAC_PACKET_BYTES]
-    __attribute__((aligned(4)));
-static int8_t s_uac_logical[USB_STREAM_UAC_PACKET_BYTES];
-static uint16_t s_uac_logical_got;
-static uint8_t s_uac_synced;
-#define USB_PACKET_LENGTH_QUEUE 16u
-static volatile uint16_t s_uac_lengths[USB_PACKET_LENGTH_QUEUE];
-static volatile uint8_t s_uac_length_wr;
-static volatile uint8_t s_uac_length_rd;
-static volatile uint32_t s_bad_uac;
-static volatile uint8_t s_uac_resync;
-
-static void USB_App_ResetUacAlignment(void)
-{
-  s_uac_length_rd = s_uac_length_wr;
-  s_uac_resync = 0u;
-  s_uac_logical_got = 0u;
-  s_uac_synced = 0u;
-}
-
-static void USB_App_ConsumeUacBytes(const int8_t *bytes, uint16_t nbytes)
-{
-  uint16_t at = 0u;
-  if (s_uac_synced == 0u)
-  {
-    /* CoreAudio begins on an audio-frame boundary, but not necessarily on
-     * the endpoint's millisecond boundary. Find the existing tag once; from
-     * there the 1008-byte period is exact and no further scanning is needed. */
-    for (at = 0u; at + USB_STREAM_UAC_HEADER_BYTES <= nbytes; at = (uint16_t)(at + USB_STREAM_UAC_CHANNELS))
-    {
-      const uint8_t tag = (uint8_t)bytes[at + 2u];
-      const uint8_t tag2 = (uint8_t)bytes[at + 6u];
-      if ((tag == USB_STREAM_TAG_IDLE ||
-           (tag & USB_STREAM_TAG_MASK) == USB_STREAM_TAG_BASE) &&
-          (tag2 == USB_STREAM_TAG_IDLE ||
-           (tag2 & USB_STREAM_TAG_MASK) == USB_STREAM_TAG_BASE))
-      {
-        s_uac_synced = 1u;
-        break;
-      }
-    }
-    if (s_uac_synced == 0u)
-      return;
-  }
-  while (at < nbytes)
-  {
-    uint16_t copy_n = (uint16_t)(USB_STREAM_UAC_PACKET_BYTES -
-                                 s_uac_logical_got);
-    if (copy_n > (uint16_t)(nbytes - at))
-      copy_n = (uint16_t)(nbytes - at);
-    memcpy(s_uac_logical + s_uac_logical_got, bytes + at, copy_n);
-    s_uac_logical_got = (uint16_t)(s_uac_logical_got + copy_n);
-    at = (uint16_t)(at + copy_n);
-    if (s_uac_logical_got == USB_STREAM_UAC_PACKET_BYTES)
-    {
-      s_rx_msg += StreamRing_WriteUac(s_uac_logical);
-      s_uac_windows++;
-      s_uac_logical_got = 0u;
-    }
-  }
-}
-
-static void USB_LowLevel_Init(void)
-{
-  RCC_PeriphCLKInitTypeDef clock = {0};
-  clock.PeriphClockSelection = RCC_PERIPHCLK_USB;
-  clock.PLL3.PLL3M = 4;
-  clock.PLL3.PLL3N = 125;
-  clock.PLL3.PLL3P = 16;
-  clock.PLL3.PLL3Q = 16;
-  clock.PLL3.PLL3R = 8;
-  clock.PLL3.PLL3RGE = RCC_PLL3VCIRANGE_2;
-  clock.PLL3.PLL3VCOSEL = RCC_PLL3VCOWIDE;
-  clock.PLL3.PLL3FRACN = 0;
-  clock.UsbClockSelection = RCC_USBCLKSOURCE_PLL3;
-  if (HAL_RCCEx_PeriphCLKConfig(&clock) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  HAL_PWREx_EnableUSBVoltageDetector();
-  __HAL_RCC_USB_OTG_HS_CLK_ENABLE();
-  HAL_NVIC_SetPriority(OTG_HS_IRQn, 0, 0);
-  /* Below USB so RX status can unblock task waits; above the DMA mixer (2).
-   * Match the TIM7/SPI2 audio service priority (1), preserving serialization
-   * with audio start/stop callbacks. PendSV still preempts a busy main loop. */
-  HAL_NVIC_SetPriority(PendSV_IRQn, 1, 0);
-  HAL_NVIC_EnableIRQ(OTG_HS_IRQn);
-}
-
-void USB_App_Init(void)
-{
-  s_sample_freq_range.wNumSubRanges = 1;
-  s_sample_freq_range.subrange[0].bMin = CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE;
-  s_sample_freq_range.subrange[0].bMax = CFG_TUD_AUDIO_FUNC_1_MAX_SAMPLE_RATE;
-  s_sample_freq_range.subrange[0].bRes = 0;
-  USB_LowLevel_Init();
-  if (!tud_init(BOARD_TUD_RHPORT))
-    Error_Handler();
-}
-
+/* Existing upload validators report here; strings never enter the raw stream. */
 void USB_CDC_WriteStr(const char *s)
 {
-  uint32_t sent = 0u;
-  uint32_t len;
-  if (s == NULL || !tud_cdc_connected())
-    return;
-  len = (uint32_t)strlen(s);
-  while (sent < len)
-  {
-    uint32_t n = tud_cdc_write(s + sent, len - sent);
-    sent += n;
-    tud_cdc_write_flush();
-    if (n == 0u)
-      return;
-  }
+  if (s) (void)snprintf(upload_reply,sizeof upload_reply,"%s",s);
 }
-
-static void CDC_Console_Poll(void)
+static void abort_upload(void)
 {
-  static char line[64];
-  static uint8_t len;
-  if (!tud_cdc_connected())
-  {
-    if (VmUpload_IsActive() != 0u) VmUpload_Abort();
-    if (AttackUpload_IsActive() != 0u) AttackUpload_Abort();
-    len = 0u;
-    return;
-  }
-  while (tud_cdc_available())
-  {
-    char c;
-    if (VmUpload_IsActive() != 0u)
-    {
-      uint8_t tmp[256];
-      uint32_t n = tud_cdc_read(tmp, sizeof tmp);
-      if (n == 0u)
-        break;
-      (void)VmUpload_Feed(tmp, n);
-      continue;
-    }
-    if (AttackUpload_IsActive() != 0u)
-    {
-      uint8_t tmp[256];
-      uint32_t n = tud_cdc_read(tmp, sizeof tmp);
-      if (n == 0u)
-        break;
-      (void)AttackUpload_Feed(tmp, n);
-      continue;
-    }
-    if (tud_cdc_read(&c, 1) == 0u)
-      break;
-    if (c == '\r' || c == '\n')
-    {
-      USB_CDC_WriteStr("\r\n");
-      if (len != 0u)
-      {
-        line[len] = '\0';
-        len = 0u;
-        Console_ExecFromUSB(line);
-      }
-    }
-    else if (c == 0x08 || c == 0x7F)
-    {
-      if (len != 0u)
-      {
-        len--;
-        USB_CDC_WriteStr("\b \b");
-      }
-    }
-    else if (len < sizeof(line) - 1u && c >= 0x20 && c < 0x7F)
-    {
-      if (c >= 'A' && c <= 'Z')
-        c = (char)(c + 32);
-      line[len++] = c;
-      {
-        char echo[2] = {c, '\0'};
-        USB_CDC_WriteStr(echo);
-      }
-    }
-  }
+  VmUpload_Abort(); AttackUpload_Abort();
+  upload_kind=0; upload_offset=upload_total=0;
 }
-
-static void USB_App_DrainUac(void)
+static void make_reply(const uint8_t *header, const uint8_t *payload, uint16_t size)
 {
-  if (!tud_audio_mounted())
-  {
-    USB_App_ResetUacAlignment();
-    return;
-  }
-  /* Protect the FIFO read and queue pop from an ISR overflow flush. Keep
-   * BODY parsing outside this short section so audio IRQs can run. */
-  const uint32_t primask = __get_PRIMASK();
-  __disable_irq();
-  if (s_uac_resync != 0u)
-  {
-    s_uac_logical_got = 0u;
-    s_uac_synced = 0u;
-    s_uac_resync = 0u;
-  }
-  /* The ISR callback records each physical ISO OUT transfer length. Consume
-   * exactly one such transfer here so FIFO batching cannot erase the USB
-   * millisecond boundary that carries the tag. */
-  if (s_uac_length_rd != s_uac_length_wr)
-  {
-    const uint8_t rd = s_uac_length_rd;
-    const uint16_t packet_bytes = s_uac_lengths[rd];
-    if (tud_audio_available() < packet_bytes)
-    {
-      __set_PRIMASK(primask);
-      return;
-    }
-    if (packet_bytes == USB_STREAM_UAC_PACKET_BYTES)
-    {
-      const uint16_t n = tud_audio_read(s_uac_packet, packet_bytes);
-      if (n != packet_bytes)
-      {
-        s_bad_uac++;
-        Error_Handler();
-      }
-      s_rx_bytes += n;
-    }
-    else
-    {
-      uint16_t left = packet_bytes;
-      while (left != 0u)
-      {
-        uint16_t chunk = left;
-        if (chunk > sizeof s_uac_packet)
-          chunk = sizeof s_uac_packet;
-        chunk = tud_audio_read(s_uac_packet, chunk);
-        if (chunk == 0u)
-        {
-          s_bad_uac++;
-          Error_Handler();
-        }
-        left = (uint16_t)(left - chunk);
-        s_rx_bytes += chunk;
-      }
-      s_bad_uac++;
-      /* A malformed ISO transfer destroys the fixed BODY framing. */
-      Error_Handler();
-    }
-    s_uac_length_rd = (uint8_t)((rd + 1u) % USB_PACKET_LENGTH_QUEUE);
-    __set_PRIMASK(primask);
-    USB_App_ConsumeUacBytes(
-        (const int8_t *)(const void *)s_uac_packet,
-        USB_STREAM_UAC_PACKET_BYTES);
-    return;
-  }
-  __set_PRIMASK(primask);
+  memcpy(reply,header,USB_STREAM_HEADER_BYTES);
+  reply[0]=USB_MSG_REPLY;
+  /* Echo request type in flags: BODY errors cannot masquerade as upload ACKs. */
+  reply[3]=header[0]; USB_Write16(reply+4,size);
+  memcpy(reply+USB_STREAM_HEADER_BYTES,payload,size);
+  reply_size=(uint16_t)(USB_STREAM_HEADER_BYTES+size);
 }
-
-void USB_App_DeferredTask(void)
+static void result(const uint8_t *h, uint8_t error, const char *message)
 {
-  /* Sole task consumer. PendSV cannot preempt itself; USB may enqueue events
-   * and pend another pass while this runs. TinyUSB's OS-none queue protects
-   * task reads by briefly masking the USB IRQ. */
-  tud_task();
+  uint8_t data[96]; data[0]=error;
+  size_t n=message ? strlen(message) : 0;
+  if (n>sizeof(data)-1) n=sizeof(data)-1;
+  if (n) memcpy(data+1,message,n);
+  make_reply(h,data,(uint16_t)(n+1));
 }
-
+static void fail_link(const uint8_t *h, const char *message)
+{
+  ++bad; failed=1; hello=0; abort_upload();
+  if (h) result(h,1,message);
+  USB_Device_Fault();
+}
+static uint8_t dispatch(const uint8_t *h)
+{
+  uint16_t n=USB_Read16(h+4), seq=USB_Read16(h+6);
+  const uint8_t *p=h+USB_STREAM_HEADER_BYTES;
+  if (h[0]==USB_MSG_HELLO) {
+    if (hello || n!=1 || p[0]!=USB_STREAM_VERSION || h[1] || h[2] || h[3]) {
+      fail_link(h,"incompatible HELLO"); return 1;
+    }
+    abort_upload(); body_sequence=StreamRing_LastBodySequence();
+    hello=1; probe_bytes=probe_blocks=0; probe_hash=2166136261u;
+    const uint8_t caps[]={0,USB_STREAM_VERSION,8,1,0x80,0xBB,0,0,
+                         USB_STREAM_PAYLOAD_MAX&255,USB_STREAM_PAYLOAD_MAX>>8,
+                         USB_STREAM_PRIME_SAMPLES&255,USB_STREAM_PRIME_SAMPLES>>8};
+    make_reply(h,caps,sizeof caps); return 1;
+  }
+  if (!hello) { fail_link(h,"HELLO required"); return 1; }
+  /* Diagnostic sink: no voice, upload, or credit state is changed. An empty
+   * probe is an ordered barrier returning totals for this connection. */
+  if (h[0]==USB_MSG_PROBE) {
+    if (h[1] || h[2] || h[3]) { fail_link(h,"invalid PROBE"); return 1; }
+    if (n) {
+      probe_bytes+=n; ++probe_blocks;
+      for (uint16_t i=0;i<n;++i) probe_hash=(probe_hash^p[i])*16777619u;
+    } else {
+      uint8_t stats[13]={0};
+      uint32_t values[]={probe_bytes,probe_blocks,probe_hash};
+      for (unsigned i=0;i<3;++i) {
+        USB_Write16(stats+1+i*4,(uint16_t)values[i]);
+        USB_Write16(stats+3+i*4,(uint16_t)(values[i]>>16));
+      }
+      make_reply(h,stats,sizeof stats);
+    }
+    return 1;
+  }
+  if (h[0]==USB_MSG_BODY) {
+    if (!n || h[1]>=8 || h[2]>=USB_STREAM_SESSION_MOD || (h[3]&~USB_STREAM_FLAG_START) ||
+        seq!=(uint16_t)(body_sequence+1)) { fail_link(h,"invalid BODY"); return 1; }
+    /* Prediction may temporarily run ahead of consumption. Retain this whole
+     * block and apply USB backpressure; never overwrite or drop ring samples. */
+    if (StreamRing_TargetSession(h[1])==h[2] && StreamRing_FreeLevel(h[1])<n) return 0;
+    body_sequence=seq;
+    /* Stale notes are acknowledged/ignored by the ring; no stale data becomes
+     * audible. Capacity errors are explicit, never silently dropped. */
+    int accepted=StreamRing_WriteBody(h[1],h[2],h[3]&USB_STREAM_FLAG_START,seq,(const int8_t *)p,n);
+    if (accepted<0) { fail_link(h,"BODY ring capacity"); return 1; }
+    rx_messages+=(uint32_t)(accepted>0); return 1;
+  }
+  if (h[2] || h[3]) { fail_link(h,"invalid upload header"); return 1; }
+  upload_reply[0]=0;
+  if (h[0]==USB_MSG_UPLOAD_BEGIN) {
+    if (n!=5 || upload_kind) { result(h,1,"upload busy/invalid"); return 1; }
+    uint32_t size=USB_Read32(p+1);
+    int rc=-1;
+    if (p[0]==USB_UPLOAD_ATTACK) rc=AttackUpload_Begin(h[1],size);
+    else if (p[0]==USB_UPLOAD_WAVE) rc=AttackUpload_BeginWavetable(h[1],size);
+    else if (p[0]==USB_UPLOAD_SCRIPT) rc=VmUpload_Begin(h[1],size);
+    if (rc) { result(h,1,"upload rejected (target, size, or active voice)"); return 1; }
+    upload_kind=p[0]; upload_target=h[1]; upload_total=size; upload_offset=0;
+    upload_ms=HAL_GetTick(); result(h,0,NULL); return 1;
+  }
+  if (h[0]==USB_MSG_UPLOAD_DATA) {
+    if (!upload_kind || h[1]!=upload_target || n<=4 || USB_Read32(p)!=upload_offset ||
+        (uint32_t)(n-4)>upload_total-upload_offset) {
+      abort_upload(); result(h,1,"upload offset/length"); return 1;
+    }
+    uint32_t take=upload_kind==USB_UPLOAD_SCRIPT ? VmUpload_Feed(p+4,n-4) : AttackUpload_Feed(p+4,n-4);
+    if (take!=(uint32_t)(n-4) || strncmp(upload_reply,"err:",4)==0) {
+      result(h,1,upload_reply[0] ? upload_reply : "upload failed"); abort_upload(); return 1;
+    }
+    upload_offset+=take; upload_ms=HAL_GetTick();
+    result(h,0,NULL);
+    if (upload_offset==upload_total) abort_upload();
+    return 1;
+  }
+  if (h[0]==USB_MSG_UPLOAD_ABORT && n==0) { abort_upload(); result(h,0,NULL); return 1; }
+  fail_link(h,"unknown request"); return 1;
+}
+void USB_App_Init(void)
+{
+  USB_ParserReset(&parser); USB_Device_Init(); link_epoch=USB_Device_Epoch();
+}
 void USB_App_Task(void)
 {
-  USB_App_DrainUac();
-  CDC_Console_Poll();
-}
-
-uint16_t USB_App_LastPackSequence(void) { return 0xFFFFu; }
-uint32_t USB_App_RxMsgCount(void) { return s_rx_msg; }
-uint32_t USB_App_RxByteCount(void) { return s_rx_bytes; }
-uint32_t USB_App_UacWindowCount(void) { return s_uac_windows; }
-uint32_t USB_App_BadCount(void) { return s_bad_uac; }
-uint32_t USB_App_BadReasonCount(uint8_t reason)
-{
-  return reason == 4u ? s_bad_uac : 0u;
-}
-
-void USB_App_StatsClear(void)
-{
-  s_rx_msg = 0u;
-  s_rx_bytes = 0u;
-  s_uac_windows = 0u;
-  s_bad_uac = 0u;
-}
-
-bool tud_audio_set_req_ep_cb(uint8_t rhport,
-                             tusb_control_request_t const *request,
-                             uint8_t *buffer)
-{
-  (void)rhport; (void)request; (void)buffer;
-  return false;
-}
-
-bool tud_audio_set_req_itf_cb(uint8_t rhport,
-                              tusb_control_request_t const *request,
-                              uint8_t *buffer)
-{
-  (void)rhport; (void)request; (void)buffer;
-  return false;
-}
-
-bool tud_audio_set_req_entity_cb(uint8_t rhport,
-                                 tusb_control_request_t const *request,
-                                 uint8_t *buffer)
-{
-  (void)rhport; (void)request; (void)buffer;
-  return false;
-}
-
-bool tud_audio_get_req_ep_cb(uint8_t rhport,
-                             tusb_control_request_t const *request)
-{
-  (void)rhport; (void)request;
-  return false;
-}
-
-bool tud_audio_get_req_itf_cb(uint8_t rhport,
-                              tusb_control_request_t const *request)
-{
-  (void)rhport; (void)request;
-  return false;
-}
-
-bool tud_audio_get_req_entity_cb(uint8_t rhport,
-                                 tusb_control_request_t const *request)
-{
-  uint8_t control = TU_U16_HIGH(request->wValue);
-  uint8_t entity = TU_U16_HIGH(request->wIndex);
-  if (entity == 1u && control == AUDIO_TE_CTRL_CONNECTOR)
-  {
-    audio_desc_channel_cluster_t result;
-    result.bNrChannels = CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX;
-    result.bmChannelConfig = (audio_channel_config_t)0;
-    result.iChannelNames = 0;
-    return tud_audio_buffer_and_schedule_control_xfer(
-        rhport, request, &result, sizeof result);
+  uint32_t epoch=USB_Device_Epoch();
+  if (epoch!=link_epoch) {
+    abort_upload(); USB_ParserReset(&parser); hello=failed=0; reply_size=0;
+    link_epoch=epoch;
   }
-  if (entity == 4u)
-  {
-    if (control == AUDIO_CS_CTRL_SAM_FREQ)
-    {
-      if (request->bRequest == AUDIO_CS_REQ_CUR)
-        return tud_control_xfer(rhport, request, &s_sample_freq,
-                                sizeof s_sample_freq);
-      if (request->bRequest == AUDIO_CS_REQ_RANGE)
-        return tud_control_xfer(rhport, request, &s_sample_freq_range,
-                                sizeof s_sample_freq_range);
+  if (reply_size) {
+    if (!USB_Device_Write(reply,reply_size)) return;
+    reply_size=0;
+  }
+  if (!USB_Device_Connected() || failed) return;
+  if (parser.used==parser.need) {
+    if (!dispatch(parser.bytes)) return;
+    USB_ParserReset(&parser);
+    if (failed || reply_size) return;
+  }
+  /* Bounded passes keep the main-loop RS485 service responsive. */
+  uint32_t budget=4096;
+  uint8_t bytes[64];
+  while (budget && !reply_size && !failed) {
+    /* Never consume beyond this frame: a pending reply must not discard the
+     * beginning of the next block from the same USB packet. */
+    uint32_t want=parser.need-parser.used;
+    if (want>sizeof bytes) want=sizeof bytes;
+    if (want>budget) want=budget;
+    uint32_t n=USB_Device_Read(bytes,want);
+    if (USB_Device_Epoch()!=link_epoch) return;
+    if (!n) break;
+    rx_bytes+=n; budget-=n; last_rx_ms=HAL_GetTick();
+    for (uint32_t i=0;i<n;++i) {
+      int rc=USB_ParserByte(&parser,bytes[i]);
+      if (rc<0) { fail_link(NULL,"bad header"); return; }
+      if (rc>0) { ++blocks; if (dispatch(parser.bytes)) USB_ParserReset(&parser); }
     }
-    if (control == AUDIO_CS_CTRL_CLK_VALID)
-      return tud_control_xfer(rhport, request, &s_clock_valid,
-                              sizeof s_clock_valid);
   }
-  return false;
+  if (parser.used && parser.used<parser.need && (uint32_t)(HAL_GetTick()-last_rx_ms)>1000) fail_link(NULL,"partial frame timeout");
+  if (upload_kind && (uint32_t)(HAL_GetTick()-upload_ms)>5000) abort_upload();
 }
-
-bool tud_audio_set_itf_cb(uint8_t rhport,
-                          tusb_control_request_t const *request)
-{
-  (void)rhport;
-  USB_App_ResetUacAlignment();
-  if ((uint8_t)tu_le16toh(request->wValue) != 0u)
-    Audio_Bridge_Start();
-  return true;
-}
-
-bool tud_audio_set_itf_close_EP_cb(uint8_t rhport,
-                                   tusb_control_request_t const *request)
-{
-  (void)rhport; (void)request;
-  USB_App_ResetUacAlignment();
-  Audio_Bridge_StreamStop();
-  return true;
-}
-
-bool tud_audio_rx_done_post_read_cb(uint8_t rhport, uint16_t nbytes,
-                                    uint8_t func_id, uint8_t ep_out,
-                                    uint8_t alt)
-{
-  uint8_t next;
-  (void)rhport; (void)func_id; (void)ep_out; (void)alt;
-  next = (uint8_t)((s_uac_length_wr + 1u) % USB_PACKET_LENGTH_QUEUE);
-  if (next == s_uac_length_rd)
-  {
-    s_bad_uac++;
-    /* Drop the backlog, including this transfer, so bytes and boundary
-     * metadata restart together. Existing voice buffers keep playing. */
-    (void)tud_audio_clear_ep_out_ff();
-    s_uac_length_rd = s_uac_length_wr;
-    s_uac_resync = 1u;
-    return true;
-  }
-  s_uac_lengths[s_uac_length_wr] = nbytes;
-  s_uac_length_wr = next;
-  return true;
-}
+uint16_t USB_App_LastPackSequence(void) { return StreamRing_LastBodySequence(); }
+uint32_t USB_App_RxMsgCount(void) { return rx_messages; }
+uint32_t USB_App_RxByteCount(void) { return rx_bytes; }
+uint32_t USB_App_BlockCount(void) { return blocks; }
+uint32_t USB_App_BadCount(void) { return bad; }
+uint32_t USB_App_BadReasonCount(uint8_t reason) { return reason==4 ? bad : 0; }
+void USB_App_StatsClear(void) { rx_messages=rx_bytes=blocks=bad=0; }

@@ -11,23 +11,23 @@ If this document and the firmware disagree, trust the firmware.
 ## 1. Host interfaces (both cards)
 
 One RS485 multi-drop bus (`c:` / `e:` / `*:`). USB is per-card: Channel
-is Full-Speed **UAC2 BODY OUT** (21-channel signed int8 carrier at 48 kHz,
-1008 B / 1 ms; BODY/DAC are 48 kHz) plus CDC. Sequential
-RS485 `vq` request/reply cycles every 5 ms provide exact refill credit and a processed-UAC acknowledgement;
-Effect is a Full-Speed **UAC2 microphone** (mono int32 @ 96 kHz) plus CDC.
+uses one binary Full-Speed CDC connection for BODY and uploads. RS485 `vq`
+provides exact ring credit and processed-BODY acknowledgements, normally every
+5 ms and as often as 1 ms for high source demand. Effect retains its Full-Speed
+UAC2 microphone (mono int32 at 96 kHz) and separate CDC text console.
 
 ```mermaid
 flowchart TB
   subgraph host [Host]
     RS485[RS485 921600 8N1]
-    CDC[USB CDC ACM]
-    BodyOut[UAC2 OUT 21ch int8 48 kHz carrier]
+    CDC[Effect USB CDC console]
+    BodyOut[Channel binary CDC BODY and uploads]
     UacIn[UAC2 IN mono int32 96 kHz]
   end
 
   subgraph ch [Channel STM32H725]
     ChCon[channel_console]
-    ChAtk[AXI attack heads al]
+    ChAtk[AXI attack heads and script uploads]
     ChRing[Contiguous DTCM BODY rings]
     ChMix[note_bank mix]
     ChI2S[I2S1/I2S2 DMA AXI]
@@ -41,10 +41,9 @@ flowchart TB
     FxFifo[TinyUSB ISO FIFO]
   end
 
-  RS485 -->|"c: nX en f vq"| ChCon
+  RS485 -->|"c: nX f vq"| ChCon
   RS485 -->|"e: u echo"| FxCon
-  CDC -->|"al nbytes int8"| ChAtk
-  CDC --> ChCon
+  BodyOut -->|"typed upload blocks"| ChAtk
   CDC --> FxCon
   BodyOut -->|"voice session SOF int8"| ChRing
   ChAtk --> ChMix
@@ -57,26 +56,13 @@ flowchart TB
 
 ## 2. Channel — SAMPLE voice (one of n0..n7)
 
-Attack and body are storage. The head plays to its committed length
-(≤ 512). Body is a FIFO from packed UAC2 BODY data, consumed with
-Q16.16 interpolation. `nX on <key> [velocity]` is a note-on. A new BODY session
-(`SOF` + session 0–254) starts a new body FIFO; a repeated burst with
-the same session does not.
-The host packs the hungriest wanting voices into each UAC window (fair share
-of a 10040-sample 10 ms OUT budget for eight voices). The host reserves the BODY
-session, launches sequential pitch-neutral SOF BODY, then immediately queues
-RS485 `aw` and `nX on <key> <velocity> @<session>` without waiting for USB. Tagged `nX`
-binds the wave/session; the card maps/tunes the key and starts pitch/attack. An
-early matching SOF waits on-card for I2S to select its ring origin, while a
-superseded session is rejected as stale.
-Every fresh RS485 `vq` exact free-space grant permits one later bounded refill.
-Unsent refill suffixes yield to a new urgent note; already transmitted records
-are rejected as stale when their voice/session has been replaced.
-Iso OUT has no NAK. BODY underrun repeats up to 256 recent source samples
-per voice until refill (silence if none have arrived). A full ring drops the
-incoming block while queued audio keeps playing. USB packet-length queue
-overflow clears the USB backlog and boundary metadata, then resynchronizes
-on new data. The producer never overwrites unread FIFO samples.
+Attack and BODY are storage. The attack plays to its committed length (up to
+512 samples), joining the signed-int8 BODY ring through the existing 32-sample
+overlap. A note-on over RS485 arms a session before acknowledging it. The host
+then sends BODY for that session over the shared binary CDC stream. The card
+waits for 998 samples before dispatching the script's note-on at an audio
+boundary. Upload blocks can be interleaved with BODY; no audio-class carrier
+or continuous idle padding is involved.
 
 ```mermaid
 flowchart TB
@@ -105,7 +91,7 @@ flowchart TB
     BodyOnly["body lerp from ring rd"]
     SourceMix["average sample + enabled oscillators"]
     Lpf["note_filter DF4"]
-    Env["native amplitude ramp"]
+    Env["note_envelope"]
     Ph --> Join
     Inc --> Ph
     Atk --> AtkOnly
@@ -129,23 +115,16 @@ flowchart TB
   end
 ```
 
-RS485 `vq` returns a 56-byte ABI1 frame containing active/pending masks,
-runtime capacity, target session/fill, exact credit, and the last processed UAC
-sequence. It is the only live refill authority. Each UAC window carries one
-voice/session tag, one sequence, and 1004 BODY samples. The host subtracts the
-exact sequenced frames not yet reflected by `vq`; it never guesses USB
-headroom. Playing voices are scheduled by depletion deadline. A silent voice
-is admitted only when its exact 1 ms service cost fits before that deadline.
+RS485 `vq` returns a 61-byte frame containing masks, physical ring capacity,
+sessions, exact free space, source demand, playback duration and the last
+processed BODY sequence. Host credits subtract every unacknowledged sample,
+including old sessions sharing a ring. Startup and endangered voices take
+priority; within a group, fewer in-flight samples and deadlines determine order.
 
-`nX` only arms a pending generation. Berry receives `on_note_on` after at least
-one complete pending BODY frame exists, and the script decides when to call
-`start_note()`. That operation discards the remaining current span and promotes
-pending atomically. The attack plays to its committed length; BODY consumption
-starts at `len − 32` with the same source fraction. No native crash duration or
-release reservation exists.
-
-Voices with no loaded attack head play body from the FIFO immediately.
-`en` / `f` / `fk` still apply.
+BODY blocks contain 1..1024 samples for one voice. Complete blocks publish through
+a ring reservation; a pending-to-playing promotion during the copy preserves
+valid data, while a superseded session cannot publish. Release, pitch, envelopes,
+filtering and oscillator routing remain owned by the existing note/VM engine.
 
 ## 3. Channel — I2S, DAC, analog
 
@@ -262,7 +241,7 @@ in the sample path.
 ```mermaid
 flowchart LR
   subgraph ch_loop [Channel main loop]
-    Tud1[tud_task / USB_App_Task]
+    Tud1[USB_App_Task: parse BODY and uploads]
     Con1[Console_Poll RS485]
     Tud1 --- Con1
   end
@@ -271,7 +250,7 @@ flowchart LR
     I2S1[I2S1 DMA: note mix + CH2]
     I2S2[I2S2 DMA: CH3/CH4]
     U5[UART5 RX]
-    USB1[OTG_HS]
+    USB1[HAL PCD: OUT queue and immediate rearm]
   end
 
   subgraph fx_loop [Effect main loop]
@@ -286,6 +265,7 @@ flowchart LR
   end
 ```
 
-Continuous RS485 `vq` request/reply cycles provide the sole refill permission
-and report the last processed UAC sequence. USB carries BODY data only.
-A full vendor FIFO NAKs the host.
+RS485 `vq` provides the refill permission and last processed BODY sequence.
+USB carries framed BODY and uploads. The Channel receive queue has 8192 bytes;
+when full, the endpoint stays unarmed and NAKs until space becomes available.
+The I2S/DAC clock runs independently of USB traffic. Effect retains TinyUSB.

@@ -1,12 +1,12 @@
 /**
  ******************************************************************************
  * @file    audio_bridge.h
- * @brief   USB audio / note-bank → I2S bridge for the CS4304 4-channel DAC.
+ * @brief   Note-bank → I2S bridge for the CS4304 4-channel DAC.
  *
- * Owns I2S DMA ring buffers, USB BODY ingest, CH1 note-bank refill,
+ * Owns I2S DMA ring buffers, CH1 note-bank refill,
  * and the TIM7 I2S2 underrun pump. Tone/DC generators live in
  * audio_tone_dc.h (re-exported here for existing callers).
- * Vendor bulk BODY feeds StreamRing_WriteVoice (not the DAC). CH1 is
+ * CDC BODY fills the per-voice stream rings. CH1 is
  * always the SAMPLE note-bank mix.
  ******************************************************************************
  */
@@ -32,11 +32,11 @@ extern "C"
    */
   void Audio_Bridge_SetDacHandle(CS4304_HandleTypeDef *h);
 
-  /* ---------------- USB stack facing API (called by USB_APP) ---------------- */
+  /* ---------------- DAC / note engine API ---------------- */
 
   /**
    * @brief Clear I2S buffers and start I2S1 (+I2S2) DMA.
-   * @note Called from the audio interface callback in the PendSV TinyUSB task.
+   * @note Called by the note engine; USB enumeration does not start the DAC.
    */
   void Audio_Bridge_Start(void);
 

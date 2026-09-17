@@ -1,9 +1,9 @@
 /**
  ******************************************************************************
  * @file    audio_bridge.c
- * @brief   USB audio / note-bank → I2S bridge for the CS4304 4-channel DAC.
+ * @brief   Note-bank → I2S bridge for the CS4304 4-channel DAC.
  *
- * Owns I2S DMA ring buffers, USB packet ingest, CH1 note-bank refill,
+ * Owns I2S DMA ring buffers, CH1 note-bank refill,
  * and the TIM7 I2S2 underrun pump. Tone/DC generation lives in
  * audio_tone_dc.c; the LED_Y DMA-load scope probe is implemented here.
  ******************************************************************************
@@ -35,9 +35,8 @@ void Audio_Bridge_SetDacHandle(CS4304_HandleTypeDef *h)
  * Each I2S frame = 2 × 32-bit words (L + R) = 8 bytes
  * DMA buffer is double-buffered: half/full IRQs each refill one half.
  *
- * Full-speed iso OUT is one 1023-byte packet per 1 ms SOF. Size the DMA
- * half to AUDIO_SAMPLE_RATE_HZ/1000 frames so I2S consume and USB fill
- * share that 1 ms cadence.
+ * Retain the 1 ms audio refill cadence independently of CDC transfer timing.
+ * Each DMA half contains AUDIO_SAMPLE_RATE_HZ/1000 frames.
  */
 #define AUDIO_I2S_HALF_FRAMES (AUDIO_SAMPLE_RATE_HZ / 1000u)
 #define AUDIO_I2S_BUF_FRAMES (AUDIO_I2S_HALF_FRAMES * 2u)
@@ -244,7 +243,7 @@ static void Audio_FillTestTone(int32_t *buf, uint32_t num_frames,
 /**
  * @brief  Fill ONE slot (0 = L, 1 = R) of an interleaved stereo buffer with
  *         a sine tone, leaving the other slot untouched. Used to put the
- *         CH2 tone in I2S1's right slot while USB audio owns the left slot.
+ *         CH2 tone in I2S1's right slot while the note-bank mix owns the left slot.
  */
 static void Audio_FillToneSlot(int32_t *buf, uint32_t num_frames,
                                uint8_t ch, uint8_t slot)

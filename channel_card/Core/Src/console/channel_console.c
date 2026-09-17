@@ -21,6 +21,7 @@
 #include "note_filter.h"
 #include "uart5_rx.h"
 #include "usb_app.h"
+#include "usb_device.h"
 #include "usb_stream.h"
 #include "attack_bank.h"
 #include "attack_upload.h"
@@ -221,7 +222,7 @@ static void RS485_Reply(const char *s)
 }
 
 /*
- * Sequenced vq frame: masks/capacity/status and last processed UAC sequence,
+ * Sequenced vq frame: masks/capacity/status and last processed BODY sequence,
  * plus eight session/free-space/refill-budget/duration records and a terminator; no CRC.
  */
 #define VQ_FRAME_LEN 61u
@@ -241,7 +242,7 @@ static void RS485_ReplyVq(uint8_t active_mask, uint8_t pending_mask,
                           const uint8_t *sessions,
                           const uint32_t *remaining_us,
                           const uint16_t *free_samples,
-                          uint16_t uac_sequence, uint8_t uac_age_ms, const uint16_t *refill_samples)
+                          uint16_t body_sequence, uint8_t body_age_ms, const uint16_t *refill_samples)
 {
   uint8_t frame[VQ_FRAME_LEN] = {0};
   frame[0] = VQ_SYNC_0;
@@ -254,9 +255,9 @@ static void RS485_ReplyVq(uint8_t active_mask, uint8_t pending_mask,
   frame[7] = (uint8_t)(STREAM_RING_SAMPLES >> 8u);
   ++rs485_vq_sequence;
   frame[8] = (uint8_t)rs485_vq_sequence;
-  frame[9] = uac_age_ms;
-  frame[10] = (uint8_t)uac_sequence;
-  frame[11] = (uint8_t)(uac_sequence >> 8u);
+  frame[9] = body_age_ms;
+  frame[10] = (uint8_t)body_sequence;
+  frame[11] = (uint8_t)(body_sequence >> 8u);
   for (uint8_t i = 0u; i < NOTE_BANK_VOICES; ++i)
   {
     uint8_t *record = frame + 12u + 6u * i;
@@ -689,8 +690,8 @@ static void Console_CmdVoiceQuery(void)
   uint8_t sessions[NOTE_BANK_VOICES];
   uint32_t remaining_us[NOTE_BANK_VOICES];
   uint16_t refill_samples[NOTE_BANK_VOICES];
-  uint16_t uac_sequence;
-  uint8_t uac_age_ms;
+  uint16_t body_sequence;
+  uint8_t body_age_ms;
   uint8_t i;
 
   {
@@ -708,22 +709,22 @@ static void Console_CmdVoiceQuery(void)
     }
     /* Credit and acknowledgement must describe the same USB state. A newer
      * acknowledgement with older free space grants already-used space again. */
-    uac_sequence = StreamRing_LastUacSequence();
-    uac_age_ms = StreamRing_UacAgeMs();
+    body_sequence = StreamRing_LastBodySequence();
+    body_age_ms = StreamRing_BodyAgeMs();
     if (primask == 0u) __enable_irq();
   }
 
   if (!console_via_usb)
   {
     RS485_ReplyVq(mask, pending_mask, sessions, remaining_us, free_samples,
-                 uac_sequence, uac_age_ms, refill_samples);
+                 body_sequence, body_age_ms, refill_samples);
     return;
   }
 
   n = snprintf(b, sizeof b, "ok:vq12 %02x %02x %u %u %u",
                (unsigned)mask, (unsigned)pending_mask,
                (unsigned)STREAM_RING_SAMPLES, (unsigned)rs485_vq_sequence,
-               (unsigned)uac_sequence);
+               (unsigned)body_sequence);
   for (i = 0u; i < NOTE_BANK_VOICES; i++)
   {
     if (n < 0 || (size_t)n >= sizeof b)
@@ -1123,6 +1124,15 @@ static void Console_Exec(char *line)
     return;
   }
 
+  if (strcmp(line,"rs485")==0) {
+    char debug[128];
+    (void)snprintf(debug,sizeof debug,"ok: rs485 rxdrop %lu txfail %lu trunc %lu\r\n",
+      (unsigned long)Uart5Rx_DroppedCount(),(unsigned long)rs485_tx_fail,(unsigned long)rs485_tx_trunc);
+    RS485_Reply(debug);return;
+  }
+  if (strcmp(line,"usbdev")==0) {
+    char debug[300]; USB_Device_Debug(debug,sizeof debug); RS485_Reply(debug); return;
+  }
   /* ---- usb [0]: BODY counters (FIFO drop, hold, fill) ---- */
   if (strncmp(line, "usb", 3) == 0 && (line[3] == '\0' || line[3] == ' '))
   {
@@ -1163,7 +1173,7 @@ static void Console_Exec(char *line)
                (unsigned long)StreamRing_ZeroCount(),
                (unsigned long)StreamRing_SofCount(),
                (unsigned long)rs485_vq_count,
-               (unsigned long)USB_App_UacWindowCount(),
+               (unsigned long)USB_App_BlockCount(),
                (unsigned long)USB_App_RxMsgCount(),
                (unsigned long)USB_App_RxByteCount(),
                (unsigned long)USB_App_BadCount(),

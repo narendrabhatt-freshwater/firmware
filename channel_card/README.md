@@ -13,27 +13,27 @@ those same files live at the repository root (`README.md`,
 | CMake target   | `channel_MCU`                                                |
 | CubeMX project | `channel_MCU.ioc`                                            |
 | Linker script  | `STM32H725xG_flash.ld`                                       |
-| USB stack      | TinyUSB 0.17 (`ThirdParty/tinyusb`)                          |
-| USB device     | UAC2 BODY OUT (21ch int8 at 48 kHz) + CDC console             |
+| USB stack      | Custom CDC over STM32 HAL PCD                          |
+| USB device     | One binary CDC port: BODY + uploads             |
 | RS485 address  | `c:`                                                         |
 
 Each board exposes a stable USB serial number derived from its 96-bit STM32
 hardware UID: `CHCARD-<24 hex digits>`. On macOS, the CDC path therefore looks
-like `/dev/cu.usbmodemCHCARD_<24 hex digits>3`; the final `3` is added for the
-CDC interface. Flashing firmware does not change the hardware UID.
+like `/dev/cu.usbmodemCHCARD_<24 hex digits>...`; the OS chooses the suffix.
+The new CDC-only descriptor can change that suffix. Flashing preserves the UID.
 
 ## What this card does
 
-Receives USB audio from the PC into **per-voice sustain rings**, and
+Receives sample blocks from the PC over USB CDC into **per-voice sustain rings**, and
 plays the 8-voice SAMPLE / note bank out of a **CS4304 4-channel DAC**
 over I2S.
 
-- **CH1** — SAMPLE note-bank mix (`n0..n7`). UAC2 BODY transport fills the
+- **CH1** — SAMPLE note-bank mix (`n0..n7`). Binary CDC BODY transport fills the
   per-voice rings used for sustain. Berry may append oscillators sourced from
   eight looping wavetables reserved at attack-bank IDs 248…255.
 - **CH2–CH4** — firmware-generated DC control voltages, clocked purely
   by I2S with no USB involvement (0 V at boot)
-- Console over RS485 (`c:` prefix) and USB CDC
+- Text console over RS485 (`c:` prefix); USB is binary-only
 
 The note bank has no firmware-owned envelope policy. After each reset, upload a
 valid Channel Berry ABI2 program with `cmi::Core` before sending note commands.
@@ -146,26 +146,19 @@ Hand-written modules live under `Core/Src/<domain>/` (and matching
 | `Core/Src/filters/note_filter.c`           | Per-voice LPF wrapper (base/effective cutoff, pitch-k, q/Q31)     |
 | `Core/Src/filters/butterworth_four_pole.c` | Reusable 4-pole DF4 Butterworth kernel                            |
 | `Core/Src/drivers/cs4304.c`                | CS4304 DAC driver (I2C)                                           |
-| `USB_APP/`                                 | TinyUSB descriptors, 21ch int8 UAC2 BODY + CDC                    |
+| `USB_APP/`                                 | Custom USB CDC device, binary BODY + uploads                    |
 
 ### `audio_bridge.c` — handle with care
 
 This file holds the playback path as measured on the board. Notable
 parts, all commented in-place:
 
-- **BODY stream** is class-compliant synchronous UAC2 OUT: a 21-channel
-  signed-int8 48 kHz carrier (1008 bytes/ms) for 48 kHz BODY/DAC data. Each
-  millisecond has four routing/sequence bytes and 1004 BODY samples; exact
-  free-space `vq` permission arrives every 5 ms. BODY underrun repeats up to 256 recent source
-  samples per voice until refill, or outputs silence if none have arrived.
-  Ring-capacity overflow drops the incoming block; USB packet-length queue
-  overflow clears the backlog and resynchronizes. Both keep playback running.
-  Malformed UAC transfers and I2S1 refill re-entry still halt the card with
-  the DAC held in reset and the fault LEDs latched. CH1 I2S is always the
-  note-bank mix. The USB IRQ (priority 0) schedules the TinyUSB task in PendSV
-  (priority 1) to re-arm UAC OUT; the main loop parses BODY. USB can preempt
-  PendSV to service receive status during endpoint shutdown. PendSV shares
-  TIM7/SPI2 priority and preempts the DMA mixer (priority 2).
+- **BODY stream** uses custom CDC bulk reception. The USB interrupt rearms
+  64-byte receives into an 8 KB queue; main parses variable blocks up to 1024
+  samples. A full USB queue NAKs rather than discarding bytes. RS485 `vq`
+  supplies credit and five-ms demand forecasts. Early BODY blocks wait for
+  ring space; framing faults stop the transport and require reconnect. USB traffic does not clock the DAC.
+  See [qualification and limits](docs/cdc_validation.md).
 - **I2S start order matters** — the I2S1 master must be running before
   the I2S2 slave is enabled, or the slave never shifts.
 - **I2S2 slave workarounds** — UDR wedge clearing via the TIM7 pump, and
@@ -191,8 +184,8 @@ This table matches the parser in
 `Core/Src/console/channel_console.c`. Commands are case-insensitive because
 console input is converted to lowercase. End a command with carriage return.
 
-On shared RS485, prefix commands with `c:`. USB CDC accepts `c:`, `*:`, or no
-prefix. RS485 replies are tagged `[C]`; CDC replies contain only the body.
+On shared RS485, prefix commands with `c:`. Replies are tagged `[C]`.
+The Channel USB port accepts only framed binary blocks.
 Successful setters normally return `ok`. Common failures are `err:syntax`,
 `err:range`, `err:unknown`, `err:no-program`, and `err:vm-busy`.
 
@@ -227,30 +220,29 @@ Pitch tracking uses `fc = fbase × (noteHz / 261.625565)^k`. See
 
 | Command | Transport | Action |
 | ------- | --------- | ------ |
-| `al <id> <nbytes>` | USB CDC only | Upload sample attack ID 0…247 using 1…512 signed-int8 bytes. |
-| `wl <wave> <nbytes>` | USB CDC only | Upload logical oscillator wave 0…7 using 2…512 signed-int8 bytes. Firmware owns its physical bank placement. |
-| `ar <id> <Hz>` | RS485 or CDC | Set the positive root frequency for attack ID 0…255. |
-| `aw <voice> <id>` | RS485 or CDC | Assign sample attack ID 0…247 to voice 0…7. IDs 248…255 are reserved wavetables. |
-| `a` | RS485 or CDC | Query loaded attack count and the 256-bit loaded mask. |
-| `vmload <voice> <nbytes>` | USB CDC only | Begin an FWSC ABI2 program upload to voice 0…7. Total container size is 20…16404 bytes. After `ok:ready`, send exactly that many bytes. |
-| `vm` | RS485 or CDC | Query the active-program voice mask. |
-| `vm <voice>` | RS485 or CDC | Query active state, target, ABI version, and fault for voice 0…7. |
-| `vm mem` | RS485 or CDC | Return shared VM arena and per-voice fault/cycle diagnostics. |
-| `vq` | RS485 or CDC | Query active/pending masks, BODY sessions, target fill, and exact writable credit. RS485 uses the fixed binary-compatible `vq7` response. |
-| `reset` | RS485 or CDC | Clear RS485 hardware RX FIFO, queued RX bytes, receive error flags, and partial command line; replies `ok:reset`. Does not reboot or clear audio/voice state. |
-| `usb` | RS485 or CDC | Query BODY transport and underrun counters. |
-| `usb 0` | RS485 or CDC | Clear BODY transport counters and return the new values. |
-| `cpuload [0\|1]` | RS485 or CDC | Query or enable the LED_Y DMA-refill scope probe. Low is busy; high is idle. |
+| Upload kind 1 | Binary USB | Upload sample attack ID 0…247 using 1…512 signed-int8 bytes. |
+| Upload kind 2 | Binary USB | Upload logical oscillator wave 0…7 using 2…512 signed-int8 bytes. Firmware owns its physical bank placement. |
+| `ar <id> <Hz>` | RS485 | Set the positive root frequency for attack ID 0…255. |
+| `aw <voice> <id>` | RS485 | Assign sample attack ID 0…247 to voice 0…7. IDs 248…255 are reserved wavetables. |
+| `a` | RS485 | Query loaded attack count and the 256-bit loaded mask. |
+| Upload kind 3 | Binary USB | Begin an FWSC ABI2 program upload to voice 0…7. Total container size is 20…16404 bytes. Send offset-checked chunks; the final reply confirms validation/commit. |
+| `vm` | RS485 | Query the active-program voice mask. |
+| `vm <voice>` | RS485 | Query active state, target, ABI version, and fault for voice 0…7. |
+| `vm mem` | RS485 | Return shared VM arena and per-voice fault/cycle diagnostics. |
+| `vq` | RS485 | Query active/pending masks, BODY sessions, target fill, and exact writable credit. RS485 uses the fixed 61-byte `vq` response. |
+| `reset` | RS485 | Clear RS485 hardware RX FIFO, queued RX bytes, receive error flags, and partial command line; replies `ok:reset`. Does not reboot or clear audio/voice state. |
+| `usb` | RS485 | Query BODY transport and underrun counters. |
+| `usb 0` | RS485 | Clear BODY transport counters and return the new values. |
+| `cpuload [0\|1]` | RS485 | Query or enable the LED_Y DMA-refill scope probe. Low is busy; high is idle. |
 
 Send `c:reset\r` and wait for `ok:reset` before sending another RS485 command:
-bytes already queued behind reset are discarded. The USB CDC console can also
-issue `c:reset` to clear an incomplete RS485 line. The command must reach a
+bytes already queued behind reset are discarded. The command must reach a
 working console; it cannot reset the host adapter or recover a disconnected bus.
 Lifetime RX-drop counters are preserved.
 
-`al`, `wl`, and `vmload` switch the CDC connection from line parsing to binary input
-until the declared byte count has arrived. Do not send another command during
-that payload. Full upload sequencing and reply fields are documented in
+The former ASCII `al`, `wl`, and `vmload` USB operations are replaced by
+binary upload kinds 1, 2, and 3. BODY blocks can be interleaved with upload chunks.
+Full upload sequencing and reply fields are documented in
 [`../docs/protocol.md`](../docs/protocol.md).
 
 ### Service diagnostics
