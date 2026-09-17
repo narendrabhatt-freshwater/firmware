@@ -127,7 +127,7 @@ Without hardware:
 ./voicebdgui --browse-only           # Browse, search and decode; no MIDI/serial
 ./voicebdgui --check /path/sound.VC   # Decode and report PCM length
 ./voicebdgui --check-library         # Validate every VC/WAV; nonzero if any fail
-cmake --build .build --target voicebd_gui_test voicebd_transport_test
+cmake --build .build --target voicebd_gui_test
 ctest --test-dir .build --output-on-failure
 ```
 
@@ -263,11 +263,11 @@ loads. Host tests do not prove USB bus timing. See
 [`CDC qualification`](../channel_card/docs/cdc_validation.md) and
 [`wire protocol`](../docs/protocol.md).
 
-Run the host/firmware-ring integration tests without a board:
+Run the browser decoder, resampler and MIDI tests without a board:
 
 ```sh
 cmake -S voice_bd -B /tmp/voicebd-tests
-cmake --build /tmp/voicebd-tests --target voicebd_transport_test
+cmake --build /tmp/voicebd-tests --target voicebd_gui_test
 ctest --test-dir /tmp/voicebd-tests --output-on-failure
 ```
 

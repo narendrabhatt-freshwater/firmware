@@ -31,6 +31,13 @@ USB behavior still need a board. Protocol-v2 tests additionally cover inferred
 note start from fragmented priming, stale notes, session and BODY-counter wrap,
 HELLO counter baselines after reconnect, and rejection of v1 framing.
 
+## Historical host transport checks
+
+The transport simulations, serial mocks and automated hardware harness were
+removed from `voicebdtest.cpp` after migration validation. The descriptions and
+results below record those earlier checks. Current host CTest runs cover the
+browser decoder, resampler and MIDI handling; firmware native tests remain.
+
 Host tests exercise every two-read frame split, concatenated frames, maximum
 lengths, exact credit reconciliation, bounded five-ms forecasts, byte-window
 limits for small blocks, old-session accounting, note promotion during a reserved
@@ -107,25 +114,14 @@ The protocol supports up to 1024 sample bytes per block, not a guaranteed number
 per millisecond. The current PHY remains 12 Mbit/s. Multi-card integration and a
 480 Mbit/s external ULPI PHY are separate changes.
 
-## Repeatable playback test
+## Historical playback harness
 
-The opt-in test uses a quiet generated sine at 48 dB attenuation. It opens the
-specified card, replaces its voice programs/attack sample, and stops notes on
-exit. It is not part of automatic CTest runs. From the repository root:
-
-```sh
-cmake --build /tmp/voicebd-tests --target voicebd_hardware_test
-/tmp/voicebd-tests/voicebd_hardware_test RS485_PORT USB_PORT voice_bd/series2.bec 1800 72 steady
-/tmp/voicebd-tests/voicebd_hardware_test RS485_PORT USB_PORT voice_bd/series2.bec 60 72 exercise 20
-```
-
-Arguments after the BEC path are duration in seconds, MIDI key, mode and optional
-reopen count. Long steady runs rearm the eight notes every 30 seconds to keep
-nonzero source data throughout. Exercise mode repeatedly replaces/releases
-notes, uploads attacks while playing, and checks that active script replacement
-is rejected without breaking USB. Both modes require zero hold/drop/full/bad/
-late/future counters, no RS485 error increase, unchanged USB bytes over two
-seconds of idle polling, and working RS485 stop commands after USB closes.
+The migration harness played eight generated sine voices at 48 dB attenuation.
+Steady runs rearmed notes every 30 seconds; exercise runs replaced and released
+notes, uploaded attacks while playing, and checked active-script rejection.
+Checks covered playback error counters, RS485 errors, idle USB traffic, reconnects
+and stopping notes after USB closed. The harness and its build target have been
+removed. Use MAS or `voicebdgui` for manual playback checks.
 
 On macOS both transport workers request interactive QoS and a preemptible
 real-time policy. Plain thread scheduling produced measured 19–26 ms worker
