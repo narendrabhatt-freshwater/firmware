@@ -15,7 +15,7 @@ static inline int USB_ParserByte(USB_Parser *p, uint8_t byte)
   if (p->used>=p->need || p->need>sizeof p->bytes) return -1;
   p->bytes[p->used++]=byte;
   if (p->used==USB_STREAM_HEADER_BYTES) {
-    uint16_t size=USB_Read16(p->bytes+4);
+    uint16_t size=USB_Read16(p->bytes+3);
     if (size>USB_STREAM_PAYLOAD_MAX || p->bytes[0]<USB_MSG_HELLO || p->bytes[0]>USB_MSG_PROBE) return -1;
     p->need=(uint16_t)(USB_STREAM_HEADER_BYTES+size);
   }

@@ -305,9 +305,9 @@ console commands. Open it in raw binary mode with software/hardware flow control
 disabled, lower DTR, flush pending host data, then raise DTR and send HELLO.
 CDC line coding is accepted but does not throttle USB to a UART baud rate.
 
-### Framing (version 1)
+### Framing (version 2)
 
-All multi-byte values are little-endian. Every block is an eight-byte header
+All multi-byte values are little-endian. Every block is a five-byte header
 followed by exactly `length` payload bytes (maximum 1024). Serial reads/writes
 and the 64-byte Full-Speed USB transactions do not delimit application blocks.
 
@@ -315,36 +315,41 @@ and the 64-byte Full-Speed USB transactions do not delimit application blocks.
 |---|---:|---|
 | 0 | 1 | Type: HELLO=1, BODY=2, UPLOAD_BEGIN=3, UPLOAD_DATA=4, UPLOAD_ABORT=5, REPLY=6, PROBE=7 |
 | 1 | 1 | Target: voice, sample or logical wavetable according to type |
-| 2 | 1 | BODY session 0..254; zero for other host requests |
-| 3 | 1 | BODY bit 0 = start of note; zero for other host requests |
-| 4 | 2 | Payload length |
-| 6 | 2 | BODY sequence or request ID, wrapping at 65536 |
+| 2 | 1 | BODY session 0..254; zero for other host requests; original request type for REPLY |
+| 3 | 2 | Payload length (0..1024) |
 
 There is no padding, idle packet or application CRC. USB bulk provides link-level
 error detection/retry. When no voices require samples and no upload is pending,
 the host submits no data blocks. Note release tails continue receiving BODY until
 `vq` reports the voice inactive; `n off` retains its existing hard-stop behavior.
 
-The first request is HELLO with target/session/flags zero and the single payload
-byte `01`. Its reply payload is:
+Version 2 requires a matching host and firmware; version 1's eight-byte framing
+is incompatible. The first request is HELLO with target/session zero and the
+single payload byte `02`. Its 14-byte reply payload is:
 
-```text
-00 01 08 01 80 bb 00 00 00 04 e6 03
-|  |  |  |  |           |     +-- 998-sample note priming threshold (u16)
-|  |  |  |  |           +-------- 1024 maximum payload bytes (u16)
-|  |  |  |  +-------------------- 48000 Hz DAC rate (u32)
-|  |  |  +----------------------- one signed-int8 byte per source sample
-|  |  +-------------------------- eight voices
-|  +----------------------------- protocol version 1
-+-------------------------------- success
-```
+| Payload offset | Bytes | Value |
+|---|---:|---|
+| 0 | 1 | Status: 0 success |
+| 1 | 1 | Protocol version: 2 |
+| 2 | 1 | Voices: 8 |
+| 3 | 1 | Source sample width: 1 signed-int8 byte |
+| 4 | 4 | DAC rate: 48000 Hz |
+| 8 | 2 | Maximum payload: 1024 bytes |
+| 10 | 2 | Note priming: 998 samples |
+| 12 | 2 | Current processed BODY counter, modulo 65536 |
 
-REPLY echoes target, session and request ID; its flags byte identifies the
-request type. Payload byte zero is status (`0` success, `1` error); errors may
-append a diagnostic string without a NUL terminator. Successful upload replies have only the status byte. BODY does not get a per-block success reply: RS485
-`vq` acknowledges it. A BODY error generates an error REPLY and faults the link.
+REPLY echoes the target and puts the original request type in header byte 2.
+Payload byte zero is status (`0` success, `1` error); errors may append a
+diagnostic string without a NUL terminator. Successful upload replies contain
+only the status byte. No request ID is transmitted: exactly one request/reply
+exchange may be outstanding, even while BODY is streaming. The host verifies
+reply type, target, status and successful payload length. A timeout, disconnect
+or unexpected reply faults the host connection; it must reopen before sending
+another request. It never retries an ambiguously completed request on that link.
+BODY does not get a per-block success reply: RS485 `vq` acknowledges progress.
+A BODY error generates an error REPLY identifying BODY and faults the link.
 
-A malformed header, invalid BODY sequence or partial frame stalled for over one
+A malformed header, invalid BODY fields or partial frame stalled for over one
 second faults reception. The host must close/reopen, toggle DTR, negotiate HELLO
 and obtain current `vq` status before arming new notes. No scanning inside binary
 samples attempts to guess framing. USB reset and DTR transitions discard receive,
@@ -356,31 +361,42 @@ increments `full`/`drop` and faults the transport; it is not normal flow control
 
 ### USB-only diagnostic
 
-PROBE (`7`) requires HELLO first and target/session/flags zero. A nonempty
+PROBE (`7`) requires HELLO first and target/session zero. A nonempty
 payload (1..1024 arbitrary test bytes) is counted and discarded, with no reply.
 An empty PROBE is an ordered barrier: its REPLY contains status `0`, total test
 bytes (u32), test blocks (u32), and rolling FNV-1a hash (u32). Counters wrap at
 2^32 and reset on HELLO; hash starts at 2166136261 and updates for each test
 payload byte as `(hash XOR byte) * 16777619` modulo 2^32. Headers are excluded.
-PROBE does not alter audio, upload, BODY sequence, or ring credit state.
+PROBE does not alter audio, upload, the BODY counter, or ring credit state.
 
-`voicebd --usb-bench PORT [SECONDS]` opens a separate connection, checks these
-counters/hash, measures payload throughput in eight- and 32-block batches, and reports 64
-1024-byte-plus-barrier round trips. Close normal playback before using it.
-This checks the USB path without RS485; it does not measure key-to-DAC latency.
+PROBE remains supported by the firmware for protocol diagnostics. The production
+host does not expose a benchmark API or command; playback uses HELLO, BODY and
+upload messages. PROBE timings do not measure key-to-DAC latency.
 
 ### BODY and flow control
 
-BODY payload contains 1..1024 signed-int8 samples for one voice. The first block
-of a new session has START set. Subsequent blocks append to that session even
-across pending-to-playing promotion. The existing 998-sample startup gate is
-independent of transport block size. Samples and the DAC are still 48 kHz source
-format/output; scripts control the playback increment.
+BODY payload contains 1..1024 signed-int8 samples for one voice. RS485 note-on
+arms a pending session; its first matching BODY establishes note start while
+that pending ring is empty. Later blocks append, including across promotion
+to the playing note. There is no START flag or per-note sequence on USB.
+The existing 998-sample startup gate is independent of transport block size.
+Samples and the DAC are still 48 kHz source format/output; scripts control the
+playback increment.
 
-Each BODY increments a connection's sequence by one, starting at the last
-processed sequence from `vq` plus one. Valid stale-note blocks are ignored but
-acknowledged so they release in-flight accounting. Upload requests use a separate
-request-ID sequence and do not advance BODY acknowledgements.
+The ordered stream uses an implicit cumulative BODY counter, shared by all
+voices and wrapping at 65536. Firmware increments it exactly once per processed
+BODY, including valid stale-note blocks that it discards. Partial frames and
+blocks retained waiting for ring space do not advance it. Uploads do not advance
+it. The host assigns corresponding counts internally when preparing blocks;
+they are not transmitted in the header.
+
+After DTR resets the transport, HELLO reports the firmware's current count.
+The host drops its previous in-flight history, sets its next count to that
+baseline plus one, and then reads fresh `vq` credit before enabling streaming.
+A pre-reconnect status snapshot is not a safe baseline: previously queued
+complete blocks could have been processed since that snapshot. DTR, note
+resets and diagnostic-counter clearing do not reset the BODY counter; MCU
+initialization does. Reopening always negotiates the current baseline.
 
 The existing RS485 status frame remains byte-for-byte compatible:
 
@@ -393,7 +409,7 @@ The existing RS485 status frame remains byte-for-byte compatible:
 6..7    ring capacity u16 (4080)
 8       wrapping status sequence u8
 9       age of last processed BODY, rounded-up audio ms; 255 unknown/expired
-10..11  last processed BODY sequence u16
+10..11  cumulative processed BODY counter u16
 12..59  eight six-byte records:
           session u8
           free space u13, five-ms source demand u12, remaining time u15
@@ -412,7 +428,7 @@ synthetic isochronous packet clock. Fresh status reconciles the balance and all
 unacknowledged samples. Firmware backpressure remains authoritative if a pitch
 or script change makes consumption slower than predicted.
 
-At most 8256 wire bytes of BODY are outstanding, tracked in up to 64 block
+At most 8232 wire bytes of BODY are outstanding, tracked in up to 64 block
 records. Small blocks do not prematurely exhaust an eight-packet window. Ready
 blocks are batched into a USB write without waiting to fill a batch. Missing
 status stops further prediction; nothing is sent merely to keep USB busy.

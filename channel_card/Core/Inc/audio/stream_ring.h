@@ -6,10 +6,9 @@
  * SPSC: USB writes from main, the playhead reads in I2S. A full FIFO drops
  * the write (never unread samples). An empty FIFO is an underrun.
  *
- * Each CDC BODY block carries a voice/session, transport sequence, and
- * up to 1024 signed-int8 samples for one voice.
- * Note-on arms the replacement origin; only its matching session may start
- * the body. Repeated SOF tags for that session append normally.
+ * Each CDC BODY block carries a voice/session and up to 1024 signed-int8
+ * samples. The firmware counts processed blocks for cumulative RS485 ACKs.
+ * Note-on arms the replacement origin; its first matching BODY starts it.
  ******************************************************************************
  */
 
@@ -81,8 +80,8 @@ extern "C"
                                  uint32_t nsamp);
 
   /** One complete CDC BODY block: 1 accepted, 0 retired session, -1 capacity/error. */
-  int StreamRing_WriteBody(uint8_t voice, uint8_t session, uint8_t sof,
-                           uint16_t sequence, const int8_t *samples, uint16_t count);
+  int StreamRing_WriteBody(uint8_t voice, uint8_t session,
+                           const int8_t *samples, uint16_t count);
   uint16_t StreamRing_LastBodySequence(void);
   void StreamRing_AudioFrame(void);
   uint8_t StreamRing_BodyAgeMs(void);

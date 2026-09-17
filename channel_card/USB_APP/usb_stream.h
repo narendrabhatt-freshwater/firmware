@@ -1,17 +1,17 @@
-/* Channel Card binary CDC protocol, version 1. No USB packet boundaries on wire. */
+/* Channel Card binary CDC protocol, version 2. No USB packet boundaries on wire. */
 #ifndef USB_STREAM_H
 #define USB_STREAM_H
 #include <stdint.h>
 #define USB_STREAM_VID 0xCAFEu
 #define USB_STREAM_PID 0x4032u
-#define USB_STREAM_VERSION 1u
-#define USB_STREAM_HEADER_BYTES 8u
+#define USB_STREAM_VERSION 2u
+#define USB_STREAM_HEADER_BYTES 5u
 #define USB_STREAM_PAYLOAD_MAX 1024u
 #define USB_STREAM_SESSION_MOD 255u
 #define USB_STREAM_NSAMP_MAX 4096u
 #define USB_STREAM_PRIME_SAMPLES 998u
-#define USB_STREAM_FLAG_START 1u
-/* Header: type, target, session, flags, payload length LE16, sequence LE16. */
+/* Header: type, target, session, payload length LE16.
+ * REPLY uses session for the request type. BODY progress is counted implicitly. */
 enum { USB_MSG_HELLO = 1, USB_MSG_BODY, USB_MSG_UPLOAD_BEGIN,
        USB_MSG_UPLOAD_DATA, USB_MSG_UPLOAD_ABORT, USB_MSG_REPLY, USB_MSG_PROBE };
 enum { USB_UPLOAD_ATTACK = 1, USB_UPLOAD_WAVE, USB_UPLOAD_SCRIPT };

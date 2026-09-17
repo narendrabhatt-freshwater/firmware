@@ -427,11 +427,15 @@ uint32_t StreamRing_WriteVoice(uint8_t voice, uint8_t session, uint8_t sof,
   return StreamRing_WriteCommit(&write);
 }
 
-int StreamRing_WriteBody(uint8_t voice, uint8_t session, uint8_t sof,
-                         uint16_t sequence, const int8_t *samples, uint16_t count)
+int StreamRing_WriteBody(uint8_t voice, uint8_t session,
+                         const int8_t *samples, uint16_t count)
 {
   if (voice >= SAMPLE_VOICES || !samples || !count || count > USB_STREAM_PAYLOAD_MAX) return -1;
   StreamRing_t *r = StreamRing_At(voice);
+  /* RS485 arms an empty pending session. Its first matching BODY establishes
+   * the start; subsequent fragments append without another on-wire flag. */
+  uint8_t sof = r->pending_armed && r->wr == r->split &&
+      (session == r->pending_session || r->pending_session == 0xFFu);
   uint16_t wave = (r->pending_armed && (sof || session == r->pending_session))
       ? r->pending_wave_id : r->current_wave_id;
   StreamRing_Write_t write;
@@ -451,7 +455,9 @@ int StreamRing_WriteBody(uint8_t voice, uint8_t session, uint8_t sof,
   } else if (rc == STREAM_RING_WRITE_ERROR) accepted = -1;
   s_last_body_frame = s_audio_frames;
   s_have_body = 1u;
-  s_last_body_sequence = sequence;
+  /* Count each processed block once, including retired notes. A blocked block
+   * is retained by USB_App_Task and must not advance this cumulative ACK. */
+  if (accepted >= 0) ++s_last_body_sequence;
   return accepted;
 }
 

@@ -41,8 +41,29 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 add_dependencies(voicebd voicebd_program)
 
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/series2.bec"
+    COMMAND "${BERRY_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/series2.be"
+        -o "${CMAKE_CURRENT_BINARY_DIR}/series2.bec"
+    DEPENDS "${BERRY_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/series2.be"
+    VERBATIM)
+add_custom_target(voicebd_gui_program
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_BINARY_DIR}/series2.bec" "${CMAKE_CURRENT_SOURCE_DIR}/series2.bec"
+    DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/series2.bec")
+add_executable(voicebdgui voicebdgui.cpp voicebd.cpp)
+target_compile_features(voicebdgui PRIVATE cxx_std_17)
+target_compile_options(voicebdgui PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(voicebdgui PRIVATE PkgConfig::SERIAL PkgConfig::MIDI Threads::Threads)
+set_target_properties(voicebdgui PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+add_dependencies(voicebdgui voicebd_gui_program)
+
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(voicebd_gui_test voicebdgui_test.cpp voicebd.cpp)
+    target_compile_features(voicebd_gui_test PRIVATE cxx_std_17)
+    target_compile_options(voicebd_gui_test PRIVATE -Wall -Wextra -Werror)
+    target_link_libraries(voicebd_gui_test PRIVATE PkgConfig::SERIAL PkgConfig::MIDI Threads::Threads)
+    add_test(NAME voicebd_gui COMMAND voicebd_gui_test)
     add_executable(voicebd_hardware_test EXCLUDE_FROM_ALL voicebdtest.cpp)
     target_compile_features(voicebd_hardware_test PRIVATE cxx_std_17)
     target_compile_definitions(voicebd_hardware_test PRIVATE VOICEBD_HARDWARE_TEST=1)

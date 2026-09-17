@@ -2,7 +2,8 @@
 
 The migration changes one STM32H725 Channel Card and the `voice_bd` host. Eight
 voices, signed-int8 source samples, 48 kHz DAC, script behavior, and RS485 controls
-are retained. Effect Card firmware and the mainframe application are not migrated.
+are retained. Effect Card firmware is unchanged. MAS uses the matching shared
+`voicebd.cpp`/`voicebd.h` transport; its UI and synthesis logic are unchanged.
 
 ## Automated checks
 
@@ -26,35 +27,42 @@ machine, CDC queues, parser, attack uploader and voice rings against a mocked
 HAL PCD. They test multi-packet descriptors, address/configuration/line coding,
 BODY interleaved with uploads, bad offsets, truncated frames, DTR recovery without endpoint toggle resets, retained BODY when the voice ring
 is full, RX backpressure, terminating IN zero-length packets, and diagnostic integrity counters. HAL/register and physical
-USB behavior still need a board.
+USB behavior still need a board. Protocol-v2 tests additionally cover inferred
+note start from fragmented priming, stale notes, session and BODY-counter wrap,
+HELLO counter baselines after reconnect, and rejection of v1 framing.
 
 Host tests exercise every two-read frame split, concatenated frames, maximum
 lengths, exact credit reconciliation, bounded five-ms forecasts, byte-window
 limits for small blocks, old-session accounting, note promotion during a reserved
 write, ring wrap/capacity, and sequence wrap. The actual firmware ring code is
-linked to the host scheduler. Simulations run eight voices for 30 seconds at
-384 kB/s with 8 ms status gaps and at 960 kB/s with 5 ms status. A socket peer
-forces the real host worker to use 17-byte writes/13-byte reads, interleaves
-upload replies with BODY, and injects a mismatched reply. The USB-only benchmark
-is tested with fragmented I/O and an intentionally corrupted checksum.
+linked to the host scheduler. Eight-voice simulations cover 30 seconds of
+virtual time at 384 kB/s with 8 ms status gaps and 70 seconds at 960 kB/s with
+5 ms status, crossing the implicit 16-bit BODY counter wrap. These are fast
+software simulations, not timed hardware playback. A socket peer forces the
+real host worker to use 17-byte writes/13-byte reads, interleaves upload replies
+with BODY, and tests wrong reply types/targets, incompatible capabilities,
+partial replies/disconnects, timeout without request reuse, and BODY errors
+during uploads. HELLO tests replace stale host state with zero, nonzero and
+wraparound firmware baselines.
+
+Linux tests also check real worker scheduling and FTDI latency configuration.
+Set `VOICEBD_EXPECT_REALTIME=0` when running without real-time permission, or
+`VOICEBD_EXPECT_REALTIME=1` with an `rtprio` limit of at least 20, to require the
+expected permission outcome. Serial and scheduling mocks live in the transport test executable; production
+`voicebd.cpp` has no test-only branches. A separate worker verifies `SCHED_RR` priority 20
+and confirms that denied scheduling prevents its work from starting.
+Timer fixtures cover setting 1 ms, an already configured read-only timer,
+missing adapter-specific attributes, and denied writes.
+
+The standalone host, browser, transport tests and hardware-test executable
+were compiled with GCC on Debian Bookworm ARM64 with warnings as errors.
+Browser/transport tests passed as an unprivileged user, including scheduling
+denial and permission via a container-scoped `rtprio=20` limit. This validates
+the Linux code paths, not physical Rockchip USB/RS485 timing.
 
 For memory/undefined-behavior checking, configure both native test builds with
 `-fsanitize=address,undefined -fno-omit-frame-pointer` in C/C++ flags and
 `-fsanitize=address,undefined` in executable linker flags.
-
-## USB-only check while RS485 is unavailable
-
-After flashing, close other applications using the board and run:
-
-```sh
-voice_bd/voicebd --usb-bench /dev/cu.usbmodemXXXXX 5
-```
-
-Use the actual Channel Card CDC path (Linux: `/dev/ttyACM*`). This verifies
-HELLO, sustained test payload delivery, byte/block totals and a rolling checksum.
-It measures round trips for 1024 bytes plus a reply barrier; it cannot establish
-one-way USB scheduling delay or audible note latency. Repeating the command
-also exercises DTR recovery. No notes are started and no ring credit is consumed.
 
 ## Hardware gate (not established by the automated checks)
 
@@ -150,7 +158,20 @@ and aborts/flushes queued IN data without reopening endpoints. Protocol faults
 leave OUT NAKed rather than using a halt that would reset toggle state on clear.
 
 
-## Recorded hardware results — 17 September 2026
+## Protocol-v2 validation — 17 September 2026
+
+The five-byte header passes native firmware and host tests, ASan/UBSan tests,
+and Debian Bookworm ARM64 tests with real-time permission both granted and
+denied. The STM32 Release build and matching ARM64 MAS are rebuilt together.
+The packet contract and hex examples are in [the packet guide](usb_packet_guide.md).
+These checks do not establish hardware playback or latency for v2. Start with
+a short 30-second playback/exercise check on the Rockchip; the longer release
+qualification below remains separate.
+
+## Recorded v1 hardware results — 17 September 2026
+
+These measurements used the previous eight-byte header. They must not be
+reported as hardware qualification of protocol v2.
 
 Board: `CHCARD-001B00253034510A31373233`, STM32 DFU serial `315232583034`.
 Final Release binary: 167372 bytes, SHA-256

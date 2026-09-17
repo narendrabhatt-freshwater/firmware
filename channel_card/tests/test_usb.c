@@ -69,19 +69,20 @@ static void out(const uint8_t *bytes,unsigned n) {
 static void flush_reply(void) {
   for (unsigned i=0;i<32;++i) { USB_App_Task(); in_done(1); }
 }
-static void frame(uint8_t type,uint8_t target,uint8_t session,uint8_t flags,uint16_t seq,const uint8_t *p,uint16_t n) {
-  uint8_t bytes[1032]={type,target,session,flags,0,0,0,0};
-  USB_Write16(bytes+4,n);USB_Write16(bytes+6,seq); if(n)memcpy(bytes+8,p,n);
+static void frame(uint8_t type,uint8_t target,uint8_t session,const uint8_t *p,uint16_t n) {
+  uint8_t bytes[USB_STREAM_HEADER_BYTES+USB_STREAM_PAYLOAD_MAX]={type,target,session,0,0};
+  USB_Write16(bytes+3,n); if(n)memcpy(bytes+USB_STREAM_HEADER_BYTES,p,n);
   /* Adversarial 3-byte fragments, including frames much larger than USB packets. */
-  for(unsigned at=0;at<8u+n;) { unsigned count=8u+n-at; if(count>3) count=3;
+  for(unsigned at=0;at<USB_STREAM_HEADER_BYTES+n;) { unsigned count=USB_STREAM_HEADER_BYTES+n-at; if(count>3) count=3;
     out(bytes+at,count); at+=count; USB_App_Task(); }
   flush_reply();
 }
 static void connect(void) {
   setup(0,9,1,0,0);in_done(0);setup(0x21,0x22,1,0,0);in_done(0);USB_App_Task();
-  reply_count=0;uint8_t version=1;frame(USB_MSG_HELLO,0,0,0,1,&version,1);
-  CHECK(reply_count==20 && reply_bytes[0]==USB_MSG_REPLY && reply_bytes[8]==0);
-  CHECK(reply_bytes[9]==1 && USB_Read16(reply_bytes+16)==1024);
+  reply_count=0;uint8_t version=USB_STREAM_VERSION;frame(USB_MSG_HELLO,0,0,&version,1);
+  CHECK(reply_count==19 && reply_bytes[0]==USB_MSG_REPLY && reply_bytes[5]==0);
+  CHECK(reply_bytes[6]==USB_STREAM_VERSION && USB_Read16(reply_bytes+13)==1024);
+  CHECK(USB_Read16(reply_bytes+17)==StreamRing_LastBodySequence());
   reply_count=0;
 }
 static void enumeration(void) {
@@ -101,53 +102,112 @@ static void enumeration(void) {
 static void app_test(void) {
   uint8_t data[1024];for(unsigned i=0;i<sizeof data;++i)data[i]=(uint8_t)i;
   StreamRing_ArmPending(0,0,1);
-  frame(USB_MSG_BODY,0,1,1,1,data,998);CHECK(StreamRing_PendingFill(0)==998 && reply_count==0);
+  frame(USB_MSG_BODY,0,1,data,998);CHECK(StreamRing_PendingFill(0)==998 && reply_count==0);
   CHECK(StreamRing_StartNote(0)==0);
   uint8_t begin[]={USB_UPLOAD_ATTACK,0,2,0,0}; // 512-byte attack
-  frame(USB_MSG_UPLOAD_BEGIN,1,0,0,2,begin,5);CHECK(reply_bytes[8]==0);reply_count=0;
-  frame(USB_MSG_BODY,0,1,0,2,data,1024);CHECK(StreamRing_CurrentFill(0)==2022);
+  frame(USB_MSG_UPLOAD_BEGIN,1,0,begin,5);CHECK(reply_bytes[5]==0);reply_count=0;
+  frame(USB_MSG_BODY,0,1,data,1024);CHECK(StreamRing_CurrentFill(0)==2022);
   uint8_t chunk[516]={0};memcpy(chunk+4,data,512);
-  frame(USB_MSG_UPLOAD_DATA,1,0,0,3,chunk,516);CHECK(reply_bytes[8]==0 && AttackBank_IsLoaded(1));
+  frame(USB_MSG_UPLOAD_DATA,1,0,chunk,516);CHECK(reply_bytes[5]==0 && AttackBank_IsLoaded(1));
   CHECK(memcmp(AttackBank_Table(1),data,512)==0);reply_count=0;
   // Wrong offset cannot commit a partial upload.
-  frame(USB_MSG_UPLOAD_BEGIN,2,0,0,4,begin,5);reply_count=0;
-  chunk[0]=1;frame(USB_MSG_UPLOAD_DATA,2,0,0,5,chunk,516);
-  CHECK(reply_bytes[8]!=0 && !AttackBank_IsLoaded(2));reply_count=0;
+  frame(USB_MSG_UPLOAD_BEGIN,2,0,begin,5);reply_count=0;
+  chunk[0]=1;frame(USB_MSG_UPLOAD_DATA,2,0,chunk,516);
+  CHECK(reply_bytes[5]!=0 && !AttackBank_IsLoaded(2));reply_count=0;
   // Frame truncation faults transport instead of interpreting payload as headers.
-  uint8_t truncated[]={USB_MSG_BODY,0,1,0,32,0,3,0};out(truncated,8);USB_App_Task();
+  uint8_t truncated[]={USB_MSG_BODY,0,1,32,0};out(truncated,sizeof truncated);USB_App_Task();
   tick+=1001;USB_App_Task();CHECK(!USB_Device_Connected());
   unsigned opens=data_opens;
   setup(0x21,0x22,0,0,0);in_done(0);setup(0x21,0x22,1,0,0);in_done(0);USB_App_Task();
   CHECK(USB_Device_Connected() && data_opens==opens);
-  uint8_t ver=1;frame(USB_MSG_HELLO,0,0,0,6,&ver,1);CHECK(reply_bytes[8]==0);
+  uint8_t ver=USB_STREAM_VERSION;frame(USB_MSG_HELLO,0,0,&ver,1);CHECK(reply_bytes[5]==0);
 }
 static void probe_test(void) {
   reply_count=0;
   uint8_t data[1024]; uint32_t hash=2166136261u;
   for(unsigned i=0;i<1024;++i) { data[i]=(uint8_t)i; hash=(hash^data[i])*16777619u; }
   uint16_t seq=StreamRing_LastBodySequence(); uint32_t fill=StreamRing_CurrentFill(0);
-  frame(USB_MSG_PROBE,0,0,0,7,data,sizeof data);CHECK(reply_count==0);
-  frame(USB_MSG_PROBE,0,0,0,8,NULL,0);
-  CHECK(reply_count==21 && reply_bytes[8]==0 && reply_bytes[3]==USB_MSG_PROBE);
-  CHECK(USB_Read32(reply_bytes+9)==1024 && USB_Read32(reply_bytes+13)==1);
-  CHECK(USB_Read32(reply_bytes+17)==hash);
+  frame(USB_MSG_PROBE,0,0,data,sizeof data);CHECK(reply_count==0);
+  frame(USB_MSG_PROBE,0,0,NULL,0);
+  CHECK(reply_count==18 && reply_bytes[5]==0 && reply_bytes[2]==USB_MSG_PROBE);
+  CHECK(USB_Read32(reply_bytes+6)==1024 && USB_Read32(reply_bytes+10)==1);
+  CHECK(USB_Read32(reply_bytes+14)==hash);
   CHECK(StreamRing_LastBodySequence()==seq && StreamRing_CurrentFill(0)==fill);
   setup(0x21,0x22,0,0,0);in_done(0);connect();
-  frame(USB_MSG_PROBE,0,0,0,9,NULL,0);
-  CHECK(USB_Read32(reply_bytes+9)==0 && USB_Read32(reply_bytes+13)==0);
-  CHECK(USB_Read32(reply_bytes+17)==2166136261u);
+  frame(USB_MSG_PROBE,0,0,NULL,0);
+  CHECK(USB_Read32(reply_bytes+6)==0 && USB_Read32(reply_bytes+10)==0);
+  CHECK(USB_Read32(reply_bytes+14)==2166136261u);
 }
 static void body_backpressure(void) {
   StreamRing_Init();setup(0x21,0x22,0,0,0);in_done(0);connect();
   uint8_t data[1024];memset(data,0x35,sizeof data);StreamRing_ArmPending(0,0,1);
-  frame(USB_MSG_BODY,0,1,1,1,data,998);CHECK(StreamRing_StartNote(0)==0);
-  for(uint16_t seq=2;seq<=4;++seq)frame(USB_MSG_BODY,0,1,0,seq,data,1024);
+  frame(USB_MSG_BODY,0,1,data,998);CHECK(StreamRing_StartNote(0)==0);
+  for(uint16_t seq=2;seq<=4;++seq)frame(USB_MSG_BODY,0,1,data,1024);
   CHECK(StreamRing_CurrentFill(0)==4070);
-  frame(USB_MSG_BODY,0,1,0,5,data,1024);
+  frame(USB_MSG_BODY,0,1,data,1024);
   CHECK(StreamRing_LastBodySequence()==4 && StreamRing_FullCount()==0 && USB_Device_Connected());
   StreamRing_Advance(0,1024);flush_reply();
   CHECK(StreamRing_LastBodySequence()==5 && StreamRing_CurrentFill(0)==4070);
   CHECK(StreamRing_FullCount()==0 && reply_count==0);
+  // Reopen while a complete BODY is blocked. It and subsequent queued bytes
+  // are discarded; HELLO must report only the five blocks actually processed.
+  frame(USB_MSG_BODY,0,1,data,1024);
+  frame(USB_MSG_BODY,0,1,data,20);
+  CHECK(StreamRing_LastBodySequence()==5);
+  setup(0x21,0x22,0,0,0);in_done(0);connect();
+  CHECK(StreamRing_LastBodySequence()==5 && StreamRing_CurrentFill(0)==4070);
+  StreamRing_Advance(0,1024);
+  frame(USB_MSG_BODY,0,1,data,1024);
+  CHECK(StreamRing_LastBodySequence()==6 && StreamRing_CurrentFill(0)==4070);
+  CHECK(StreamRing_FullCount()==0 && reply_count==0);
+}
+static void session_and_counter_test(void) {
+  StreamRing_Init();StreamRing_StatsClear();
+  setup(0x21,0x22,0,0,0);in_done(0);connect();
+  uint8_t data[1024];memset(data,0x27,sizeof data);
+  StreamRing_ArmPending(0,0,254);
+  frame(USB_MSG_BODY,0,254,data,256);
+  frame(USB_MSG_BODY,0,254,data,742);
+  CHECK(StreamRing_PendingFill(0)==998 && StreamRing_SofCount()==1);
+  CHECK(StreamRing_StartNote(0)==0);
+  StreamRing_ArmPending(0,1,0); // Session wraps, old queued note must be ignored.
+  frame(USB_MSG_BODY,0,254,data,20);
+  CHECK(StreamRing_LastBodySequence()==3 && StreamRing_PendingFill(0)==0);
+  frame(USB_MSG_BODY,0,0,data,998);
+  CHECK(StreamRing_SofCount()==2 && StreamRing_PendingFill(0)==998);
+  CHECK(StreamRing_StartNote(0)==0);
+  StreamRing_ResetAll();frame(USB_MSG_BODY,0,0,data,20);
+  CHECK(StreamRing_LastBodySequence()==5 && StreamRing_FillLevel(0)==0);
+  // Partial header on disconnect cannot advance the cumulative counter.
+  const uint8_t partial[]={USB_MSG_BODY,0};out(partial,sizeof partial);USB_App_Task();
+  setup(0x21,0x22,0,0,0);in_done(0);connect();
+  CHECK(StreamRing_LastBodySequence()==5);
+  frame(USB_MSG_BODY,0,0,data,1); // A retired block is still processed exactly once.
+  CHECK(StreamRing_LastBodySequence()==6);
+  // All voices share the same block counter; they do not reset it on note-on.
+  for(uint8_t v=0;v<8;++v) {
+    StreamRing_ArmPending(v,v,7);frame(USB_MSG_BODY,v,7,data,998);
+    CHECK(StreamRing_PendingFill(v)==998);
+  }
+  CHECK(StreamRing_LastBodySequence()==14);
+  StreamRing_ResetAll();
+  for(unsigned i=14;i<65536u;++i)frame(USB_MSG_BODY,0,7,data,1);
+  CHECK(StreamRing_LastBodySequence()==0);
+  frame(USB_MSG_BODY,0,7,data,1);CHECK(StreamRing_LastBodySequence()==1);
+  CHECK(StreamRing_DropCount()==0 && reply_count==0);
+}
+static void incompatible_test(void) {
+  setup(0x21,0x22,0,0,0);in_done(0);
+  setup(0x21,0x22,1,0,0);in_done(0);USB_App_Task();
+  uint8_t old_version=1;reply_count=0;
+  frame(USB_MSG_HELLO,0,0,&old_version,1);
+  CHECK(!USB_Device_Connected() && reply_bytes[5]==1);
+  setup(0x21,0x22,0,0,0);in_done(0);
+  setup(0x21,0x22,1,0,0);in_done(0);USB_App_Task();
+  const uint8_t old_hello[]={1,0,0,0,1,0,1,0,1};
+  out(old_hello,sizeof old_hello);USB_App_Task();tick+=1001;USB_App_Task();
+  CHECK(!USB_Device_Connected());
+  setup(0x21,0x22,0,0,0);in_done(0);connect();
 }
 static void backpressure(void) {
   setup(0x21,0x22,0,0,0);in_done(0);setup(0x21,0x22,1,0,0);in_done(0);
@@ -162,6 +222,6 @@ static void backpressure(void) {
   CHECK(tx_length[1]==0);in_done(1);CHECK(reply_count==64); // Terminating ZLP, no added data byte.
 }
 int main(void) {
-  StreamRing_Init();AttackBank_Init();USB_App_Init();enumeration();app_test();probe_test();body_backpressure();backpressure();
+  StreamRing_Init();AttackBank_Init();USB_App_Init();enumeration();app_test();probe_test();body_backpressure();session_and_counter_test();incompatible_test();backpressure();
   puts("CDC enumeration, control transfers, uploads/BODY interleaving, reconnect and backpressure passed");return 0;
 }

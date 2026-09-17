@@ -1,6 +1,80 @@
+#include <cstring>
+#include <iostream>
+
 #if defined(VOICEBD_TRANSPORT_TEST)
-// Exercise the production host scheduler against the actual firmware ring code.
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <fcntl.h>
+#include <libserialport.h>
+#include <string>
+#include <unistd.h>
+
+// The test executable supplies libserialport's API using a socket pair. This
+// exercises the normal open/read/write/close path without a physical board.
+struct sp_port { int fd; };
+extern "C" {
+sp_return sp_get_port_by_name(const char* name, sp_port** port) {
+    *port=nullptr;
+    std::string path(name);
+    if (path.compare(0,7,"socket:")!=0) return SP_ERR_ARG;
+    *port=new sp_port{std::stoi(path.substr(7))};
+    return SP_OK;
+}
+void sp_free_port(sp_port* port) { delete port; }
+sp_return sp_open(sp_port* port, sp_mode mode) {
+    if (mode!=SP_MODE_READ_WRITE) return SP_ERR_ARG;
+    int flags=fcntl(port->fd,F_GETFL);
+    return flags>=0 && fcntl(port->fd,F_SETFL,flags|O_NONBLOCK)==0 ? SP_OK : SP_ERR_FAIL;
+}
+sp_return sp_close(sp_port* port) {
+    int result=::close(port->fd);port->fd=-1;
+    return result==0 ? SP_OK : SP_ERR_FAIL;
+}
+sp_return sp_get_port_handle(const sp_port* port, void* handle) {
+    *static_cast<int*>(handle)=port->fd;return SP_OK;
+}
+sp_return sp_set_baudrate(sp_port*, int baud) { return baud==115200 ? SP_OK : SP_ERR_ARG; }
+sp_return sp_set_bits(sp_port*, int bits) { return bits==8 ? SP_OK : SP_ERR_ARG; }
+sp_return sp_set_parity(sp_port*, sp_parity parity) { return parity==SP_PARITY_NONE ? SP_OK : SP_ERR_ARG; }
+sp_return sp_set_stopbits(sp_port*, int bits) { return bits==1 ? SP_OK : SP_ERR_ARG; }
+sp_return sp_set_flowcontrol(sp_port*, sp_flowcontrol flow) { return flow==SP_FLOWCONTROL_NONE ? SP_OK : SP_ERR_ARG; }
+sp_return sp_set_dtr(sp_port*, sp_dtr) { return SP_OK; }
+sp_return sp_flush(sp_port*, sp_buffer) { return SP_OK; }
+sp_return sp_nonblocking_read(sp_port* port, void* data, size_t size) {
+    auto n=::read(port->fd,data,std::min<size_t>(size,13));
+    if (n<0) return errno==EAGAIN || errno==EWOULDBLOCK ? SP_OK : SP_ERR_FAIL;
+    return static_cast<sp_return>(n);
+}
+sp_return sp_nonblocking_write(sp_port* port, const void* data, size_t size) {
+    auto n=::write(port->fd,data,std::min<size_t>(size,17));
+    if (n<0) return errno==EAGAIN || errno==EWOULDBLOCK ? SP_OK : SP_ERR_FAIL;
+    return static_cast<sp_return>(n);
+}
+// RS485 is not simulated by these USB worker tests.
+sp_return sp_blocking_read_next(sp_port*, void*, size_t, unsigned) { return SP_ERR_SUPP; }
+sp_return sp_blocking_write(sp_port*, const void*, size_t, unsigned) { return SP_ERR_SUPP; }
+sp_return sp_drain(sp_port*) { return SP_ERR_SUPP; }
+char* sp_last_error_message() { return nullptr; }
+void sp_free_error_message(char*) {}
+}
+
+#if defined(__linux__)
+#include <pthread.h>
+#include <sched.h>
+static std::atomic<bool> socket_worker_running{false};
+static int socket_setschedparam(pthread_t thread, int policy, const sched_param* priority) {
+    // Socket tests do not need OS scheduling privileges. The separate Linux
+    // scheduling test still calls the real function and checks the result.
+    if (socket_worker_running) return policy==SCHED_RR && priority->sched_priority==20 ? 0 : EINVAL;
+    return pthread_setschedparam(thread,policy,priority);
+}
+#define pthread_setschedparam socket_setschedparam
+#endif
 #include "voicebd.cpp"
+#if defined(__linux__)
+#undef pthread_setschedparam
+#endif
 #include "../channel_card/USB_APP/usb_protocol.h"
 #include "../channel_card/Core/Inc/audio/stream_ring.h"
 #include <stdexcept>
@@ -25,17 +99,17 @@ static void arm(stream_state& host,uint8_t voice,uint8_t session) {
     sample.pcm=std::make_unique<int16_t[]>(sample.pcm_size);
     for (size_t i=0;i<sample.pcm_size;++i) sample.pcm[i]=static_cast<int16_t>(i*256);
     auto& v=host.voices[voice]; v.active=true; v.pending=true; v.session_id=session;
-    v.sample_id=voice; v.waiting_for_first_packet=true; v.initial_samples_left=kPrimeSamples;
+    v.sample_id=voice;  v.initial_samples_left=kPrimeSamples;
     StreamRing_ArmPending(voice,voice,session);
 }
 static void framing_test() {
     static_assert(kUsbHeaderBytes==USB_STREAM_HEADER_BYTES && kUsbPayloadMax==USB_STREAM_PAYLOAD_MAX);
     static_assert(unsigned(kBody)==USB_MSG_BODY && unsigned(kReply)==USB_MSG_REPLY);
-    std::array<uint8_t,1032> frame{};
-    frame[0]=kBody; frame[1]=7; frame[2]=254; frame[3]=1;
-    write16(frame.data()+4,1024); write16(frame.data()+6,65535);
-    for (size_t i=8;i<frame.size();++i) frame[i]=static_cast<uint8_t>(i);
-    // Every possible two-read split, including inside length and sequence.
+    std::array<uint8_t,kUsbHeaderBytes+kUsbPayloadMax> frame{};
+    frame[0]=kBody; frame[1]=7; frame[2]=254;
+    write16(frame.data()+3,1024);
+    for (size_t i=kUsbHeaderBytes;i<frame.size();++i) frame[i]=static_cast<uint8_t>(i);
+    // Split the frame at every byte, including between the two length bytes.
     for (size_t split=0;split<=frame.size();++split) {
         USB_Parser p{}; USB_ParserReset(&p); int complete=0;
         for (size_t start=0,end=split,pass=0;pass<2;++pass,start=split,end=frame.size())
@@ -50,15 +124,15 @@ static void framing_test() {
         if (rc==1) { ++complete; USB_ParserReset(&p); }
     }
     require(complete==3,"coalesced frames");
-    frame[4]=1; frame[5]=4; USB_ParserReset(&p);
-    int rc=0; for (unsigned i=0;i<8;++i) rc=USB_ParserByte(&p,frame[i]);
+    frame[3]=1; frame[4]=4; USB_ParserReset(&p);
+    int rc=0; for (unsigned i=0;i<kUsbHeaderBytes;++i) rc=USB_ParserByte(&p,frame[i]);
     require(rc==-1,"oversized payload accepted");
 }
 static void credit_test() {
     StreamRing_Init(); stream_state h; arm(h,0,1);
     auto now=std::chrono::steady_clock::now(); auto s=snapshot(1); h.apply_status(s,now);
-    uint8_t frame[1032]; unsigned sent=0;
-    while (auto n=h.make_block(frame)) { sent+=static_cast<unsigned>(n-8); }
+    uint8_t frame[kUsbHeaderBytes+kUsbPayloadMax]; unsigned sent=0;
+    while (auto n=h.make_block(frame)) { sent+=static_cast<unsigned>(n-kUsbHeaderBytes); }
     require(sent==4080,"exact credit not enforced");
     s.status_sequence=2; h.apply_status(s,now); // Nothing delivered: do not grant it again.
     require(h.make_block(frame)==0,"in-flight credit double spent");
@@ -77,7 +151,7 @@ static void byte_window_test() {
     StreamRing_Init(); stream_state h; for(uint8_t v=0;v<8;++v)arm(h,v,1);
     auto now=std::chrono::steady_clock::now(); auto status=snapshot(1);
     for(auto& credit:status.free_samples)credit=500;
-    h.apply_status(status,now); uint8_t frame[1032];unsigned bytes=0,blocks=0;
+    h.apply_status(status,now); uint8_t frame[kUsbHeaderBytes+kUsbPayloadMax];unsigned bytes=0,blocks=0;
     while(auto n=h.make_block(frame)) {bytes+=static_cast<unsigned>(n);++blocks;}
     require(blocks==8,"small-block first window");
     // A fresh snapshot can grant more real space without ACKing earlier blocks.
@@ -93,13 +167,13 @@ static void byte_window_test() {
 }
 static void forecast_test() {
     StreamRing_Init();stream_state h;arm(h,0,1);
-    h.voices[0].initial_samples_left=0;h.voices[0].waiting_for_first_packet=false;
+    h.voices[0].initial_samples_left=0;
     auto now=std::chrono::steady_clock::now();auto status=snapshot(1);
     status.active_voice_mask=1;status.pending_voice_mask=0;
     status.free_samples[0]=100;status.refill_samples_5ms[0]=240;status.remaining_us[0]=80000;
-    h.apply_status(status,now,now);uint8_t frame[1032];
+    h.apply_status(status,now,now);uint8_t frame[kUsbHeaderBytes+kUsbPayloadMax];
     require(h.make_block(frame,now)==0,"small refill did not retain safety reserve");
-    require(h.make_block(frame,now+std::chrono::milliseconds(5))==252,"five-ms look-ahead was lost");
+    require(h.make_block(frame,now+std::chrono::milliseconds(5))==244+kUsbHeaderBytes,"five-ms look-ahead was lost");
     require(h.make_block(frame,now+std::chrono::milliseconds(50))==0,"forecast continued beyond fresh status horizon");
     status.status_sequence=2;status.free_samples[0]=340; // The 244 sent bytes remain unacknowledged.
     h.apply_status(status,now+std::chrono::milliseconds(50),now+std::chrono::milliseconds(50));
@@ -108,18 +182,18 @@ static void forecast_test() {
 static void ring_test() {
     StreamRing_Init(); StreamRing_ArmPending(0,0,254);
     int8_t bytes[1024]; for (unsigned i=0;i<1024;++i) bytes[i]=static_cast<int8_t>(i);
-    require(StreamRing_WriteBody(0,254,1,65535,bytes,998)==1,"prime failed");
+    require(StreamRing_WriteBody(0,254,bytes,998)==1,"prime failed");
     require(StreamRing_StartNote(0)==0,"start failed");
-    require(StreamRing_WriteBody(0,254,0,0,bytes,1024)==1,"sequence wrap failed");
-    require(StreamRing_LastBodySequence()==0,"wrapped ack");
+    require(StreamRing_WriteBody(0,254,bytes,1024)==1,"refill failed");
+    require(StreamRing_LastBodySequence()==2,"cumulative ack");
     StreamRing_Advance(0,1900);
-    for (unsigned i=0;i<3;++i) require(StreamRing_WriteBody(0,254,0,i+1,bytes,1024)==1,"ring wrap write");
+    for (unsigned i=0;i<3;++i) require(StreamRing_WriteBody(0,254,bytes,1024)==1,"ring wrap write");
     unsigned before=StreamRing_CurrentFill(0);
-    require(StreamRing_WriteBody(0,254,0,4,bytes,1024)==-1,"overflow accepted");
+    require(StreamRing_WriteBody(0,254,bytes,1024)==-1,"overflow accepted");
     require(StreamRing_CurrentFill(0)==before,"overflow changed ring");
     StreamRing_ArmPending(0,0,0);
-    require(StreamRing_WriteBody(0,254,0,5,bytes,1)==0,"retired session accepted");
-    require(StreamRing_LastBodySequence()==5,"stale data not acknowledged");
+    require(StreamRing_WriteBody(0,254,bytes,1)==0,"retired session accepted");
+    require(StreamRing_LastBodySequence()==6,"stale data not acknowledged");
     // Incomplete reservations cannot publish samples.
     StreamRing_ResetAll(); StreamRing_ArmPending(1,1,3); StreamRing_Write_t w;
     require(StreamRing_WriteBegin(1,3,1,1,20,&w)==0,"reservation failed");
@@ -129,20 +203,20 @@ static void ring_test() {
     StreamRing_WriteAbort(&w);
     // Audio boundary promotion during the next copy must not lose samples.
     StreamRing_ResetAll(); StreamRing_ArmPending(0,0,1);
-    require(StreamRing_WriteBody(0,1,1,1,bytes,998)==1,"promotion prime");
+    require(StreamRing_WriteBody(0,1,bytes,998)==1,"promotion prime");
     require(StreamRing_WriteBegin(0,1,0,0,20,&w)==0,"promotion reservation");
     dst=StreamRing_WriteSpan(&w,&n); memcpy(dst,bytes,20);
     require(StreamRing_WriteAdvance(&w,20)==0,"promotion advance");
     require(StreamRing_StartNote(0)==0,"promotion");
     require(StreamRing_WriteCommit(&w)==20 && StreamRing_CurrentFill(0)==1018,"promotion lost BODY");
 }
-static void streaming_test(unsigned consume=48, unsigned status_interval=8) {
+static void streaming_test(unsigned consume=48, unsigned status_interval=8, unsigned duration_ms=30000) {
     StreamRing_Init(); stream_state h; for (uint8_t v=0;v<8;++v) arm(h,v,1);
     auto now=std::chrono::steady_clock::now(); uint8_t status_seq=0;
     h.apply_status(snapshot(++status_seq),now);
-    std::array<bool,8> started{}; uint8_t frame[1032];
+    std::array<bool,8> started{}; uint8_t frame[kUsbHeaderBytes+kUsbPayloadMax];
     // One maximum BODY block per millisecond. Include repeated 8 ms status gaps.
-    for (unsigned ms=0;ms<30000;++ms) {
+    for (unsigned ms=0;ms<duration_ms;++ms) {
         if (ms%status_interval==0) {
             auto s=snapshot(++status_seq);
             for (unsigned v=0;v<8;++v) {
@@ -154,8 +228,8 @@ static void streaming_test(unsigned consume=48, unsigned status_interval=8) {
         size_t n=h.make_block(frame,now+std::chrono::milliseconds(ms));
         if (n) {
             unsigned voice=frame[1];
-            require(StreamRing_WriteBody(frame[1],frame[2],frame[3],read16(frame+6),
-                reinterpret_cast<int8_t*>(frame+8),static_cast<uint16_t>(n-8))==1,"valid stream block rejected");
+            require(StreamRing_WriteBody(frame[1],frame[2],
+                reinterpret_cast<int8_t*>(frame+kUsbHeaderBytes),static_cast<uint16_t>(n-kUsbHeaderBytes))==1,"valid stream block rejected");
             if (!started[voice] && StreamRing_PendingFill(voice)>=998) {
                 require(StreamRing_StartNote(static_cast<uint8_t>(voice))==0,"simulated startup"); started[voice]=true;
             }
@@ -169,9 +243,12 @@ static void streaming_test(unsigned consume=48, unsigned status_interval=8) {
     }
     for (bool active:started) require(active,"voice starved during startup");
 }
-static void worker_test(bool bad_reply) {
+// Faults: wrong type, wrong target, old protocol, partial reply/disconnect,
+// timeout, and a BODY error while an upload request is outstanding.
+static void worker_test(unsigned fault=0, uint16_t baseline=0) {
     int sockets[2]; require(::socketpair(AF_UNIX,SOCK_STREAM,0,sockets)==0,"socket pair");
-    std::atomic<bool> stop{false}, peer_ok{true}; std::atomic<unsigned> body_count{0}, upload_count{0}, body_bytes{0}, starts{0};
+    std::atomic<bool> stop{false}, peer_ok{true}; std::atomic<unsigned> body_count{0}, upload_count{0}, body_bytes{0};
+    std::atomic<unsigned> voice_mask{0};
     std::thread peer([&] {
         USB_Parser parser{}; USB_ParserReset(&parser);
         while(!stop) {
@@ -182,74 +259,109 @@ static void worker_test(bool bad_reply) {
             if(rc<0) { peer_ok=false; break; }
             if(rc!=1)continue;
             auto h=parser.bytes;
-            if(h[0]==kBody) { ++body_count; body_bytes+=8+read16(h+4); starts+=(h[3]&1); USB_ParserReset(&parser); continue; }
+            if(h[0]==kBody) { ++body_count; body_bytes+=kUsbHeaderBytes+read16(h+3); voice_mask|=1u<<h[1]; USB_ParserReset(&parser); continue; }
             if(h[0]==kUploadBegin || h[0]==kUploadData)++upload_count;
-            uint8_t reply[20]={kReply,h[1],h[2],h[0],1,0,h[6],h[7],0};
-            unsigned size=9;
+            uint8_t reply[19]={kReply,h[1],h[0],1,0,0};
+            unsigned size=6;
             if(h[0]==kHello) {
-                reply[4]=12;reply[9]=1;reply[10]=8;reply[11]=1;
-                write32(reply+12,48000);write16(reply+16,1024);write16(reply+18,998);size=20;
+                reply[3]=14;reply[6]=kUsbProtocolVersion;reply[7]=8;reply[8]=1;
+                write32(reply+9,48000);write16(reply+13,1024);write16(reply+15,998);write16(reply+17,baseline);size=19;
             }
-            if(bad_reply)reply[6]^=0x40; // Mismatched request must never complete successfully.
+            if(fault==1)reply[2]=kUploadData;
+            if(fault==2)reply[1]^=1;
+            if(fault==3 && h[0]==kHello)reply[6]=1;
+            if(fault==5) { USB_ParserReset(&parser); continue; }
+            if(fault==6 && h[0]==kUploadBegin) { reply[2]=kBody;reply[5]=1; }
+            if(fault==4) {
+                (void)::write(sockets[1],reply,3);
+                ::shutdown(sockets[1],SHUT_RDWR);
+                break;
+            }
             for(unsigned i=0;i<size;++i) if(::write(sockets[1],reply+i,1)!=1)peer_ok=false;
             USB_ParserReset(&parser);
         }
     });
     stream_state host; StreamRing_Init(); usb_link link;
-    auto opened=link.open_test_fd(sockets[0],host);
-    if(!bad_reply && opened) {
+    // Simulate an old snapshot and unacknowledged data left from a prior link.
+    host.sequence_ready=true;host.next_sequence=123;host.pending_packet_count=2;
+    host.first_pending_packet=5;
+#if defined(__linux__)
+    socket_worker_running=true;
+#endif
+    auto opened=link.open("socket:"+std::to_string(sockets[0]),host);
+    if(opened) {
+        require(host.next_sequence==static_cast<uint16_t>(baseline+1u) &&
+                host.pending_packet_count==0 && host.first_pending_packet==0,
+                "HELLO did not reset the implicit counter baseline");
         auto now=std::chrono::steady_clock::now();
         for(uint8_t v=0;v<8;++v)arm(host,v,1);
-        host.apply_status(snapshot(1),now);link.enable_streaming();
+        auto status=snapshot(1);status.last_usb_sequence=baseline;
+        host.apply_status(status,now);link.enable_streaming();
         uint8_t sample[512]={};
         auto uploaded=link.upload(1,0,sample,sizeof sample);
-        require(uploaded.ok(),"upload while BODY is running");
-        require(starts==8 && body_count>8 && body_bytes<=kPendingWireBytes && upload_count==2,"BODY byte window / upload interleaving");
+        if(fault==6) require(!uploaded && !link.good(),"BODY error was accepted as an upload ACK");
+        else {
+            require(uploaded.ok(),"upload while BODY is running");
+            require(voice_mask==255 && body_count>8 && body_bytes<=kPendingWireBytes && upload_count==2,"BODY byte window / upload interleaving");
+            require(host.pending_packets[0].sequence==static_cast<uint16_t>(baseline+1u),
+                    "first BODY did not use the HELLO baseline");
+        }
+    }
+    if(fault==5) {
+        auto start=std::chrono::steady_clock::now();
+        require(!link.request(kUploadBegin,0,{1,0,2,0,0}),"request reused a timed-out connection");
+        require(std::chrono::steady_clock::now()-start<std::chrono::milliseconds(100),
+                "timeout did not make subsequent requests fail immediately");
     }
     link.close();stop=true;::shutdown(sockets[1],SHUT_RDWR);peer.join();::close(sockets[1]);
+#if defined(__linux__)
+    socket_worker_running=false;
+#endif
     require(peer_ok,"peer framing failed under partial writes");
-    require(bad_reply ? !opened.ok() : opened.ok(),"request reply validation");
+    require((fault && fault!=6) ? !opened.ok() : opened.ok(),"request reply validation");
 }
-static void benchmark_test(bool corrupt) {
-    int sockets[2]; require(::socketpair(AF_UNIX,SOCK_STREAM,0,sockets)==0,"benchmark socket pair");
-    std::atomic<bool> stop{false},peer_ok{true};
-    std::thread peer([&] {
-        USB_Parser parser{}; USB_ParserReset(&parser);
-        uint32_t bytes=0,blocks=0,hash=2166136261u;
-        while(!stop) {
-            pollfd fd{sockets[1],POLLIN,0}; if(::poll(&fd,1,50)<=0)continue;
-            uint8_t buffer[256]; auto n=::read(sockets[1],buffer,sizeof buffer); if(n<=0)break;
-            for(int i=0;i<n;++i) {
-                int rc=USB_ParserByte(&parser,buffer[i]);
-                if(rc<0) { peer_ok=false; return; }
-                if(!rc)continue;
-                auto h=parser.bytes; unsigned length=read16(h+4);
-                uint8_t response[21]={kReply,0,0,h[0],0,0,h[6],h[7],0};
-                unsigned size=0;
-                if(h[0]==kHello) {
-                    response[4]=12;response[9]=1;response[10]=8;response[11]=1;
-                    write32(response+12,48000);write16(response+16,1024);write16(response+18,998);size=20;
-                } else if(h[0]==kProbe && length) {
-                    bytes+=length;++blocks;
-                    for(unsigned j=0;j<length;++j)hash=(hash^h[8+j])*16777619u;
-                } else if(h[0]==kProbe) {
-                    response[4]=13;write32(response+9,bytes);write32(response+13,blocks);
-                    write32(response+17,hash^(corrupt ? 1u : 0u));size=21;
-                } else { peer_ok=false; return; }
-                for(unsigned j=0;j<size;++j) if(::write(sockets[1],response+j,1)!=1)peer_ok=false;
-                USB_ParserReset(&parser);
-            }
-        }
+#if defined(__linux__)
+static void linux_settings_test() {
+    bool ran=false;
+    int policy=-1, query=-1;
+    sched_param priority{};
+    std::thread worker;
+    auto error=start_stream_thread(worker,[&] {
+        ran=true;
+        query=pthread_getschedparam(pthread_self(),&policy,&priority);
     });
-    serial_port port; port.adopt_test_fd(sockets[0]);
-    // Zero seconds performs one throughput batch plus the latency observations.
-    auto result=usb_benchmark(port,0);
-    stop=true;::shutdown(sockets[1],SHUT_RDWR);peer.join();::close(sockets[1]);
-    require(peer_ok,"benchmark peer framing");
-    require(corrupt ? !result.ok() : result.ok(),"benchmark verifies byte counts and checksum");
+    if (worker.joinable()) worker.join();
+    require(ran==error.empty(),"worker ran without required scheduling");
+    if (ran) require(query==0 && policy==SCHED_RR && priority.sched_priority==20,
+                     "worker did not receive Linux real-time priority");
+    else require(error.find("rtprio")!=std::string::npos,"missing scheduling setup guidance");
+    if (auto expected=std::getenv("VOICEBD_EXPECT_REALTIME"))
+        require(ran==(std::string(expected)=="1"),"unexpected real-time permission result");
+
+    char directory[]="/tmp/voicebd-latency-XXXXXX";
+    require(::mkdtemp(directory)!=nullptr,"latency fixture directory");
+    std::string timer=std::string(directory)+"/latency_timer";
+    require(set_linux_serial_latency(timer,error),"adapter without FTDI timer rejected");
+    { std::ofstream out(timer); out<<"16\n"; }
+    require(set_linux_serial_latency(timer,error),"setting 1 ms timer failed");
+    { std::ifstream in(timer); unsigned value=0; in>>value; require(value==1,"timer not set to 1 ms"); }
+    require(::chmod(timer.c_str(),0444)==0,"latency fixture permissions");
+    require(set_linux_serial_latency(timer,error),"read-only preconfigured timer rejected");
+    require(::chmod(timer.c_str(),0644)==0,"latency fixture restore permissions");
+    { std::ofstream out(timer); out<<"16\n"; }
+    require(::chmod(timer.c_str(),0444)==0,"latency fixture read-only permissions");
+    if (::geteuid()!=0) require(!set_linux_serial_latency(timer,error),"unconfigured read-only timer accepted");
+    require(!set_linux_serial_latency(timer+"/invalid",error),"invalid sysfs path accepted");
+    ::unlink(timer.c_str()); ::rmdir(directory);
 }
+#endif
 int main() try {
-    framing_test(); credit_test(); byte_window_test(); forecast_test(); ring_test(); streaming_test(); streaming_test(120,5); worker_test(false); worker_test(true); benchmark_test(false); benchmark_test(true);
+#if defined(__linux__)
+    linux_settings_test();
+#endif
+    framing_test(); credit_test(); byte_window_test(); forecast_test(); ring_test(); streaming_test(); streaming_test(120,5,70000); worker_test(); worker_test(0,65535);
+    for(unsigned fault=1;fault<=6;++fault)worker_test(fault);
+    worker_test(0,77); // A fresh connection works after the rejected/timed-out links.
     std::cout << "CDC framing, credit, sessions, worker I/O and eight-voice simulations (384/960 kB/s) passed\n";
     return 0;
 } catch (std::exception const& error) { std::cerr << error.what() << '\n'; return 1; }
@@ -390,7 +502,6 @@ int main(int argc,char**argv) try {
 #include <cmath>
 #include <csignal>
 #include <cstdlib>
-#include <cstring>
 #include <exception>
 #include <sysexits.h>
 #include <fstream>
@@ -399,7 +510,6 @@ int main(int argc,char**argv) try {
 #include <termios.h>
 #include <unistd.h>
 #include <iomanip>
-#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -446,7 +556,6 @@ int usage(int status)
         << "    -h             Print this help and exit\n"
         << "    --usb-port PORT     Override the Channel CDC port\n"
         << "    --rs485-port PORT   Override the RS485 adapter port\n"
-        << "    --usb-bench PORT [SECONDS]   USB-only throughput/integrity/timing check (default 5 s)\n"
         << "\nARGUMENTS\n\n"
         << "    sample.wav     48 kHz, 16-bit PCM WAV, mono or stereo\n"
         << "    program.bec    Firmware program (default: channel.bec in current directory)\n"
@@ -541,19 +650,6 @@ try
 {
     char const* const slash = std::strrchr(argv[0], '/');
     exe_name = slash ? slash + 1 : argv[0];
-    if(argc>=2 && std::strcmp(argv[1],"--usb-bench")==0) {
-        if(argc<3 || argc>4) return usage(EX_USAGE);
-        unsigned seconds=5;
-        if(argc==4) {
-            std::string arg=argv[3];
-            if(arg.empty() || arg.find_first_not_of("0123456789")!=std::string::npos || arg.size()>2)
-                return usage(EX_USAGE);
-            seconds=static_cast<unsigned>(std::stoul(arg));
-        }
-        auto result=voice_board_usb_benchmark(argv[2],seconds);
-        (result ? std::cout : std::cerr) << result.message << '\n';
-        return result ? EX_OK : EX_IOERR;
-    }
     auto const base_path = std::filesystem::path(argv[0]).parent_path();
     auto const orchestra_path =
         base_path / "orch01.vc_SV001.wav";

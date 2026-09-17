@@ -57,10 +57,6 @@ struct voice_board_result_t {
     explicit operator bool() const { return ok(); }
 };
 
-/* USB-only diagnostic; opens its own connection. Close normal playback first.
- * Reports verified payload throughput and host round-trip timing, not DAC latency. */
-voice_board_result_t voice_board_usb_benchmark(std::string const& port, unsigned seconds = 5);
-
 /* Reserved for per-channel controls. These values are not sent yet. */
 struct controls_t {
     uint8_t pb = 64;               /* Pitch bend, centred at 64. */

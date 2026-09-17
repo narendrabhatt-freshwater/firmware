@@ -1,0 +1,175 @@
+component,object,flash_bytes
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_vm.c.obj),10700
+VM subsystem (Berry + integration/upload),libscript_runtime_berry_backend.a(berry_backend.c.obj),9135
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_string.c.obj),4320
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_strlib.c.obj),3296
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_gc.c.obj),2796
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_api.c.obj),2336
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_bytecode.c.obj),1848
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_map.c.obj),1632
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_module.c.obj),1572
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_class.c.obj),1500
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_exec.c.obj),1284
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_mem.c.obj),976
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_baselib.c.obj),712
+VM subsystem (Berry + integration/upload),libfreshwater_vm.a(vm.c.obj),676
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_vector.c.obj),624
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_object.c.obj),540
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_func.c.obj),432
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_var.c.obj),400
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_debug.c.obj),388
+VM subsystem (Berry + integration/upload),vm_upload.c.obj,348
+VM subsystem (Berry + integration/upload),channel_vm.c.obj,328
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_list.c.obj),208
+VM subsystem (Berry + integration/upload),libberry_runtime.a(be_libs.c.obj),4
+VM subsystem (Berry + integration/upload),libberry_runtime.a(berry_runtime_modtab.c.obj),4
+STM32 HAL/LL drivers,stm32h7xx_hal_rcc_ex.c.obj,5780
+STM32 HAL/LL drivers,stm32h7xx_hal_dma.c.obj,5248
+STM32 HAL/LL drivers,stm32h7xx_hal_pcd.c.obj,4468
+STM32 HAL/LL drivers,stm32h7xx_ll_usb.c.obj,3444
+STM32 HAL/LL drivers,stm32h7xx_hal_i2c.c.obj,3152
+STM32 HAL/LL drivers,stm32h7xx_hal_rcc.c.obj,3100
+STM32 HAL/LL drivers,stm32h7xx_hal_uart.c.obj,1828
+STM32 HAL/LL drivers,stm32h7xx_hal_tim.c.obj,1452
+STM32 HAL/LL drivers,stm32h7xx_hal_gpio.c.obj,1016
+STM32 HAL/LL drivers,stm32h7xx_hal_i2s.c.obj,1012
+STM32 HAL/LL drivers,stm32h7xx_hal_sai.c.obj,856
+STM32 HAL/LL drivers,stm32h7xx_hal_uart_ex.c.obj,468
+STM32 HAL/LL drivers,stm32h7xx_hal_cortex.c.obj,396
+STM32 HAL/LL drivers,stm32h7xx_hal_pcd_ex.c.obj,324
+STM32 HAL/LL drivers,stm32h7xx_hal.c.obj,313
+STM32 HAL/LL drivers,system_stm32h7xx.c.obj,252
+STM32 HAL/LL drivers,stm32h7xx_hal_tim_ex.c.obj,212
+STM32 HAL/LL drivers,stm32h7xx_hal_i2c_ex.c.obj,172
+STM32 HAL/LL drivers,stm32h7xx_hal_pwr_ex.c.obj,140
+C library (newlib-nano),libg_nano.a(libc_a-strtod.o),3076
+C library (newlib-nano),libg_nano.a(libc_a-dtoa.o),2952
+C library (newlib-nano),libg_nano.a(libc_a-mprec.o),2686
+C library (newlib-nano),libg_nano.a(libc_a-nano-vfprintf_float.o),1908
+C library (newlib-nano),libg_nano.a(libc_a-gdtoa-gethex.o),1250
+C library (newlib-nano),libg_nano.a(libc_a-nano-vfscanf_float.o),1036
+C library (newlib-nano),libg_nano.a(libc_a-nano-svfscanf.o),924
+C library (newlib-nano),libg_nano.a(libc_a-nano-vfprintf_i.o),830
+C library (newlib-nano),libg_nano.a(libc_a-nano-svfprintf.o),688
+C library (newlib-nano),libg_nano.a(libc_a-nano-vfscanf_i.o),664
+C library (newlib-nano),libg_nano.a(libc_a-nano-vfprintf.o),630
+C library (newlib-nano),libg_nano.a(libc_a-gdtoa-hexnan.o),390
+C library (newlib-nano),libg_nano.a(libc_a-locale.o),364
+C library (newlib-nano),libg_nano.a(libc_a-findfp.o),344
+C library (newlib-nano),libg_nano.a(libc_a-fflush.o),336
+C library (newlib-nano),libg_nano.a(libc_a-mallocr.o),316
+C library (newlib-nano),libg_nano.a(libc_a-ctype_.o),257
+C library (newlib-nano),libg_nano.a(libc_a-strtol.o),248
+C library (newlib-nano),libg_nano.a(libc_a-strtoul.o),224
+C library (newlib-nano),libg_nano.a(libc_a-makebuf.o),186
+C library (newlib-nano),libg_nano.a(libc_a-wsetup.o),168
+C library (newlib-nano),libg_nano.a(libc_a-memchr.o),160
+C library (newlib-nano),libg_nano.a(libc_a-freer.o),152
+C library (newlib-nano),libg_nano.a(libc_a-stdio.o),140
+C library (newlib-nano),libg_nano.a(libc_a-wbuf.o),122
+C library (newlib-nano),libg_nano.a(libc_a-ungetc.o),116
+C library (newlib-nano),libg_nano.a(libc_a-sccl.o),114
+C library (newlib-nano),libg_nano.a(libc_a-snprintf.o),100
+C library (newlib-nano),libg_nano.a(libc_a-signal.o),96
+C library (newlib-nano),libg_nano.a(libc_a-reallocr.o),92
+C library (newlib-nano),libg_nano.a(libc_a-sscanf.o),88
+C library (newlib-nano),libg_nano.a(libc_a-impure.o),80
+C library (newlib-nano),libg_nano.a(libc_a-init.o),72
+C library (newlib-nano),libg_nano.a(libc_a-sprintf.o),68
+C library (newlib-nano),libg_nano.a(libc_a-assert.o),60
+C library (newlib-nano),libg_nano.a(libc_a-fwalk.o),58
+C library (newlib-nano),libg_nano.a(libc_a-memmove.o),50
+C library (newlib-nano),libg_nano.a(libc_a-setjmp.o),44
+C library (newlib-nano),libg_nano.a(libc_a-strncat.o),42
+C library (newlib-nano),libg_nano.a(libc_a-signalr.o),40
+C library (newlib-nano),libg_nano.a(libc_a-callocr.o),40
+C library (newlib-nano),libg_nano.a(libc_a-strncpy.o),38
+C library (newlib-nano),libg_nano.a(libc_a-strncmp.o),36
+C library (newlib-nano),libg_nano.a(libc_a-lseekr.o),36
+C library (newlib-nano),libg_nano.a(libc_a-readr.o),36
+C library (newlib-nano),libg_nano.a(libc_a-writer.o),36
+C library (newlib-nano),libg_nano.a(libc_a-mbtowc_r.o),36
+C library (newlib-nano),libg_nano.a(libc_a-fprintf.o),36
+C library (newlib-nano),libg_nano.a(libc_a-fstatr.o),36
+C library (newlib-nano),libg_nano.a(libc_a-malloc.o),32
+C library (newlib-nano),libg_nano.a(libc_a-sbrkr.o),32
+C library (newlib-nano),libg_nano.a(libc_a-closer.o),32
+C library (newlib-nano),libg_nano.a(libc_a-isattyr.o),32
+C library (newlib-nano),libg_nano.a(libc_a-strcmp.o),28
+C library (newlib-nano),libg_nano.a(libc_a-strchr.o),28
+C library (newlib-nano),libg_nano.a(libc_a-memcpy-stub.o),28
+C library (newlib-nano),libg_nano.a(libc_a-wctomb_r.o),26
+C library (newlib-nano),libg_nano.a(libc_a-mlock.o),24
+C library (newlib-nano),libg_nano.a(libc_a-strlen.o),16
+C library (newlib-nano),libg_nano.a(libc_a-memset.o),16
+C library (newlib-nano),libg_nano.a(libc_a-strcpy.o),16
+C library (newlib-nano),libg_nano.a(libm_a-s_nan.o),16
+C library (newlib-nano),libg_nano.a(libc_a-msizer.o),16
+C library (newlib-nano),libg_nano.a(libc_a-abort.o),14
+C library (newlib-nano),libg_nano.a(libc_a-errno.o),12
+C library (newlib-nano),libg_nano.a(libm_a-sf_nan.o),12
+C library (newlib-nano),libg_nano.a(libc_a-localeconv.o),8
+C library (newlib-nano),libg_nano.a(libc_a-lock.o),6
+Audio engine / DSP,note_bank.c.obj,6992
+Audio engine / DSP,wavetable_osc.c.obj,3036
+Audio engine / DSP,stream_ring.c.obj,3020
+Audio engine / DSP,audio_tone_dc.c.obj,1453
+Audio engine / DSP,note_filter.c.obj,1408
+Audio engine / DSP,audio_bridge.c.obj,952
+Audio engine / DSP,note_envelope.c.obj,664
+Audio engine / DSP,attack_bank.c.obj,556
+Audio engine / DSP,butterworth_four_pole.c.obj,544
+Math library,libm.a(libm_a-pow_log_data.o),4168
+Math library,libm.a(libm_a-exp_data.o),2160
+Math library,libm.a(libm_a-k_rem_pio2.o),1796
+Math library,libm.a(libm_a-pow.o),1504
+Math library,libm.a(libm_a-e_rem_pio2.o),1076
+Math library,libm.a(libm_a-sf_pow.o),792
+Math library,libm.a(libm_a-k_tan.o),600
+Math library,libm.a(libm_a-ef_fmod.o),400
+Math library,libm.a(libm_a-sf_exp2_data.o),328
+Math library,libm.a(libm_a-sf_pow_log2_data.o),296
+Math library,libm.a(libm_a-s_floor.o),272
+Math library,libm.a(libm_a-s_scalbn.o),244
+Math library,libm.a(libm_a-math_err.o),232
+Math library,libm.a(libm_a-math_errf.o),160
+Math library,libm.a(libm_a-s_tan.o),96
+Math library,libm.a(libm_a-wf_fmod.o),88
+Math library,libm.a(libm_a-s_fabs.o),20
+Console / RS485 / attack upload,channel_console.c.obj,12283
+Console / RS485 / attack upload,attack_upload.c.obj,704
+Console / RS485 / attack upload,uart5_rx.c.obj,668
+Our USB CDC stack,usb_device.c.obj,3727
+Our USB CDC stack,usb_app.c.obj,2636
+Our USB CDC stack,usb_descriptors.c.obj,317
+Compiler support (libgcc),libgcc.a(unwind-arm.o),2760
+Compiler support (libgcc),libgcc.a(_arm_addsubdf3.o),888
+Compiler support (libgcc),libgcc.a(pr-support.o),856
+Compiler support (libgcc),libgcc.a(_udivmoddi4.o),800
+Compiler support (libgcc),libgcc.a(libunwind.o),408
+Compiler support (libgcc),libgcc.a(_aeabi_ldivmod.o),160
+Compiler support (libgcc),libgcc.a(_fixunsdfdi.o),64
+Compiler support (libgcc),libgcc.a(_aeabi_uldivmod.o),48
+Compiler support (libgcc),libgcc.a(_popcountsi2.o),40
+Compiler support (libgcc),libgcc.a(_fixdfdi.o),36
+Compiler support (libgcc),libgcc.a(_dvmd_tls.o),4
+Startup / peripheral init / system glue,main.c.obj,812
+Startup / peripheral init / system glue,startup_stm32h725xx.s.obj,804
+Startup / peripheral init / system glue,i2s.c.obj,728
+Startup / peripheral init / system glue,tim.c.obj,668
+Startup / peripheral init / system glue,usart.c.obj,360
+Startup / peripheral init / system glue,sai.c.obj,328
+Startup / peripheral init / system glue,gpio.c.obj,296
+Startup / peripheral init / system glue,i2c.c.obj,284
+Startup / peripheral init / system glue,usb_otg.c.obj,192
+Startup / peripheral init / system glue,crtbegin.o,148
+Startup / peripheral init / system glue,stm32h7xx_it.c.obj,120
+Startup / peripheral init / system glue,syscalls.c.obj,120
+Startup / peripheral init / system glue,sysmem.c.obj,80
+Startup / peripheral init / system glue,dma.c.obj,72
+Startup / peripheral init / system glue,stm32h7xx_hal_msp.c.obj,36
+Startup / peripheral init / system glue,crtn.o,16
+Startup / peripheral init / system glue,crti.o,8
+Our DAC / LED drivers,cs4304.c.obj,1052
+Our DAC / LED drivers,channel_led.c.obj,266
+Linker overhead/alignment,,139

@@ -34,7 +34,7 @@
 #include <cerrno>
 #include <libserialport.h>
 #if defined(__APPLE__)
-// To change macOS serial latency from the default 16 ms to 1 ms.
+// macOS exposes the serial receive latency through IOSSDATALAT.
 #include <IOKit/serial/ioss.h>
 #include <sys/ioctl.h>
 #include <pthread.h>
@@ -45,6 +45,9 @@
 #endif
 #if defined(__linux__)
 #include <cstdlib>
+#include <pthread.h>
+#include <sched.h>
+#include <sys/stat.h>
 #endif
 #include <algorithm>
 #include <array>
@@ -54,9 +57,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
-#include <cstring>
 #include <fstream>
+#include <future>
+#include <system_error>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -65,20 +68,18 @@
 #include <thread>
 #include <utility>
 #include <vector>
-#include <iostream>
 
 namespace voice_board_detail {
 
-/* Match the scheduling needs of an audio callback without an audio library.
- * Workers block on I/O/timers at idle; the time constraint reserves up to
- * 250 us of CPU per 1 ms period and remains preemptible. OS scheduling is
- * best effort, so sustained playback still needs qualification on each host. */
-static void prioritize_stream_thread()
+// Give the USB and RS485 workers priority so refills are handled promptly.
+/* ---- set streaming priority --------------------------------------------- */
+
+static std::string prioritize_stream_thread()
 {
 #if defined(__APPLE__)
     (void)pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     mach_timebase_info_data_t timebase{};
-    if (mach_timebase_info(&timebase)!=KERN_SUCCESS || !timebase.numer) return;
+    if (mach_timebase_info(&timebase)!=KERN_SUCCESS || !timebase.numer) return {};
     thread_time_constraint_policy_data_t policy{};
     policy.period=static_cast<uint32_t>(1000000ull*timebase.denom/timebase.numer);
     policy.computation=policy.period/4u;
@@ -88,7 +89,35 @@ static void prioritize_stream_thread()
     (void)thread_policy_set(thread, THREAD_TIME_CONSTRAINT_POLICY,
         reinterpret_cast<thread_policy_t>(&policy), THREAD_TIME_CONSTRAINT_POLICY_COUNT);
     (void)mach_port_deallocate(mach_task_self(),thread);
+#elif defined(__linux__)
+    // Below the usual threaded IRQ priority; equal-priority workers time-share.
+    sched_param priority{};
+    priority.sched_priority=20;
+    int result=pthread_setschedparam(pthread_self(),SCHED_RR,&priority);
+    if (result) return "Linux streaming requires SCHED_RR priority 20: " +
+        std::error_code(result,std::generic_category()).message() +
+        ". Set your account's rtprio limit or the service's LimitRTPRIO to at least 20.";
 #endif
+    return {};
+}
+
+// Report scheduling errors before the worker starts using the connection.
+/* ---- start a worker ----------------------------------------------------- */
+
+template<class Work>
+std::string start_stream_thread(std::thread& thread, Work work)
+{
+    std::promise<std::string> started;
+    auto result=started.get_future();
+    thread=std::thread([work=std::move(work), started=std::move(started)]() mutable {
+        auto error=prioritize_stream_thread();
+        bool ready=error.empty();
+        started.set_value(std::move(error));
+        if (ready) work();
+    });
+    auto error=result.get();
+    if (!error.empty()) thread.join();
+    return error;
 }
 
 /* Channel Card wire-format constants. */
@@ -98,10 +127,11 @@ constexpr unsigned kSampleSlotCount = 248u;
 constexpr unsigned kSampleRate = 48000u;
 constexpr unsigned kAttackSampleCount = 512u;
 constexpr unsigned kCrossfadeSampleCount = 32u;
-constexpr unsigned kUsbHeaderBytes=8u;
+constexpr unsigned kUsbHeaderBytes=5u;
+constexpr uint8_t kUsbProtocolVersion=2u;
 constexpr unsigned kUsbPayloadMax=1024u;
 constexpr unsigned kPrimeSamples=998u;
-enum : uint8_t { kHello=1, kBody, kUploadBegin, kUploadData, kUploadAbort, kReply, kProbe };
+enum : uint8_t { kHello=1, kBody, kUploadBegin, kUploadData, kUploadAbort, kReply };
 constexpr uint8_t kSessionIdWrap = 255u;
 constexpr size_t kBecHeaderBytes = 20u;
 constexpr size_t kBecMaxPayload = 16384u;
@@ -110,35 +140,27 @@ constexpr size_t kPendingPacketCapacity = 64u;
 constexpr unsigned kPendingWireBytes = 8u * (kUsbHeaderBytes + kUsbPayloadMax);
 constexpr std::array<uint8_t, 4> kBecMagic{{0x46u, 0x57u, 0x53u, 0x43u}};
 
-/*******************************************************************************
-
-                     v o i c e   b o a r d   h e l p e r s
-
-*******************************************************************************/
-
-/* ---- return a successful board result ------------------------------------ */
+/* ---- return a successful result ----------------------------------------- */
 
 voice_board_result_t ok(std::string message = {})
 {
     return {voice_board_error_t::ok, std::move(message)};
 }
 
-/* ---- return a failed board result ---------------------------------------- */
+/* ---- return an error ---------------------------------------------------- */
 
 voice_board_result_t fail(voice_board_error_t code, std::string message)
 {
     return {code, std::move(message)};
 }
 
-/* ---- read a little-endian 16 bit value ----------------------------------- */
+/* ---- read and write little-endian values -------------------------------- */
 
 uint16_t read16(uint8_t const* p)
 {
     return static_cast<uint16_t>(p[0]) |
         static_cast<uint16_t>(static_cast<uint16_t>(p[1]) << 8u);
 }
-
-/* ---- read a little-endian 32 bit value ----------------------------------- */
 
 uint32_t read32(uint8_t const* p)
 {
@@ -151,7 +173,28 @@ uint32_t read32(uint8_t const* p)
 void write16(uint8_t* p,uint16_t n) { p[0]=static_cast<uint8_t>(n); p[1]=static_cast<uint8_t>(n>>8); }
 void write32(uint8_t* p,uint32_t n) { write16(p,static_cast<uint16_t>(n)); write16(p+2,static_cast<uint16_t>(n>>16)); }
 
-/* ---- calculate the payload crc32 ----------------------------------------- */
+/* Shared by BODY streaming and upload/control requests. */
+/* ---- frame a USB message ------------------------------------------------ */
+
+void write_usb_header(uint8_t* out, uint8_t type, uint8_t target,
+    uint8_t session, uint16_t payload_size)
+{
+    out[0] = type;
+    out[1] = target;
+    out[2] = session;
+    write16(out + 3, payload_size);
+}
+
+/* poll uses -1 for an unlimited wait; both request and write deadlines bound it. */
+int limit_poll_timeout(int timeout, std::chrono::steady_clock::time_point deadline)
+{
+    auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - std::chrono::steady_clock::now()).count();
+    int ms = static_cast<int>(std::max<int64_t>(0, left));
+    return timeout < 0 ? ms : std::min(timeout, ms);
+}
+
+/* ---- calculate the program checksum ------------------------------------- */
 
 uint32_t crc32(uint8_t const* data, size_t size)
 {
@@ -164,13 +207,7 @@ uint32_t crc32(uint8_t const* data, size_t size)
     return crc ^ 0xFFFFFFFFu;
 }
 
-/*******************************************************************************
-
-                             s e r i a l   p o r t
-
-*******************************************************************************/
-
-/* ---- format a serial port error ------------------------------------------ */
+/* ---- describe a serial error -------------------------------------------- */
 
 std::string serial_error(std::string const& operation, enum sp_return result)
 {
@@ -193,25 +230,65 @@ std::string serial_error(std::string const& operation, enum sp_return result)
     return message;
 }
 
+#if defined(__linux__)
+bool set_linux_serial_latency(std::string const& path, std::string& error)
+{
+    struct stat info{};
+    if (::stat(path.c_str(),&info)<0) {
+        // Non-FTDI drivers may not expose this adapter-specific setting.
+        if (errno==ENOENT) return true;
+        error="cannot inspect RS485 latency timer: " + path;
+        return false;
+    }
+    auto is_one_ms=[&] {
+        std::ifstream input(path);
+        unsigned latency=0;
+        return (input>>latency) && latency==1u;
+    };
+    if (is_one_ms()) return true;
+    {
+        std::ofstream output(path);
+        output << "1\n";
+        output.flush();
+        if (!output) {
+            error="cannot set RS485 latency timer to 1 ms: " + path +
+                "; allow writes to this attribute or configure udev to set it to 1";
+            return false;
+        }
+    }
+    if (is_one_ms()) return true;
+    error="RS485 latency timer did not read back as 1 ms: " + path;
+    return false;
+}
+
+bool configure_linux_rs485(std::string const& name, std::string& error)
+{
+    // Resolve /dev/serial/by-id aliases to the actual ttyUSB device name.
+    std::unique_ptr<char,decltype(&std::free)> resolved(::realpath(name.c_str(),nullptr),&std::free);
+    if (!resolved) {
+        error="cannot resolve RS485 device: " + name;
+        return false;
+    }
+    std::string path(resolved.get());
+    std::string tty=path.substr(path.find_last_of('/')+1);
+    return set_linux_serial_latency("/sys/bus/usb-serial/devices/"+tty+"/latency_timer",error);
+}
+#endif
+
+/* ---- open and use a serial port ----------------------------------------- */
+
 class serial_port
 {
 private:
     struct sp_port* port_ = nullptr;
     bool opened_ = false;
     enum sp_return result_ = SP_OK;
-#if defined(VOICEBD_TRANSPORT_TEST)
-    int test_fd_=-1;
-#endif
 
 public:
     serial_port() = default;
-/* ---- close the serial port ----------------------------------------------- */
-
     ~serial_port() { close(); }
     serial_port(serial_port const&) = delete;
     serial_port& operator=(serial_port const&) = delete;
-
-/* ---- open the serial port ------------------------------------------------ */
 
     bool open(std::string const& name, uint32_t baud, bool assert_dtr,
         std::string& error)
@@ -253,33 +330,13 @@ public:
         }
 #endif
 #if defined(__linux__)
-	if (!assert_dtr) {
-		std::string const tty = name.substr(name.find_last_of('/') + 1);
-		std::string const latency_path = "/sys/bus/usb-serial/devices/" +
-						tty +
-						"/latency_timer";
-		{
-			std::ofstream out(latency_path);
-			if (!out) {
-				error = "cannot set low-latency mode on " + name;
-				close();
-				return false;
-			}
-			out << "1\n";
-		}
-		{
-			std::ifstream in(latency_path);
-			unsigned latency = 0;
-			if (!(in >> latency) || latency != 1u) {
-				error = "failed to enable 1 ms latency on " + name;
-				close();
-				return false;
-			}
-		}
-	}
+        if (!assert_dtr && !configure_linux_rs485(name,error)) {
+            close();
+            return false;
+        }
 #endif
         if (assert_dtr) {
-            // Explicitly start a new framed connection, even when the OS leaves DTR set.
+            // Toggle DTR to discard any unfinished messages from the previous connection.
             if (sp_set_dtr(port_,SP_DTR_OFF)!=SP_OK || sp_flush(port_,SP_BUF_BOTH)!=SP_OK ||
                 sp_set_dtr(port_,SP_DTR_ON)!=SP_OK) {
                 error="resetting CDC connection failed"; close(); return false;
@@ -289,21 +346,14 @@ public:
         return true;
     }
 
-/* ---- close the serial port ----------------------------------------------- */
-
     void close()
     {
-#if defined(VOICEBD_TRANSPORT_TEST)
-        if (test_fd_>=0) { ::close(test_fd_); test_fd_=-1; }
-#endif
         if (!port_) return;
         if (opened_) (void)sp_close(port_);
         sp_free_port(port_);
         port_ = nullptr;
         opened_ = false;
     }
-
-/* ---- write to the serial port -------------------------------------------- */
 
     bool write(void const* data, size_t size, std::string& error)
     {
@@ -325,8 +375,6 @@ public:
         return true;
     }
 
-/* ---- read from the serial port ------------------------------------------- */
-
     size_t read(void* data, size_t capacity, unsigned timeout_ms)
     {
         if (!opened_ || capacity == 0u) return 0u;
@@ -335,154 +383,23 @@ public:
         return result > 0 ? static_cast<size_t>(result) : 0u;
     }
 
-/* ---- flush serial input -------------------------------------------------- */
-
-#if defined(VOICEBD_TRANSPORT_TEST)
-    void adopt_test_fd(int fd) { test_fd_=fd; (void)fcntl(fd,F_SETFL,O_NONBLOCK); }
-#endif
     int fd() const {
-#if defined(VOICEBD_TRANSPORT_TEST)
-        if (test_fd_>=0) return test_fd_;
-#endif
         int handle=-1; if (port_) (void)sp_get_port_handle(port_,&handle); return handle;
     }
     int read_nonblocking(void* data,size_t n) {
-#if defined(VOICEBD_TRANSPORT_TEST)
-        if (test_fd_>=0) {
-            int rc=static_cast<int>(::read(test_fd_,data,std::min<size_t>(n,13)));
-            return rc<0 && (errno==EAGAIN || errno==EWOULDBLOCK) ? 0 : rc;
-        }
-#endif
         return sp_nonblocking_read(port_,data,n);
     }
     int write_nonblocking(void const* data,size_t n) {
-#if defined(VOICEBD_TRANSPORT_TEST)
-        if (test_fd_>=0) {
-            int rc=static_cast<int>(::write(test_fd_,data,std::min<size_t>(n,17)));
-            return rc<0 && (errno==EAGAIN || errno==EWOULDBLOCK) ? 0 : rc;
-        }
-#endif
         return sp_nonblocking_write(port_,data,n);
     }
     void flush() { if (opened_) (void)sp_flush(port_, SP_BUF_INPUT); }
-/* ---- test whether the serial port is open -------------------------------- */
-
     bool is_open() const { return opened_; }
 
 };
 
-/* Ordered diagnostic barriers measure data reaching firmware, rather than the
- * host kernel accepting a write. No RS485 or voice state is involved. */
-voice_board_result_t usb_benchmark(serial_port& port, unsigned seconds)
-{
-    using clock = std::chrono::steady_clock;
-    uint16_t id=0;
-    auto exchange = [&](uint8_t type, std::vector<uint8_t> bytes,
-                        std::vector<uint8_t>& reply) -> voice_board_result_t {
-        ++id;
-        size_t header=bytes.size();
-        bytes.resize(header+8+(type==kHello ? 1 : 0),0);
-        bytes[header]=type; write16(bytes.data()+header+6,id);
-        if(type==kHello) { bytes[header+4]=1; bytes[header+8]=1; }
-        size_t sent=0, received=0, need=8;
-        std::array<uint8_t,1032> response{};
-        auto deadline=clock::now()+std::chrono::seconds(3);
-        while(received<need) {
-            auto left=std::chrono::duration_cast<std::chrono::milliseconds>(deadline-clock::now()).count();
-            if(left<=0) return fail(voice_board_error_t::timeout,"USB diagnostic timed out");
-            pollfd fd{port.fd(),static_cast<short>(POLLIN | (sent<bytes.size() ? POLLOUT : 0)),0};
-            int ready=::poll(&fd,1,static_cast<int>(left));
-            if(ready<0 && errno==EINTR) continue;
-            if(ready<0 || (fd.revents&(POLLERR|POLLHUP|POLLNVAL)))
-                return fail(voice_board_error_t::io_error,"USB diagnostic disconnected");
-            if(fd.revents&POLLOUT) {
-                int n=port.write_nonblocking(bytes.data()+sent,bytes.size()-sent);
-                if(n<0) return fail(voice_board_error_t::io_error,"USB diagnostic write failed");
-                sent+=static_cast<size_t>(n);
-            }
-            if(fd.revents&POLLIN) {
-                int n=port.read_nonblocking(response.data()+received,need-received);
-                if(n<0) return fail(voice_board_error_t::io_error,"USB diagnostic read failed");
-                received+=static_cast<size_t>(n);
-                if(received==8 && need==8) {
-                    unsigned size=read16(response.data()+4);
-                    if(response[0]!=kReply || response[1] || response[2] || response[3]!=type ||
-                       read16(response.data()+6)!=id || size==0 || size>kUsbPayloadMax)
-                        return fail(voice_board_error_t::bad_reply,"Invalid USB diagnostic reply");
-                    need=8+size;
-                }
-            }
-        }
-        if(sent!=bytes.size() || response[8])
-            return fail(voice_board_error_t::bad_reply,"Firmware rejected USB diagnostic");
-        reply.assign(response.begin()+8,response.begin()+need);
-        return ok();
-    };
-    std::vector<uint8_t> reply;
-    auto result=exchange(kHello,{},reply);
-    if(!result) return result;
-    if(reply.size()!=12 || reply[1]!=1 || reply[2]!=8 || reply[3]!=1 ||
-       read32(reply.data()+4)!=48000 || read16(reply.data()+8)!=1024 || read16(reply.data()+10)!=998)
-        return fail(voice_board_error_t::bad_reply,"Incompatible USB diagnostic capabilities");
-    uint32_t total_bytes=0,total_blocks=0,hash=2166136261u;
-    auto batch = [&](unsigned count) -> voice_board_result_t {
-        std::vector<uint8_t> data(count*1032,0);
-        for(unsigned b=0;b<count;++b) {
-            uint8_t* frame=data.data()+b*1032;
-            frame[0]=kProbe; write16(frame+4,1024);
-            for(unsigned i=0;i<1024;++i) {
-                frame[8+i]=static_cast<uint8_t>(i+total_blocks);
-                hash=(hash^frame[8+i])*16777619u;
-            }
-            total_bytes+=1024; ++total_blocks;
-        }
-        auto r=exchange(kProbe,std::move(data),reply);
-        if(!r) return r;
-        if(reply.size()!=13 || read32(reply.data()+1)!=total_bytes ||
-           read32(reply.data()+5)!=total_blocks || read32(reply.data()+9)!=hash)
-            return fail(voice_board_error_t::bad_reply,"USB diagnostic byte count/checksum mismatch");
-        return ok();
-    };
-    // Eight blocks reflect the normal outstanding limit. Larger batches expose
-    // raw transport headroom without a USB acknowledgement after every 8 KiB.
-    auto throughput = [&](unsigned count, double& rate) -> voice_board_result_t {
-        auto start=clock::now(); uint32_t before=total_bytes;
-        do { auto r=batch(count); if(!r)return r; }
-        while(clock::now()-start<std::chrono::milliseconds(seconds*500));
-        rate=(total_bytes-before)/std::chrono::duration<double>(clock::now()-start).count()/1000.0;
-        return ok();
-    };
-    double eight_rate=0,bulk_rate=0;
-    result=throughput(8,eight_rate); if(!result)return result;
-    result=throughput(32,bulk_rate); if(!result)return result;
-    auto start=clock::now();
-    std::array<double,64> timing{};
-    for(auto& ms:timing) {
-        start=clock::now(); result=batch(1); if(!result) return result;
-        ms=std::chrono::duration<double,std::milli>(clock::now()-start).count();
-    }
-    std::sort(timing.begin(),timing.end());
-    char report[384];
-    std::snprintf(report,sizeof report,
-        "USB verified payload: %.1f kB/s (8-block batches), %.1f kB/s (32-block batches); "
-        "1024-byte + barrier round trip: "
-        "p50 %.3f ms, p95 %.3f ms, p99/max %.3f ms (64 observations). "
-        "Counts and checksum passed. This does not measure note-to-DAC latency.",
-        eight_rate,bulk_rate,timing[31],timing[60],timing[63]);
-    return ok(report);
-}
-
-/* ---- wait for a serial response ------------------------------------------ */
-
-/*******************************************************************************
-
-                     b e c   p r o g r a m   l o a d i n g
-
-*******************************************************************************/
-
 /* Check the BEC header and CRC before touching the card. */
 
-/* ---- read and validate the channel program ------------------------------- */
+/* ---- validate a compiled voice program ---------------------------------- */
 
 voice_board_result_t read_bec(std::string const& path,
     std::vector<uint8_t>& bytes)
@@ -507,11 +424,7 @@ voice_board_result_t read_bec(std::string const& path,
     return ok();
 }
 
-/*******************************************************************************
-
-                              r s 4 8 5   l i n k
-
-*******************************************************************************/
+/* ---- decode voice buffer status ----------------------------------------- */
 
 struct card_status
 {
@@ -526,8 +439,6 @@ struct card_status
     std::array<uint16_t, kVoiceCount> free_samples{};
     std::array<uint16_t, kVoiceCount> refill_samples_5ms{};
 };
-
-/* ---- parse voice queue status -------------------------------------------- */
 
 bool parse_voice_queue_status(std::vector<uint8_t> const& raw,
     card_status& status)
@@ -564,6 +475,8 @@ bool parse_voice_queue_status(std::vector<uint8_t> const& raw,
     return false;
 }
 
+/* ---- exchange commands with the card ------------------------------------ */
+
 class rs485_link
 {
 private:
@@ -571,8 +484,6 @@ private:
     std::mutex mutex_;
 
 public:
-/* ---- open the rs485 link ------------------------------------------------- */
-
     voice_board_result_t open(std::string const& path, uint32_t baud)
     {
         std::string error;
@@ -581,14 +492,8 @@ public:
         return ok();
     }
 
-/* ---- close the serial port ----------------------------------------------- */
-
     void close() { port_.close(); }
-/* ---- test whether the serial port is open -------------------------------- */
-
     bool is_open() const { return port_.is_open(); }
-
-/* ---- send an rs485 command ----------------------------------------------- */
 
     voice_board_result_t command(std::string const& body,
         std::vector<uint8_t>* binary = nullptr)
@@ -607,7 +512,6 @@ public:
         while (std::chrono::steady_clock::now() < stop_waiting_at) {
             size_t const count = port_.read(
                 bytes.data(), bytes.size(), 1u);
-            // std::cerr << "bytes " << bytes.size() << std::endl;
             reply.insert(reply.end(), bytes.begin(), bytes.begin() + count);
             if (body == "vq") {
                 std::string const text(reply.begin(), reply.end());
@@ -648,11 +552,7 @@ public:
 
 };
 
-/*******************************************************************************
-
-                        u s b   b o d y   s t r e a m
-
-*******************************************************************************/
+/* ---- track samples and voice demand ------------------------------------- */
 
 struct sample_data
 {
@@ -665,7 +565,6 @@ struct sample_data
 struct voice_data
 {
     bool active = false;
-    bool waiting_for_first_packet = false;
     unsigned initial_samples_left = 0u;
     bool note_seen_in_status = false;
     uint8_t session_id = 0u;
@@ -788,8 +687,8 @@ struct stream_state {
             if (packet.session==voices[packet.voice].session_id) queued[packet.voice]+=packet.samples;
         }
         if (wire_bytes+kUsbHeaderBytes>=kPendingWireBytes) return 0;
-        // Preserve the previous five-ms demand forecast and two-ms reserve.
-        // Anchor at receipt (conservative for USB), never a synthetic ISO clock.
+        // Forecast demand for five milliseconds from this status reply, keeping
+        // two milliseconds of samples in reserve.
         for (uint8_t i=0;i<kVoiceCount;++i) {
             auto& v=voices[i];
             if(!v.active || !v.refill_samples_5ms)continue;
@@ -827,9 +726,7 @@ struct stream_state {
         unsigned count=std::min({v.available_sample_slots,kUsbPayloadMax,
             kPendingWireBytes-wire_bytes-kUsbHeaderBytes, static_cast<unsigned>(capacity-kUsbHeaderBytes)});
         if (v.initial_samples_left) count=std::min(count,v.initial_samples_left);
-        out[0]=kBody; out[1]=chosen; out[2]=v.session_id;
-        out[3]=v.waiting_for_first_packet ? 1u : 0u;
-        write16(out+4,static_cast<uint16_t>(count)); write16(out+6,next_sequence);
+        write_usb_header(out, kBody, chosen, v.session_id, static_cast<uint16_t>(count));
         for (unsigned i=0;i<count;++i)
             out[kUsbHeaderBytes+i]=v.source_position<sample.pcm_size
                 ? static_cast<uint8_t>(sample.pcm[v.source_position++]>>8) : 0u;
@@ -839,14 +736,15 @@ struct stream_state {
         v.available_sample_slots-=count;
         v.refill_balance-=count;
         v.initial_samples_left-=std::min(v.initial_samples_left,count);
-        v.waiting_for_first_packet=false;
         next_voice=static_cast<uint8_t>((chosen+1u)%kVoiceCount);
         return kUsbHeaderBytes+count;
     }
 };
 
-/* One worker owns all CDC bytes. poll() waits for fd readiness or an explicit
- * wakeup from MIDI/status/upload; it never imposes a streaming timer. */
+// One worker handles all USB reads and writes. MIDI, status and uploads wake it
+// when there is work; otherwise it waits for the port or the next refill.
+/* ---- stream BODY blocks and uploads ------------------------------------- */
+
 class usb_link {
     serial_port port_;
     stream_state *stream_=nullptr;
@@ -856,7 +754,6 @@ class usb_link {
     std::mutex mutex_, request_mutex_;
     std::condition_variable done_;
     std::vector<uint8_t> request_, response_;
-    uint16_t request_id_=0;
     uint8_t request_type_=0;
     bool request_pending_=false, request_sent_=false, request_done_=false;
     std::string error_;
@@ -866,46 +763,68 @@ class usb_link {
         std::lock_guard<std::mutex> lock(mutex_);
         error_=std::move(message); running_=false; done_.notify_all();
     }
+    size_t prepare_output(std::array<uint8_t,kPendingWireBytes>& output) {
+        size_t size=0;
+        bool have_request;
+        { std::lock_guard<std::mutex> lock(mutex_); have_request=request_pending_ && !request_sent_; }
+        if (streaming_) {
+            while (output.size()-size>kUsbHeaderBytes && (!have_request || stream_->urgent())) {
+                size_t n=stream_->make_block(output.data()+size,std::chrono::steady_clock::now(),output.size()-size);
+                if(!n)break;
+                size+=n;
+            }
+        }
+        if (!size && have_request) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            std::copy(request_.begin(),request_.end(),output.begin());
+            size=request_.size(); request_sent_=true;
+        }
+        if (!size && streaming_) size=stream_->make_block(output.data());
+        return size;
+    }
+
+    bool receive_reply(std::array<uint8_t,kUsbHeaderBytes+kUsbPayloadMax>& input,
+        size_t& received, size_t& needed) {
+        int n=port_.read_nonblocking(input.data()+received,needed-received);
+        if (n<0) { set_error("CDC read failed"); return false; }
+        received+=static_cast<size_t>(n);
+        if (received==kUsbHeaderBytes && needed==kUsbHeaderBytes) {
+            unsigned payload=read16(input.data()+3);
+            if (input[0]!=kReply || !payload || payload>kUsbPayloadMax) { set_error("invalid CDC reply framing"); return false; }
+            needed=kUsbHeaderBytes+payload;
+        }
+        if (received==needed) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!request_pending_ || !request_sent_ || input[2]!=request_type_ ||
+                input[1]!=request_[1] || input[kUsbHeaderBytes]>1 ||
+                (input[kUsbHeaderBytes]==0 && needed!=kUsbHeaderBytes+(request_type_==kHello ? 14u : 1u))) {
+                error_="unexpected CDC reply; BODY rejected or protocol lost"; running_=false; done_.notify_all(); return false;
+            }
+            response_.assign(input.begin()+kUsbHeaderBytes,input.begin()+needed);
+            request_done_=true; request_pending_=false; done_.notify_all();
+            received=0; needed=kUsbHeaderBytes;
+        }
+        return true;
+    }
+
     void run() {
-        prioritize_stream_thread();
         std::array<uint8_t,kPendingWireBytes> output{};
         std::array<uint8_t,kUsbHeaderBytes+kUsbPayloadMax> input{};
         size_t size=0, sent=0, received=0, needed=kUsbHeaderBytes;
         auto write_deadline=std::chrono::steady_clock::now();
         while (running_) {
             if (sent==size) {
-                size=sent=0;
-                bool have_request;
-                { std::lock_guard<std::mutex> lock(mutex_); have_request=request_pending_ && !request_sent_; }
-                if (streaming_) {
-                    while (output.size()-size>kUsbHeaderBytes && (!have_request || stream_->urgent())) {
-                        size_t n=stream_->make_block(output.data()+size,std::chrono::steady_clock::now(),output.size()-size);
-                        if(!n)break;
-                        size+=n;
-                    }
-                }
-                if (!size && have_request) {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    std::copy(request_.begin(),request_.end(),output.begin());
-                    size=request_.size(); request_sent_=true;
-                }
-                if (!size && streaming_) size=stream_->make_block(output.data());
+                sent=0;
+                size=prepare_output(output);
                 write_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);
             }
             int timeout=streaming_ ? stream_->refill_wake_ms() : -1;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                if (request_pending_) {
-                    auto left=std::chrono::duration_cast<std::chrono::milliseconds>(request_deadline_-std::chrono::steady_clock::now()).count();
-                    int ms=static_cast<int>(std::max<int64_t>(0,left));
-                    timeout=timeout<0 ? ms : std::min(timeout,ms);
-                }
+                if (request_pending_)
+                    timeout=limit_poll_timeout(timeout, request_deadline_);
             }
-            if (size>sent) {
-                auto left=std::chrono::duration_cast<std::chrono::milliseconds>(write_deadline-std::chrono::steady_clock::now()).count();
-                int ms=static_cast<int>(std::max<int64_t>(0,left));
-                timeout=timeout<0 ? ms : std::min(timeout,ms);
-            }
+            if (size>sent) timeout=limit_poll_timeout(timeout, write_deadline);
             pollfd fds[2]={{port_.fd(),static_cast<short>(POLLIN|(size>sent ? POLLOUT : 0)),0},{wake_[0],POLLIN,0}};
             int ready=::poll(fds,2,timeout);
             if (ready<0) { if (errno==EINTR) continue; set_error("CDC poll failed"); break; }
@@ -913,24 +832,7 @@ class usb_link {
             if (fds[1].revents&POLLIN) { uint8_t wake_bytes[64]; while (::read(wake_[0],wake_bytes,sizeof wake_bytes)>0) {} }
             if (fds[0].revents&(POLLERR|POLLHUP|POLLNVAL)) { set_error("CDC disconnected"); break; }
             if (fds[0].revents&POLLIN) {
-                int n=port_.read_nonblocking(input.data()+received,needed-received);
-                if (n<0) { set_error("CDC read failed"); break; }
-                received+=static_cast<size_t>(n);
-                if (received==kUsbHeaderBytes && needed==kUsbHeaderBytes) {
-                    unsigned payload=read16(input.data()+4);
-                    if (input[0]!=kReply || !payload || payload>kUsbPayloadMax) { set_error("invalid CDC reply framing"); break; }
-                    needed=kUsbHeaderBytes+payload;
-                }
-                if (received==needed) {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    if (!request_pending_ || !request_sent_ || read16(input.data()+6)!=request_id_ ||
-                        input[3]!=request_type_ || input[1]!=request_[1] || input[2]!=0 || input[8]>1) {
-                        error_="unexpected CDC reply; BODY rejected or protocol lost"; running_=false; done_.notify_all(); break;
-                    }
-                    response_.assign(input.begin()+kUsbHeaderBytes,input.begin()+needed);
-                    request_done_=true; request_pending_=false; done_.notify_all();
-                    received=0; needed=kUsbHeaderBytes;
-                }
+                if (!receive_reply(input, received, needed)) break;
             }
             if (size>sent && (fds[0].revents&POLLOUT)) {
                 int n=port_.write_nonblocking(output.data()+sent,size-sent);
@@ -957,11 +859,6 @@ public:
         if (!port_.open(path,115200,true,error)) return fail(voice_board_error_t::io_error,error);
         return start_worker(stream);
     }
-#if defined(VOICEBD_TRANSPORT_TEST)
-    voice_board_result_t open_test_fd(int fd,stream_state& stream) {
-        close(); port_.adopt_test_fd(fd); return start_worker(stream);
-    }
-#endif
 private:
     voice_board_result_t start_worker(stream_state& stream) {
         if (::pipe(wake_)<0) { port_.close(); return fail(voice_board_error_t::io_error,"CDC wake pipe failed"); }
@@ -971,13 +868,25 @@ private:
             }
         }
         stream_=&stream; error_.clear(); request_pending_=request_sent_=request_done_=false;
-        running_=true; worker_=std::thread([this]{run();});
+        running_=true;
+        auto scheduling_error=start_stream_thread(worker_,[this]{run();});
+        if (!scheduling_error.empty()) {
+            close();
+            return fail(voice_board_error_t::io_error,scheduling_error);
+        }
         std::vector<uint8_t> caps;
-        auto result=request(kHello,0,{1},&caps);
-        if (result && (caps.size()!=12 || caps[1]!=1 || caps[2]!=kVoiceCount || caps[3]!=1 ||
+        auto result=request(kHello,0,{kUsbProtocolVersion},&caps);
+        if (result && (caps.size()!=14 || caps[1]!=kUsbProtocolVersion || caps[2]!=kVoiceCount || caps[3]!=1 ||
             read32(caps.data()+4)!=kSampleRate || read16(caps.data()+8)!=kUsbPayloadMax ||
             read16(caps.data()+10)!=kPrimeSamples)) result=fail(voice_board_error_t::bad_reply,"incompatible CDC firmware capabilities");
-        if (!result) close();
+        if (result) {
+            // HELLO reports the count after the old connection was cleared. The
+            // last RS485 reply may predate some completed BODY blocks.
+            std::lock_guard<std::mutex> lock(stream.mutex);
+            stream.first_pending_packet=stream.pending_packet_count=0;
+            stream.next_sequence=static_cast<uint16_t>(read16(caps.data()+12)+1u);
+            stream.sequence_ready=true;
+        } else close();
         return result;
     }
 public:
@@ -997,9 +906,9 @@ public:
         std::unique_lock<std::mutex> lock(mutex_);
         if (!running_) return fail(voice_board_error_t::io_error,error_.empty() ? "CDC is closed" : error_);
         request_.assign(kUsbHeaderBytes+payload.size(),0);
-        request_[0]=type; request_[1]=target;
-        write16(request_.data()+4,static_cast<uint16_t>(payload.size()));
-        write16(request_.data()+6,++request_id_); request_type_=type;
+        write_usb_header(request_.data(), type, target, 0,
+            static_cast<uint16_t>(payload.size()));
+        request_type_=type;
         std::copy(payload.begin(),payload.end(),request_.begin()+kUsbHeaderBytes);
         response_.clear(); request_done_=request_sent_=false; request_pending_=true;
         request_deadline_=std::chrono::steady_clock::now()+std::chrono::seconds(3);
@@ -1025,12 +934,7 @@ public:
     }
 };
 
-
-/*******************************************************************************
-
-                          d e v i c e   c o n t e x t
-
-*******************************************************************************/
+/* ---- manage the sound-board connection ---------------------------------- */
 
 struct device_context
 {
@@ -1069,11 +973,7 @@ struct device_context
         }
     };
 
-/* ---- shut down the channel device context -------------------------------- */
-
     ~device_context() { shutdown(); }
-
-/* ---- shut down the channel device ---------------------------------------- */
 
     void shutdown()
     {
@@ -1123,8 +1023,6 @@ struct device_context
         return result;
     }
 
-/* ---- poll channel card status -------------------------------------------- */
-
     voice_board_result_t query_status()
     {
         auto const requested_at = std::chrono::steady_clock::now();
@@ -1149,7 +1047,6 @@ struct device_context
 
     void poll()
     {
-        prioritize_stream_thread();
         std::unique_lock<std::mutex> lock(control_mutex);
         while (worker_running.load()) {
             if (waiting_commands.load() != 0u) {
@@ -1169,23 +1066,17 @@ struct device_context
 
 };
 
-/* ---- create a channel device context ------------------------------------- */
-
 device_context* create() { return new (std::nothrow) device_context; }
-
-/* ---- destroy a channel device context ------------------------------------ */
 
 void destroy(device_context* state)
 {
     delete state;
 }
 
-/* ---- upload a BEC program to one voice ----------------------------------- */
-
 voice_board_result_t upload_script(device_context* state, uint8_t voice_id,
     std::vector<uint8_t> const& bec)
 {
-    /* vmload rejects active voices with err:vm-busy. */
+    // Firmware rejects program replacement while the voice is active.
     auto result = state->usb.upload(3,voice_id,bec.data(),bec.size());
     if (!result) {
         result.code = voice_board_error_t::bec_error;
@@ -1195,7 +1086,7 @@ voice_board_result_t upload_script(device_context* state, uint8_t voice_id,
     return result;
 }
 
-/* ---- open the channel device --------------------------------------------- */
+/* ---- initialize the sound board ----------------------------------------- */
 
 voice_board_result_t open_device(device_context* state,
     voice_board_config_t const& config)
@@ -1216,12 +1107,10 @@ voice_board_result_t open_device(device_context* state,
     if (!result) return result;
     /* Send a clear command to clear the card-side input line. */
     result = state->rs485.command("clear");
-    result = state->query_status();
-    if (!result) {
-        state->shutdown();
-        return result;
-    }
     result=state->usb.open(config.usb_port,state->stream);
+    if (!result) { state->shutdown(); return result; }
+    // Read fresh buffer space after HELLO establishes the BODY count.
+    result = state->query_status();
     if (!result) { state->shutdown(); return result; }
     for (uint8_t voice = 0u; voice < kVoiceCount; ++voice) {
         result = upload_script(state, voice, bec);
@@ -1241,11 +1130,13 @@ voice_board_result_t open_device(device_context* state,
     state->connected.store(true);
     state->next_poll = std::chrono::steady_clock::now();
     state->worker_running.store(true);
-    state->worker = std::thread([state] { state->poll(); });
+    auto scheduling_error=start_stream_thread(state->worker,[state] { state->poll(); });
+    if (!scheduling_error.empty()) {
+        state->shutdown();
+        return fail(voice_board_error_t::io_error,scheduling_error);
+    }
     return ok("Channel Card connected; BEC loaded into voices 0-7");
 }
-
-/* ---- close the channel device -------------------------------------------- */
 
 voice_board_result_t close_device(device_context* state)
 {
@@ -1253,14 +1144,10 @@ voice_board_result_t close_device(device_context* state)
     return ok("voice board disconnected");
 }
 
-/* ---- test whether the channel device is open ----------------------------- */
-
 bool device_is_open(device_context const* state)
 {
     return state && state->connected.load() && state->usb.good();
 }
-
-/* ---- load a BEC program into the channel device -------------------------- */
 
 voice_board_result_t load_script(device_context* state, uint8_t voice_id,
     std::string const& path)
@@ -1275,7 +1162,7 @@ voice_board_result_t load_script(device_context* state, uint8_t voice_id,
     return upload_script(state, voice_id, bec);
 }
 
-/* ---- load a sample into the channel device ------------------------------- */
+/* ---- replace a loaded sample -------------------------------------------- */
 
 voice_board_result_t load_sample(device_context* state, uint16_t sample_id,
     std::vector<int16_t> const& pcm,
@@ -1313,7 +1200,7 @@ voice_board_result_t load_sample(device_context* state, uint16_t sample_id,
     return ok("sample " + std::to_string(sample_id) + " loaded");
 }
 
-/* ---- start a channel voice ----------------------------------------------- */
+/* ---- start a voice ------------------------------------------------------ */
 
 voice_board_result_t note_on(device_context* state, uint8_t voice,
     uint16_t sample,
@@ -1335,7 +1222,6 @@ voice_board_result_t note_on(device_context* state, uint8_t voice,
         unsigned const free_slots = slot.available_sample_slots;
         slot = {};
         slot.available_sample_slots = free_slots;
-        slot.waiting_for_first_packet = true;
         slot.initial_samples_left = kPrimeSamples;
         slot.session_id = session;
         slot.sample_id = sample;
@@ -1363,7 +1249,7 @@ voice_board_result_t note_on(device_context* state, uint8_t voice,
     return ok("voice " + std::to_string(voice) + " started");
 }
 
-/* ---- release a channel voice --------------------------------------------- */
+/* ---- release a voice ---------------------------------------------------- */
 
 voice_board_result_t note_off(device_context* state, uint8_t voice)
 {
@@ -1377,7 +1263,7 @@ voice_board_result_t note_off(device_context* state, uint8_t voice)
     return result;
 }
 
-/* ---- release all channel voices ------------------------------------------ */
+/* ---- stop all voices ---------------------------------------------------- */
 
 voice_board_result_t all_notes_off(device_context* state)
 {
@@ -1397,8 +1283,6 @@ voice_board_result_t all_notes_off(device_context* state)
     return result;
 }
 
-/* ---- set channel output attenuation -------------------------------------- */
-
 voice_board_result_t set_attenuation(device_context* state,
     uint8_t attenuation)
 {
@@ -1410,30 +1294,20 @@ voice_board_result_t set_attenuation(device_context* state,
 
 } // namespace voice_board_detail
 
-/*******************************************************************************
-
-                   v o i c e   b o a r d   i n t e r f a c e
-
-*******************************************************************************/
+/* ---- expose the voice-board interface ----------------------------------- */
 
 struct voice_board_t::impl_t
 {
     voice_board_detail::device_context* context = voice_board_detail::create();
-/* ---- destroy the board implementation ------------------------------------ */
-
     ~impl_t() { voice_board_detail::destroy(context); }
 };
 
 namespace {
 
-/* ---- return an invalid argument result ----------------------------------- */
-
 voice_board_result_t invalid_argument(std::string const& message)
 {
     return {voice_board_error_t::invalid_argument, message};
 }
-
-/* ---- return an unavailable board result ---------------------------------- */
 
 voice_board_result_t unavailable()
 {
@@ -1443,20 +1317,10 @@ voice_board_result_t unavailable()
 
 } // namespace
 
-/* ---- construct the voice board ------------------------------------------- */
-
 voice_board_t::voice_board_t() : impl_(std::make_unique<impl_t>()) {}
-/* ---- destroy the voice board --------------------------------------------- */
-
 voice_board_t::~voice_board_t() = default;
-/* ---- move construct the voice board -------------------------------------- */
-
 voice_board_t::voice_board_t(voice_board_t&&) noexcept = default;
-/* ---- move assign the voice board ----------------------------------------- */
-
 voice_board_t& voice_board_t::operator=(voice_board_t&&) noexcept = default;
-
-/* ---- open the voice board ------------------------------------------------ */
 
 voice_board_result_t voice_board_t::open(voice_board_config_t const& config)
 {
@@ -1474,8 +1338,6 @@ voice_board_result_t voice_board_t::open(voice_board_config_t const& config)
     return voice_board_detail::open_device(impl_->context, config);
 }
 
-/* ---- close the voice board ----------------------------------------------- */
-
 voice_board_result_t voice_board_t::close()
 {
     return (!impl_ || !impl_->context)
@@ -1483,15 +1345,11 @@ voice_board_result_t voice_board_t::close()
         : voice_board_detail::close_device(impl_->context);
 }
 
-/* ---- test whether the voice board is open -------------------------------- */
-
 bool voice_board_t::is_open() const
 {
     return impl_ && impl_->context &&
         voice_board_detail::device_is_open(impl_->context);
 }
-
-/* ---- load a BEC program into one voice ----------------------------------- */
 
 voice_board_result_t voice_board_t::load_script(
     uint8_t voice_id, std::string const& path)
@@ -1502,8 +1360,6 @@ voice_board_result_t voice_board_t::load_script(
     if (path.empty()) return invalid_argument("BEC file is required");
     return voice_board_detail::load_script(impl_->context, voice_id, path);
 }
-
-/* ---- load a sample into the voice board ---------------------------------- */
 
 voice_board_result_t voice_board_t::load_sample(
     uint16_t sample_id, std::vector<int16_t> const& pcm,
@@ -1520,8 +1376,6 @@ voice_board_result_t voice_board_t::load_sample(
         impl_->context, sample_id, pcm, root_pitch_hz);
 }
 
-/* ---- start a voice board note -------------------------------------------- */
-
 voice_board_result_t voice_board_t::note_on(
     uint8_t voice_id, uint16_t sample_id, uint8_t midi_key, uint8_t velocity)
 {
@@ -1536,8 +1390,6 @@ voice_board_result_t voice_board_t::note_on(
         impl_->context, voice_id, sample_id, midi_key, velocity);
 }
 
-/* ---- release a voice board note ------------------------------------------ */
-
 voice_board_result_t voice_board_t::note_off(uint8_t voice_id)
 {
     if (!impl_ || !impl_->context) return unavailable();
@@ -1546,15 +1398,11 @@ voice_board_result_t voice_board_t::note_off(uint8_t voice_id)
     return voice_board_detail::note_off(impl_->context, voice_id);
 }
 
-/* ---- release all voice board notes --------------------------------------- */
-
 voice_board_result_t voice_board_t::all_notes_off()
 {
     if (!impl_ || !impl_->context) return unavailable();
     return voice_board_detail::all_notes_off(impl_->context);
 }
-
-/* ---- set voice board attenuation ----------------------------------------- */
 
 voice_board_result_t voice_board_t::set_attenuation(uint8_t attenuation_db)
 {
@@ -1562,14 +1410,4 @@ voice_board_result_t voice_board_t::set_attenuation(uint8_t attenuation_db)
     if (attenuation_db > 127u)
         return invalid_argument("attenuation must be 0..127 dB");
     return voice_board_detail::set_attenuation(impl_->context, attenuation_db);
-}
-
-voice_board_result_t voice_board_usb_benchmark(std::string const& path, unsigned seconds)
-{
-    using namespace voice_board_detail;
-    if(path.empty() || seconds<1 || seconds>60)
-        return fail(voice_board_error_t::invalid_argument,"USB benchmark requires a port and 1..60 seconds");
-    serial_port port; std::string error;
-    if(!port.open(path,115200,true,error)) return fail(voice_board_error_t::io_error,error);
-    return usb_benchmark(port,seconds);
 }

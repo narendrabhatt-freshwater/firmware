@@ -22,6 +22,15 @@ hardware UID: `CHCARD-<24 hex digits>`. On macOS, the CDC path therefore looks
 like `/dev/cu.usbmodemCHCARD_<24 hex digits>...`; the OS chooses the suffix.
 The new CDC-only descriptor can change that suffix. Flashing preserves the UID.
 
+## Build artifacts
+
+Each firmware link produces `channel_MCU.bin` plus a timestamped copy such as
+`channel_MCU_20260917_142245.bin`. The timestamp uses the build computer's local
+timezone. Both binaries contain identical firmware. A matching `.json` records
+the SHA-256 checksum, size, build profile, compiler version and RS485 baud rate.
+Use `./scripts/fw build channel --release` from the repository root for a Release
+build. No Git revision is added to the filename.
+
 ## What this card does
 
 Receives sample blocks from the PC over USB CDC into **per-voice sustain rings**, and
@@ -40,6 +49,9 @@ valid Channel Berry ABI2 program with `cmi::Core` before sending note commands.
 Until then the card stays silent and replies `err:no-program`.
 
 ### USB streaming
+
+For the message header, packet types, annotated hex examples and note sequence,
+see the [USB packet guide](docs/usb_packet_guide.md).
 
 Debug, Release, and host integration tests all use the same production SAMPLE
 path: signed-int8 attacks plus USB BODY streaming. Each voice has one contiguous
