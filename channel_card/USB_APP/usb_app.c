@@ -152,22 +152,18 @@ void USB_App_Task(void)
   }
   /* Bounded passes keep the main-loop RS485 service responsive. */
   uint32_t budget=4096;
-  uint8_t bytes[64];
   while (budget && !reply_size && !failed) {
     /* Never consume beyond this frame: a pending reply must not discard the
      * beginning of the next block from the same USB packet. */
     uint32_t want=parser.need-parser.used;
-    if (want>sizeof bytes) want=sizeof bytes;
     if (want>budget) want=budget;
-    uint32_t n=USB_Device_Read(bytes,want);
+    uint32_t n=USB_Device_Read(parser.bytes+parser.used,want);
     if (USB_Device_Epoch()!=link_epoch) return;
     if (!n) break;
     rx_bytes+=n; budget-=n; last_rx_ms=HAL_GetTick();
-    for (uint32_t i=0;i<n;++i) {
-      int rc=USB_ParserByte(&parser,bytes[i]);
-      if (rc<0) { fail_link(NULL,"bad header"); return; }
-      if (rc>0) { ++blocks; if (dispatch(parser.bytes)) USB_ParserReset(&parser); }
-    }
+    int rc=USB_ParserCommit(&parser,(uint16_t)n);
+    if (rc<0) { fail_link(NULL,"bad header"); return; }
+    if (rc>0) { ++blocks; if (dispatch(parser.bytes)) USB_ParserReset(&parser); }
   }
   if (parser.used && parser.used<parser.need && (uint32_t)(HAL_GetTick()-last_rx_ms)>1000) fail_link(NULL,"partial frame timeout");
   if (upload_kind && (uint32_t)(HAL_GetTick()-upload_ms)>5000) abort_upload();

@@ -28,7 +28,7 @@ int HAL_PCD_EP_Transmit(PCD_HandleTypeDef *p,uint8_t ep,uint8_t *data,uint32_t n
   return 0;
 }
 int HAL_PCD_EP_Receive(PCD_HandleTypeDef *p,uint8_t ep,uint8_t *data,uint32_t n) {
-  (void)p; CHECK(ep<2); rx_buffer[ep]=data; rx_length[ep]=n; return 0;
+  (void)p; CHECK(ep<2); rx_buffer[ep]=data; rx_length[ep]=n; rx_count[ep]=0; return 0;
 }
 int HAL_PCD_EP_Open(PCD_HandleTypeDef *p,uint8_t ep,uint16_t size,uint8_t type) {
   if(ep==1 || ep==0x81) ++data_opens;
@@ -65,6 +65,16 @@ static void in_done(uint8_t ep) { HAL_PCD_DataInStageCallback(&hpcd_USB_OTG_HS,e
 static void out(const uint8_t *bytes,unsigned n) {
   CHECK(rx_buffer[1] && n<=rx_length[1]); memcpy(rx_buffer[1],bytes,n); rx_count[1]=n;
   rx_buffer[1]=NULL; HAL_PCD_DataOutStageCallback(&hpcd_USB_OTG_HS,1);
+}
+/* Model HAL's per-packet FIFO copy separately from transfer completion. Full
+ * packets leave the 512-byte receive armed; a short packet or full transfer
+ * invokes the completion callback. */
+static void packet(const uint8_t *bytes,unsigned n) {
+  CHECK(rx_buffer[1] && n<=64 && rx_count[1]+n<=rx_length[1]);
+  memcpy(rx_buffer[1]+rx_count[1],bytes,n); rx_count[1]+=n;
+  if(n<64 || rx_count[1]==rx_length[1]) {
+    rx_buffer[1]=NULL;HAL_PCD_DataOutStageCallback(&hpcd_USB_OTG_HS,1);
+  }
 }
 static void flush_reply(void) {
   for (unsigned i=0;i<32;++i) { USB_App_Task(); in_done(1); }
@@ -212,16 +222,77 @@ static void incompatible_test(void) {
 static void backpressure(void) {
   setup(0x21,0x22,0,0,0);in_done(0);setup(0x21,0x22,1,0,0);in_done(0);
   uint8_t data[64]; memset(data,0xA5,64);
-  for(unsigned i=0;i<128;++i)out(data,64);
+  for(unsigned i=0;i<128;++i)packet(data,64);
   CHECK(rx_buffer[1]==NULL); // OUT stays NAKed until storage is available.
-  uint8_t readback[64];CHECK(USB_Device_Read(readback,64)==64 && rx_buffer[1]);
-  CHECK(memcmp(readback,data,64)==0);out(data,64);CHECK(rx_buffer[1]==NULL);
+  uint8_t readback[64];
+  for(unsigned i=0;i<8;++i) {
+    CHECK(USB_Device_Read(readback,64)==64);
+    CHECK(memcmp(readback,data,64)==0);
+    CHECK((rx_buffer[1]!=NULL)==(i==7)); // Reserve an entire receive transfer.
+  }
+  for(unsigned i=0;i<8;++i)packet(data,64);
+  CHECK(rx_buffer[1]==NULL);
   for(unsigned i=0;i<128;++i)CHECK(USB_Device_Read(readback,64)==64);
   CHECK(USB_Device_Read(readback,64)==0);
   reply_count=0;CHECK(USB_Device_Write(data,64));CHECK(tx_length[1]==64);in_done(1);
   CHECK(tx_length[1]==0);in_done(1);CHECK(reply_count==64); // Terminating ZLP, no added data byte.
 }
+static void partial_transfer_test(void) {
+  setup(0x21,0x22,0,0,0);in_done(0);connect();USB_App_StatsClear();
+  uint8_t message[64]={USB_MSG_PROBE,0,0,59,0};
+  uint32_t hash=2166136261u;
+  for(unsigned i=5;i<64;++i) {message[i]=(uint8_t)i;hash=(hash^message[i])*16777619u;}
+  packet(message,64);CHECK(rx_count[1]==64);USB_App_Task();
+  CHECK(USB_App_BlockCount()==1 && USB_App_RxByteCount()==64);
+  CHECK(rx_count[1]==64); // Parsed without completion, a short packet or ZLP.
+  for(unsigned i=1;i<8;++i) {
+    packet(message,64);USB_App_Task();
+    for(unsigned j=5;j<64;++j)hash=(hash^message[j])*16777619u;
+  }
+  CHECK(rx_count[1]==0 && USB_App_BlockCount()==8); // Completion did not duplicate data.
+  const uint8_t barrier[]={USB_MSG_PROBE,0,0,0,0};
+  packet(barrier,5);flush_reply();
+  CHECK(reply_count==18 && USB_Read32(reply_bytes+6)==8*59);
+  CHECK(USB_Read32(reply_bytes+10)==8 && USB_Read32(reply_bytes+14)==hash);
+  // Drop unpublished old bytes when DTR changes, preserving the in-flight
+  // transfer and USB packet toggles. New HELLO appends to that same buffer.
+  packet(message,64);
+  unsigned opens=data_opens;
+  setup(0x21,0x22,0,0,0);in_done(0);
+  packet(message,64);
+  setup(0x21,0x22,1,0,0);in_done(0);USB_App_Task();reply_count=0;
+  const uint8_t hello[]={USB_MSG_HELLO,0,0,1,0,USB_STREAM_VERSION};
+  packet(hello,sizeof hello);flush_reply();
+  CHECK(data_opens==opens && USB_Device_Connected());
+  CHECK(reply_count==19 && reply_bytes[5]==0);
+}
+static void burst_stream_test(void) {
+  setup(0x21,0x22,0,0,0);in_done(0);connect();USB_App_StatsClear();
+  /* Cross packet, 512-byte receive, parser and 8192-byte queue boundaries with
+   * different payloads, while allowing multiple packets between task calls. */
+  uint8_t wire[40*(USB_STREAM_HEADER_BYTES+1024)];
+  uint32_t hash=2166136261u;
+  for(unsigned b=0;b<40;++b) {
+    uint8_t *p=wire+b*(USB_STREAM_HEADER_BYTES+1024);
+    p[0]=USB_MSG_PROBE;p[1]=p[2]=0;USB_Write16(p+3,1024);
+    for(unsigned i=0;i<1024;++i) {
+      p[5+i]=(uint8_t)(i+b);hash=(hash^p[5+i])*16777619u;
+    }
+  }
+  unsigned packets=0;
+  for(unsigned at=0;at<sizeof wire;) {
+    unsigned n=sizeof wire-at;if(n>64)n=64;
+    packet(wire+at,n);at+=n;
+    if(++packets%13==0)USB_App_Task();
+  }
+  flush_reply();CHECK(reply_count==0 && USB_App_RxByteCount()==sizeof wire);
+  CHECK(USB_App_BlockCount()==40 && USB_Device_Connected());
+  const uint8_t barrier[]={USB_MSG_PROBE,0,0,0,0};
+  packet(barrier,5);flush_reply();
+  CHECK(reply_count==18 && USB_Read32(reply_bytes+6)==40*1024);
+  CHECK(USB_Read32(reply_bytes+10)==40 && USB_Read32(reply_bytes+14)==hash);
+}
 int main(void) {
-  StreamRing_Init();AttackBank_Init();USB_App_Init();enumeration();app_test();probe_test();body_backpressure();session_and_counter_test();incompatible_test();backpressure();
+  StreamRing_Init();AttackBank_Init();USB_App_Init();enumeration();app_test();probe_test();partial_transfer_test();burst_stream_test();body_backpressure();session_and_counter_test();incompatible_test();backpressure();
   puts("CDC enumeration, control transfers, uploads/BODY interleaving, reconnect and backpressure passed");return 0;
 }

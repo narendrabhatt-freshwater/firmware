@@ -1,6 +1,8 @@
 /* Minimal full-speed CDC ACM device on the existing STM32 HAL PCD.
  * IRQ owns endpoints. Queue publication uses short interrupt critical sections.
- * OUT is rearmed in its completion ISR, not on the 1 ms application cadence.
+ * OUT accepts eight packets per transfer and is rearmed in its completion ISR.
+ * Main-loop reads also publish partial transfers; no short packet is required
+ * to make a command visible to the parser.
  */
 #include "usb_device.h"
 #include "usb_otg.h"
@@ -10,6 +12,7 @@
 #define PCD (&hpcd_USB_OTG_HS)
 #define RX_SIZE 8192u
 #define TX_SIZE 2048u
+#define RX_TRANSFER_BYTES 512u
 #define BULK_OUT 0x01u
 #define BULK_IN 0x81u
 #define NOTIFY_IN 0x82u
@@ -19,7 +22,8 @@
 #define USB_RAM __attribute__((aligned(4)))
 #endif
 static uint8_t rx[RX_SIZE] USB_RAM, tx[TX_SIZE] USB_RAM;
-static uint8_t out_packet[64] USB_RAM, in_packet[64] USB_RAM;
+static uint8_t out_packet[RX_TRANSFER_BYTES] USB_RAM, in_packet[64] USB_RAM;
+static uint32_t rx_published;
 static volatile uint32_t rx_wr, rx_rd, tx_wr, tx_rd, epoch;
 static volatile uint8_t configuration, dtr, suspended, faulted, rx_armed, tx_busy;
 static uint8_t tx_zlp;
@@ -34,8 +38,9 @@ static uint8_t ctrl_stage; /* 0 idle, 1 data IN, 2 data OUT, 3 status IN, 4 stat
 
 /* Masking only USB permits a lower-priority mixer interrupt to preempt the
  * main loop with USB still masked for the entire audio refill. Prevent that
- * priority inversion: these sections copy at most one RX packet or one small
- * reply, update queue indices and arm an endpoint. Restore the caller's mask. */
+ * priority inversion: these sections publish at most one 512-byte receive
+ * transfer, copy at most 64 bytes to the parser (or one small reply), and update
+ * queue indices/endpoints. Restore the caller's mask. */
 static uint32_t queue_lock(void)
 {
 #if defined(__arm__) || defined(__thumb__)
@@ -82,10 +87,30 @@ static void control_in(const uint8_t *data, uint16_t size, uint16_t wanted)
 }
 static void arm_out(void)
 {
-  if (configuration && !faulted && !rx_armed && RX_SIZE-(rx_wr-rx_rd) >= 64) {
+  /* Reserve room for the entire transfer, including its unpublished tail. */
+  if (configuration && !faulted && !rx_armed && RX_SIZE-(rx_wr-rx_rd) >= RX_TRANSFER_BYTES) {
+    rx_published=0;
     rx_armed=1;
-    if (HAL_PCD_EP_Receive(PCD, BULK_OUT, out_packet, 64) != HAL_OK) rx_armed=0;
+    if (HAL_PCD_EP_Receive(PCD, BULK_OUT, out_packet, RX_TRANSFER_BYTES) != HAL_OK) rx_armed=0;
   }
+}
+/* Caller holds the queue lock or runs in the USB ISR. With PCD DMA disabled,
+ * HAL advances xfer_count only after copying a complete packet from the FIFO.
+ * Publishing that prefix early avoids waiting for all eight packets or a ZLP.
+ * Completion publishes only the remaining suffix, never the same bytes twice. */
+static void publish_out(uint32_t received)
+{
+  if (received<rx_published || received>RX_TRANSFER_BYTES ||
+      received-rx_published>RX_SIZE-(rx_wr-rx_rd)) {
+    faulted=1; ++epoch; return;
+  }
+  uint32_t n=received-rx_published;
+  if (!n) return;
+  uint32_t wr=rx_wr, at=wr%RX_SIZE, first=n;
+  if(first>RX_SIZE-at)first=RX_SIZE-at;
+  memcpy(rx+at,out_packet+rx_published,first);
+  memcpy(rx,out_packet+rx_published+first,n-first);
+  __DMB(); rx_wr=wr+n; rx_published=received;
 }
 static void kick_in(void)
 {
@@ -104,6 +129,7 @@ static void kick_in(void)
 static void reset_queues(void)
 {
   rx_wr=rx_rd=tx_wr=tx_rd=0;
+  rx_published=0;
   rx_armed=tx_busy=tx_zlp=0;
   faulted=0; ++epoch;
 }
@@ -112,6 +138,7 @@ static void reset_link(void)
   /* DTR is not a USB endpoint reset. Preserve DATA0/DATA1 synchronisation with
    * the host, keep the OUT transaction armed, and discard only application data. */
   uint8_t armed=rx_armed;
+  uint32_t received=armed ? HAL_PCD_EP_GetRxCount(PCD,BULK_OUT) : 0;
   if (tx_busy) (void)HAL_PCD_EP_Abort(PCD,BULK_IN);
   (void)HAL_PCD_EP_Flush(PCD,BULK_IN);
 #if defined(__arm__) || defined(__thumb__)
@@ -121,7 +148,7 @@ static void reset_link(void)
    * newly queued HELLO reply. No DATA PID bits are changed. */
   USBx_INEP(1)->DIEPINT=0xFFu;
 #endif
-  reset_queues(); rx_armed=armed; arm_out();
+  reset_queues(); rx_armed=armed; rx_published=received; arm_out();
 }
 static void close_data(void)
 {
@@ -230,12 +257,7 @@ void HAL_PCD_DataOutStageCallback(PCD_HandleTypeDef *pcd, uint8_t ep)
   if (ep!=1) return;
   rx_armed=0;
   if (!dtr || faulted) { arm_out(); return; }
-  if (n<=64 && RX_SIZE-(rx_wr-rx_rd)>=n) {
-    uint32_t wr=rx_wr, at=wr%RX_SIZE, first=n;
-    if(first>RX_SIZE-at)first=RX_SIZE-at;
-    memcpy(rx+at,out_packet,first); memcpy(rx,out_packet+first,n-first);
-    __DMB(); rx_wr=wr+n;
-  } else { faulted=1; ++epoch; }
+  publish_out(n);
   arm_out();
 }
 void HAL_PCD_SuspendCallback(PCD_HandleTypeDef *pcd) { (void)pcd; suspended=1; }
@@ -264,8 +286,11 @@ void USB_Device_Init(void)
 uint32_t USB_Device_Read(uint8_t *dst, uint32_t size)
 {
   uint32_t saved=queue_lock();
+  if (dtr && !faulted && rx_armed) publish_out(HAL_PCD_EP_GetRxCount(PCD,BULK_OUT));
+  if (faulted) { queue_unlock(saved); return 0; }
   uint32_t n=rx_wr-rx_rd;
   if (n>size) n=size;
+  if (n>64) n=64; /* Keep the interrupt-masked copy bounded. */
   uint32_t rd=rx_rd, at=rd%RX_SIZE, first=n;
   if(first>RX_SIZE-at)first=RX_SIZE-at;
   memcpy(dst,rx+at,first); memcpy(dst+first,rx,n-first);
