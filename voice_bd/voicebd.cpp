@@ -510,11 +510,11 @@ public:
     }
 
     voice_board_result_t command(std::string const& body,
-        std::vector<uint8_t>* binary = nullptr, std::string const& events = {})
+        std::vector<uint8_t>* binary = nullptr)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::string const wire = events + ((body.size() > 1u && body[1] == ':')
-            ? body + "\r" : "c:" + body + "\r");
+        std::string const wire = (body.size() > 1u && body[1] == ':')
+            ? body + "\r" : "c:" + body + "\r";
         port_.flush();
         auto sent = write(wire);
         if (!sent) return sent;
@@ -950,45 +950,6 @@ public:
 
 /* ---- manage the sound-board connection ---------------------------------- */
 
-struct note_event {
-    bool on;
-    uint8_t voice, key, velocity;
-    uint16_t sample;
-};
-
-class note_event_queue {
-    static constexpr unsigned capacity = 256u;
-    std::array<note_event, capacity> events_{};
-    std::atomic<unsigned> written_{0}, read_{0};
-    std::atomic_flag producer_ = ATOMIC_FLAG_INIT;
-public:
-    static_assert(std::atomic<unsigned>::is_always_lock_free,
-                  "realtime event indices must be lock-free");
-    bool push(note_event event) {
-        if (producer_.test_and_set(std::memory_order_acquire)) return false;
-        auto w = written_.load(std::memory_order_relaxed);
-        if (w - read_.load(std::memory_order_acquire) == capacity) {
-            producer_.clear(std::memory_order_release);
-            return false;
-        }
-        events_[w % capacity] = event;
-        written_.store(w + 1u, std::memory_order_release);
-        producer_.clear(std::memory_order_release);
-        return true;
-    }
-    bool pop(note_event& event) {
-        auto r = read_.load(std::memory_order_relaxed);
-        if (r == written_.load(std::memory_order_acquire)) return false;
-        event = events_[r % capacity];
-        read_.store(r + 1u, std::memory_order_release);
-        return true;
-    }
-    bool empty() const {
-        return read_.load(std::memory_order_acquire) == written_.load(std::memory_order_acquire);
-    }
-    void discard() { read_.store(written_.load(std::memory_order_acquire), std::memory_order_release); }
-};
-
 struct device_context
 {
     voice_board_config_t config;
@@ -1004,66 +965,14 @@ struct device_context
     std::condition_variable control_changed;
     std::atomic<unsigned> waiting_commands{0u};
     std::chrono::steady_clock::time_point next_poll = std::chrono::steady_clock::now();
-    note_event_queue notes;
-    std::array<std::atomic<bool>, kSampleSlotCount> sample_ready{};
     std::atomic<voice_board_error_t> event_error{voice_board_error_t::ok};
-    int control_wake[2] = {-1, -1};
-
-    void wake_control() {
-        uint8_t byte = 1;
-        if (control_wake[1] >= 0) { auto n = ::write(control_wake[1], &byte, 1); (void)n; }
-    }
-
-    voice_board_result_t submit(note_event event) {
-        static_assert(std::atomic<bool>::is_always_lock_free &&
-                      std::atomic<voice_board_error_t>::is_always_lock_free,
-                      "realtime admission flags must be lock-free");
-        if (!connected.load()) return {voice_board_error_t::not_connected, {}};
-        auto error = event_error.load(std::memory_order_acquire);
-        if (error != voice_board_error_t::ok) return {error, {}};
-        if (event.on && !usb.good()) return {voice_board_error_t::io_error, {}};
-        if (event.on && !sample_ready[event.sample].load(std::memory_order_acquire))
-            return {voice_board_error_t::sample_error, {}};
-        if (!notes.push(event)) return {voice_board_error_t::io_error, {}};
-        wake_control();
-        return {};
-    }
 
     void record_error(voice_board_result_t result) {
         if (result || event_error.load() != voice_board_error_t::ok) return;
         event_error.store(result.code, std::memory_order_release);
-        notes.discard();
         (void)rs485.command("clear");
         std::lock_guard<std::mutex> lock(stream.mutex);
         for (auto& voice : stream.voices) voice.active = false;
-    }
-
-    std::string prepare_events() {
-        std::string wire;
-        wire.reserve(64u * 32u);
-        std::lock_guard<std::mutex> lock(stream.mutex);
-        note_event event;
-        for (unsigned count = 0; count < 64u && notes.pop(event); ++count) {
-            auto& slot = stream.voices[event.voice];
-            if (!event.on) {
-                wire += "c:n" + std::to_string(event.voice) + " off\r";
-                if (!slot.note_seen_in_status) slot.active = false;
-                continue;
-            }
-            auto session = static_cast<uint8_t>((slot.session_id + 1u) % kSessionIdWrap);
-            slot = {};
-            slot.active = true;
-            slot.initial_samples_left = kPrimeSamples;
-            slot.session_id = session;
-            slot.sample_id = event.sample;
-            size_t attack = std::min<size_t>(kAttackSampleCount, stream.samples[event.sample].pcm_size);
-            slot.source_position = attack - std::min<size_t>(kCrossfadeSampleCount, attack);
-            slot.stream_origin = slot.source_position;
-            wire += "c:n" + std::to_string(event.voice) + " on " +
-                std::to_string(event.sample) + " " + std::to_string(event.key) + " " +
-                std::to_string(event.velocity) + " @" + std::to_string(session) + "\r";
-        }
-        return wire;
     }
 
     struct control_turn {
@@ -1072,7 +981,6 @@ struct device_context
         explicit control_turn(device_context* s)
             : state(s) {
             ++state->waiting_commands;
-            state->wake_control();
             lock = std::unique_lock<std::mutex>(state->control_mutex);
         }
         ~control_turn() {
@@ -1087,8 +995,10 @@ struct device_context
     {
         std::lock_guard<std::mutex> upload_lock(upload_mutex);
         bool was_connected = connected.exchange(false);
-        worker_running.store(false);
-        wake_control();
+        {
+            std::lock_guard<std::mutex> lock(control_mutex);
+            worker_running.store(false);
+        }
         control_changed.notify_all();
         if (worker.joinable() && worker.get_id() != std::this_thread::get_id())
             worker.join();
@@ -1097,8 +1007,6 @@ struct device_context
             if (was_connected) (void)rs485.command("clear");
             rs485.close();
         }
-        notes.discard();
-        for (int& fd : control_wake) { if (fd >= 0) ::close(fd); fd = -1; }
         {
             std::lock_guard<std::mutex> lock(stream.mutex);
             for (auto& voice : stream.voices) voice = {};
@@ -1116,7 +1024,6 @@ struct device_context
         {
             std::lock_guard<std::mutex> lock(stream.mutex);
             std::swap(stream.samples[id], replacement);
-            sample_ready[id].store(true, std::memory_order_release);
         }
         replacement.pcm.reset(); // Free old PCM outside the stream lock.
         auto result = ok();
@@ -1136,25 +1043,15 @@ struct device_context
         return result;
     }
 
-    voice_board_result_t query_status(std::string const& events = {})
+    voice_board_result_t query_status()
     {
         auto const requested_at = std::chrono::steady_clock::now();
         std::vector<uint8_t> raw;
-        auto result = rs485.command("vq", &raw, events);
+        auto result = rs485.command("vq", &raw);
         if (result) {
             card_status status;
             if (parse_voice_queue_status(raw, status)) {
                 stream.apply_status(status, requested_at);
-                if (!events.empty()) {
-                    std::lock_guard<std::mutex> lock(stream.mutex);
-                    for (auto const& voice : stream.voices) {
-                        if (voice.active && !voice.note_seen_in_status) {
-                            result = fail(voice_board_error_t::bad_reply,
-                                "note rejected or lost; reopen the voice board");
-                            break;
-                        }
-                    }
-                }
             } else result = fail(voice_board_error_t::bad_reply, "invalid voice status reply");
             usb.wake();
         }
@@ -1177,27 +1074,17 @@ struct device_context
                 });
                 continue;
             }
-            if (event_error.load() == voice_board_error_t::ok &&
-                (!notes.empty() || std::chrono::steady_clock::now() >= next_poll)) {
-                auto const requested_at = std::chrono::steady_clock::now();
-                auto events = prepare_events();
-                record_error(query_status(events));
-                advance_poll(requested_at);
+            if (event_error.load() != voice_board_error_t::ok) {
+                control_changed.wait(lock, [this] { return !worker_running.load(); });
                 continue;
             }
-            int timeout = event_error.load() == voice_board_error_t::ok
-                ? limit_poll_timeout(-1, next_poll) : -1;
-            lock.unlock();
-            pollfd wake_fd{control_wake[0], POLLIN, 0};
-            int ready = ::poll(&wake_fd, 1, timeout);
-            int poll_error = errno;
-            if (ready > 0) {
-                uint8_t bytes[128];
-                while (::read(control_wake[0], bytes, sizeof bytes) > 0) {}
+            if (std::chrono::steady_clock::now() < next_poll) {
+                control_changed.wait_until(lock, next_poll);
+                continue;
             }
-            lock.lock();
-            if (ready < 0 && poll_error != EINTR)
-                record_error(fail(voice_board_error_t::io_error, "event wake poll failed"));
+            auto const requested_at = std::chrono::steady_clock::now();
+            record_error(query_status());
+            advance_poll(requested_at);
         }
     }
 
@@ -1270,16 +1157,6 @@ voice_board_result_t open_device(device_context* state,
     }
     state->usb.enable_streaming();
     state->event_error.store(voice_board_error_t::ok);
-    if (::pipe(state->control_wake) < 0) {
-        state->shutdown();
-        return fail(voice_board_error_t::io_error, "event wake pipe failed");
-    }
-    for (int fd : state->control_wake) {
-        if (::fcntl(fd, F_SETFL, O_NONBLOCK) < 0 || ::fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
-            state->shutdown();
-            return fail(voice_board_error_t::io_error, "event wake pipe setup failed");
-        }
-    }
     state->connected.store(true);
     state->next_poll = std::chrono::steady_clock::now();
     state->worker_running.store(true);
@@ -1359,16 +1236,54 @@ voice_board_result_t load_sample(device_context* state, uint16_t sample_id,
 voice_board_result_t note_on(device_context* state, uint8_t voice,
     uint16_t sample, uint8_t key, uint8_t velocity)
 {
-    if (!state) return {voice_board_error_t::not_connected, {}};
-    return state->submit({true, voice, key, velocity, sample});
+    if (!device_is_open(state))
+        return fail(voice_board_error_t::not_connected, "voice board is not connected");
+    device_context::control_turn turn(state);
+    if (!device_is_open(state))
+        return fail(voice_board_error_t::not_connected, "voice board is not connected");
+    uint8_t session;
+    {
+        std::lock_guard<std::mutex> lock(state->stream.mutex);
+        if (!state->stream.samples[sample].loaded)
+            return fail(voice_board_error_t::sample_error,
+                "sample " + std::to_string(sample) + " is not loaded");
+        auto& slot = state->stream.voices[voice];
+        session = static_cast<uint8_t>((slot.session_id + 1u) % kSessionIdWrap);
+        slot = {};
+        slot.active = true;
+        slot.initial_samples_left = kPrimeSamples;
+        slot.session_id = session;
+        slot.sample_id = sample;
+        size_t attack = std::min<size_t>(kAttackSampleCount, state->stream.samples[sample].pcm_size);
+        slot.source_position = attack - std::min<size_t>(kCrossfadeSampleCount, attack);
+        slot.stream_origin = slot.source_position;
+    }
+    // Silent note event: write it now, without appending vq or reading an ACK.
+    auto result = state->rs485.send_event("n" + std::to_string(voice) + " on " +
+        std::to_string(sample) + " " + std::to_string(key) + " " +
+        std::to_string(velocity) + " @" + std::to_string(session));
+    if (!result) {
+        std::lock_guard<std::mutex> lock(state->stream.mutex);
+        state->stream.voices[voice].active = false;
+    }
+    return result;
 }
 
 /* ---- release a voice ---------------------------------------------------- */
 
 voice_board_result_t note_off(device_context* state, uint8_t voice)
 {
-    if (!state) return {voice_board_error_t::not_connected, {}};
-    return state->submit({false, voice, 0, 0, 0});
+    // Keep note-off available even if USB streaming or status polling failed.
+    if (!state || !state->connected.load() || !state->rs485.is_open())
+        return fail(voice_board_error_t::not_connected, "voice board is not connected");
+    device_context::control_turn turn(state);
+    auto result = state->rs485.send_event("n" + std::to_string(voice) + " off");
+    if (result) {
+        std::lock_guard<std::mutex> lock(state->stream.mutex);
+        auto& slot = state->stream.voices[voice];
+        if (!slot.note_seen_in_status) slot.active = false;
+    }
+    return result;
 }
 
 /* ---- stop all voices ---------------------------------------------------- */
@@ -1379,7 +1294,6 @@ voice_board_result_t all_notes_off(device_context* state)
         return fail(voice_board_error_t::not_connected,
             "voice board is not connected");
     device_context::control_turn turn(state);
-    state->notes.discard();
     auto const result = state->rs485.command("clear");
     if (result) {
         std::lock_guard<std::mutex> lock(state->stream.mutex);

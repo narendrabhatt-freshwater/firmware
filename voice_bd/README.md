@@ -219,6 +219,10 @@ One `voice_board_config_t::usb_port` selects the binary CDC port for all eight
 voices, attacks and scripts. The old audio-device name and separate upload port
 are removed. RS485 continues to carry controls and the existing 61-byte `vq`
 reply. Linux/macOS use native CDC drivers and libserialport; RtAudio is not used.
+Note-on/off calls write one silent RS485 command directly and return after the
+write, without waiting for an acknowledgement or appending `vq`. The separate
+status worker continues polling `vq` for BODY credit. The shared bus lock can
+delay a note while an existing status/control exchange finishes.
 Use this host with protocol-v2 firmware (`cafe:4032`); HELLO rejects incompatible
 firmware. Re-enumeration can change the OS port suffix/path, so update the port
 configuration for the board's unchanged `CHCARD-<UID>` identity.
