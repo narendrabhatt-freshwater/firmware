@@ -28,12 +28,10 @@
 #include "usart.h"
 #include "usb_app.h"
 
-/** Power of two so the wrap is a mask, not a modulo. 2048 B holds several
- * full 16-voice note bursts (~20 B each) so a mash of On+Off chords cannot
- * overrun while the main loop is in USB/audio work. 256 was too small: one
- * 16-note batch alone is ~300 B and dropped Offs left voices stuck. */
-#define UART5_RX_BUF_SIZE 2048u
+#define UART5_RX_BUF_SIZE 8192u
 #define UART5_RX_BUF_MASK (UART5_RX_BUF_SIZE - 1u)
+_Static_assert(UART5_RX_BUF_SIZE > 128u * 32u, "RX must hold the worst-case note burst");
+_Static_assert((UART5_RX_BUF_SIZE & UART5_RX_BUF_MASK) == 0u, "RX size must be a power of two");
 
 static volatile uint8_t rx_buf[UART5_RX_BUF_SIZE];
 /** Written only by the ISR. */

@@ -170,9 +170,9 @@ static int __attribute__((unused)) RS485_Send(const char *s)
 /* Main-loop parser state; reset is also available from the USB console. */
 static uint8_t rs485_line[96];
 static uint8_t rs485_line_len;
-static uint32_t rs485_dropped_reported;
 
 static uint8_t console_via_usb = 0;
+static uint8_t console_note_event;
 
 /* RS485 path counters (internal; no console cmd). */
 static uint32_t rs485_cmd_count; /**< commands executed from the bus */
@@ -188,6 +188,7 @@ static uint32_t rs485_vq_count;  /**< exact refill-status frames transmitted */
  * drop: a clipped line still terminates the host's exchange. */
 static void RS485_Reply(const char *s)
 {
+  if (console_note_event) return;
   char frame[224];
   size_t tag_len;
   size_t body_len;
@@ -367,7 +368,7 @@ static uint8_t Console_ParseNoteSlot(char hex_digit)
   return 0xFFu;
 }
 
-/** Apply nX on <key> <velocity> [@session]. Compact ACK: ok / err:<code>. */
+/** Apply nX on <key> <velocity> [@session]. */
 static void Console_NoteOn(uint8_t note, uint8_t key, uint8_t velocity,
                            uint16_t session, uint16_t sample)
 {
@@ -757,7 +758,8 @@ static void Console_CmdNoteAll(char *line)
     RS485_Reply("err:syntax\r\n");
     return;
   }
-  Console_AllNotesOff();RS485_Reply("ok\r\n");
+  Console_AllNotesOff();
+  RS485_Reply(strcmp(line, "clear") == 0 ? "ok:clear rt=1\r\n" : "ok\r\n");
 }
 
 /** n0..n7: note bank on CH1 (also answers unknown; slots 8..f err:range). */
@@ -1044,7 +1046,6 @@ static void Console_Exec(char *line)
     Uart5Rx_Clear();
     rs485_line_len = 0u;
     rs485_line[0] = '\0';
-    rs485_dropped_reported = Uart5Rx_DroppedCount();
     RS485_Reply("ok:reset\r\n");
     return;
   }
@@ -1219,15 +1220,21 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- clear / n off: silence all voices. n0..n7 below. ---- */
-  if (strcmp(line, "clear") == 0 ||
-      (line[0] == 'n' && (line[1] == '\0' || line[1] == ' ')))
+  if (strcmp(line, "clear") == 0)
   {
     Console_CmdNoteAll(line);
     return;
   }
 
-  /* ---- n0..n7: 8-voice note bank on CH1 (slots 8..f reply err:range) ---- */
+  if (line[0] == 'n')
+  {
+    console_note_event = 1u;
+    if (line[1] == '\0' || line[1] == ' ') Console_CmdNoteAll(line);
+    else Console_CmdNoteSlot(line);
+    console_note_event = 0u;
+    return;
+  }
+
   Console_CmdNoteSlot(line);
 }
 
@@ -1280,15 +1287,6 @@ void Console_ExecFromUSB(char *line)
 static void Console_Poll(void)
 {
   uint8_t c;
-
-  /* Fail loud on lost characters — but only when idle between lines.
-   * Replying mid-command would itself drive the bus and lose more RX. */
-  const uint32_t dropped = Uart5Rx_DroppedCount();
-  if (dropped != rs485_dropped_reported && rs485_line_len == 0u)
-  {
-    rs485_dropped_reported = dropped;
-    RS485_Reply("err:rxdrop\r\n");
-  }
 
   while (Uart5Rx_Get(&c))
   {
