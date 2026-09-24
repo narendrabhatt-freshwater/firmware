@@ -169,8 +169,12 @@ speed. Rates above 2× are halved repeatedly to preserve the note's pitch class
 within one octave above the sample root. The card also folds sample frequency
 modulation above 2×. Custom firmware programs can change the actual demand.
 
-Startup assumes the card is idle. If voices are active, program upload fails with
-`err:vm-busy`; startup does not silence them or wait for their release.
+Startup sends one `clear` command before opening USB and uploading programs.
+With matching firmware, `clear` is an alias for `n off`: it hard-stops all voices,
+discards their queued playback data and resets Berry state at the next audio
+boundary. No sleep, retry or additional status polling is added. Older firmware
+does not implement `clear`, so update the Channel Card firmware for this recovery
+behavior. USB open separately resets transport queues and partial messages.
 
 Startup reads `vq` before uploading programs. RS485 transactions retain their
 existing 5 ms reply timeout and are not automatically retried. CDC HELLO/upload

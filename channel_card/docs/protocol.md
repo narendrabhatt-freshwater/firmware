@@ -110,7 +110,7 @@ At boot the card turns the analog bypass path on and sets CH1 DAC trim to
 | `n0`…`n7 on <sample> <key> <velocity> @<session>` | Assign sample and arm streamed note together; one small ACK. |
 | `n0`…`n7 on <key> <velocity> @<session>` | Streamed note-on; bind BODY session 0…254 before ACK.          |
 | `n0`…`n7 off`            | Turn that slot off.                                                            |
-| `n off`                | Silence all 8.                                                                  |
+| `clear` / `n off`      | Hard-stop all 8, discard queued playback data and reset Berry state at the next audio boundary. Loaded samples/programs and USB transport state are retained. |
 
 Bare `n0`…`n7` is a syntax error.
 

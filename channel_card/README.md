@@ -98,7 +98,8 @@ Audio from CH1 reaches the output by either — or both — of:
 For bring-up/verification, first upload a Channel VM program to voice 0, then
 use the note bank: `n0 on 69` plays A4 onto CH1 with the default tuning. Bypass
 is enabled at boot, so the tone is heard clean and filter-free at `out`.
-`n off` silences all voices.
+`clear` and `n off` hard-stop all voices, discard queued playback data and reset
+Berry state at the next audio boundary. Loaded samples and programs are retained.
 
 ### Switch reference
 
@@ -209,7 +210,7 @@ Successful setters normally return `ok`. Common failures are `err:syntax`,
 | `n0`…`n7 on <key> [velocity]` | Start voice 0…7 using MIDI key 0…127 and velocity 1…127; velocity defaults to 127. A valid script must already be loaded for that voice. |
 | `n0`…`n7 on <key> <velocity> @<session>` | Start a streamed note and bind BODY session 0…254 before acknowledging. Key-only commands default to velocity 127. |
 | `n0`…`n7 off` | Release one voice. |
-| `n off` | Release all eight voices. |
+| `clear` / `n off` | Hard-stop all eight voices and reset playback buffers and Berry state. |
 | `g <channel> <dB>` | Set CS4304 attenuation: channel 1…4, attenuation 0…127 dB. |
 
 ### Filters

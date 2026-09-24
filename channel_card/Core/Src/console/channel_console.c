@@ -319,7 +319,7 @@ static const SwitchDef_t switches[] = {
  *
  *   h / help / ?      — command list
  *   n0..n7 on <key> [velocity] [@session] / off — MIDI gate
- *   n off             — hard-stop all 8 voices and reset Berry state
+ *   clear / n off     — hard-stop all 8 voices and reset Berry state
  *   al <id> <len>     — CDC signed-int8 attack upload (1..ATTACK_BANK_BYTES)
  *   wl <wave> <len>   — CDC logical wavetable upload (wave 0..7, len 2..512)
  *   vmload <v> <len>  — CDC Berry ABI2 upload; vm [v|mem] — status
@@ -407,7 +407,7 @@ static void Console_Help(void)
   /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
   snprintf(b, sizeof b,
            "ok: reset (RS485 RX) | SAMPLE n0..n7 on sample key velocity @session | on key [velocity] [@session] | off | "
-           "n off | al id n | wl wave n | vmload v n | vm [v] | ar id Hz | a | vq | "
+           "clear | n off | al id n | wl wave n | vmload v n | vm [v] | ar id Hz | a | vq | "
            "usb | cpuload [0|1] | "
            "f0..f7 Hz [q] | fk0..fk7 k | g ch dB\r\n");
   RS485_Reply(b);
@@ -749,10 +749,14 @@ static void Console_CmdVoiceQuery(void)
   RS485_Reply(b);
 }
 
-/** n off: hard-stop all voices and reset Berry state at the next boundary. */
+/** clear / n off: hard-stop all voices and reset Berry state at the next boundary. */
 static void Console_CmdNoteAll(char *line)
 {
-  if (strcmp(line, "n off") != 0) { RS485_Reply("err:syntax\r\n"); return; }
+  if (strcmp(line, "n off") != 0 && strcmp(line, "clear") != 0)
+  {
+    RS485_Reply("err:syntax\r\n");
+    return;
+  }
   Console_AllNotesOff();RS485_Reply("ok\r\n");
 }
 
@@ -1215,8 +1219,9 @@ static void Console_Exec(char *line)
     return;
   }
 
-  /* ---- n off: silence all voices. n0..n7 below. ---- */
-  if (line[0] == 'n' && (line[1] == '\0' || line[1] == ' '))
+  /* ---- clear / n off: silence all voices. n0..n7 below. ---- */
+  if (strcmp(line, "clear") == 0 ||
+      (line[0] == 'n' && (line[1] == '\0' || line[1] == ' ')))
   {
     Console_CmdNoteAll(line);
     return;
