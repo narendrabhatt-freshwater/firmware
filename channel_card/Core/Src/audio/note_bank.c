@@ -585,8 +585,8 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
   float env;
   float sample_frequency_mod;
   float sample_amplitude;
-  int32_t env_q15;
-  int32_t gain_q15;
+  int32_t env_q31;
+  int32_t gain_q31;
   int32_t amp;
   uint32_t frame_inc;
   double delta_inc;
@@ -608,18 +608,21 @@ static inline int32_t NoteBank_VoiceSample(uint8_t note)
   s = NoteFilter_Process(note, s);
 
   env = NoteEnv_RenderSample(note);
-  env_q15 = (int32_t)(env * (float)NOTE_AMP_Q15_MAX + 0.5f);
-  if (env_q15 > NOTE_AMP_Q15_MAX)
+  if (env >= 1.0f)
   {
-    env_q15 = NOTE_AMP_Q15_MAX;
+    env_q31 = INT32_MAX;
   }
-  if (env_q15 < 0)
+  else if (env <= 0.0f)
   {
-    env_q15 = 0;
+    env_q31 = 0;
   }
-  gain_q15 =
-      (int32_t)(((int64_t)note_play_amp_q15[note] * (int64_t)env_q15) >> 15);
-  amp = (int32_t)(((int64_t)s * (int64_t)gain_q15) >> 15);
+  else
+  {
+    env_q31 = (int32_t)(env * 2147483648.0f);
+  }
+  gain_q31 =
+      (int32_t)(((int64_t)note_play_amp_q15[note] * (int64_t)env_q31) >> 15);
+  amp = (int32_t)(((int64_t)s * (int64_t)gain_q31) >> 31);
   return amp;
 }
 
