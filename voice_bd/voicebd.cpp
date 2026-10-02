@@ -298,6 +298,12 @@ public:
             error = serial_error("locating " + name, result);
             return false;
         }
+#if defined(__linux__)
+        if (!assert_dtr && !configure_linux_rs485(name,error)) {
+            close();
+            return false;
+        }
+#endif
         result = sp_open(port_, SP_MODE_READ_WRITE);
         if (result != SP_OK) {
             error = serial_error("opening " + name, result);
@@ -326,12 +332,6 @@ public:
                 close();
                 return false;
             }
-        }
-#endif
-#if defined(__linux__)
-        if (!assert_dtr && !configure_linux_rs485(name,error)) {
-            close();
-            return false;
         }
 #endif
         if (assert_dtr) {
@@ -1131,10 +1131,9 @@ voice_board_result_t open_device(device_context* state,
     result = state->rs485.open(state->rs485_name, config.rs485_baud);
     if (!result) return result;
     result = state->rs485.command("clear");
-    if (!result || result.message.find("ok:clear rt=1") == std::string::npos) {
+    if (!result) {
         state->shutdown();
-        return result ? fail(voice_board_error_t::bad_reply,
-            "Channel firmware must support silent note events (clear rt=1)") : result;
+        return result;
     }
     result=state->usb.open(config.usb_port,state->stream);
     if (!result) { state->shutdown(); return result; }

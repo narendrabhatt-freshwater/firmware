@@ -4,7 +4,7 @@
 #define FRONTSPI_DEV "/dev/spidev2.0"
 #define FRONTUART_DEV "/dev/ttyS4"
 #define RS485_DEV "/dev/cu.usbserial-BG03CSYB"
-#define CHANNEL1_DEV "/dev/cu.usbmodem13301"
+#define CHANNEL1_DEV "/dev/cu.usbmodem1333101"
 #define CHANNEL1_NAME "Channel Card BODY"
 #define EFFECT_DEV "/dev/cu.usbmodemeffectcard1"
 #define MIDI_PORT 0

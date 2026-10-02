@@ -76,7 +76,7 @@ struct voice_board_config_t
     /* One binary CDC port for BEC/ATTACK uploads and all eight BODY voices. */
     std::string usb_port = CHANNEL1_DEV;
     /* RS485 baud rate; Channel firmware must use the same setting. */
-    uint32_t rs485_baud = 3000000;
+    uint32_t rs485_baud = 921600;
     /* Output attenuation in dB: 0 is loudest. */
     uint8_t initial_attenuation_db = 0;
 };
