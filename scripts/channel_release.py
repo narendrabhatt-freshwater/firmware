@@ -23,11 +23,11 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 INPUTS = ("channel_card", "berry_compiler", "scripts/channel_release.py",
           "scripts/svn_publish.sh")
-CARD_ROOT = {"CMakeLists.txt", "CMakePresets.json", "README.md",
+CARD_ROOT = {"README.md",
              "channel_MCU.ioc", "startup_stm32h725xx.s", "STM32H725xG_flash.ld", "flash.sh"}
 COMPILER_ROOT = {"CMakeLists.txt", "Makefile", "README.md", "berry.c",
                  "berry.linux-arm64"}
-CARD_DOCS = {"docs/protocol.md", "docs/reference/note_filter_butterworth.md"}
+CARD_DOCS = {"PROTOCOL.md"}
 NOTICES = {"LICENSE", "LICENSE.txt", "PROVENANCE.md", "README.md"}
 
 
@@ -58,11 +58,9 @@ def selected(path):
                     tail[1] == "inc" and suffix == ".h")
         if tail[0] == "drivers":
             return suffix in {".c", ".h"} or tail[-1] in NOTICES
-        if tail[0] == "cmake":
-            return suffix == ".cmake" or tail[-1] == "CMakeLists.txt"
         if tail[0] == "berry_runtime":
             if len(tail) == 2:
-                return suffix in {".c", ".h"} or tail[-1] == "CMakeLists.txt"
+                return suffix in {".c", ".h"}
             if tail[1:3] == ["third_party", "berry"]:
                 return suffix in {".c", ".h"} or tail[-1] in NOTICES
     if product == "berry_compiler":
@@ -108,8 +106,7 @@ def validate(stage):
                 "app/samples.h",
                 "app/stream.h",
                 "app/usb.h",
-                "cmake/FirmwareInfo.cmake",
-                "berry_runtime/CMakeLists.txt", "berry_runtime/berry_backend.c",
+                "berry_runtime/berry_backend.c",
                 "berry_runtime/third_party/berry/LICENSE",
                 "berry_runtime/third_party/berry/generate/be_const_strtab.h",
                 "berry_compiler/vendor/berry/LICENSE",
@@ -152,7 +149,7 @@ def validate(stage):
     # Check maintained guides and references. Upstream READMEs retain upstream
     # links even when their original repository contains additional files.
     docs = [stage / "README.md", stage / "berry_compiler/README.md"]
-    docs += list((stage / "docs").rglob("*.md"))
+    docs += [stage / rel for rel in sorted(CARD_DOCS)]
     for p in docs:
         for link in markdown_links(p):
             link = unquote(link.split("#", 1)[0])

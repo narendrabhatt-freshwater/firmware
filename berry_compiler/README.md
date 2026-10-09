@@ -96,7 +96,7 @@ final success reply confirms validation and installation. Upload only while
 all voices are idle. Load each voice slot independently; programs are lost
 on a card reset. Query them with RS485 `vm`, `vm <voice>`, or `vm mem`.
 
-The Channel package's `docs/protocol.md` gives byte layouts and error handling.
+The Channel package's `PROTOCOL.md` gives byte layouts and error handling.
 Programs must use ABI2 and provide all three handlers below.
 
 ## Program structure

@@ -7,14 +7,15 @@ sample data and uploads.
 
 The [Berry guide](../berry_compiler/README.md) covers the matching compiler,
 script language, runtime functions, and examples. In an SVN release the
-compiler is included in `berry_compiler/`. The [wire protocol](docs/protocol.md)
+compiler is included in `berry_compiler/`. The [wire protocol](PROTOCOL.md)
 specifies framing, uploads, and flow control.
 
 ## Build
 
-Install Make, CMake 3.22 or later, and the GNU Arm embedded toolchain
-with newlib (`arm-none-eabi-gcc`, `arm-none-eabi-g++`, `arm-none-eabi-objcopy`,
-and `arm-none-eabi-size` on PATH). No build dependencies are downloaded.
+Install GNU Make, Python 3 (for build validation and reports), and the GNU Arm
+embedded toolchain with newlib (`arm-none-eabi-gcc`, `arm-none-eabi-g++`, `arm-none-eabi-objcopy`,
+`arm-none-eabi-ar`, and `arm-none-eabi-objdump` on PATH). No build dependencies
+are downloaded.
 
 From `channel_card/app/`, run:
 
@@ -23,7 +24,8 @@ make
 ```
 
 This builds Release firmware and writes **`bin/channel_MCU.bin`**, beside `app/`.
-CMake/Make manage intermediate files under `build/release/` automatically.
+The standalone `app/Makefile` compiles and links directly, keeping intermediate
+files under `build/release/`. CMake and Ninja are not required.
 Use `make -j4` to build with up to four parallel jobs.
 Use `make clean` to remove this build and its output binary.
 
@@ -143,8 +145,7 @@ Successful setters normally return `ok`. Common failures are `err:syntax`,
 | `fk0`…`fk7` | Query one voice's pitch tracking. |
 | `fk0`…`fk7 <k>` | Set one voice's pitch tracking. |
 
-Pitch tracking uses `fc = fbase × (noteHz / 261.625565)^k`. See
-[`docs/reference/note_filter_butterworth.md`](docs/reference/note_filter_butterworth.md).
+Pitch tracking uses `fc = fbase × (noteHz / 261.625565)^k`.
 
 ### Samples, scripts, and streaming
 
@@ -174,7 +175,7 @@ Lifetime RX-drop counters are preserved.
 The former ASCII `al`, `wl`, and `vmload` USB operations are replaced by
 binary upload kinds 1, 2, and 3. BODY blocks can be interleaved with upload chunks.
 Full upload sequencing and reply fields are documented in
-[wire protocol](docs/protocol.md).
+[wire protocol](PROTOCOL.md).
 
 ### Service diagnostics
 
@@ -195,7 +196,6 @@ Pitch-track smoke with a loaded sample: `f0 300`, `fk0 1`, `n0 on 60` then
 - `berry_runtime/`: first-party script runtime and shared ABI declarations;
   `third_party/berry/` retains the vendored interpreter.
 - `core/` and `drivers/`: STM32 initialization, interrupt glue, HAL, and CMSIS.
-- `cmake/`: toolchain and CubeMX build integration.
 - `channel_MCU.ioc`, startup assembly, and `STM32H725xG_flash.ld`: hardware and
   memory configuration.
 
@@ -220,13 +220,12 @@ Public interfaces use C linkage for generated C and the Berry runtime;
 interrupt handlers must also retain C linkage. The interpreter and generated
 STM32 sources keep their existing C implementation.
 
-Keep custom source lists in the top-level CMake file. CubeMX regenerates
-`cmake/stm32cubemx/CMakeLists.txt`. Preserve `USER CODE` markers when editing
-its generated sources. All maintained directories use lowercase names, including HAL/CMSIS
+Keep source lists, compiler flags, and link settings in `app/Makefile`.
+Preserve `USER CODE` markers when editing CubeMX-generated sources. All maintained directories use lowercase names, including HAL/CMSIS
 subfolders. If CubeMX regeneration restores names such as `Core`, `Drivers`,
-`Inc`, or `Src`, lowercase those folders and their generated CMake paths before
-building. Channel USB uses HAL PCD and the custom CDC device;
-do not enable a second USB middleware stack. After regeneration, check USB
+`Inc`, or `Src`, lowercase those folders and check the paths in `app/Makefile`
+before building. Generated CMake files are not used by Channel Card. Channel USB
+uses HAL PCD and the custom CDC device; do not enable a second USB middleware stack. After regeneration, check USB
 initialization, interrupt routing, main-loop processing, custom sources, and
 linker configuration before rebuilding.
 
@@ -268,5 +267,3 @@ then slews toward those targets from the first DMA buffer. No diagnostic
 tones are generated. Their calibration and slew limits are in
 `app/audio.cpp`; there is no console command to set them. The analog
 switch defaults are in `core/src/gpio.c` and `app/channel.cpp`.
-The per-voice digital filter is described in the
-[filter reference](docs/reference/note_filter_butterworth.md).

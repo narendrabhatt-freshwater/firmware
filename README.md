@@ -4,7 +4,7 @@ Common quick-start for **both** cards. Per-card detail lives in each
 project's own `README.md`; the host↔card wire contract lives in
 [`docs/protocol.md`](docs/protocol.md).
 
-| Card         | Folder               | MCU         | CMake target  | CubeMX file       |
+| Card         | Folder               | MCU         | Firmware name | CubeMX file       |
 | ------------ | -------------------- | ----------- | ------------- | ----------------- |
 | Channel Card | `channel_card/` | STM32H725xG | `channel_MCU` | `channel_MCU.ioc` |
 | Effect Card  | `effect_card/`  | STM32H743xx | `effect_card` | `effect_card.ioc` |
@@ -52,7 +52,9 @@ conversion failed.
 
 For Channel Card, run `make` inside `channel_card/app/`. It produces
 `channel_card/bin/channel_MCU.bin`. Set `BAUDRATE` in its Makefile or run
-`make BAUDRATE=3000000`. See the [Channel guide](channel_card/README.md).
+`make BAUDRATE=3000000`. This standalone Makefile requires GNU Make, Python 3,
+and the GNU Arm toolchain; it does not use CMake or Ninja. See the
+[Channel guide](channel_card/README.md).
 
 For Effect Card, run from `effect_card/`:
 
@@ -120,15 +122,14 @@ you will silently lose working code.
 Anything outside these markers is regenerated and lost. All custom code
 in both projects already lives inside them.
 
-### 4.2 Never add hand-written sources to the generated CMake file
+### 4.2 Keep source lists outside generated build files
 
-`cmake/stm32cubemx/CMakeLists.txt` is **regenerated from the `.ioc`**.
-Any source you add there disappears on the next regeneration.
+Channel Card maintains all build rules and source lists in `app/Makefile`;
+any CMake files produced by CubeMX are unused.
 
-Add hand-written sources to the **top-level `CMakeLists.txt`** instead,
-under `target_sources(${CMAKE_PROJECT_NAME} PRIVATE …)`. This is already
-done for the nine Channel Card `.cpp` modules under `app/`. Keeping this
-list outside the generated file preserves it across regeneration.
+On Effect Card, `cmake/stm32cubemx/CMakeLists.txt` is regenerated from the
+`.ioc`. Add hand-written sources to its top-level `CMakeLists.txt`, under
+`target_sources(${CMAKE_PROJECT_NAME} PRIVATE …)`, so they survive regeneration.
 
 ### 4.3 `Middlewares/` belongs to CubeMX — third-party code goes in `ThirdParty/`
 
@@ -158,7 +159,7 @@ CODE blocks, but check anyway):
 - [ ] `USB_App_Init()` called in `main()`
 - [ ] `USB_App_Task()` called in the main `while(1)` loop
 - [ ] HAL PCD IRQ handler on Channel; `tud_int_handler(0)` on Effect
-- [ ] Hand-written sources still listed in the **top-level** `CMakeLists.txt`
+- [ ] Source lists preserved in Channel `app/Makefile` or Effect top-level `CMakeLists.txt`
 - [ ] Project builds and the board still enumerates over USB
 
 ---
@@ -280,7 +281,7 @@ USB device implementation replaces TinyUSB; the host no longer uses RtAudio.
 
 Debug/Release builds and native protocol/scheduler tests are available. Physical
 USB enumeration, throughput and playback latency require qualification on the
-board; see [the validation procedure](channel_card/docs/cdc_validation.md).
+board; see the [Channel wire protocol](channel_card/PROTOCOL.md).
 
 Effect Card remains the existing mono 32-bit 96 kHz UAC2 microphone with CDC
 console, eight ADC inputs and 48 V rail control.

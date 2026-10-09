@@ -82,7 +82,7 @@ return `ok: …` with the value.
 
 ## 2. Console commands
 
-The [Channel command reference](../README.md#console-command-reference) lists
+The [Channel command reference](README.md#console-command-reference) lists
 syntax, ranges, and examples. Select sample heads 0..247 in the explicit
 `n0 on <sample> <key> <velocity> @<session>` form. Logical wavetables 0..7
 occupy bank entries 248..255; there is no `aw` command.

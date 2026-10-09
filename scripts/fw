@@ -86,12 +86,12 @@ usage() {
     "  fw help"
     ""
     "Build options"
-    "  --debug | --release     preset (default Debug)"
+    "  --debug | --release     Effect preset (default Debug; Channel always Release)"
     "  --force | -f            wipe build/ then reconfigure and rebuild"
-    "  -BAUD RATE              Channel Card baud (otherwise 921600)"
+    "  -BAUD RATE              Channel Card baud (otherwise app/Makefile setting)"
     ""
     "Flash options"
-    "  --debug | --release     preset (default Debug)"
+    "  --debug | --release     Effect preset (default Debug; Channel always Release)"
     "  --tool cube|dfu|auto    flasher (default cube)"
     "  --port USB1 | -p 1      Cube USB port (auto if one device)"
     "  --sn <serial>           DFU serial"
@@ -164,7 +164,15 @@ normalize_card() {
 
 artifact() {
   local card="$1" ext="$2"
-  echo "$(card_dir "$card")/build/$PRESET/$(card_target "$card").${ext}"
+  if [[ "$card" == "channel" ]]; then
+    if [[ "$ext" == "bin" ]]; then
+      echo "$(card_dir "$card")/bin/channel_MCU.bin"
+    else
+      echo "$(card_dir "$card")/build/release/channel_MCU.${ext}"
+    fi
+  else
+    echo "$(card_dir "$card")/build/$PRESET/$(card_target "$card").${ext}"
+  fi
 }
 
 # ── toolchain ────────────────────────────────────────────────────────────────
@@ -207,6 +215,18 @@ cube_cli() {
 cmd_build_one() {
   local card="$1" dir
   dir="$(card_dir "$card")"
+  if [[ "$card" == "channel" ]]; then
+    need_cmd make
+    [[ "$BUILD_FORCE" -eq 0 ]] || make -C "$dir/app" clean
+    info "build channel (Release)"
+    if [[ -n "$BUILD_BAUD" ]]; then
+      make -C "$dir/app" "BAUDRATE=$BUILD_BAUD"
+    else
+      make -C "$dir/app"
+    fi
+    ok "$(relpath "$(artifact "$card" bin)")"
+    return
+  fi
   need_cmd cmake
   need_cmd ninja
   need_cmd arm-none-eabi-gcc
@@ -221,11 +241,7 @@ cmd_build_one() {
   info "build $card ($PRESET)"
   (
     cd "$dir"
-    if [[ "$card" == "channel" ]]; then
-      cmake --preset "$PRESET" "-DFW_RS485_BAUD=$BUILD_BAUD"
-    else
-      cmake --preset "$PRESET"
-    fi
+    cmake --preset "$PRESET"
     cmake --build "build/$PRESET"
   )
   ok "$(relpath "$(artifact "$card" elf)")"
@@ -251,6 +267,11 @@ cmd_build() {
 cmd_clean_one() {
   local card="$1" dir
   dir="$(card_dir "$card")"
+  if [[ "$card" == "channel" ]]; then
+    make -C "$dir/app" clean
+    ok "cleaned channel"
+    return
+  fi
   if [[ -d "$dir/build" ]]; then
     info "Removing $dir/build"
     rm -rf "$dir/build"
@@ -725,7 +746,7 @@ cmd_status() {
 
   hdr "Config"
   row "root" "$ROOT"
-  row "preset" "$PRESET"
+  row "build" "Channel: Release; Effect: $PRESET"
   row "tool" "$FLASH_TOOL"
   [[ -n "$FLASH_PORT" ]] && row "port" "$FLASH_PORT"
   [[ -n "$FLASH_SN" ]] && row "sn" "$FLASH_SN"
@@ -852,10 +873,11 @@ cmd_flash() {
   # Ensure wait/list logic matches chosen tool
   FLASH_TOOL="$tool"
 
-  local elf
+  local elf variant="$PRESET"
+  [[ "$card" != "channel" ]] || variant="Release"
   elf="$(artifact "$card" elf)"
   if [[ ! -f "$elf" ]]; then
-    warn "No $PRESET build for $card — building first"
+    warn "No $variant build for $card — building first"
     cmd_build_one "$card"
   fi
 
@@ -863,7 +885,7 @@ cmd_flash() {
 
   hdr "Flash"
   row "card"   "$card"
-  row "preset" "$PRESET"
+  row "build" "$variant"
   row "tool"   "$tool"
   [[ -n "$FLASH_PORT" ]] && row "port" "$FLASH_PORT"
   [[ -n "$FLASH_SN" ]] && row "sn" "$FLASH_SN"

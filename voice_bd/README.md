@@ -325,8 +325,7 @@ Script upload restrictions and validation remain owned by firmware.
 Hardware acceptance must measure actual delivery gaps and note-on latency and
 show zero `hold`, `full`, `drop`, `bad`, and late-refill increments at supported
 loads. Host tests do not prove USB bus timing. See
-[`CDC qualification`](../channel_card/docs/cdc_validation.md) and
-[`wire protocol`](../docs/protocol.md).
+the [Channel wire protocol](../channel_card/PROTOCOL.md).
 
 Run the browser decoder, resampler and MIDI tests without a board:
 

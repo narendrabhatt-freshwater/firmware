@@ -68,6 +68,13 @@ class ChannelReleaseTests(unittest.TestCase):
         self.assertEqual(self.manifest["git_revision"],
                          self.fixture_run("git", "rev-parse", "HEAD").decode().strip())
         self.assertTrue((self.package / "app/usb.cpp").is_file())
+        self.assertTrue((self.package / "app/Makefile").is_file())
+        self.assertTrue((self.package / "PROTOCOL.md").is_file())
+        self.assertFalse((self.package / "docs").exists())
+        self.assertFalse((self.package / "cmake").exists())
+        self.assertFalse((self.package / "CMakeLists.txt").exists())
+        self.assertFalse((self.package / "CMakePresets.json").exists())
+        self.assertFalse((self.package / "berry_runtime/CMakeLists.txt").exists())
         self.assertTrue((self.package / "flash.sh").stat().st_mode & 0o111)
         self.assertTrue((self.package / "berry_compiler/berry.linux-arm64").stat().st_mode & 0o111)
         for p in self.package.rglob("*"):

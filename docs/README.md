@@ -1,7 +1,7 @@
 # Freshwater documentation
 
 Channel documentation is maintained in `channel_card/README.md`,
-`channel_card/docs/protocol.md`, and `berry_compiler/README.md`. The Channel
+`channel_card/PROTOCOL.md`, and `berry_compiler/README.md`. The Channel
 package includes both firmware and compiler, with no images or test assets.
 This shared directory retains other products' references and historical
 authoring material. Root and Effect Card protocol copies remain shared
