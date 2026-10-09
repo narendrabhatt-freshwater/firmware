@@ -180,9 +180,9 @@ static void session_and_counter_test(void) {
   frame(USB_MSG_BODY,0,254,data,742);
   CHECK(StreamRing_PendingFill(0)==998 && StreamRing_SofCount()==1);
   CHECK(StreamRing_StartNote(0)==0);
-  StreamRing_ArmPending(0,1,0); // Session wraps, old queued note must be ignored.
+  StreamRing_ArmPending(0,1,0);
   frame(USB_MSG_BODY,0,254,data,20);
-  CHECK(StreamRing_LastBodySequence()==3 && StreamRing_PendingFill(0)==0);
+  CHECK(StreamRing_LastBodySequence()==3 && StreamRing_PendingFill(0)==0 && StreamRing_CurrentFill(0)==1018);
   frame(USB_MSG_BODY,0,0,data,998);
   CHECK(StreamRing_SofCount()==2 && StreamRing_PendingFill(0)==998);
   CHECK(StreamRing_StartNote(0)==0);

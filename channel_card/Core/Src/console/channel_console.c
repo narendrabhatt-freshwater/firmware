@@ -227,24 +227,19 @@ static void RS485_Reply(const char *s)
  * plus eight session/free-space/refill-budget/duration records and a terminator; no CRC.
  */
 #define VQ_FRAME_LEN 61u
-_Static_assert(STREAM_RING_SAMPLES <= 8191u, "vq refill format uses 13-bit free space");
+_Static_assert(STREAM_RING_SAMPLES <= 4095u, "vq format uses 12-bit physical free space");
 #define VQ_SYNC_0 0xA5u
 #define VQ_SYNC_1 0x5Au
 #define VQ_CARD_CHANNEL 0x43u
-#define VQ_TYPE_STATUS 0x0Cu
+#define VQ_TYPE_STATUS 0x0Eu
 _Static_assert(NOTE_BANK_VOICES == 8u,
                "vq binary frame packs exactly eight voices");
-/* Even the slowest supported playback fits the 15-bit 0.1 ms duration. */
-_Static_assert((STREAM_RING_SAMPLES + ATTACK_BANK_LEN) * 16u * 10000u / 48000u < 32768u,
-               "vq duration must cover a complete ring and attack at minimum speed");
 
 static uint16_t rs485_vq_sequence;
-static void RS485_ReplyVq(uint8_t active_mask, uint8_t pending_mask,
-                          const uint8_t *sessions,
-                          const uint32_t *remaining_us,
-                          const uint16_t *free_samples,
-                          uint16_t body_sequence, uint8_t body_age_ms, const uint16_t *refill_samples)
-{
+static void RS485_ReplyVq(uint8_t active_mask, uint8_t pending_mask, const uint8_t *sessions,
+                          const uint8_t *current_sessions, const uint32_t *remaining_us,
+                          const uint16_t *free_samples, uint16_t body_sequence, uint8_t body_age_ms,
+                          const uint16_t *refill_samples) {
   uint8_t frame[VQ_FRAME_LEN] = {0};
   frame[0] = VQ_SYNC_0;
   frame[1] = VQ_SYNC_1;
@@ -262,18 +257,15 @@ static void RS485_ReplyVq(uint8_t active_mask, uint8_t pending_mask,
   for (uint8_t i = 0u; i < NOTE_BANK_VOICES; ++i)
   {
     uint8_t *record = frame + 12u + 6u * i;
-    record[0] = sessions[i];
-    record[1] = (uint8_t)free_samples[i];
-    record[2] = (uint8_t)(free_samples[i] >> 8u);
-    /* 0.1 ms units, rounded down so urgency is never reported late. */
     uint32_t duration = remaining_us[i] / 100u;
-    if (duration > 32767u) duration = 32767u;
-    /* Pack free u13, demand u12 and duration u15 into five bytes. */
-    record[2] |= (uint8_t)((refill_samples[i] & 0x07u) << 5u);
-    record[3] = (uint8_t)(refill_samples[i] >> 3u);
-    record[4] = (uint8_t)(((refill_samples[i] >> 11u) & 1u) |
-                          ((duration & 0x7Fu) << 1u));
-    record[5] = (uint8_t)(duration >> 7u);
+    if (duration > 2047u)
+      duration = 2047u;
+    record[0] = sessions[i];
+    record[1] = current_sessions[i];
+    record[2] = (uint8_t)free_samples[i];
+    record[3] = (uint8_t)((free_samples[i] >> 8u) | ((refill_samples[i] & 15u) << 4u));
+    record[4] = (uint8_t)((refill_samples[i] >> 4u) | ((duration & 7u) << 5u));
+    record[5] = (uint8_t)(duration >> 3u);
   }
   frame[VQ_FRAME_LEN - 1u] = '\n';
 
@@ -688,7 +680,7 @@ static void Console_CmdVoiceQuery(void)
   uint8_t mask = 0u;
   uint16_t free_samples[NOTE_BANK_VOICES];
   uint8_t pending_mask = 0u;
-  uint8_t sessions[NOTE_BANK_VOICES];
+  uint8_t sessions[NOTE_BANK_VOICES], current_sessions[NOTE_BANK_VOICES];
   uint32_t remaining_us[NOTE_BANK_VOICES];
   uint16_t refill_samples[NOTE_BANK_VOICES];
   uint16_t body_sequence;
@@ -703,6 +695,7 @@ static void Console_CmdVoiceQuery(void)
       if (NoteBank_IsActive(i) != 0u) mask |= (uint8_t)(1u << i);
       free_samples[i] = (uint16_t)StreamRing_FreeLevel(i);
       sessions[i] = StreamRing_TargetSession(i);
+      current_sessions[i] = StreamRing_CurrentSession(i);
       remaining_us[i] = NoteBank_RemainingUs(i);
       refill_samples[i] = NoteBank_RefillSamples5ms(i);
       if (StreamRing_HasPending(i) != 0u)
@@ -717,8 +710,8 @@ static void Console_CmdVoiceQuery(void)
 
   if (!console_via_usb)
   {
-    RS485_ReplyVq(mask, pending_mask, sessions, remaining_us, free_samples,
-                 body_sequence, body_age_ms, refill_samples);
+    RS485_ReplyVq(mask, pending_mask, sessions, current_sessions, remaining_us, free_samples,
+                  body_sequence, body_age_ms, refill_samples);
     return;
   }
 

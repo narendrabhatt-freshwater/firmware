@@ -5,6 +5,16 @@ alwaysApply: true
 
 # Firmware Modules and Robust Coding
 
+## Root-cause fixes and user agreement
+
+Follow the repository [coding and debugging rules](../../AGENTS.md).
+Reproduce and establish the actual cause before changing production behavior.
+Explain the evidence and proposed fix to the user and agree on the solution first.
+Testing authorization does not authorize an additional behavior change.
+Do not hide failures with arbitrary delays, larger timeouts, retries, silent
+fallbacks, resets, or reconnect requirements. Fix the underlying defect and
+report the limits of the regression testing.
+
 ## Language (honest status)
 
 - **MCU firmware today is C** (CubeMX + HAL + TinyUSB, `enable_language(C ASM)`).

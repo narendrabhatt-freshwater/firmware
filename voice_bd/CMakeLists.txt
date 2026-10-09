@@ -59,6 +59,18 @@ add_dependencies(voicebdgui voicebd_gui_program)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(voicebd_stream_test stream_test.cpp)
+    target_compile_features(voicebd_stream_test PRIVATE cxx_std_17)
+    target_compile_options(voicebd_stream_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+    target_link_libraries(voicebd_stream_test PRIVATE PkgConfig::SERIAL Threads::Threads)
+    add_test(NAME voicebd_stream COMMAND voicebd_stream_test)
+
+    add_executable(voicebd_rs485_event_test rs485_event_test.cpp)
+    target_compile_features(voicebd_rs485_event_test PRIVATE cxx_std_17)
+    target_compile_options(voicebd_rs485_event_test PRIVATE -Wall -Wextra -Werror)
+    target_link_libraries(voicebd_rs485_event_test PRIVATE PkgConfig::SERIAL Threads::Threads)
+    add_test(NAME voicebd_rs485_events COMMAND voicebd_rs485_event_test)
+
     add_executable(voicebd_gui_test voicebdgui_test.cpp voicebd.cpp)
     target_compile_features(voicebd_gui_test PRIVATE cxx_std_17)
     target_compile_options(voicebd_gui_test PRIVATE -Wall -Wextra -Werror)

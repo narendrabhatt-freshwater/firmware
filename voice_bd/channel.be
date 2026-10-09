@@ -7,13 +7,12 @@ def on_note_on(key, velocity)
     state attack_slope
 
     # Amplitude choices (leave only one assignment active).
-    level = velocity / 127.0                 # linear MIDI velocity
-    # level = 1                              # ignore MIDI velocity
+    # level = velocity / 127.0              # linear MIDI velocity
+    level = 1                               # ignore MIDI velocity
     # level = pow(velocity / 127.0, 2)       # quieter, squared response
 
-    # Higher velocity gives a faster attack:
-    # velocity 127 ~= 50 ms, 64 ~= 100 ms, and 32 ~= 200 ms.
-    attack_slope = level * level * 20
+    # Five-second attack to full level, independent of MIDI velocity.
+    attack_slope = level / 5.0
 
     # Sustain choices (leave only one assignment active).
     sustain = level * 0.9             # hold at 90% of the peak
@@ -25,7 +24,7 @@ def on_note_on(key, velocity)
 
     if stage != 0
         # A newer pending note replaces the previous pending note while the
-        # current voice-steal fade continues. `level` already has its velocity.
+        # current voice-steal fade continues.
         if stage == 5
             return
         end
@@ -96,9 +95,9 @@ def on_note_on(key, velocity)
 
     set_amplitude(0)
     stage = 1
-    ramp(level, attack_slope)                 # velocity controls attack time
+    ramp(level, attack_slope)                 # zero -> peak in five seconds
 
-    # Keep RGB on for the note, with brightness controlled by velocity.
+    # Keep RGB on for the note, with brightness matching the peak level.
     led(0.1, 0.4, 1.0, level)
 end
 
@@ -115,7 +114,7 @@ def on_ramp_end()
         start_note()
         set_amplitude(0)
         stage = 1
-        ramp(level, attack_slope)             # replacement keeps its velocity attack
+        ramp(level, attack_slope)             # replacement uses the same five-second attack
 
         led(0.1, 0.4, 1.0, level)              # show the replacement note
         return

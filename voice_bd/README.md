@@ -223,15 +223,19 @@ Note-on/off calls write one silent RS485 command directly and return after the
 write, without waiting for an acknowledgement or appending `vq`. The separate
 status worker continues polling `vq` for BODY credit. The shared bus lock can
 delay a note while an existing status/control exchange finishes.
+The port is flushed only during connection setup, never before individual
+status/control requests. On the macOS FTDI path, purging input while note writes
+are still queued can discard those events, causing missed starts or stuck notes.
 Use this host with protocol-v2 firmware (`cafe:4032`); HELLO rejects incompatible
 firmware. Re-enumeration can change the OS port suffix/path, so update the port
 configuration for the board's unchanged `CHCARD-<UID>` identity.
 
 The USB worker uses nonblocking I/O, a readiness wait and explicit MIDI/status
-wakeups. Active voices retain five-ms demand forecasting with a two-ms reserve;
-the worker may wake between status replies to refill them. There are no audio
-callbacks, timed idle packets or `sp_drain()` calls per USB block. Each BODY block carries an
-five-byte header and up to 1024 signed-int8 source samples for one voice.
+wakeups. The worker selects each BODY frame using current and pending session credit
+and card-reported deadlines. There are no audio
+callbacks, timed idle packets or `sp_drain()` calls per USB block. Each BODY block carries a
+five-byte header; this host sends up to 128 signed-int8 source samples per frame
+(the wire protocol permits 1024).
 The header is type, target, session and a little-endian 16-bit payload length.
 Note start is inferred from the armed session; BODY acknowledgements use an
 implicit cumulative counter initialized by HELLO. Control/upload requests are
@@ -250,15 +254,30 @@ This is a priority policy, not a 1 ms CPU reservation. Both platforms still
 need hardware timing qualification.
 Note-off and all-notes-off remain available over RS485 after USB failure.
 
-`vq` supplies exact writable credit. Prepared/unacknowledged samples, including
-older sessions, remain charged against the physical voice ring. At most 8232
-wire bytes are outstanding, with ready blocks batched into each USB write.
-Prediction lasts at most five ms after fresh status; firmware retains a block
-that does not yet fit, applying backpressure without dropping or overwriting it. Refills favor endangered voices, new-note priming
-and voices with fewer samples in flight; upload chunks use spare capacity.
-Polling is normally 5 ms and shortens to 1 ms for high card-reported per-voice
-demand. A note-on ACK immediately wakes USB using existing credit. The card still
-starts a note after its first 998 BODY samples, at an audio boundary.
+`vq` supplies exact writable credit for a shared 4080-byte pool per voice.
+Current and pending sessions share that pool; outgoing audio continues receiving
+BODY data until the script switches notes. Unacknowledged frames remain charged
+in 16-byte allocation units, including frames from older sessions. The host
+selects one BODY frame at a time so another voice can become eligible between
+frames. The outstanding limit remains 8232 wire bytes.
+
+Prepared coverage is bounded by the existing 5 ms poll interval plus 5 ms reply
+deadline. Replacement prefetch accounts for the cached attack head and maximum
+supported playback increment, without assuming a script fade duration. Pending
+notes trigger another status poll immediately; otherwise polls are at most
+5 ms apart. Idle starts retain the 998-sample gate. An active voice starts its
+scripted steal fade at the next audio boundary without waiting for that gate.
+
+Host and Channel Card must both support the 61-byte **0x0E** status frame, which
+reports current and target sessions. Older 0x0C status firmware is incompatible
+with this host even though USB HELLO still uses protocol version 2.
+
+**Qualification limit:** the isolated 5 ms steal hardware run passed sustain,
+single-voice steals with seven continuing voices, eight C5 steals and mixed-pitch
+steals without added holds or transport failures. Zero and 50 ms variants still
+underran; this is not a general solution for arbitrary script fades. The fixture
+`channel_card/tests/fixtures/stream_handover.bec` reproduces the tested envelope;
+normal app runs keep the user's own envelope settings.
 
 Sample loading keeps the existing signed-16 host PCM and converts only the
 transmitted attack/BODY bytes to signed eight-bit. Failed attack uploads leave
@@ -275,7 +294,7 @@ Run the browser decoder, resampler and MIDI tests without a board:
 
 ```sh
 cmake -S voice_bd -B /tmp/voicebd-tests
-cmake --build /tmp/voicebd-tests --target voicebd_gui_test
+cmake --build /tmp/voicebd-tests --target voicebd_gui_test voicebd_stream_test voicebd_rs485_event_test
 ctest --test-dir /tmp/voicebd-tests --output-on-failure
 ```
 

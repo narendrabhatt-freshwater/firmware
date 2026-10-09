@@ -92,7 +92,9 @@ static uint8_t dispatch(const uint8_t *h)
     if (!n || h[1]>=8 || h[2]>=USB_STREAM_SESSION_MOD) { fail_link(h,"invalid BODY"); return 1; }
     /* Prediction may temporarily run ahead of consumption. Retain this whole
      * block and apply USB backpressure; never overwrite or drop ring samples. */
-    if (StreamRing_TargetSession(h[1])==h[2] && StreamRing_FreeLevel(h[1])<n) return 0;
+    if ((StreamRing_TargetSession(h[1]) == h[2] || StreamRing_CurrentSession(h[1]) == h[2]) &&
+        StreamRing_FreeLevel(h[1]) < ((n + 15u) / 16u) * 16u)
+      return 0;
     /* Stale notes are acknowledged/ignored by the ring; no stale data becomes
      * audible. Capacity errors are explicit, never silently dropped. */
     int accepted=StreamRing_WriteBody(h[1],h[2],(const int8_t *)p,n);

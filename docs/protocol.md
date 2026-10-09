@@ -379,7 +379,11 @@ BODY payload contains 1..1024 signed-int8 samples for one voice. RS485 note-on
 arms a pending session; its first matching BODY establishes note start while
 that pending ring is empty. Later blocks append, including across promotion
 to the playing note. There is no START flag or per-note sequence on USB.
-The existing 998-sample startup gate is independent of transport block size.
+Idle starts retain the 998-sample startup gate. For an already playing voice,
+the note-on event starts its script immediately; `start_note()` promotes the
+pending queue when the script finishes the steal fade. Current-session BODY
+remains accepted until that switch. Both queues share the original 4080-byte
+pool, allocated in 16-byte blocks.
 Samples and the DAC are still 48 kHz source format/output; scripts control the
 playback increment.
 
@@ -398,12 +402,13 @@ complete blocks could have been processed since that snapshot. DTR, note
 resets and diagnostic-counter clearing do not reset the BODY counter; MCU
 initialization does. Reopening always negotiates the current baseline.
 
-The existing RS485 status frame remains byte-for-byte compatible:
+The dual-session RS485 status frame remains 61 bytes, but uses type 0x0E.
+It is incompatible with the earlier 0x0C layout; update host and card together:
 
 ```text
 0..1    a5 5a
 2       43 ('C')
-3       0c (status type)
+3       0e (dual-session status type)
 4       active voice mask
 5       pending voice mask
 6..7    ring capacity u16 (4080)
@@ -411,43 +416,43 @@ The existing RS485 status frame remains byte-for-byte compatible:
 9       age of last processed BODY, rounded-up audio ms; 255 unknown/expired
 10..11  cumulative processed BODY counter u16
 12..59  eight six-byte records:
-          session u8
-          free space u13, five-ms source demand u12, remaining time u15
+          target session u8, current session u8
+          free space u12, five-ms source demand u9, remaining time u11
           packed little-endian; time units are 100 microseconds
+          remaining time is rounded down and clamped at 204.7 ms
 60      0a
 ```
 
 Free space and acknowledgement are captured in the same snapshot. Each fresh
-snapshot grants `max(0, reported free - all unacknowledged samples for that
-physical voice)`, including outstanding blocks from older sessions. Credit is
-charged when a block is prepared, including partially written blocks. The host
-then advances the playing voice's refill balance using the reported five-ms
-demand, keeping the previous two-ms safety reserve. CDC prediction is anchored
-at status receipt and capped at the next five milliseconds; it never uses a
-synthetic isochronous packet clock. Fresh status reconciles the balance and all
-unacknowledged samples. Firmware backpressure remains authoritative if a pitch
-or script change makes consumption slower than predicted.
+snapshot grants `max(0, reported free - unacknowledged allocation charges)` for
+that physical voice. Each frame is charged its payload rounded up to 16 bytes,
+including partially written frames and frames from older sessions. Reservations
+remain charged through promotion or cancellation until released; no credit is
+returned over USB.
 
-At most 8232 wire bytes of BODY are outstanding, tracked in up to 64 block
-records. Small blocks do not prematurely exhaust an eight-packet window. Ready
-blocks are batched into a USB write without waiting to fill a batch. Missing
-status stops further prediction; nothing is sent merely to keep USB busy.
+The host retains source positions for the outgoing and replacement sessions.
+It chooses the eligible session with the earliest deadline, rotating ties,
+and sends at most 128 samples per BODY frame before selecting again. At most
+8232 wire bytes may be outstanding, tracked in up to 64 frame records. Prepared
+coverage is bounded by the 5 ms poll interval plus the 5 ms reply deadline.
+Replacement prefetch subtracts the cached source head from that coverage at the
+maximum supported playback increment, allowing two interpolation samples. This
+budget does not depend on the script's steal duration.
 
-The host polls every 5 ms normally. For high per-voice demand it uses
-`clamp(capacity * 5 / (4 * max_active_five_ms_demand), 1, 5)` milliseconds to
-obtain roughly four snapshots per ring. It uses card-reported demand, not host
-pitch calculations. Note commands retain serialized RS485 access and MIDI
-commands take the next turn after an in-progress poll.
+Pending or not-yet-observed note sessions trigger another poll immediately.
+Otherwise the poll interval is
+`clamp(capacity * 5 / (4 * max_active_five_ms_demand), 1, 5)` milliseconds.
+Note events are fire-and-forget RS485 writes; a successful write schedules an
+immediate status poll. BODY starts only once the corresponding session appears
+in status. MIDI commands take the next bus turn after an in-progress poll.
+Upload blocks use spare capacity, with priming and urgent playback taking
+precedence.
 
-After a note-on ACK the USB worker wakes immediately using existing confirmed
-credit. It prioritizes playing voices within 3 ms of their reported deadline,
-then initial 998-sample priming, then other refills. Within a priority group,
-voices with fewer current-session samples in flight come first, followed by
-reported deadline and rotating ties. Upload blocks use spare capacity; playing
-voices within 10 ms and initial priming take precedence over uploads. A running
-forecast may wake the worker each millisecond, but no idle packets are sent.
-Normal refills gather at least a five-ms demand block where capacity allows;
-endangered voices and initial priming do not wait for that batching threshold.
+This host policy passed the isolated 5 ms hardware steal test; zero and 50 ms
+variants still produced underruns. Card-reported five-ms BODY demand can discount
+cached attack data and must not be mistaken for a stable playback rate. The
+current policy is not qualified for arbitrary script envelopes or transport
+loads; passing native tests does not establish USB timing.
 
 The USB receive ISR rearms immediately into an 8192-byte queue in fast DTCM.
 PCD DMA is disabled, so USB buffers do not need the uncached audio DMA region. A full queue

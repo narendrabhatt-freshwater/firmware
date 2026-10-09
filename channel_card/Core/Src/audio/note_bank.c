@@ -262,27 +262,12 @@ static int NoteBank_InterpBody(uint8_t note, int32_t *out)
 {
   uint32_t phase = note_body_frac[note];
   uint32_t i0 = phase >> 16;
-  uint32_t filled = StreamRing_FillLevel(note);
-  int8_t s0;
-  int8_t s1;
-
-  if (out == NULL || filled == 0u || i0 >= filled)
-  {
+  int8_t taps[2];
+  if (out == NULL || StreamRing_Read(note, i0, taps, 2u) != 0) {
     StreamRing_ObserveFill(note);
     return -1;
   }
-  if (i0 + 1u >= filled)
-  {
-    StreamRing_ObserveFill(note);
-    return -1;
-  }
-
-  if (StreamRing_GetRel(note, i0, &s0) != 0 ||
-      StreamRing_GetRel(note, i0 + 1u, &s1) != 0)
-  {
-    StreamRing_ObserveFill(note);
-    return -1;
-  }
+  int8_t s0 = taps[0], s1 = taps[1];
   *out = (int32_t)((int64_t)s0 * 16777216 +
                    (int64_t)(s1 - s0) * (phase & 0xFFFFu) * 256);
   return 0;
@@ -290,18 +275,18 @@ static int NoteBank_InterpBody(uint8_t note, int32_t *out)
 
 static void NoteBank_AdvanceBody(uint8_t note, uint32_t increment)
 {
+  int8_t consumed[2];
   note_body_frac[note] += increment;
-  while (note_body_frac[note] >= BODY_ADVANCE_PHASE)
-  {
-    if (StreamRing_FillLevel(note) == 0u)
-    {
+  while (note_body_frac[note] >= BODY_ADVANCE_PHASE) {
+    uint32_t count = note_body_frac[note] >> 16;
+    if (count > 2u)
+      count = 2u;
+    count = StreamRing_Consume(note, consumed, count);
+    if (!count)
       break;
-    }
-    int8_t sample;
-    if (StreamRing_GetRel(note, 0u, &sample) == 0)
-      NoteBank_RememberBody(note, sample);
-    StreamRing_Advance(note, 1u);
-    note_body_frac[note] -= PHASE_ONE;
+    for (uint32_t i = 0; i < count; i++)
+      NoteBank_RememberBody(note, consumed[i]);
+    note_body_frac[note] -= count * PHASE_ONE;
   }
 }
 
@@ -455,7 +440,8 @@ static void NoteBank_DrainCmd(uint8_t note)
       NoteBank_HardOff(note);
       return;
     }
-    if (StreamRing_PendingFill(note) < USB_STREAM_PRIME_SAMPLES) return;
+    if (note_active[note] == 0u && StreamRing_PendingFill(note) < USB_STREAM_PRIME_SAMPLES)
+      return;
     note_cmd[note] = NOTE_CMD_NONE;
     NoteBank_StartVoice(note, note_cmd_key[note], note_cmd_velocity[note]);
     (void)NoteBank_VmDispatch(FW_VM_CHANNEL_HANDLER_NOTE_ON, note);
@@ -1016,8 +1002,8 @@ uint16_t NoteBank_RefillSamples5ms(uint8_t note)
 {
   uint32_t inc;
   uint64_t advance;
-  if (note >= NOTE_BANK_VOICES || note_active[note] == 0u ||
-      StreamRing_HasPending(note) != 0u) return 0u;
+  if (note >= NOTE_BANK_VOICES || note_active[note] == 0u)
+    return 0u;
   inc = note_observed_inc[note];
   if (inc < note_inc[note]) inc = note_inc[note];
   if (inc < note_inc_tgt[note]) inc = note_inc_tgt[note];

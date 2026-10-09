@@ -3,9 +3,6 @@
  * @file    stream_ring.h
  * @brief   Per-voice BODY FIFOs stored contiguously in DTCM, filled from USB.
  *
- * SPSC: USB writes from main, the playhead reads in I2S. A full FIFO drops
- * the write (never unread samples). An empty FIFO is an underrun.
- *
  * Each CDC BODY block carries a voice/session and up to 1024 signed-int8
  * samples. The firmware counts processed blocks for cumulative RS485 ACKs.
  * Note-on arms the replacement origin; its first matching BODY starts it.
@@ -39,6 +36,8 @@ extern "C"
     uint8_t session;
     uint8_t sof;
     uint8_t pending;
+    uint8_t bank, offset;
+    uint16_t head, tail, cursor;
     uint8_t active;
   } StreamRing_Write_t;
 
@@ -117,6 +116,8 @@ extern "C"
    * @retval -1 offset past wr (underrun / not yet written)
    */
   int StreamRing_GetRel(uint8_t voice, uint32_t offset, int8_t *out);
+  int StreamRing_Read(uint8_t voice, uint32_t offset, int8_t *out, uint32_t count);
+  uint32_t StreamRing_Consume(uint8_t voice, int8_t *out, uint32_t count);
 
   /** Drop up to n unread samples from rd (playhead consumed them). */
   void StreamRing_Advance(uint8_t voice, uint32_t n);
@@ -125,9 +126,10 @@ extern "C"
   uint32_t StreamRing_PendingFill(uint8_t voice);
   uint32_t StreamRing_FillLevel(uint8_t voice);
 
-  /** Exact producer credit: capacity - current fill - pending fill. */
   uint32_t StreamRing_FreeLevel(uint8_t voice);
 
+  uint8_t StreamRing_CurrentSession(uint8_t voice);
+  uint32_t StreamRing_CurrentFree(uint8_t voice);
   uint8_t StreamRing_HasPending(uint8_t voice);
   uint8_t StreamRing_TargetSession(uint8_t voice);
   uint32_t StreamRing_TargetFill(uint8_t voice);
