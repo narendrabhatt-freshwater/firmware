@@ -2,3 +2,5 @@
 /berry
 /berry.exe
 *.bec
+*.berry-bytecode.tmp
+*.wrapped.tmp

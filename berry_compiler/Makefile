@@ -5,7 +5,7 @@ TARGET   ?= native
 ZIG      ?= zig
 CFLAGS   ?= -O2
 
-CPPFLAGS += -Iconfig -Ivendor/berry/src -Ishared/include
+CPPFLAGS += -Iconfig -Ivendor/berry/src -Ishared/include/freshwater -Ishared/include/script
 LDLIBS   += -lm
 
 EXEEXT :=

@@ -4,16 +4,9 @@
         {
             "name": "default",
             "hidden": true,
-            "generator": "Ninja",
-            "binaryDir": "${sourceDir}/build/${presetName}",
+            "generator": "Unix Makefiles",
+            "binaryDir": "${sourceDir}/build/release",
             "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake"
-        },
-        {
-            "name": "Debug",
-            "inherits": "default",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug"
-            }
         },
         {
             "name": "Release",
@@ -24,10 +17,6 @@
         }
     ],
     "buildPresets": [
-        {
-            "name": "Debug",
-            "configurePreset": "Debug"
-        },
         {
             "name": "Release",
             "configurePreset": "Release"

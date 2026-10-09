@@ -1,206 +1,122 @@
-# Channel Card — Firmware
+# Channel Card firmware and commands
 
-Standalone checkouts (SVN trunk) ship the toolchain handbook as
-[`docs/firmware_handbook.md`](docs/firmware_handbook.md) and the wire
-contract as [`docs/protocol.md`](docs/protocol.md). In the git monorepo
-those same files live at the repository root (`README.md`,
-[`docs/protocol.md`](docs/protocol.md) here and
-[`../docs/protocol.md`](../docs/protocol.md)).
+The STM32H725 Channel Card mixes eight scripted sample voices and optional
+wavetable oscillators onto CS4304 DAC channel 1. Channels 2–4 provide control
+voltages. RS485 carries commands and status; USB CDC carries framed binary
+sample data and uploads.
 
-|                |                                                              |
-| -------------- | ------------------------------------------------------------ |
-| MCU            | STM32H725xG                                                  |
-| CMake target   | `channel_MCU`                                                |
-| CubeMX project | `channel_MCU.ioc`                                            |
-| Linker script  | `STM32H725xG_flash.ld`                                       |
-| USB stack      | Custom CDC over STM32 HAL PCD                          |
-| USB device     | One binary CDC port: BODY + uploads             |
-| RS485 address  | `c:`                                                         |
+The [Berry guide](../berry_compiler/README.md) covers the matching compiler,
+script language, runtime functions, and examples. In an SVN release the
+compiler is included in `berry_compiler/`. The [wire protocol](docs/protocol.md)
+specifies framing, uploads, and flow control.
 
-Each board exposes a stable USB serial number derived from its 96-bit STM32
-hardware UID: `CHCARD-<24 hex digits>`. On macOS, the CDC path therefore looks
-like `/dev/cu.usbmodemCHCARD_<24 hex digits>...`; the OS chooses the suffix.
-The new CDC-only descriptor can change that suffix. Flashing preserves the UID.
+## Build
 
-## Build artifacts
+Install Make, CMake 3.22 or later, and the GNU Arm embedded toolchain
+with newlib (`arm-none-eabi-gcc`, `arm-none-eabi-g++`, `arm-none-eabi-objcopy`,
+and `arm-none-eabi-size` on PATH). No build dependencies are downloaded.
 
-Each firmware link produces `channel_MCU.bin` plus a timestamped copy such as
-`channel_MCU_20260917_142245.bin`. The timestamp uses the build computer's local
-timezone. Both binaries contain identical firmware. A matching `.json` records
-the SHA-256 checksum, size, build profile, compiler version and RS485 baud rate.
-Use `./scripts/fw build channel --release` from the repository root for a Release
-build. No Git revision is added to the filename.
+From `channel_card/app/`, run:
 
-## What this card does
-
-Receives sample blocks from the PC over USB CDC into **per-voice sustain rings**, and
-plays the 8-voice SAMPLE / note bank out of a **CS4304 4-channel DAC**
-over I2S.
-
-- **CH1** — SAMPLE note-bank mix (`n0..n7`). Binary CDC BODY transport fills the
-  per-voice rings used for sustain. Berry may append oscillators sourced from
-  eight looping wavetables reserved at attack-bank IDs 248…255.
-- **CH2–CH4** — firmware-generated DC control voltages, clocked purely
-  by I2S with no USB involvement (0 V at boot)
-- Text console over RS485 (`c:` prefix); USB is binary-only
-
-The note bank has no firmware-owned envelope policy. After each reset, upload a
-valid Channel Berry ABI2 program with `cmi::Core` before sending note commands.
-Until then the card stays silent and replies `err:no-program`.
-
-### USB streaming
-
-For the message header, packet types, annotated hex examples and note sequence,
-see the [USB packet guide](docs/usb_packet_guide.md).
-
-Debug, Release, and host integration tests all use the same production SAMPLE
-path: signed-int8 attacks plus USB BODY streaming. Each voice has one contiguous
-4,080-sample DTCM ring (85 ms at 48 kHz). This is the only Channel audio build
-profile.
-
-## Audio signal path
-
-Firmware / USB / playhead / I2S (including ISR vs main loop):
-[`docs/diagrams/card_data_flow.md`](docs/diagrams/card_data_flow.md).
-
-Analog wet/dry and GPIO switches:
-
-![Channel Card audio flow](docs/diagrams/channel_card_audio_flow.jpg)
-
-Green = audio, dashed red = control, tan boxes = analog switches driven
-by GPIO. Every tan box maps to one entry in the `switches[]` table in
-`Core/Src/console/channel_console.c` (boot defaults; no runtime command).
-
-### DAC channel roles
-
-The CS4304S is one 4-channel DAC doing two different jobs — **one audio
-channel and three control voltages**:
-
-| DAC ch | Role                                                | Set with                              |
-| ------ | --------------------------------------------------- | ------------------------------------- |
-| CH1    | **Audio** — SAMPLE note-bank mix (`n0..n7`)         | `g 1 <dB>`                            |
-| CH2    | **CV → VCA** gain                                   | `Audio_SetDCLevel(2, …)` (boot: 0 V)  |
-| CH3    | **CV → VCF cutoff**                                 | `Audio_SetDCLevel(3, …)` (boot: 0 V)  |
-| CH4    | **CV → VCF resonance**                              | `Audio_SetDCLevel(4, …)` (boot: 0 V)  |
-
-So CH2–CH4 are not heard directly: they steer the analog blocks. The
-CV levels are driven through `audio_tone_dc.c` (per-channel zero
-calibration, slew limiting); there is currently no console command for
-them — firmware sets 0 V at boot.
-
-### The two output routes
-
-Audio from CH1 reaches the output by either — or both — of:
-
-- **Dry:** `bypass` switch → straight to `out`
-- **Wet:** through SCF and/or VCF → **VCA** → `vca` switch → `out`
-
-For bring-up/verification, first upload a Channel VM program to voice 0, then
-use the note bank: `n0 on 69` plays A4 onto CH1 with the default tuning. Bypass
-is enabled at boot, so the tone is heard clean and filter-free at `out`.
-`clear` and `n off` hard-stop all voices, discard queued playback data and reset
-Berry state at the next audio boundary. Loaded samples and programs are retained.
-
-### Switch reference
-
-| Switch    | Diagram block        | Function                                  | Polarity        |
-| --------- | -------------------- | ----------------------------------------- | --------------- |
-| `bypass`  | bypass (dry → out)   | Route unprocessed CH1 to the output      | active-low      |
-| `scf`     | scf sw (post-filter) | Pass the SCF output on to the VCA        | active-low      |
-| `hp_ctl`  | mux 2:1 select       | SCF input: HP stage (on) or direct (off) | **active-high** |
-| `vcf`     | vcf path enable      | Feed CH1 into the VCF block              | active-low      |
-| `lp`      | vcf → lp             | Take the VCF **low-pass** tap            | active-low      |
-| `bp`      | vcf → bp             | Take the VCF **band-pass** tap           | active-low      |
-| `hp`      | vcf → hp             | Take the VCF **high-pass** tap           | active-low      |
-| `vca`     | vca sw (wet → out)   | Route the VCA (wet) output to `out`      | active-low      |
-
-`hp_ctl` is the one **active-high** switch — see the `switches[]` table
-in `Core/Src/console/channel_console.c`, where its `active_low` field is
-`0` while every other entry is `1`. All switches are driven OFF at init,
-then the boot defaults turn `bypass` ON; the polarity only matters if
-you drive the GPIOs directly.
-
-The VCF taps (`lp`/`bp`/`hp`) are separate switches, not a selector —
-enabling more than one sums those responses into the VCA.
-
-### SCF clock
-
-The SCF's `lp core` cutoff is **clock ÷ 100** (a 100 kHz clock gives a
-1 kHz cutoff). The clock line is `filter_ctl` (TIM3_CH1, PC6); firmware
-holds it LOW at boot and exposes no console control for it.
-
-## Build & flash
-
-```bash
-cmake --preset Debug
+```sh
+make
 ```
 
-```bash
-cmake --build build/Debug
+This builds Release firmware and writes **`bin/channel_MCU.bin`**, beside `app/`.
+CMake/Make manage intermediate files under `build/release/` automatically.
+Use `make -j4` to build with up to four parallel jobs.
+Use `make clean` to remove this build and its output binary.
+
+Every build prints the firmware size, built baud rate, toolchain, timestamp,
+checksum, and Flash/RAM allocation by memory region and section. To view the
+last successful build without compiling or changing settings:
+
+```sh
+make info
 ```
 
-Then flash `build/Debug/channel_MCU.hex` over DFU — see
-[`docs/firmware_handbook.md`](docs/firmware_handbook.md) in an SVN
-checkout, or [`../README.md`](../README.md) §3 in the git monorepo.
+The report includes used/free bytes and percentages for Flash, DTCM, AXI SRAM
+(`RAM_D1`), `RAM_D2`, `RAM_D3`, and ITCM. Section sizes show sample storage,
+the Berry arena, DMA buffers, and the heap/stack reservation. These are linker
+allocations, including alignment, rather than measured runtime memory peaks.
+The saved report stays under `build/release/`; `bin/` contains only the binary.
 
-## Source map
+The RS485 rate is set by `BAUDRATE ?= 921600` at the top of
+[`app/Makefile`](app/Makefile). Edit that value for the normal build rate,
+or override it for a build:
 
-Hand-written modules live under `Core/Src/<domain>/` (and matching
-`Core/Inc/<domain>/`). CubeMX-generated files stay flat in `Core/Src` /
-`Core/Inc`.
+```sh
+make BAUDRATE=3000000
+```
 
-| Path                                       | Contents                                                          |
-| ------------------------------------------ | ----------------------------------------------------------------- |
-| `Core/Src/main.c`                          | Bring-up, DAC init, main loop wiring                              |
-| `Core/Src/console/channel_console.c`       | RS485 + USB CDC console and LED status                            |
-| `Core/Src/console/uart5_rx.c`              | Interrupt-driven UART5 RX ring buffer                             |
-| `Core/Src/audio/audio_bridge.c`            | USB → per-voice stream rings; CH1 note-bank mix; I2S DMA |
-| `Core/Src/audio/note_bank.c`               | n0–n7 8-voice attack/BODY SAMPLE bank                             |
-| `Core/Src/filters/note_filter.c`           | Per-voice LPF wrapper (base/effective cutoff, pitch-k, q/Q31)     |
-| `Core/Src/filters/butterworth_four_pole.c` | Reusable 4-pole DF4 Butterworth kernel                            |
-| `Core/Src/drivers/cs4304.c`                | CS4304 DAC driver (I2C)                                           |
-| `USB_APP/`                                 | Custom USB CDC device, binary BODY + uploads                    |
+Changing the rate rebuilds the affected code automatically. Plain `make`
+returns to the Makefile's value. Configure the host to use the same rate,
+with 8 data bits, no parity, and 1 stop bit (8N1).
 
-### `audio_bridge.c` — handle with care
+## Flash
 
-This file holds the playback path as measured on the board. Notable
-parts, all commented in-place:
+Install [STM32CubeProgrammer](https://www.st.com/en/development-tools/stm32cubeprog.html)
+for your host OS. The script uses its command-line programmer; CubeIDE is not
+required. Standard macOS application and Linux installation paths are detected.
+For another location, put `STM32_Programmer_CLI` on PATH or set
+`CUBE_PROGRAMMER` to the full executable path.
 
-- **BODY stream** uses custom CDC bulk reception. The USB interrupt rearms
-  64-byte receives into an 8 KB queue; main parses variable blocks up to 1024
-  samples. A full USB queue NAKs rather than discarding bytes. RS485 `vq`
-  supplies credit and five-ms demand forecasts. Early BODY blocks wait for
-  ring space; framing faults stop the transport and require reconnect. USB traffic does not clock the DAC.
-  See [qualification and limits](docs/cdc_validation.md).
-- **I2S start order matters** — the I2S1 master must be running before
-  the I2S2 slave is enabled, or the slave never shifts.
-- **I2S2 slave workarounds** — UDR wedge clearing via the TIM7 pump, and
-  `CFG2.IOSWP` to swap MISO/MOSI because the board wires PC1 to the
-  DAC's SDIN2.
-- **DMA buffers live in AXI SRAM** (`.dma_buffer` section) — DMA1 cannot
-  reach the DTCM RAM where `.bss` normally lands.
+1. Run `make` in `app/` to build the firmware.
+2. Run `./flash.sh` from `channel_card/` (or `../flash.sh` from `app/`).
+3. The script waits for USB bootloader mode. Connect the USB data cable, move
+   the BOOT switch up, and press reset. Press Ctrl+C to cancel the wait.
+4. After successful verification, move BOOT down and press reset to run.
 
-## Volume control
+Flashing uses the existing `bin/channel_MCU.bin` at `0x08000000`; it does not
+rebuild or change its baud rate. The script stops with an explanation if the
+programmer or binary is missing, USB enumeration fails, or writing or
+verification fails. With multiple bootloaders connected, identify the Channel
+Card's port and use `./flash.sh --port USB2` (substitute its port). This waits
+for that port before flashing.
+Use `./flash.sh --check` to check the programmer and binary without accessing
+the board. The script can be invoked from any directory.
 
-There is no USB speaker volume control. BODY samples pass at unity.
-Use **`g <ch> <dB>`** for CS4304 DAC trim.
+For GUI flashing, select USB in STM32CubeProgrammer, connect to the bootloader,
+download `bin/channel_MCU.bin` at `0x08000000`, and enable verification.
 
-The card applies **bypass ON** and **`g 1 0`** (0 dB CH1 DAC trim) at
-boot. **`n0`…`n7`** are eight independent sample voices summed
-onto CH1. Their uploaded scripts control tuning and amplitude. Production
-firmware has no internal oscillator; playback requires loaded attack/BODY
-sample data. `g` changes DAC attenuation on any channel.
+The running device uses USB VID/PID `cafe:4032` and a serial number derived
+from its hardware UID: `CHCARD-<24 hex digits>`. Select the corresponding CDC
+port on the host; its OS-assigned path suffix may change.
+
+## Prepare playback
+
+Programs, sample attacks, and wavetables are held in RAM and are lost on reset.
+Compile a program with the bundled Berry compiler, negotiate binary USB HELLO,
+and upload it to each voice that will be used. Upload the sample attack and
+set its root frequency with `ar`. Then select the sample and start a note:
+
+```text
+c:ar 0 261.625565
+c:n0 on 0 60 127 @1
+c:n0 off
+c:clear
+```
+
+End each command with carriage return and wait for its reply. Stream BODY data
+for the selected voice/session according to `vq` credit, including during a
+scripted release. The first pending note requires 998 BODY samples before it is
+ready for its script handler; an oscillator declaration does not bypass this
+gate. A voice without a loaded program returns `err:no-program`.
+
+The script controls pitch, amplitude, and note activation/release. It can add
+oscillators using eight uploaded wavetables. DAC channel 1 starts at 0 dB trim
+with the analog bypass route enabled. There is no USB volume control.
 
 ## Console command reference
 
 This table matches the parser in
-`Core/Src/console/channel_console.c`. Commands are case-insensitive because
+`app/channel.cpp`. Commands are case-insensitive because
 console input is converted to lowercase. End a command with carriage return.
 
 On shared RS485, prefix commands with `c:`. Replies are tagged `[C]`.
 The Channel USB port accepts only framed binary blocks.
 Successful setters normally return `ok`. Common failures are `err:syntax`,
-`err:range`, `err:unknown`, `err:no-program`, and `err:vm-busy`.
+`err:range`, `err:unknown`, `err:no-program`, `err:busy`, `err:usb`, and `err:vm-busy`.
 
 ### Playback and card control
 
@@ -209,6 +125,7 @@ Successful setters normally return `ok`. Common failures are `err:syntax`,
 | `h` / `help` / `?` | Return the live command list. |
 | `n0`…`n7 on <key> [velocity]` | Start voice 0…7 using MIDI key 0…127 and velocity 1…127; velocity defaults to 127. A valid script must already be loaded for that voice. |
 | `n0`…`n7 on <key> <velocity> @<session>` | Start a streamed note and bind BODY session 0…254 before acknowledging. Key-only commands default to velocity 127. |
+| `n0`…`n7 on <sample> <key> <velocity> @<session>` | Select sample 0…247 and arm a streamed note in one command. |
 | `n0`…`n7 off` | Release one voice. |
 | `clear` / `n off` | Hard-stop all eight voices and reset playback buffers and Berry state. |
 | `g <channel> <dB>` | Set CS4304 attenuation: channel 1…4, attenuation 0…127 dB. |
@@ -236,7 +153,6 @@ Pitch tracking uses `fc = fbase × (noteHz / 261.625565)^k`. See
 | Upload kind 1 | Binary USB | Upload sample attack ID 0…247 using 1…512 signed-int8 bytes. |
 | Upload kind 2 | Binary USB | Upload logical oscillator wave 0…7 using 2…512 signed-int8 bytes. Firmware owns its physical bank placement. |
 | `ar <id> <Hz>` | RS485 | Set the positive root frequency for attack ID 0…255. |
-| `aw <voice> <id>` | RS485 | Assign sample attack ID 0…247 to voice 0…7. IDs 248…255 are reserved wavetables. |
 | `a` | RS485 | Query loaded attack count and the 256-bit loaded mask. |
 | Upload kind 3 | Binary USB | Begin an FWSC ABI2 program upload to voice 0…7. Total container size is 20…16404 bytes. Send offset-checked chunks; the final reply confirms validation/commit. |
 | `vm` | RS485 | Query the active-program voice mask. |
@@ -245,6 +161,8 @@ Pitch tracking uses `fc = fbase × (noteHz / 261.625565)^k`. See
 | `vq` | RS485 | Query active/pending masks, BODY sessions, target fill, and exact writable credit. RS485 uses the fixed 61-byte `vq` response. |
 | `reset` | RS485 | Clear RS485 hardware RX FIFO, queued RX bytes, receive error flags, and partial command line; replies `ok:reset`. Does not reboot or clear audio/voice state. |
 | `usb` | RS485 | Query BODY transport and underrun counters. |
+| `rs485` | RS485 | Report receive drops, transmit failures, and reply truncations. |
+| `usbdev` | RS485 | Report USB peripheral and endpoint state. |
 | `usb 0` | RS485 | Clear BODY transport counters and return the new values. |
 | `cpuload [0\|1]` | RS485 | Query or enable the LED_Y DMA-refill scope probe. Low is busy; high is idle. |
 
@@ -256,15 +174,11 @@ Lifetime RX-drop counters are preserved.
 The former ASCII `al`, `wl`, and `vmload` USB operations are replaced by
 binary upload kinds 1, 2, and 3. BODY blocks can be interleaved with upload chunks.
 Full upload sequencing and reply fields are documented in
-[`../docs/protocol.md`](../docs/protocol.md).
+[wire protocol](docs/protocol.md).
 
 ### Service diagnostics
 
-| Command | Action |
-| ------- | ------ |
-
-`vm mem`, `usb`, and `cpuload` are service diagnostics;
-applications should use the high-level `cmi::Core` operations instead.
+`vm mem`, `usb`, `usbdev`, `rs485`, and `cpuload` report runtime or transport state.
 
 With `cpuload 1`, LED_Y/PB9 goes low on entry to each SPI1 DMA half-buffer
 callback and high after its 48-frame refill completes. At 48 kHz the period is
@@ -274,3 +188,85 @@ Use `cpuload 0` to return the fixed LEDs to normal operation.
 
 Pitch-track smoke with a loaded sample: `f0 300`, `fk0 1`, `n0 on 60` then
 `n0 on 72` — corner should roughly double with the octave (query `f0`).
+
+## Source layout and maintenance
+
+- `app/`: nine C++ implementations, their headers, and the Release Makefile.
+- `berry_runtime/`: first-party script runtime and shared ABI declarations;
+  `third_party/berry/` retains the vendored interpreter.
+- `core/` and `drivers/`: STM32 initialization, interrupt glue, HAL, and CMSIS.
+- `cmake/`: toolchain and CubeMX build integration.
+- `channel_MCU.ioc`, startup assembly, and `STM32H725xG_flash.ld`: hardware and
+  memory configuration.
+
+The application is split by responsibility:
+
+| Implementation | Contents | Header |
+| --- | --- | --- |
+| `audio.cpp` | Calibrated DC outputs and I2S/DMA audio bridge | `audio.h` |
+| `cs4304.cpp` | CS4304 DAC register access, initialization, gain and mute | `cs4304.h` |
+| `channel.cpp` | RS485 commands, UART5 interrupt, LEDs, script uploads | `channel.h` |
+| `voice.cpp` | Note playback, envelopes, Berry adapter | `voice.h` |
+| `filter.cpp` | Four-pole kernel and per-voice filter control | `filter.h` |
+| `oscillator.cpp` | Wavetable oscillators, routing, interpolation helpers | `oscillator.h` |
+| `samples.cpp` | Sample attack storage and playheads | `samples.h` |
+| `stream.cpp` | Per-voice BODY rings | `stream.h` |
+| `usb.cpp` | CDC device, descriptors, binary protocol, sample uploads | `usb.h` |
+
+Use simple C++17 with plain functions and structs. Exceptions, RTTI, and
+thread-safe local-static initialization are disabled. Do not add virtual
+functions, STL containers, or dynamic initialization to this application.
+Public interfaces use C linkage for generated C and the Berry runtime;
+interrupt handlers must also retain C linkage. The interpreter and generated
+STM32 sources keep their existing C implementation.
+
+Keep custom source lists in the top-level CMake file. CubeMX regenerates
+`cmake/stm32cubemx/CMakeLists.txt`. Preserve `USER CODE` markers when editing
+its generated sources. All maintained directories use lowercase names, including HAL/CMSIS
+subfolders. If CubeMX regeneration restores names such as `Core`, `Drivers`,
+`Inc`, or `Src`, lowercase those folders and their generated CMake paths before
+building. Channel USB uses HAL PCD and the custom CDC device;
+do not enable a second USB middleware stack. After regeneration, check USB
+initialization, interrupt routing, main-loop processing, custom sources, and
+linker configuration before rebuilding.
+
+Use four-space indentation, function braces on separate lines, and control-flow
+braces on the opening line. Use 79-column section comments as in the MAS
+`voicebd.cpp`, with a blank line before the following function or declaration:
+
+```c
+/* ---- read and write little-endian values -------------------------------- */
+
+```
+
+A section can group related small helpers. Comments explain purpose, contracts,
+and hardware constraints. Preserve public names, copyright notices, and vendor
+formatting. Local tests and development tools are maintained separately from
+the SVN package.
+
+The compiler's shared ABI/source snapshot and vendored Berry files must match
+this firmware revision. The host and target `berry_conf.h` configurations are
+intentionally different. Compile scripts using the compiler bundled with the
+same firmware release.
+
+## Hardware constraints
+
+Audio DMA refills 48 frames per half-buffer at 48 kHz. USB traffic does not
+clock the DAC. I2S DMA buffers use AXI SRAM because DMA1 cannot access DTCM.
+The I2S1 master must start before the I2S2 slave. I2S2 requires its existing
+underrun handling and IOSWP wiring configuration. Keep these constraints when
+maintaining the audio path.
+
+The shared RS485 transceiver requires this card's TX and enable pins to return
+to high impedance when idle. Send one command at a time and wait for its reply.
+USB bulk throughput and playback latency require hardware measurement; successful
+builds and host tests do not establish those timing guarantees.
+
+DAC channels 2–4 supply VCA gain, VCF cutoff, and VCF resonance control voltages
+respectively. Startup sets their calibrated 0 V targets before playback,
+then slews toward those targets from the first DMA buffer. No diagnostic
+tones are generated. Their calibration and slew limits are in
+`app/audio.cpp`; there is no console command to set them. The analog
+switch defaults are in `core/src/gpio.c` and `app/channel.cpp`.
+The per-voice digital filter is described in the
+[filter reference](docs/reference/note_filter_butterworth.md).

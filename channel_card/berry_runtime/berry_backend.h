@@ -1,0 +1,102 @@
+#ifndef SCRIPT_BERRY_BACKEND_H
+#define SCRIPT_BERRY_BACKEND_H
+
+#include "script_runtime.h"
+#include <setjmp.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+/* Shared heap plus one maximum-size upload scratch. This larger reserve keeps
+ * practical eight-program loads and reload fragmentation comfortably bounded;
+ * the 16 KiB payload cap remains per program, not an eight-at-maximum promise. */
+#define SCRIPT_BERRY_ARENA_SIZE (96u * 1024u)
+#define SCRIPT_BERRY_UPLOAD_SIZE FW_SCRIPT_MAX_PAYLOAD
+#define SCRIPT_BERRY_HEAP_SIZE (SCRIPT_BERRY_ARENA_SIZE - SCRIPT_BERRY_UPLOAD_SIZE)
+
+/* Instruction and cycle counts are diagnostics, not execution watchdogs. */
+
+/* ---- native voice operations -------------------------------------------- */
+
+typedef struct {
+    void *context;
+    int (*read_input)(void *, uint8_t, FwVmChannelInput, float *);
+    int (*set_amplitude)(void *, uint8_t, float);
+    int (*ramp)(void *, uint8_t, float, float);
+    int (*note_end)(void *, uint8_t);
+    void (*silence_voice)(void *, uint8_t, FwVmFault);
+    int (*set_led)(void *, uint8_t, float, float, float, float);
+    int (*discard_pending)(void *, uint8_t);
+    int (*start_note_at)(void *, uint8_t, float);
+    int (*osc)(void *, uint8_t, uint8_t, float, uint32_t *);
+    int (*route)(void *, uint8_t, uint32_t, int32_t, uint8_t, float);
+} ScriptBerryNativeOps;
+
+/* ---- shared runtime storage --------------------------------------------- */
+
+typedef union {
+    long double alignment;
+    uint8_t bytes[SCRIPT_BERRY_HEAP_SIZE];
+} ScriptBerryArena;
+
+typedef struct ScriptBerryRuntime {
+    ScriptBerryArena arena;
+    void *vm;
+    ScriptBerryNativeOps ops;
+    float state[FW_SCRIPT_CHANNEL_VOICE_COUNT][FW_SCRIPT_CHANNEL_STATE_VALUES];
+    FwVmMetrics voice_metrics[FW_SCRIPT_CHANNEL_VOICE_COUNT];
+    FwVmFault voice_fault[FW_SCRIPT_CHANNEL_VOICE_COUNT];
+    FwVmMemoryMetrics memory;
+    uint8_t active_mask;
+    uint8_t current_voice;
+    uint8_t phase;
+    uint8_t shared_valid;
+    uint8_t discard_vm;
+    uint8_t abort_active;
+    uint8_t upload_active;
+    uint8_t upload_voice;
+    uint8_t upload_header_bytes;
+    uint8_t upload_header[FW_SCRIPT_CONTAINER_HEADER_SIZE];
+    uint32_t upload_payload_bytes;
+    uint32_t upload_expected_size;
+    uint32_t upload_expected_crc;
+    uint32_t handler_instruction_start;
+    uint32_t boundary_instructions;
+    uint32_t boundary_cycles;
+    uint32_t heap_limit;
+    uint32_t allocations[4];
+    uint32_t frees[4];
+    uint32_t gc_runs[4];
+    FwVmFault pending_fault;
+    jmp_buf abort_jump;
+} ScriptBerryRuntime;
+
+/* ---- runtime lifecycle and diagnostics ---------------------------------- */
+
+void script_berry_init(ScriptBerryRuntime *, const ScriptBerryNativeOps *);
+void script_berry_stop(ScriptBerryRuntime *, uint8_t voice);
+void script_berry_stop_all(ScriptBerryRuntime *);
+/* Audio-boundary operation: preserve programs, readiness and faults. */
+void script_berry_reset_state_all(ScriptBerryRuntime *);
+uint8_t script_berry_is_active(const ScriptBerryRuntime *, uint8_t voice);
+uint8_t script_berry_active_mask(const ScriptBerryRuntime *);
+FwVmFault script_berry_fault(const ScriptBerryRuntime *, uint8_t voice);
+const FwVmMetrics *script_berry_voice_metrics(const ScriptBerryRuntime *, uint8_t);
+const FwVmMemoryMetrics *script_berry_memory_metrics(ScriptBerryRuntime *);
+void script_berry_boundary_begin(ScriptBerryRuntime *);
+void script_berry_record_cycles(ScriptBerryRuntime *, uint8_t, uint32_t);
+int script_berry_dispatch(ScriptBerryRuntime *, FwVmChannelHandler, uint8_t);
+/* ---- compiled program uploads ------------------------------------------- */
+
+int script_berry_upload_begin(ScriptBerryRuntime *, uint8_t voice);
+int script_berry_upload_feed(ScriptBerryRuntime *, const void *, size_t);
+int script_berry_upload_commit(ScriptBerryRuntime *);
+void script_berry_upload_abort(ScriptBerryRuntime *);
+uint8_t script_berry_upload_is_active(const ScriptBerryRuntime *, uint8_t);
+
+/* Berry port hooks selected by berry_conf.h. */
+void *script_berry_malloc(size_t);
+void script_berry_free(void *);
+void *script_berry_realloc(void *, size_t);
+
+#endif

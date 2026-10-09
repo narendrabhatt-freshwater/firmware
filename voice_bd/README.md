@@ -185,6 +185,44 @@ Input: 48 kHz, 16-bit PCM WAV, mono or stereo. Build requires RtMidi, libserialp
 
 Use `-h` to display the version, product identifier, and usage.
 
+While `voicebd` is running, type a colon command and press **Enter**:
+
+| Command | Meaning |
+| --- | --- |
+| `:a 5000` | Five-second attack; durations are in **milliseconds** (`:a 5` is 5 ms). |
+| `:s 1` | Sustain/peak amplitude, from 0 to 1. There is no separate decay stage. |
+| `:r 250` | Release from the current amplitude to zero in 250 ms, including when released during attack. |
+| `:g 0.01` | Linear gain from 0 to 1, applied by the firmware envelope after sample conversion. |
+| `:e off` | Disable attack/release and play at `:g` immediately until note-off. |
+| `:e on` | Enable attack/release again; the stored timings and sustain are retained. |
+| `:status` / `:help` | Show the current settings or command help. |
+
+Zero attack or release is immediate. With the envelope enabled, the note rises
+to `sustain * gain`; with it disabled, the level is `gain` and sustain is ignored.
+MIDI velocity does not change these durations or audio levels. The existing
+voice-steal fade remains in place for replacements. The card's separate fixed
+voice mixer gain and DAC attenuation still apply; `:g` is not the RS485 DAC `g`
+command and does not change the speaker volume setting.
+
+The startup `.bec` file remains active until the first setting command. That
+command selects terminal envelope controls, initially **attack 5000 ms, sustain
+1, release 5 ms, gain 1, envelope on**, with the requested value applied. Settings
+last for the current run. Each change is compiled first, then stops existing
+notes and uploads the program to all eight voices; **press a MIDI key again
+after "Applied"**. A malformed command or failed compilation does not replace
+the playing program. An incomplete upload pauses new note-ons until a complete
+settings upload or `R` reload succeeds.
+
+Generated `voicebd_live.be` and `voicebd_live.bec` are placed alongside the
+executable, using the Berry compiler in the same folder. Original `.be`/`.bec`
+files are not overwritten by colon commands. **Esc** cancels command entry;
+Backspace edits it and Ctrl+U clears the text. MIDI continues while typing.
+Outside command entry, the existing `S` sine-wave shortcut and other single-key
+controls still work. `R` returns to the regular `series2.be` program.
+
+For a fixed-level listening check, enter `:g 0.01`, then `:e off`, and play a
+note. For the five-second fade, use `:e on`, `:a 5000`, `:s 1`, and `:g 1`.
+
 The voice board API returns `voice_board_result_t` with an error code and message.
 The test program checks these results and prints failures before exiting.
 

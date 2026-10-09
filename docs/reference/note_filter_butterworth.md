@@ -1,9 +1,8 @@
 # Channel Card — Per-voice 4-pole Butterworth LPF
 
-Sources: [`note_filter.c`](../../channel_card/Core/Src/filters/note_filter.c),
-[`note_filter.h`](../../channel_card/Core/Inc/filters/note_filter.h),
-kernel [`butterworth_four_pole.c`](../../channel_card/Core/Src/filters/butterworth_four_pole.c),
-wired from [`note_bank.c`](../../channel_card/Core/Src/audio/note_bank.c).
+Sources: [`filter.cpp`](../../channel_card/app/filter.cpp) contains the filter kernel and per-voice
+filter control; [`filter.h`](../../channel_card/app/filter.h) declares the API.
+[`voice.cpp`](../../channel_card/app/voice.cpp) calls the filter during note rendering.
 
 This document explains **why** the filter is built this way, the **structure**
 used in firmware, and how to **verify** it on a scope against theory.
@@ -95,7 +94,7 @@ d[2] = coef[3]*in + coef[7]*out + d[3];
 d[3] = coef[4]*in + coef[8]*out;
 ```
 
-At \(f_c \ge 20000\ \mathrm{Hz}\) (or 0) `note_filter.c` bypasses the
+At \(f_c \ge 20000\ \mathrm{Hz}\) (or 0) `filter.cpp` bypasses the
 kernel and returns the input unchanged.
 
 Redesign (cutoff, q, pitch-track) is **cold-path only** — triggered by
@@ -208,13 +207,11 @@ too low for a stable trigger.
 
 | File                                       | Role                                                           |
 | ------------------------------------------ | -------------------------------------------------------------- |
-| `Core/Src/filters/butterworth_four_pole.c` | DF4 design + process kernel (LP + HP init, `double` state)     |
-| `Core/Inc/filters/butterworth_four_pole.h` | Kernel API                                                     |
-| `Core/Src/filters/note_filter.c`           | Per-voice base/effective cutoff, pitch-k, bypass/q + Q31 edges |
-| `Core/Inc/filters/note_filter.h`           | Public voice API                                               |
-| `Core/Src/audio/note_bank.c`               | Calls `NoteFilter_Process` after amp; resets on note-off       |
-| `Core/Src/console/channel_console.c`       | `f0`…`f7` / `f` with optional q; init bypass + q=1.0           |
-| Top-level `CMakeLists.txt`                 | Registers filter + audio sources under `Core/Src/<domain>/`    |
+| `app/filter.cpp` | DF4 kernel, per-voice cutoff/q/pitch tracking, and Q31 conversion |
+| `app/voice.cpp` | Calls the filter during note rendering |
+| `app/filter.h` | Filter API |
+| `app/channel.cpp` | `f0`…`f7` / `f` with optional q; init bypass + q=1.0 |
+| Top-level `CMakeLists.txt` | Registers the nine application C++ sources |
 
 ---
 

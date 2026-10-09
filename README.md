@@ -50,7 +50,11 @@ conversion failed.
 
 ## 2. Building
 
-From inside a project folder (`channel_card/` or `effect_card/`):
+For Channel Card, run `make` inside `channel_card/app/`. It produces
+`channel_card/bin/channel_MCU.bin`. Set `BAUDRATE` in its Makefile or run
+`make BAUDRATE=3000000`. See the [Channel guide](channel_card/README.md).
+
+For Effect Card, run from `effect_card/`:
 
 ```bash
 cmake --preset Debug
@@ -87,8 +91,8 @@ ST-LINK required.
 3. The board enumerates as **"STM32 BOOTLOADER"** (DFU device).
 4. Open **STM32CubeProgrammer** → select **USB** → refresh the port →
    **Connect**.
-5. **Open file** → pick `build/Debug/<target>.hex` (or `.elf`) →
-   **Download**.
+5. **Open file** → pick `channel_card/bin/channel_MCU.bin` for Channel
+   (address `0x08000000`), or `build/Debug/<target>.hex` for Effect → **Download**.
 6. **Slide the BOOT toggle back DOWN** and **press reset** to run the
    new firmware.
 
@@ -123,15 +127,14 @@ Any source you add there disappears on the next regeneration.
 
 Add hand-written sources to the **top-level `CMakeLists.txt`** instead,
 under `target_sources(${CMAKE_PROJECT_NAME} PRIVATE …)`. This is already
-done for e.g. `Core/Src/drivers/cs4304.c` and
-`Core/Src/audio/audio_bridge.c` on the Channel Card — both were dropped
-by a regeneration once, which is why they now live in the top-level file.
+done for the nine Channel Card `.cpp` modules under `app/`. Keeping this
+list outside the generated file preserves it across regeneration.
 
 ### 4.3 `Middlewares/` belongs to CubeMX — third-party code goes in `ThirdParty/`
 
 CubeMX manages and prunes `Middlewares/`. Effect Card TinyUSB lives in
 **`ThirdParty/`**, which CubeMX does not touch. Channel Card USB is custom
-application code under `USB_APP/`.
+application code under `app/`.
 
 ### 4.4 Do not enable the ST USB Device middleware
 
@@ -160,16 +163,18 @@ CODE blocks, but check anyway):
 
 ---
 
-## 5. Repository layout (same shape in both projects)
+## 5. Repository layout
 
-The firmware projects live at the repo root. Channel Card's interpreter and VM
-support live in `channel_card/runtime/`. `berry_compiler/` builds the standalone
+The firmware projects live at the repo root. Channel custom sources are paired
+in `channel_card/app/`; its current layout is documented in the Channel README.
+The tree below describes the Effect Card layout. Channel Card's interpreter and VM
+support live in `channel_card/berry_runtime/`. `berry_compiler/` builds the standalone
 host compiler; `voice_bd/` is the standalone playback application. `docs/`
 contains references and `scripts/` contains firmware utilities and explicit
 mainframe synchronization.
 
 ```
-<project>/    (channel_card/ or effect_card/)
+effect_card/
 ├── CMakeLists.txt            ← hand-written sources + TinyUSB go HERE
 ├── CMakePresets.json         ← Debug / Release presets
 ├── <project>.ioc             ← STM32CubeMX project (source of truth)
@@ -203,7 +208,7 @@ reply formats.
 **Channel Card** — 8 SAMPLE voices (`n0`…`n7`) with automatically allocated,
 script-controlled oscillators using eight reserved logical wavetables
 (`osc0`…`osc7` in the UI) and ABI2 per-note audio/FM/AM routing, sample upload/assignment
-(`al`/`wl`/`ar`/`aw`/`a`/`vq`), per-voice VM programs (`vmload`/`vm`) and LPF
+(binary uploads, `ar`, sample selection in note-on, `a`, and `vq`), per-voice VM programs (binary script uploads and `vm`) and LPF
 (`f`/`fk`) and DAC gain (`g`).
 
 | Command | Meaning |
@@ -257,7 +262,7 @@ that look like firmware bugs; this failure mode has produced multi-hour
 misdiagnoses on this project.
 
 **Rule: change a descriptor → bump `idProduct` in
-`USB_APP/usb_descriptors.c`.** Current values are `0xCafe/0x401x`
+`app/usb.cpp` on Channel or `USB_APP/usb_descriptors.c` on Effect.** Current values are `0xCafe/0x4032` (Channel) and `0xCafe/0x4015` (Effect)
 (development identifiers — replace them with organization-owned or formally
 allocated VID/PIDs before production).
 

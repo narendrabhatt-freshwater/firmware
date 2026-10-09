@@ -163,7 +163,7 @@ offset-checked binary blocks. The full transaction is specified in §4.
 
 Amplitude ramps and note lifecycle are controlled only by the uploaded per-voice
 VM program. The firmware exposes no separate envelope-programming commands.
-See [SCRIPTING.md](../channel_card/SCRIPTING.md) and script uploads below.
+See [Berry scripting](../berry_compiler/README.md) and script uploads below.
 
 Each `osc(wave, frequency_hz)` call appends a pending-note oscillator and
 returns an opaque handle. ABI2 `route(source, OUTPUT, weight)` sends oscillator

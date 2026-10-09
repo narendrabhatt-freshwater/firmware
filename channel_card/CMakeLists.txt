@@ -1,96 +1,54 @@
 cmake_minimum_required(VERSION 3.22)
 
-#
-# This file is generated only once,
-# and is not re-generated if converter is called multiple times.
-#
-# User is free to modify the file as much as necessary
-#
-
-# Setup compiler settings
 set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
 
-
-# Define the build type
 if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "Debug")
+    set(CMAKE_BUILD_TYPE "Release")
 endif()
 
-# Set the project name
 set(CMAKE_PROJECT_NAME channel_MCU)
 
-# Enable compile command to ease indexing with e.g. clangd
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
-# Core project settings
 project(${CMAKE_PROJECT_NAME})
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
-# Enable CMake support for ASM and C languages
-enable_language(C ASM)
+enable_language(C CXX ASM)
 
-# Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME})
 include(cmake/RS485Config.cmake)
 fw_configure_rs485(${CMAKE_PROJECT_NAME} PRIVATE)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
-add_subdirectory(runtime ${CMAKE_CURRENT_BINARY_DIR}/script_runtime)
+add_subdirectory(berry_runtime ${CMAKE_CURRENT_BINARY_DIR}/script_runtime)
 
-# Link directories setup
-target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined library search paths
-)
-
-# Add sources to executable
-#
-# NOTE: hand-written sources belong HERE, not in cmake/stm32cubemx/
-# CMakeLists.txt — that file is regenerated from the .ioc and any manual
-# additions to it are silently lost (which is exactly how cs4304.c went
-# missing after the USB middleware was removed).
+# Keep custom sources here; CubeMX regenerates cmake/stm32cubemx.
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    # Hand-written app modules live under Core/Src/<domain>/ — CubeMX
-    # sources stay flat in Core/Src. Never add these to cmake/stm32cubemx/.
-    Core/Src/drivers/cs4304.c
-    Core/Src/drivers/channel_led.c
-    Core/Src/audio/note_bank.c
-    Core/Src/audio/note_envelope.c
-    Core/Src/audio/attack_bank.c
-    Core/Src/audio/wavetable_osc.c
-    Core/Src/audio/stream_ring.c
-    Core/Src/audio/audio_tone_dc.c
-    Core/Src/filters/butterworth_four_pole.c
-    Core/Src/filters/note_filter.c
-    Core/Src/console/channel_console.c
-    Core/Src/console/uart5_rx.c
-    Core/Src/console/attack_upload.c
-    Core/Src/console/vm_upload.c
-    Core/Src/audio/audio_bridge.c
-    Core/Src/audio/channel_vm.c
-    # Custom CDC device over the STM32 HAL PCD peripheral driver.
-    USB_APP/usb_device.c
-    USB_APP/usb_descriptors.c
-    USB_APP/usb_app.c
+    app/cs4304.cpp
+    app/audio.cpp
+    app/channel.cpp
+    app/filter.cpp
+    app/oscillator.cpp
+    app/voice.cpp
+    app/samples.cpp
+    app/stream.cpp
+    app/usb.cpp
 )
 
-# Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    Core/Inc/filters
-    Core/Inc/audio
-    Core/Inc/drivers
-    Core/Inc/console
-    USB_APP
-    runtime/vm/include
-    runtime/include
+    app
+    berry_runtime
 )
 
 # Remove wrong libob.a library dependency when using cpp files
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 
-# Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
     script_runtime::berry
@@ -98,32 +56,34 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     m
 )
 
-# --specs=nano.specs (cmake/gcc-arm-none-eabi.cmake) strips floating-point
-# scanf/printf conversions out of newlib-nano by default to save flash.
-# The console parses fractional values with sscanf(..., "%lf", ...)
-# (note keys/velocities `nX on <key> [velocity]` and filter cutoffs) and
-# formats replies with %.1f/%.2f. Without these, sscanf("%lf") always
-# returns 0 -> every such command answers "err:" for valid input.
-# Force-link the float variants instead of dropping nano.specs entirely
-# (keeps flash usage low everywhere else).
+# newlib-nano omits floating-point scanf/printf by default. The console parses
+# fractional filter/root frequencies and formats floating-point status values.
 target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
     -Wl,-u,_scanf_float
     -Wl,-u,_printf_float
 )
 
-# Generate .hex and .bin output files from .elf
-set(FW_PACKAGE_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/PackageFirmware.cmake")
-set_property(TARGET ${CMAKE_PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${FW_PACKAGE_SCRIPT}")
+# The ELF is an intermediate; app/Makefile delivers the Release binary.
+set(FW_INFO_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FirmwareInfo.cmake")
+set_property(TARGET ${CMAKE_PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${FW_INFO_SCRIPT}")
+set(FW_INFO_BAUD "${FW_RS485_BAUD}")
+if(FW_INFO_BAUD STREQUAL "")
+    # Keep direct CMake builds consistent with the fallback used by the firmware.
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/app/channel.h" FW_BAUD_DEFAULT
+         REGEX "^#define FW_RS485_BAUD [0-9]+u$")
+    string(REGEX REPLACE ".* ([0-9]+)u$" "\\1" FW_INFO_BAUD "${FW_BAUD_DEFAULT}")
+endif()
 add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_OBJCOPY} -O ihex $<TARGET_FILE:${CMAKE_PROJECT_NAME}> ${CMAKE_PROJECT_NAME}.hex
     COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:${CMAKE_PROJECT_NAME}> ${CMAKE_PROJECT_NAME}.bin
-    COMMAND ${CMAKE_SIZE} $<TARGET_FILE:${CMAKE_PROJECT_NAME}>
     COMMAND ${CMAKE_COMMAND}
-        "-DINPUT=$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/${CMAKE_PROJECT_NAME}.bin"
-        "-DBUILD_TYPE=$<CONFIG>"
-        "-DRS485_BAUD=${FW_RS485_BAUD}"
-        "-DCOMPILER_VERSION=${CMAKE_C_COMPILER_VERSION}"
-        -P "${FW_PACKAGE_SCRIPT}"
-    COMMENT "Generating ${CMAKE_PROJECT_NAME}.hex and ${CMAKE_PROJECT_NAME}.bin"
+        "-DELF=$<TARGET_FILE:${CMAKE_PROJECT_NAME}>"
+        "-DMAP=${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_PROJECT_NAME}.map"
+        "-DBINARY=${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_PROJECT_NAME}.bin"
+        "-DOBJDUMP=${CMAKE_OBJDUMP}"
+        "-DBAUD=${FW_INFO_BAUD}"
+        "-DCOMPILER=${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} (${CMAKE_CXX_COMPILER})"
+        "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_PROJECT_NAME}.info"
+        -P "${FW_INFO_SCRIPT}"
+    COMMENT "Generating ${CMAKE_PROJECT_NAME}.bin"
     VERBATIM
 )

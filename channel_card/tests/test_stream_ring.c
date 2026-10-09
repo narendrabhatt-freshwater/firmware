@@ -1,4 +1,4 @@
-#include "stream_ring.h"
+#include "stream.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

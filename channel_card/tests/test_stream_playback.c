@@ -1,7 +1,7 @@
-#include "note_bank.h"
-#include "note_envelope.h"
-#include "note_filter.h"
-#include "stream_ring.h"
+#include "voice.h"
+#include "channel.h"
+#include "filter.h"
+#include "stream.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

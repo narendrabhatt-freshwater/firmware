@@ -1,3 +1,7 @@
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef USB_TEST_HAL_H
 #define USB_TEST_HAL_H
 #include <stdint.h>
@@ -47,3 +51,7 @@ void HAL_PCD_ResumeCallback(PCD_HandleTypeDef*);
 
 int HAL_PCD_EP_Abort(PCD_HandleTypeDef *p,uint8_t ep);
 int HAL_PCD_EP_Flush(PCD_HandleTypeDef *p,uint8_t ep);
+
+#ifdef __cplusplus
+}
+#endif

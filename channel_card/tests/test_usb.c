@@ -1,9 +1,8 @@
+#include "usb.h"
+#include "channel.h"
+#include "samples.h"
+#include "stream.h"
 #include "usb_otg.h"
-#include "usb_device.h"
-#include "usb_app.h"
-#include "usb_stream.h"
-#include "stream_ring.h"
-#include "attack_bank.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

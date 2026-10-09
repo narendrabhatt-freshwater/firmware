@@ -1,10 +1,12 @@
 # Freshwater documentation
 
-`protocol.md` is the single normative host ↔ card wire contract. Matching
-copies ship in each card tree (`channel_card/docs/protocol.md`,
-`effect_card/docs/protocol.md`) so an SVN trunk stands alone. Keep those
-three files in lockstep; relative scripting-document links can differ by location.
-Everything else is grouped below.
+Channel documentation is maintained in `channel_card/README.md`,
+`channel_card/docs/protocol.md`, and `berry_compiler/README.md`. The Channel
+package includes both firmware and compiler, with no images or test assets.
+This shared directory retains other products' references and historical
+authoring material. Root and Effect Card protocol copies remain shared
+references for that existing workflow; the Channel reference is maintained
+independently against its firmware.
 
 | Location | Contents |
 | -------- | -------- |

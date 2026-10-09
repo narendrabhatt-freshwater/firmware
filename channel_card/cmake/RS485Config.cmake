@@ -1,6 +1,6 @@
 include_guard(GLOBAL)
 
-# Empty means use the Channel Card default in console/rs485_config.h.
+# app/Makefile supplies the baud rate. Empty uses the fallback in app/channel.h.
 set(FW_RS485_BAUD "" CACHE STRING "RS485 baud override (empty uses the shared default)")
 if(NOT FW_RS485_BAUD STREQUAL "")
   if(NOT FW_RS485_BAUD MATCHES "^[1-9][0-9]*$")

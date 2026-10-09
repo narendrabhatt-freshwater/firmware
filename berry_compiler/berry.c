@@ -1,7 +1,7 @@
 #include "berry.h"
 #include "be_vm.h"
-#include "script/script_runtime.h"
-#include "freshwater/vm_source.h"
+#include "script_runtime.h"
+#include "vm_source.h"
 
 #include <errno.h>
 #include <math.h>
@@ -13,16 +13,23 @@
 #include <direct.h>
 #endif
 
+/* ---- encode the script container ---------------------------------------- */
+
 static void put_u16(uint8_t *p, uint16_t value)
 {
-    p[0] = (uint8_t)value; p[1] = (uint8_t)(value >> 8);
+    p[0] = (uint8_t)value;
+    p[1] = (uint8_t)(value >> 8);
 }
 
 static void put_u32(uint8_t *p, uint32_t value)
 {
-    p[0] = (uint8_t)value; p[1] = (uint8_t)(value >> 8);
-    p[2] = (uint8_t)(value >> 16); p[3] = (uint8_t)(value >> 24);
+    p[0] = (uint8_t)value;
+    p[1] = (uint8_t)(value >> 8);
+    p[2] = (uint8_t)(value >> 16);
+    p[3] = (uint8_t)(value >> 24);
 }
+
+/* ---- report compiler errors --------------------------------------------- */
 
 static int fail(const char *message, const char *path)
 {
@@ -30,13 +37,14 @@ static int fail(const char *message, const char *path)
     return 1;
 }
 
+/* ---- prepare the output directory --------------------------------------- */
+
 static int create_output_directories(const char *output)
 {
     char path[1024];
     size_t i;
     if (!output[0]) return fail("output file path is required", NULL);
-    if (strlen(output) >= sizeof(path))
-        return fail("output path too long", output);
+    if (strlen(output) >= sizeof(path)) return fail("output path too long", output);
     strcpy(path, output);
     for (i = 1; path[i]; ++i) {
         int result;
@@ -44,7 +52,8 @@ static int create_output_directories(const char *output)
 #ifdef _WIN32
             && path[i] != '\\'
 #endif
-        ) continue;
+        )
+            continue;
 #ifdef _WIN32
         if (i == 2 && path[1] == ':') continue;
 #endif
@@ -55,14 +64,16 @@ static int create_output_directories(const char *output)
         result = mkdir(path, 0777);
 #endif
         if (result != 0 && errno != EEXIST) {
-            fprintf(stderr, "berry: error: cannot create output directory '%s': %s\n",
-                    path, strerror(errno));
+            fprintf(stderr, "berry: error: cannot create output directory '%s': %s\n", path,
+                    strerror(errno));
             return 1;
         }
         path[i] = output[i];
     }
     return 0;
 }
+
+/* ---- describe compiler usage -------------------------------------------- */
 
 static void print_help(FILE *stream)
 {
@@ -83,13 +94,24 @@ static void print_help(FILE *stream)
           stream);
 }
 
+/* ---- report berry compilation errors ------------------------------------ */
+
 static int init_error(bvm *vm, const char *message)
-{ be_raise(vm, "value_error", message); return 0; }
+{
+    be_raise(vm, "value_error", message);
+    return 0;
+}
+
+/* ---- declare runtime-only functions ------------------------------------- */
+
 static int compile_only_native(bvm *vm)
 {
     be_pushnil(vm);
     be_return(vm);
 }
+
+/* ---- provide numeric compile-time functions ----------------------------- */
+
 static int pow_native(bvm *vm)
 {
     float value;
@@ -97,18 +119,27 @@ static int pow_native(bvm *vm)
         return init_error(vm, "pow requires two numbers");
     value = powf((float)be_toreal(vm, 1), (float)be_toreal(vm, 2));
     if (!isfinite(value)) return init_error(vm, "pow result must be finite");
-    be_pushreal(vm, value); be_return(vm);
+    be_pushreal(vm, value);
+    be_return(vm);
 }
+
+/* ---- register compiler constants ---------------------------------------- */
 
 static void compiler_int(bvm *vm, const char *name, bint value)
 {
-    be_pushint(vm, value); be_setglobal(vm, name); be_pop(vm, 1);
+    be_pushint(vm, value);
+    be_setglobal(vm, name);
+    be_pop(vm, 1);
 }
 
 static void compiler_nil(bvm *vm, const char *name)
 {
-    be_pushnil(vm); be_setglobal(vm, name); be_pop(vm, 1);
+    be_pushnil(vm);
+    be_setglobal(vm, name);
+    be_pop(vm, 1);
 }
+
+/* ---- validate handler signatures ---------------------------------------- */
 
 static int handler_has_arity(bvm *vm, const char *name, bbyte argc)
 {
@@ -116,27 +147,29 @@ static int handler_has_arity(bvm *vm, const char *name, bbyte argc)
     int valid = 0;
     if (found && be_isfunction(vm, -1)) {
         bvalue *value = be_indexof(vm, -1);
-        valid = var_isclosure(value) &&
-                ((bclosure *)var_toobj(value))->proto->argc == argc;
+        valid = var_isclosure(value) && ((bclosure *)var_toobj(value))->proto->argc == argc;
     }
     be_pop(vm, 1);
     return valid;
 }
 
+/* ---- validate top-level source ------------------------------------------ */
+
 static int source_line_allowed(const char *line)
 {
     const char *p = line;
-    if (strstr(line, "global ") || strstr(line, "import ") ||
-        strstr(line, "class ")) return 0;
-    while (*p == ' ' || *p == '\t') ++p;
+    if (strstr(line, "global ") || strstr(line, "import ") || strstr(line, "class ")) return 0;
+    while (*p == ' ' || *p == '\t')
+        ++p;
     if (p != line || *p == '\0' || *p == '\n' || *p == '#') return 1;
     return strncmp(p, "def on_note_on(key, velocity)",
                    sizeof("def on_note_on(key, velocity)") - 1u) == 0 ||
-           strncmp(p, "def on_note_off()",
-                   sizeof("def on_note_off()") - 1u) == 0 ||
+           strncmp(p, "def on_note_off()", sizeof("def on_note_off()") - 1u) == 0 ||
            strncmp(p, "def on_ramp_end()", sizeof("def on_ramp_end()") - 1u) == 0 ||
            strncmp(p, "end", 3) == 0;
 }
+
+/* ---- compile and package a channel program ------------------------------ */
 
 int main(int argc, char **argv)
 {
@@ -151,20 +184,23 @@ int main(int argc, char **argv)
     bvm *vm;
     int result;
 
-    if (argc == 1 || (argc == 2 &&
-        (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0))) {
+    if (argc == 1 ||
+        (argc == 2 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0))) {
         print_help(stdout);
         return 0;
     }
     if (argc == 4 && strcmp(argv[2], "-o") == 0) {
-        input = argv[1]; output = argv[3];
+        input = argv[1];
+        output = argv[3];
     } else {
         fputs("berry: error: expected an input script and -o output file.\n"
               "Usage: berry INPUT.be -o OUTPUT.bec\n"
-              "Run 'berry --help' for an example.\n", stderr);
+              "Run 'berry --help' for an example.\n",
+              stderr);
         return 2;
     }
-    if (snprintf(temporary, sizeof(temporary), "%s.berry-bytecode.tmp", output) >= (int)sizeof(temporary))
+    if (snprintf(temporary, sizeof(temporary), "%s.berry-bytecode.tmp", output) >=
+        (int)sizeof(temporary))
         return fail("output path too long", output);
     if (snprintf(wrapped, sizeof(wrapped), "%s.berry-source.tmp", output) >= (int)sizeof(wrapped))
         return fail("output path too long", output);
@@ -190,12 +226,11 @@ int main(int argc, char **argv)
         return fail("could not read source", input);
     }
     source_text[source_size] = '\0';
-    if (fw_vm_preprocess_channel_source(source_text, source_size, &lowered,
-                                        &lowered_size, preprocess_error,
-                                        sizeof(preprocess_error)) != 0) {
+    if (fw_vm_preprocess_channel_source(source_text, source_size, &lowered, &lowered_size,
+                                        preprocess_error, sizeof(preprocess_error)) != 0) {
         free(source_text);
-        return fail(preprocess_error[0] ? preprocess_error :
-                    "could not preprocess named state", input);
+        return fail(preprocess_error[0] ? preprocess_error : "could not preprocess named state",
+                    input);
     }
     free(source_text);
     if (create_output_directories(output)) {
@@ -205,27 +240,32 @@ int main(int argc, char **argv)
     wrapper = fopen(wrapped, "wb");
     if (!wrapper) {
         free(lowered);
-        fprintf(stderr, "berry: error: cannot create output files for '%s': %s\n",
-                output, strerror(errno));
+        fprintf(stderr, "berry: error: cannot create output files for '%s': %s\n", output,
+                strerror(errno));
         return 1;
     }
     source = tmpfile();
     if (!source || fwrite(lowered, 1, lowered_size, source) != lowered_size ||
         fseek(source, 0, SEEK_SET)) {
         if (source) fclose(source);
-        fclose(wrapper); free(lowered); remove(wrapped);
+        fclose(wrapper);
+        free(lowered);
+        remove(wrapped);
         return fail("could not process source", input);
     }
     free(lowered);
     while (fgets(line, sizeof(line), source)) {
         if (!source_line_allowed(line)) {
-            fclose(source); fclose(wrapper); remove(wrapped);
+            fclose(source);
+            fclose(wrapper);
+            remove(wrapped);
             return fail("only ABI2 Channel handlers are allowed at top level", input);
         }
         fputs(line, wrapper);
     }
     if (ferror(source) || fclose(source) || fclose(wrapper)) {
-        remove(wrapped); return fail("could not wrap source", input);
+        remove(wrapped);
+        return fail("could not wrap source", input);
     }
     vm = be_vm_new();
     if (!vm) return fail("could not create compiler VM", NULL);
@@ -267,28 +307,32 @@ int main(int argc, char **argv)
     if (result == BE_OK) result = be_savecode(vm, temporary);
     if (result == BE_OK) result = be_pcall(vm, 0);
     if (result == BE_OK &&
-        (!handler_has_arity(vm, "on_note_on", 2u) ||
-         !handler_has_arity(vm, "on_note_off", 0u) ||
+        (!handler_has_arity(vm, "on_note_on", 2u) || !handler_has_arity(vm, "on_note_off", 0u) ||
          !handler_has_arity(vm, "on_ramp_end", 0u))) {
         result = BE_EXCEPTION;
     }
     if (result != BE_OK) {
         be_dumpexcept(vm);
         be_vm_delete(vm);
-        remove(temporary); remove(wrapped);
+        remove(temporary);
+        remove(wrapped);
         return fail("compilation failed", input);
     }
-    be_vm_delete(vm); remove(wrapped);
+    be_vm_delete(vm);
+    remove(wrapped);
     file = fopen(temporary, "rb");
     if (!file) return fail(strerror(errno), temporary);
-    if (fseek(file, 0, SEEK_END) || (length = ftell(file)) < 0 ||
-        length > FW_SCRIPT_MAX_PAYLOAD || fseek(file, 0, SEEK_SET)) {
-        fclose(file); remove(temporary);
+    if (fseek(file, 0, SEEK_END) || (length = ftell(file)) < 0 || length > FW_SCRIPT_MAX_PAYLOAD ||
+        fseek(file, 0, SEEK_SET)) {
+        fclose(file);
+        remove(temporary);
         return fail("bytecode exceeds 16384-byte limit", input);
     }
     payload = (uint8_t *)malloc((size_t)length);
     if (!payload || fread(payload, 1, (size_t)length, file) != (size_t)length) {
-        fclose(file); free(payload); remove(temporary);
+        fclose(file);
+        free(payload);
+        remove(temporary);
         return fail("could not read generated bytecode", temporary);
     }
     fclose(file);
@@ -314,7 +358,6 @@ int main(int argc, char **argv)
         return fail("could not finish writing output", output);
     }
     free(payload);
-    printf("Compiled %s -> %s (%zu bytes)\n", input, output,
-           sizeof(header) + (size_t)length);
+    printf("Compiled %s -> %s (%zu bytes)\n", input, output, sizeof(header) + (size_t)length);
     return 0;
 }

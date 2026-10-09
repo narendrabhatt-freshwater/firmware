@@ -29,7 +29,7 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/channel.bec"
     VERBATIM)
 add_custom_target(voicebd_program DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/channel.bec")
 
-add_executable(voicebd voicebdtest.cpp voicebd.cpp)
+add_executable(voicebd voicebdtest.cpp voicebd.cpp envelope_controls.cpp)
 target_compile_features(voicebd PRIVATE cxx_std_17)
 target_compile_options(voicebd PRIVATE -Wall -Wextra)
 set_target_properties(voicebd PROPERTIES
@@ -59,6 +59,33 @@ add_dependencies(voicebdgui voicebd_gui_program)
 
 include(CTest)
 if(BUILD_TESTING)
+    # Run generated terminal-control programs through the production Channel VM
+    # and renderer on the host; this does not build or flash MCU firmware.
+    set(CONTROL_TEST_CARD "${CMAKE_CURRENT_SOURCE_DIR}/../channel_card")
+    # voice_bd can also be distributed by itself, without the firmware tree.
+    if(EXISTS "${CONTROL_TEST_CARD}/runtime/CMakeLists.txt")
+        add_subdirectory("${CONTROL_TEST_CARD}/runtime" envelope_test_runtime)
+        add_executable(voicebd_envelope_test envelope_controls_test.cpp envelope_controls.cpp
+            "${CONTROL_TEST_CARD}/Core/Src/audio/note_bank.c"
+            "${CONTROL_TEST_CARD}/Core/Src/audio/stream_ring.c"
+            "${CONTROL_TEST_CARD}/Core/Src/audio/note_envelope.c"
+            "${CONTROL_TEST_CARD}/Core/Src/audio/attack_bank.c"
+            "${CONTROL_TEST_CARD}/Core/Src/audio/wavetable_osc.c"
+            "${CONTROL_TEST_CARD}/Core/Src/audio/channel_vm.c"
+            "${CONTROL_TEST_CARD}/Core/Src/filters/note_filter.c"
+            "${CONTROL_TEST_CARD}/Core/Src/filters/butterworth_four_pole.c")
+        target_compile_features(voicebd_envelope_test PRIVATE cxx_std_17)
+        target_compile_options(voicebd_envelope_test PRIVATE -Wall -Wextra -Werror)
+        target_include_directories(voicebd_envelope_test PRIVATE
+            "${CONTROL_TEST_CARD}/Core/Inc/audio" "${CONTROL_TEST_CARD}/Core/Inc/drivers"
+            "${CONTROL_TEST_CARD}/Core/Inc/filters" "${CONTROL_TEST_CARD}/USB_APP")
+        target_link_libraries(voicebd_envelope_test PRIVATE script_runtime::berry berry_runtime m)
+        add_test(NAME voicebd_envelope COMMAND voicebd_envelope_test "${BERRY_EXECUTABLE}"
+            "${CMAKE_CURRENT_BINARY_DIR}/envelope control fixtures")
+    else()
+        message(STATUS "Channel Card sources absent: skipping firmware envelope integration test")
+    endif()
+
     add_executable(voicebd_stream_test stream_test.cpp)
     target_compile_features(voicebd_stream_test PRIVATE cxx_std_17)
     target_compile_options(voicebd_stream_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)

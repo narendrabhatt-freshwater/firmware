@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# svn_publish.sh — export one product directory from the git monorepo
-# into its SVN repository trunk, and optionally tag the release.
+# svn_publish.sh — compare the bundled Channel release, or run the legacy
+# publisher for Effect Card / voice_bd. Channel mode never modifies SVN.
 #
 # Usage:
 #   svn_publish.sh <product> <svn-working-copy> [--tag vX.Y] [--dry-run]
@@ -27,6 +27,18 @@ info() { echo "== $*"; }
 
 PRODUCT="$1"; shift
 WC="$1"; shift
+
+# Channel releases contain the matching Berry compiler. Preparation and SVN
+# comparison are read-only; publication is an explicit, separate release step.
+if [ "$PRODUCT" = channel_card ]; then
+  [ "$#" = 1 ] && [ "$1" = --dry-run ] || \
+    err "Channel preparation requires --dry-run; this tool does not modify or commit SVN. Use channel_release.py --stage DIR to prepare a local package."
+  exec python3 "$ROOT/scripts/channel_release.py" --svn-working-copy "$WC"
+fi
+if [ "$PRODUCT" = berry_compiler ]; then
+  err "Berry is bundled with channel_card; prepare the combined Channel release instead"
+fi
+
 TAG=""
 DRY=0
 while [ $# -gt 0 ]; do
@@ -104,8 +116,8 @@ copy_doc() { # copy_doc <src-rel-to-root> <dst-rel-to-trunk-docs>
 # Card trees carry their own docs/protocol.md; content must match the
 # shared copy, allowing only relative scripting-link differences.
 if [ -f "$SRC/docs/protocol.md" ]; then
-  if ! cmp -s <(sed -E 's@\]\([^)]*SCRIPTING.md\)@](SCRIPTING.md)@g' "$ROOT/docs/protocol.md") \
-              <(sed -E 's@\]\([^)]*SCRIPTING.md\)@](SCRIPTING.md)@g' "$SRC/docs/protocol.md"); then
+  if ! cmp -s <(sed -E 's@\[[^]]*\]\([^)]*(SCRIPTING.md|berry_compiler/README.md)\)@[Berry scripting](SCRIPTING.md)@g' "$ROOT/docs/protocol.md") \
+              <(sed -E 's@\[[^]]*\]\([^)]*(SCRIPTING.md|berry_compiler/README.md)\)@[Berry scripting](SCRIPTING.md)@g' "$SRC/docs/protocol.md"); then
     err "docs/protocol.md differs from $PRODUCT/docs/protocol.md — keep them identical"
   fi
 fi
@@ -113,14 +125,6 @@ if [ ! -f "$SRC/docs/protocol.md" ]; then
   copy_doc docs/protocol.md protocol.md
 fi
 case "$PRODUCT" in
-  channel_card)
-    copy_doc README.md firmware_handbook.md
-    copy_doc docs/reference/note_filter_butterworth.md reference/note_filter_butterworth.md
-    copy_doc docs/diagrams/channel_card_audio_flow.jpg diagrams/channel_card_audio_flow.jpg
-    copy_doc docs/diagrams/scf_hp_clock_steering.svg diagrams/scf_hp_clock_steering.svg
-    copy_doc docs/diagrams/scf_hp_clock_steering_v2.svg diagrams/scf_hp_clock_steering_v2.svg
-    copy_doc docs/diagrams/card_data_flow.md diagrams/card_data_flow.md
-    ;;
   effect_card)
     copy_doc README.md firmware_handbook.md
     copy_doc docs/diagrams/card_data_flow.md diagrams/card_data_flow.md

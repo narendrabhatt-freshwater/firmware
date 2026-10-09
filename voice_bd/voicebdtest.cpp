@@ -22,6 +22,7 @@
 */
 
 #include "voicebd.h"
+#include "envelope_controls.h"
 #include <RtMidi.h>
 #include <algorithm>
 #include <array>
@@ -72,6 +73,21 @@ void print_key_demand(unsigned voice, unsigned key)
 
 /* ---- print usage --------------------------------------------------------- */
 
+void envelope_help(std::ostream& out)
+{
+    out << "    Type a colon command, then Enter (Esc cancels):\n"
+        << "      :a MS       Attack duration, milliseconds; 0 = instant\n"
+        << "      :s LEVEL    Sustain/peak amplitude, 0..1\n"
+        << "      :r MS       Release duration, milliseconds; 0 = instant\n"
+        << "      :g LEVEL    Linear gain, 0..1 (not DAC attenuation in dB)\n"
+        << "      :e on|off   Enable envelope, or play directly at gain\n"
+        << "      :status     Show settings and which program is active\n"
+        << "      :help       Show these commands\n"
+        << "    First setting command selects these defaults: A=5000 ms, S=1, R=5 ms, G=1, envelope on.\n"
+        << "    Applying settings stops notes; press a key again. Durations ignore MIDI velocity.\n"
+        << "    Envelope on: note level = sustain * gain. Off: note level = gain, no attack/release.\n";
+}
+
 int usage(int status)
 {
     std::ostream& out = status == EX_OK ? std::cout : std::cerr;
@@ -92,6 +108,7 @@ int usage(int status)
         << "    Initializes the voice program on all eight voices when opening the board.\n"
         << "    MIDI voices: " << num_voices << " (1 = direct mono, 2..8 = polyphony).\n"
         << "    O: orchestra, S: sine, P: square, T: triangle, W: sawtooth; R: compile/upload series2.be; Space: hard stop/reset; Ctrl+C exits.\n\n";
+    envelope_help(out);
     return status;
 }
 
@@ -179,7 +196,7 @@ try
 {
     char const* const slash = std::strrchr(argv[0], '/');
     exe_name = slash ? slash + 1 : argv[0];
-    auto const base_path = std::filesystem::path(argv[0]).parent_path();
+    auto const base_path = std::filesystem::absolute(argv[0]).parent_path();
     auto const orchestra_path =
         base_path / "orch01.vc_SV001.wav";
     auto const sine_path = base_path / "sample.wav";
@@ -218,36 +235,110 @@ try
     std::signal(SIGINT, stop);
     std::signal(SIGTERM, stop);
     std::cout << "Ready. MIDI voices: " << num_voices
-              << "; Space stops all notes/reset state; R compiles/uploads series2.be; Ctrl+C to exit.\n";
+              << "; Space stops all notes/reset state; R compiles/uploads series2.be; Ctrl+C to exit.\n"
+              << "Type :help then Enter for attack, sustain, release, gain and envelope controls.\n";
     terminal_keys keyboard;
     // Used only in polyphonic mode: MIDI channel/key owning each voice.
     std::array<int, num_voices> keys;
     keys.fill(-1);
     unsigned next = 0;
     std::vector<unsigned char> message;
+    envelope_controls::settings envelope;
+    bool interactive_envelope = false;
+    bool playback_ready = true;
+    bool entering_command = false;
+    std::string command_line;
+#if defined(__linux__) && defined(__aarch64__)
+    auto const compiler_path = base_path / "berry.linux-arm64";
+#else
+    auto const compiler_path = base_path / "berry";
+#endif
+    auto replace_program = [&](std::filesystem::path const& path) {
+        check(board.all_notes_off());
+        keys.fill(-1);
+        next = 0;
+        playback_ready = false;
+        for (uint8_t voice = 0; voice < voice_board_t::voice_count; ++voice) {
+            auto result = board.load_script(voice, path.string());
+            if (!result)
+                throw std::runtime_error("Program upload stopped at voice " + std::to_string(voice) +
+                    ": " + result.message + "; playback paused until a complete upload succeeds");
+        }
+        do { midi.getMessage(&message); } while (!message.empty());
+        playback_ready = true;
+    };
+    auto apply_command = [&] {
+        auto const command = envelope_controls::parse(command_line, envelope);
+        if (command.kind == envelope_controls::action::help) {
+            envelope_help(std::cout);
+            return;
+        }
+        if (command.kind == envelope_controls::action::status) {
+            if (!playback_ready) std::cout << "Playback paused: program upload incomplete.\n";
+            std::cout << (interactive_envelope ? "Active: " : "Not applied (file program active): ")
+                      << envelope_controls::describe(envelope) << '\n';
+            return;
+        }
+        auto const source_path = base_path / "voicebd_live.be";
+        auto const bytecode_path = base_path / "voicebd_live.bec";
+        {
+            std::ofstream source;
+            source.exceptions(std::ios::failbit | std::ios::badbit);
+            source.open(source_path);
+            source << envelope_controls::program(command.value);
+            source.close();
+        }
+        envelope_controls::compile(compiler_path, source_path, bytecode_path);
+        if (stopped) return;
+        replace_program(bytecode_path);
+        envelope = command.value;
+        interactive_envelope = true;
+        std::cout << envelope_controls::describe(envelope)
+                  << ". Applied; press a MIDI key again.\n" << std::flush;
+    };
     while (!stopped) {
         try {
-            int const keypress = keyboard.read_key();
+            int keypress = keyboard.read_key();
+            if (entering_command && keypress >= 0) {
+                if (keypress == '\r' || keypress == '\n') {
+                    entering_command = false;
+                    std::cout << '\n' << std::flush;
+                    apply_command();
+                } else if (keypress == 27 || keypress == 4) {
+                    entering_command = false;
+                    command_line.clear();
+                    std::cout << "\nCancelled.\n" << std::flush;
+                } else if (keypress == 127 || keypress == 8) {
+                    if (command_line.size() > 1) {
+                        command_line.pop_back();
+                        std::cout << "\b \b" << std::flush;
+                    }
+                } else if (keypress == 21) {
+                    while (command_line.size() > 1) {
+                        command_line.pop_back();
+                        std::cout << "\b \b";
+                    }
+                    std::cout << std::flush;
+                } else if (keypress >= 32 && keypress <= 126) {
+                    command_line += char(keypress);
+                    std::cout << char(keypress) << std::flush;
+                }
+                keypress = -1;
+            } else if (keypress == ':') {
+                entering_command = true;
+                command_line = ":";
+                std::cout << ':' << std::flush;
+                keypress = -1;
+            }
             switch (keypress) {
                 case 'r':
                 case 'R': {
-                    check(board.all_notes_off());
-                    keys.fill(-1);
-                    next = 0;
                     std::cout << "Compiling series2.be..." << std::endl;
-#if defined(__linux__) && defined(__aarch64__)
-                    char const* command = "./berry.linux-arm64 series2.be -o series2.bec";
-#else
-                    char const* command = "./berry series2.be -o series2.bec";
-#endif
-                    if (std::system(command) == 0) {
-                        for (uint8_t voice = 0; voice < voice_board_t::voice_count; ++voice)
-                            check(board.load_script(voice, "series2.bec"));
-                        std::cout << "series2.bec loaded into voices 0-7." << std::endl;
-                    } else {
-                        std::cerr << "Compilation failed; no program uploaded.\n";
-                    }
-                    do { midi.getMessage(&message); } while (!message.empty());
+                    envelope_controls::compile(compiler_path, "series2.be", "series2.bec");
+                    if (stopped) break;
+                    replace_program("series2.bec");
+                    interactive_envelope = false;
+                    std::cout << "series2.bec loaded into voices 0-7; terminal envelope settings inactive.\n";
                     break;
                 }
                 case ' ': {
@@ -299,11 +390,15 @@ try
             midi.getMessage(&message);
             if (message.size() >= 3) {
                 unsigned const type = message[0] & 0xf0;
+                if (!playback_ready && type == 0x90 && message[2]) {
+                    std::cerr << "Playback paused: apply settings or press R to complete a program upload.\n";
+                    continue;
+                }
                 if constexpr (num_voices == 1) {
                     // No key tracking: even releases after Space reach the board.
                     if (type == 0x90 && message[2]) {
                         check(board.note_on(0, 0, message[1], message[2]));
-                        print_key_demand(0, message[1]);
+                        if (!entering_command) print_key_demand(0, message[1]);
                     } else if (type == 0x80 || (type == 0x90 && !message[2])) {
                         check(board.note_off(0));
                     }
@@ -319,7 +414,7 @@ try
                         next = (voice + 1) % num_voices;
                         keys[voice] = -1;
                         check(board.note_on(voice, 0, message[1], message[2]));
-                        print_key_demand(voice, message[1]);
+                        if (!entering_command) print_key_demand(voice, message[1]);
                         keys[voice] = key;
                     } else if (type == 0x80 || (type == 0x90 && !message[2])) {
                         for (unsigned voice = 0; voice < num_voices; ++voice) {
@@ -332,8 +427,7 @@ try
                 }
             } else std::this_thread::sleep_for(std::chrono::milliseconds(1));
         } catch (std::exception const& error) {
-            std::cerr << exe_name << ": " << error.what()
-                      << "; fix series2.be and press R to reload.\n";
+            std::cerr << exe_name << ": " << error.what() << '\n';
         }
     }
     board.close();

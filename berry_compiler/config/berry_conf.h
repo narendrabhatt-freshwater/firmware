@@ -4,6 +4,8 @@
 #include <assert.h>
 #include <stdlib.h>
 
+/* ---- host berry configuration ------------------------------------------- */
+
 #define BE_DEBUG 0
 #define BE_INTGER_TYPE 0
 #define BE_USE_SINGLE_FLOAT 1
