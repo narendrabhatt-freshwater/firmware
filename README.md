@@ -263,7 +263,7 @@ that look like firmware bugs; this failure mode has produced multi-hour
 misdiagnoses on this project.
 
 **Rule: change a descriptor → bump `idProduct` in
-`app/usb.cpp` on Channel or `USB_APP/usb_descriptors.c` on Effect.** Current values are `0xCafe/0x4032` (Channel) and `0xCafe/0x4015` (Effect)
+`app/usb_device.cpp` on Channel or `USB_APP/usb_descriptors.c` on Effect.** Current values are `0xCafe/0x4032` (Channel) and `0xCafe/0x4015` (Effect)
 (development identifiers — replace them with organization-owned or formally
 allocated VID/PIDs before production).
 

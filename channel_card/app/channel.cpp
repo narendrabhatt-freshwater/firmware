@@ -1,13 +1,11 @@
 #include "channel.h"
 #include "audio.h"
-#include "cs4304.h"
+#include "board.h"
 #include "voice.h"
 #include "filter.h"
 #include "samples.h"
 #include "stream.h"
 #include "usb.h"
-#include "main.h"
-#include "usart.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,7 +27,7 @@ void ChannelLed_Init(void)
     s_level[0] = s_level[1] = s_level[2] = 0u;
     s_phase = 0u;
     s_controlled = 0u;
-    s_last_tick = HAL_GetTick();
+    s_last_tick = Board_Millis();
 }
 
 /* ---- convert normalized led levels -------------------------------------- */
@@ -55,196 +53,16 @@ int ChannelLed_Set(float red, float green, float blue, float brightness)
 
 void ChannelLed_Task(void)
 {
-    static GPIO_TypeDef *const ports[3] = {RGB_R_GPIO_Port, RGB_G_GPIO_Port, RGB_B_GPIO_Port};
-    static const uint16_t pins[3] = {RGB_R_Pin, RGB_G_Pin, RGB_B_Pin};
     uint32_t now;
     uint8_t i;
 
     if (!s_controlled) return;
-    now = HAL_GetTick();
+    now = Board_Millis();
     if (now == s_last_tick) return;
     s_last_tick = now;
     s_phase = (uint8_t)((s_phase + 1u) & 0x0fu);
     for (i = 0u; i < 3u; ++i)
-        HAL_GPIO_WritePin(ports[i], pins[i], s_phase < s_level[i] ? GPIO_PIN_SET : GPIO_PIN_RESET);
-}
-
-/* ---- receive and transmit console bytes --------------------------------- */
-
-/* Interrupt-driven receive ring buffer for UART5 (RS485 console).
- * Polling UART5 with HAL_UART_Receive() from the main loop only catches a
- * byte if the loop happens to look within one character time — and the loop also runs the USB task, the cpuload producer and
- * blocking console replies. Hosts therefore had to pace every character
- * ~1 ms apart, which made a chord take ~100 ms to send.
- * Buffering in the RXNE interrupt removes that constraint: characters are
- * captured regardless of what the main loop is doing, so the host can send
- * a whole command at wire speed.
- * The hardware RX FIFO is re-enabled here (CubeMX leaves it off). That gives
- * ~16 character-times of slack if a higher-priority audio ISR runs long —
- * without it, priority-3 UART RX still overruns under I2S/USB load.
- * Deliberately register-level rather than HAL_UART_Receive_IT(): the HAL
- * variant arms a fixed-length transfer and stops on completion, which does
- * not fit a console stream of arbitrary-length lines. */
-
-#define UART5_RX_BUF_SIZE 8192u
-#define UART5_RX_BUF_MASK (UART5_RX_BUF_SIZE - 1u)
-static_assert(UART5_RX_BUF_SIZE > 128u * 32u, "RX must hold the worst-case note burst");
-static_assert((UART5_RX_BUF_SIZE & UART5_RX_BUF_MASK) == 0u, "RX size must be a power of two");
-
-static volatile uint8_t rx_buf[UART5_RX_BUF_SIZE];
-/** Written only by the ISR. */
-static volatile uint16_t rx_head;
-/** Written only by Uart5Rx_Get(). Single producer + single consumer, so no
- * critical section is needed around either index. */
-static volatile uint16_t rx_tail;
-static volatile uint32_t rx_dropped;
-static volatile uint8_t tx_complete;
-static const uint8_t *volatile tx_next;
-static volatile uint16_t tx_left;
-
-/* ---- initialize rs485 reception ----------------------------------------- */
-
-void Uart5Rx_Init(void)
-{
-    rx_head = 0u;
-    rx_tail = 0u;
-    rx_dropped = 0u;
-
-    /* CubeMX calls DisableFifoMode(); turn it back on so a late ISR still
-     * finds the burst sitting in hardware instead of setting ORE. */
-    if (HAL_UARTEx_SetRxFifoThreshold(&huart5, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK) {
-        Error_Handler();
-    }
-    if (HAL_UARTEx_EnableFifoMode(&huart5) != HAL_OK) {
-        Error_Handler();
-    }
-
-    /* Discard boot/turnaround noise and clear latched errors before arming:
-     * a sticky ORE would stop RXFNE from ever firing again. */
-    while (UART5->ISR & USART_ISR_RXNE_RXFNE) {
-        (void)UART5->RDR;
-    }
-    UART5->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF;
-
-    /* Release RS485 at the final stop bit, even while the audio pump runs. */
-    HAL_NVIC_SetPriority(UART5_IRQn, 0, 0);
-    HAL_NVIC_EnableIRQ(UART5_IRQn);
-
-    UART5->CR1 |= USART_CR1_RXNEIE_RXFNEIE;
-}
-
-/* ---- read and clear received bytes -------------------------------------- */
-
-uint8_t Uart5Rx_Get(uint8_t *out)
-{
-    if (out == NULL || rx_tail == rx_head) {
-        return 0u;
-    }
-    *out = rx_buf[rx_tail];
-    rx_tail = (uint16_t)((rx_tail + 1u) & UART5_RX_BUF_MASK);
-    return 1u;
-}
-
-void Uart5Rx_Clear(void)
-{
-    const uint32_t primask = __get_PRIMASK();
-    __disable_irq();
-    UART5->RQR = USART_RQR_RXFRQ;
-    UART5->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-    rx_tail = rx_head;
-    __set_PRIMASK(primask);
-}
-
-uint32_t Uart5Rx_DroppedCount(void)
-{
-    return rx_dropped;
-}
-
-/* ---- transmit an rs485 reply -------------------------------------------- */
-
-int Uart5Rx_Transmit(const uint8_t *data, uint16_t size, uint32_t timeout_ms)
-{
-    uint32_t const started = HAL_GetTick();
-    if (data == NULL || size == 0u) return -1;
-    uint32_t const primask = __get_PRIMASK();
-    __disable_irq();
-    UART5->CR1 &= ~(USART_CR1_TCIE | USART_CR1_TXEIE_TXFNFIE);
-    tx_complete = 0u;
-    tx_next = data;
-    tx_left = size;
-    UART5->ICR = USART_ICR_TCCF;
-    UART5->CR1 |= USART_CR1_TXEIE_TXFNFIE;
-    __set_PRIMASK(primask);
-    /* RX/TC already run above the mixer. Feed TX there too, so a mixer callback
-     * cannot leave gaps in a 61-byte status reply. The stack buffer remains live
-     * until TC. USB dispatch cannot recurse into this RS485-only transmitter. */
-    while (tx_complete == 0u) {
-        USB_App_Task();
-        if (!tx_complete && HAL_GetTick() - started >= timeout_ms) {
-            uint32_t saved = __get_PRIMASK();
-            __disable_irq();
-            UART5->CR1 &= ~(USART_CR1_TCIE | USART_CR1_TXEIE_TXFNFIE);
-            tx_left = 0u;
-            __set_PRIMASK(saved);
-            return -1;
-        }
-    }
-    return 0;
-}
-
-/* ---- service the uart interrupt ----------------------------------------- */
-
-extern "C" void UART5_IRQHandler(void)
-{
-    uint32_t isr = UART5->ISR;
-
-    if ((isr & USART_ISR_TC) != 0u && (UART5->CR1 & USART_CR1_TCIE) != 0u) {
-        RS485_CTL_GPIO_Port->BSRR = (uint32_t)RS485_CTL_Pin << 16u;
-        UART5->CR1 &= ~USART_CR1_TCIE;
-        UART5->ICR = USART_ICR_TCCF;
-        tx_complete = 1u;
-    }
-
-    if ((UART5->CR1 & USART_CR1_TXEIE_TXFNFIE) != 0u) {
-        while (tx_left && (UART5->ISR & USART_ISR_TXE_TXFNF)) {
-            UART5->TDR = *tx_next++;
-            --tx_left;
-        }
-        if (!tx_left) {
-            UART5->CR1 &= ~USART_CR1_TXEIE_TXFNFIE;
-            UART5->CR1 |= USART_CR1_TCIE;
-        }
-    }
-
-    if (isr & USART_ISR_ORE) {
-        /* Clear or RXFNE stalls. The surviving byte is still in RDR/FIFO and
-         * will be pulled by the drain loop below. */
-        UART5->ICR = USART_ICR_ORECF;
-        rx_dropped++;
-    }
-
-    while (isr & USART_ISR_RXNE_RXFNE) {
-        const uint8_t c = (uint8_t)(UART5->RDR & 0xFFu);
-
-        /* RS485 turnaround can stamp FE/NE on noise and valid bytes.
-         * Clear the sticky flags so RX keeps running, and retain the byte to avoid
-         * truncating command frames.
-         * Console_Poll resyncs on a fresh "c:"/"*:"/"e:" if idle garbage
-         * prefixes a line. */
-        if (isr & (USART_ISR_FE | USART_ISR_NE)) {
-            UART5->ICR = USART_ICR_FECF | USART_ICR_NECF;
-        }
-
-        const uint16_t next = (uint16_t)((rx_head + 1u) & UART5_RX_BUF_MASK);
-        if (next == rx_tail) {
-            /* Full: drop the new byte rather than overwrite an unread command. */
-            rx_dropped++;
-        } else {
-            rx_buf[rx_head] = c;
-            rx_head = next;
-        }
-        isr = UART5->ISR;
-    }
+        Board_LedWrite((uint8_t)(BOARD_LED_RGB_R + i), s_phase < s_level[i] ? 1u : 0u);
 }
 
 /* ---- process console commands ------------------------------------------- */
@@ -252,18 +70,6 @@ extern "C" void UART5_IRQHandler(void)
 /* Channel Card RS485 console and status LEDs.
  * main.c owns bring-up and the DAC handle; this file owns the interactive
  * console surface. */
-
-extern UART_HandleTypeDef huart5;
-
-/* Bound from main via ChannelConsole_SetDacHandle(). */
-static CS4304_HandleTypeDef *s_dac;
-
-/* ---- bind the console dac ----------------------------------------------- */
-
-void ChannelConsole_SetDacHandle(CS4304_HandleTypeDef *h)
-{
-    s_dac = h;
-}
 
 /* ---- multi-drop rs485 card addressing ----------------------------------- */
 
@@ -275,7 +81,7 @@ void ChannelConsole_SetDacHandle(CS4304_HandleTypeDef *h)
 /* Keep blocking TX close to its wire time so USB audio can be serviced. */
 static uint32_t RS485_TxDeadlineMs(uint32_t nbytes)
 {
-    return fw_rs485_tx_deadline_ms(nbytes, huart5.Init.BaudRate);
+    return fw_rs485_tx_deadline_ms(nbytes, Board_Rs485Baud());
 }
 
 /** RS485 bus-aware transmit.
@@ -296,70 +102,12 @@ static uint32_t RS485_TxDeadlineMs(uint32_t nbytes)
  */
 #define RS485_TAG "[C] " /* response prefix tag for Channel Card */
 
-/* ---- release and acquire the shared rs485 bus --------------------------- */
-
-/** Tri-state CTL and TX so the other MCU can use the bus (idle state). */
-static void RS485_BusRelease(void)
-{
-    GPIO_InitTypeDef gi = {};
-
-    /* Actively drive DE low first (the other card's CTL is Hi-Z input, so
-     * no contention) — a fast clean falling edge instead of the slow 10 k
-     * pull-down decay.  TX is still driving mark while DE falls, so the
-     * transceiver can't clock out garbage during the turnaround. */
-    HAL_GPIO_WritePin(RS485_CTL_GPIO_Port, RS485_CTL_Pin, GPIO_PIN_RESET);
-    for (volatile uint32_t i = 0; i < 300; i++) {
-    }
-
-    gi.Pin = RS485_CTL_Pin;
-    gi.Mode = GPIO_MODE_INPUT;
-    gi.Pull = GPIO_NOPULL; /* external 10 k pull-down keeps DE low */
-    HAL_GPIO_Init(RS485_CTL_GPIO_Port, &gi);
-
-    gi.Pin = GPIO_PIN_12; /* PC12 = UART5_TX, shared D net */
-    gi.Mode = GPIO_MODE_INPUT;
-    gi.Pull = GPIO_PULLUP; /* keep D at mark (idle) level */
-    HAL_GPIO_Init(GPIOC, &gi);
-}
-
-/** Take the bus: TX back to UART AF, CTL driven HIGH (transmit mode). */
-static void RS485_BusAcquire(void)
-{
-    GPIO_InitTypeDef gi = {};
-
-    gi.Pin = GPIO_PIN_12; /* PC12 = UART5_TX */
-    gi.Mode = GPIO_MODE_AF_PP;
-    gi.Pull = GPIO_NOPULL;
-    gi.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    gi.Alternate = GPIO_AF8_UART5;
-    HAL_GPIO_Init(GPIOC, &gi);
-
-    HAL_GPIO_WritePin(RS485_CTL_GPIO_Port, RS485_CTL_Pin, GPIO_PIN_SET);
-    gi.Pin = RS485_CTL_Pin;
-    gi.Mode = GPIO_MODE_OUTPUT_PP;
-    gi.Pull = GPIO_NOPULL;
-    gi.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    gi.Alternate = 0;
-    HAL_GPIO_Init(RS485_CTL_GPIO_Port, &gi);
-
-    /* DE enable settle time (~1 us) before the first start bit */
-    for (volatile uint32_t i = 0; i < 300; i++) {
-    }
-}
-
-/** Check whether the RS485 bus is free (CTL low = no one transmitting).
- * Our own CTL is Hi-Z input while idle, so this reads the real DE line. */
-static inline uint8_t RS485_BusFree(void)
-{
-    return (HAL_GPIO_ReadPin(RS485_CTL_GPIO_Port, RS485_CTL_Pin) == GPIO_PIN_RESET);
-}
-
 /** Wait up to timeout_ms for the bus to become free.  Returns 1 if free. */
 static uint8_t RS485_WaitBusFree(uint32_t timeout_ms)
 {
-    uint32_t t0 = HAL_GetTick();
-    while (!RS485_BusFree()) {
-        if ((HAL_GetTick() - t0) >= timeout_ms) return 0; /* timed out — bus still busy */
+    uint32_t t0 = Board_Millis();
+    while (!Board_Rs485BusFree()) {
+        if ((Board_Millis() - t0) >= timeout_ms) return 0; /* timed out — bus still busy */
     }
     return 1;
 }
@@ -371,14 +119,14 @@ static int __attribute__((unused)) RS485_Send(const char *s)
 {
     if (!RS485_WaitBusFree(RS485_BUS_TIMEOUT_MS)) return -1; /* bus occupied — drop this message */
 
-    RS485_BusAcquire();
+    Board_Rs485Acquire();
 
     {
         uint32_t n = (uint32_t)strlen(s);
         Uart5Rx_Transmit((const uint8_t *)s, (uint16_t)n, RS485_TxDeadlineMs(n));
     }
 
-    RS485_BusRelease();
+    Board_Rs485Release();
     return 0;
 }
 
@@ -429,12 +177,12 @@ static void RS485_Reply(const char *s)
     memcpy(frame, RS485_TAG, tag_len);
     memcpy(frame + tag_len, s, body_len);
 
-    RS485_BusAcquire();
+    Board_Rs485Acquire();
     if (Uart5Rx_Transmit((const uint8_t *)frame, (uint16_t)(tag_len + body_len),
                          RS485_TxDeadlineMs((uint32_t)(tag_len + body_len))) != 0) {
         rs485_tx_fail++;
     }
-    RS485_BusRelease();
+    Board_Rs485Release();
 }
 
 /*
@@ -485,13 +233,13 @@ static void RS485_ReplyVq(uint8_t active_mask, uint8_t pending_mask, const uint8
     }
     frame[VQ_FRAME_LEN - 1u] = '\n';
 
-    RS485_BusAcquire();
+    Board_Rs485Acquire();
     if (Uart5Rx_Transmit(frame, VQ_FRAME_LEN, RS485_TxDeadlineMs(VQ_FRAME_LEN)) != 0) {
         rs485_tx_fail++;
     } else {
         rs485_vq_count++;
     }
-    RS485_BusRelease();
+    Board_Rs485Release();
 }
 
 /* ---- channel card control console (rs485) ------------------------------- */
@@ -502,20 +250,19 @@ static uint8_t led_show_on = 1;
  * session default turns bypass ON); there is no runtime switch command. */
 typedef struct {
     const char *name;
-    GPIO_TypeDef *port;
-    uint16_t pin;
+    uint8_t id;
     uint8_t active_low; /* 1 = LOW enables the switch (ON) */
 } SwitchDef_t;
 
 static const SwitchDef_t switches[] = {
-    {"hp", HP_SW_GPIO_Port, HP_SW_Pin, 1},
-    {"bp", BP_SW_GPIO_Port, BP_SW_Pin, 1},
-    {"lp", LP_SW_GPIO_Port, LP_SW_Pin, 1},
-    {"vca", VCA_SW_GPIO_Port, VCA_SW_Pin, 1},
-    {"bypass", BYPASS_SW_GPIO_Port, BYPASS_SW_Pin, 1},
-    {"vcf", VCF_SW_GPIO_Port, VCF_SW_Pin, 1},
-    {"scf", SCF_SW_GPIO_Port, SCF_SW_Pin, 1},
-    {"hp_ctl", HP_CTL_GPIO_Port, HP_CTL_Pin, 0},
+    {"hp", BOARD_SWITCH_HP, 1},
+    {"bp", BOARD_SWITCH_BP, 1},
+    {"lp", BOARD_SWITCH_LP, 1},
+    {"vca", BOARD_SWITCH_VCA, 1},
+    {"bypass", BOARD_SWITCH_BYPASS, 1},
+    {"vcf", BOARD_SWITCH_VCF, 1},
+    {"scf", BOARD_SWITCH_SCF, 1},
+    {"hp_ctl", BOARD_SWITCH_HP_CTL, 0},
 };
 #define NUM_SWITCHES (sizeof(switches) / sizeof(switches[0]))
 
@@ -529,7 +276,7 @@ static const SwitchDef_t switches[] = {
 /** Bypass is active-low (LOW = ON). */
 static void Console_SetBypassOn(void)
 {
-    HAL_GPIO_WritePin(BYPASS_SW_GPIO_Port, BYPASS_SW_Pin, GPIO_PIN_RESET);
+    Board_SwitchWrite(BOARD_SWITCH_BYPASS, 0u);
 }
 
 /** Boot defaults: dry path + CH1 DAC trim 0 dB (`g 1 0`).
@@ -537,8 +284,8 @@ static void Console_SetBypassOn(void)
 static void Console_ApplyBootDefaults(void)
 {
     Console_SetBypassOn();
-    if (s_dac != NULL) {
-        CS4304_SetChannelTrim(s_dac, '1', (uint8_t)(BOOT_DEFAULT_ATTEN_DB * 2u));
+    if (Board_DacReady() != 0u) {
+        Board_DacSetTrim('1', (uint8_t)(BOOT_DEFAULT_ATTEN_DB * 2u));
     }
 }
 
@@ -640,8 +387,8 @@ static void Console_CmdGain(char *line)
     unsigned int ch, val;
 
     (void)sscanf(line, "g %u %u", &ch, &val);
-    if (ch >= 1 && ch <= 4 && val <= 127 && s_dac != NULL) {
-        CS4304_SetChannelTrim(s_dac, (char)('0' + ch), (uint8_t)(val * 2u));
+    if (ch >= 1 && ch <= 4 && val <= 127 && Board_DacReady() != 0u) {
+        Board_DacSetTrim((char)('0' + ch), (uint8_t)(val * 2u));
         RS485_Reply("ok\r\n");
     } else {
         RS485_Reply("err:range\r\n");
@@ -843,8 +590,7 @@ static void Console_CmdVoiceQuery(void)
     uint8_t i;
 
     {
-        uint32_t primask = __get_PRIMASK();
-        __disable_irq();
+        uint32_t saved = Board_IrqSave();
         for (i = 0u; i < NOTE_BANK_VOICES; i++) {
             if (NoteBank_IsActive(i) != 0u) mask |= (uint8_t)(1u << i);
             free_samples[i] = (uint16_t)StreamRing_FreeLevel(i);
@@ -859,7 +605,7 @@ static void Console_CmdVoiceQuery(void)
          * acknowledgement with older free space grants already-used space again. */
         body_sequence = StreamRing_LastBodySequence();
         body_age_ms = StreamRing_BodyAgeMs();
-        if (primask == 0u) __enable_irq();
+        Board_IrqRestore(saved);
     }
 
     if (!console_via_usb) {
@@ -1436,27 +1182,26 @@ static void Console_Poll(void)
  * The RGB package is exclusively VM-controlled. */
 static void LED_Task(void)
 {
-    static GPIO_TypeDef *const ports[2] = {LED_R_GPIO_Port, LED_Y_GPIO_Port};
-    static const uint16_t pins[2] = {LED_R_Pin, LED_Y_Pin};
+    static const uint8_t leds[2] = {BOARD_LED_R, BOARD_LED_Y};
     static uint32_t t_next = 0;
     static uint8_t step = 0;
 
     ChannelLed_Task();
     if (Audio_Bridge_CpuLoadProbeGet() != 0u) {
-        HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_RESET);
+        Board_LedWrite(BOARD_LED_R, 0u);
         return;
     }
     if (!led_show_on) {
         for (uint8_t i = 0; i < 2; i++) {
-            HAL_GPIO_WritePin(ports[i], pins[i], GPIO_PIN_RESET);
+            Board_LedWrite(leds[i], 0u);
         }
         return;
     }
-    if (HAL_GetTick() >= t_next) {
-        t_next = HAL_GetTick() + 150;
-        HAL_GPIO_WritePin(ports[step], pins[step], GPIO_PIN_RESET);
+    if (Board_Millis() >= t_next) {
+        t_next = Board_Millis() + 150;
+        Board_LedWrite(leds[step], 0u);
         step = (step + 1) % 2;
-        HAL_GPIO_WritePin(ports[step], pins[step], GPIO_PIN_SET);
+        Board_LedWrite(leds[step], 1u);
     }
 }
 
@@ -1465,12 +1210,11 @@ static void LED_Task(void)
 void ChannelConsole_Init(void)
 {
     ChannelLed_Init();
-    RS485_BusRelease();
+    Board_Rs485Release();
     Uart5Rx_Init();
 
     for (uint8_t i = 0; i < NUM_SWITCHES; i++) {
-        HAL_GPIO_WritePin(switches[i].port, switches[i].pin,
-                          switches[i].active_low ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        Board_SwitchWrite(switches[i].id, switches[i].active_low ? 1u : 0u);
     }
     Console_ApplyBootDefaults();
 
@@ -1487,6 +1231,15 @@ void ChannelConsole_Poll(void)
 {
     Console_Poll();
     LED_Task();
+}
+
+/* ---- run one main-loop pass --------------------------------------------- */
+
+void ChannelApp_Step(void)
+{
+    USB_App_Task();        /* Binary CDC BODY/uploads */
+    ChannelConsole_Poll(); /* RS485 console + LED chaser */
+    USB_App_Task();        /* Drain CDC after a console TX */
 }
 
 /* ---- receive compiled voice programs ------------------------------------ */

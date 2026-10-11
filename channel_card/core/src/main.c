@@ -200,9 +200,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-    USB_App_Task();        /* Binary CDC BODY/uploads */
-    ChannelConsole_Poll(); /* RS485 console + LED chaser */
-    USB_App_Task();        /* Drain CDC after a console TX */
+    ChannelApp_Step(); /* USB task, RS485 console + LEDs, USB task */
   }
   /* USER CODE END 3 */
 }

@@ -84,6 +84,12 @@ void ChannelConsole_Init(void);
 void ChannelConsole_Poll(void);
 
 /**
+ * @brief One pass of the main loop: USB task, console poll, USB task.
+ * @note main() calls only this in its loop, so every build runs the same pass.
+ */
+void ChannelApp_Step(void);
+
+/**
  * @brief Run one console command line that arrived over USB CDC.
  * @param line NUL-terminated command (mutated by the parser). May be NULL
  *             (no-op). Replies are routed to CDC for the duration of the call.

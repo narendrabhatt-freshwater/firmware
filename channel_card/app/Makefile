@@ -28,7 +28,7 @@ BERRY := berry_runtime/third_party/berry
 
 .DEFAULT_GOAL := all
 .DELETE_ON_ERROR:
-.PHONY: all info clean FORCE
+.PHONY: all info simulator clean FORCE
 
 # ---- source lists (keep link order stable) -----------------------------------
 
@@ -51,13 +51,16 @@ CORE_SOURCES := \
 APP_SOURCES := \
     app/cs4304.cpp \
     app/audio.cpp \
+    app/audio_i2s.cpp \
+    app/board_stm32.cpp \
     app/channel.cpp \
     app/filter.cpp \
     app/oscillator.cpp \
     app/voice.cpp \
     app/samples.cpp \
     app/stream.cpp \
-    app/usb.cpp
+    app/usb.cpp \
+    app/usb_device.cpp
 
 DRIVER_SOURCES := \
     core/src/system_stm32h7xx.c \
@@ -279,6 +282,13 @@ info:
 	@cmp -s "$(BINARY)" "$(BUILD_BINARY)" || \
 	    { echo "Output binary differs from the last build. Run make first."; exit 1; }
 	@cat "$(INFO)"
+
+# Host simulator: the same application sources behind virtual ports. Built
+# with the host compiler by sim/Makefile; it does not use the Arm toolchain.
+simulator:
+	@test -f "$(ROOT)/sim/Makefile" || \
+	    { echo "The simulator sources (sim/) are not part of this package."; exit 1; }
+	@$(MAKE) -C "$(ROOT)/sim"
 
 clean:
 	@rm -rf "$(OBJDIR)"

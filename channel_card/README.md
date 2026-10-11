@@ -41,7 +41,8 @@ The report includes used/free bytes and percentages for Flash, DTCM, AXI SRAM
 (`RAM_D1`), `RAM_D2`, `RAM_D3`, and ITCM. Section sizes show sample storage,
 the Berry arena, DMA buffers, and the heap/stack reservation. These are linker
 allocations, including alignment, rather than measured runtime memory peaks.
-The saved report stays under `build/release/`; `bin/` contains only the binary.
+The saved report stays under `build/release/`; `bin/` contains the firmware binary
+(and `sim`, the host simulator, if `make simulator` has been run).
 
 The RS485 rate is set by `BAUDRATE ?= 921600` at the top of
 [`app/Makefile`](app/Makefile). Edit that value for the normal build rate,
@@ -192,7 +193,7 @@ Pitch-track smoke with a loaded sample: `f0 300`, `fk0 1`, `n0 on 60` then
 
 ## Source layout and maintenance
 
-- `app/`: nine C++ implementations, their headers, and the Release Makefile.
+- `app/`: twelve C++ implementations, their headers, and the Release Makefile.
 - `berry_runtime/`: first-party script runtime and shared ABI declarations;
   `third_party/berry/` retains the vendored interpreter.
 - `core/` and `drivers/`: STM32 initialization, interrupt glue, HAL, and CMSIS.
@@ -203,15 +204,24 @@ The application is split by responsibility:
 
 | Implementation | Contents | Header |
 | --- | --- | --- |
-| `audio.cpp` | Calibrated DC outputs and I2S/DMA audio bridge | `audio.h` |
+| `audio.cpp` | Calibrated DC outputs and one-refill audio rendering | `audio.h` |
+| `audio_i2s.cpp` | I2S/DMA buffers and callbacks, I2S2 underrun guard, load probe | `audio.h` |
+| `board_stm32.cpp` | UART5 interrupt and RS485 bus pins, LEDs, switches, tick, DAC trim | `board.h`, `channel.h` |
 | `cs4304.cpp` | CS4304 DAC register access, initialization, gain and mute | `cs4304.h` |
-| `channel.cpp` | RS485 commands, UART5 interrupt, LEDs, script uploads | `channel.h` |
+| `channel.cpp` | RS485 commands, LED patterns, script uploads, main-loop pass | `channel.h` |
 | `voice.cpp` | Note playback, envelopes, Berry adapter | `voice.h` |
 | `filter.cpp` | Four-pole kernel and per-voice filter control | `filter.h` |
 | `oscillator.cpp` | Wavetable oscillators, routing, interpolation helpers | `oscillator.h` |
 | `samples.cpp` | Sample attack storage and playheads | `samples.h` |
 | `stream.cpp` | Per-voice BODY rings | `stream.h` |
-| `usb.cpp` | CDC device, descriptors, binary protocol, sample uploads | `usb.h` |
+| `usb.cpp` | Binary protocol, sample uploads | `usb.h` |
+| `usb_device.cpp` | CDC device on HAL PCD, descriptors, transfer queues | `usb.h` |
+
+Only `audio_i2s.cpp`, `board_stm32.cpp`, `usb_device.cpp`, and `cs4304.cpp` touch
+STM32 registers or HAL. The other implementations reach hardware through
+`board.h` and the `USB_Device_*` and `Uart5Rx_*` functions, and also build
+with a host compiler. Keep register access, HAL calls, and interrupt handlers
+in those four files. `main()` runs `ChannelApp_Step()` as its whole loop body.
 
 Use simple C++17 with plain functions and structs. Exceptions, RTTI, and
 thread-safe local-static initialization are disabled. Do not add virtual

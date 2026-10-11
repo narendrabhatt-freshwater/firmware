@@ -211,7 +211,7 @@ too low for a stable trigger.
 | `app/voice.cpp` | Calls the filter during note rendering |
 | `app/filter.h` | Filter API |
 | `app/channel.cpp` | `f0`…`f7` / `f` with optional q; init bypass + q=1.0 |
-| Top-level `CMakeLists.txt` | Registers the nine application C++ sources |
+| `app/Makefile` | Lists the application C++ sources |
 
 ---
 
