@@ -73,7 +73,8 @@ the Berry arena, DMA buffers, and the heap/stack reservation. These are linker
 allocations, including alignment, rather than measured runtime memory peaks.
 The saved report stays under `build/release/`; `bin/` contains the firmware binary
 (and `sim`, the host simulator, if `make` has been run).
-The firmware-only SVN package omits the simulator; use `make board` there.
+The SVN package includes the simulator sources: use `make` for the host
+simulator or `make board` for STM32 firmware, both from `app/`.
 
 The RS485 rate is set by `BAUDRATE ?= 921600` at the top of
 [`app/Makefile`](app/Makefile). Edit that value for the normal build rate,

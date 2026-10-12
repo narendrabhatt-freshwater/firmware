@@ -33,7 +33,7 @@ both product trees from a single `git archive HEAD`. Unrelated work in
 `voice_bd/` or Effect Card does not block preparation. Ignored build output is
 never copied. The manifest records the exact Git commit and every shipped file.
 
-The package contains firmware and compiler sources, required generated Berry
+The package contains firmware, host simulator and compiler sources, required generated Berry
 tables, licenses/provenance, build inputs, Berry source examples, the Linux
 ARM64 compiler, two first-party READMEs, and essential protocol/filter references.
 Upstream dependency READMEs remain with their snapshots. Tests, fixtures,

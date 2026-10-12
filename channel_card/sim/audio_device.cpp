@@ -99,9 +99,9 @@ bool start_audio_device(void)
         stop_audio_device();
         return false;
     }
-    fprintf(stderr, "sim: PortAudio default output, %.0f Hz, signed 32-bit, "
-            "mono to stereo; %u-frame callback, %.2f ms reported output latency\n",
-            info->sampleRate, callback_frames, info->outputLatency * 1000);
+    // fprintf(stderr, "sim: PortAudio default output, %.0f Hz, signed 32-bit, "
+    //         "mono to stereo; %u-frame callback, %.2f ms reported output latency\n",
+    //         info->sampleRate, callback_frames, info->outputLatency * 1000);
     return true;
 }
 
