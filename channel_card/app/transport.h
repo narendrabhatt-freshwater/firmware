@@ -69,12 +69,16 @@ uint32_t get_rs485_dropped_byte_count(void);
 
 /* ---- share the rs485 bus ------------------------------------------------ */
 
-/* Tri-state the driver-enable and transmit pins so another card can talk. */
-void release_rs485_bus(void);
-/* Take the bus for one reply; pair every call with release_rs485_bus(). */
-void acquire_rs485_bus(void);
-/* Non-zero while no card is driving the bus. */
-uint8_t is_rs485_bus_free(void);
+/* Optional electrical bus services. A point-to-point byte transport needs
+ * none. Hardware binds a complete, static-lifetime table before first use. */
+typedef struct {
+    void (*acquire)(void);
+    void (*release)(void);
+    uint8_t (*is_free)(void);
+    uint32_t (*baud_rate)(void);
+} Rs485BusServices;
+void set_rs485_bus_services(const Rs485BusServices *services);
+uint8_t wait_for_rs485_bus(uint32_t timeout_ms);
 uint32_t get_rs485_baud_rate(void);
 
 /* Start borrows data until poll returns complete/error or abort returns.
@@ -83,12 +87,13 @@ uint32_t get_rs485_baud_rate(void);
  * -1 error. Idle polling returns 1. Neither completion nor abort acknowledges
  * remote delivery.
  * abort stops further reads of the borrowed buffer; already sent bytes cannot
- * be recalled. Caller acquires/releases the bus on all completion paths. */
+ * be recalled. write_rs485_bytes owns any configured bus services. */
 int start_rs485_transmit(const uint8_t *data, uint16_t size);
 int poll_rs485_transmit(void);
 void abort_rs485_transmit(void);
 
-/* Shared application service: bounded wait with USB protocol servicing.
+/* Shared application service: acquire the configured bus, transmit with a
+ * bounded wait and USB protocol servicing, then release on every exit path.
  * Returns 0 on completion, -1 on start/failure/timeout (milliseconds). */
 int write_rs485_bytes(const uint8_t *data, uint16_t size, uint32_t timeout_ms);
 

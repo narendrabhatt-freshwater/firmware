@@ -30,25 +30,7 @@
 extern "C" {
 #endif
 
-/* Platform services used by the shared application.
- * board_stm32.cpp implements them for the Channel Card; the host simulator
- * supplies its own. Keep this interface C-compatible. */
-
-/* ---- read time and mask interrupts -------------------------------------- */
-
-/* Milliseconds since start; wraps at 2^32. */
-uint32_t get_board_time_ms(void);
-
-/* Mask every interrupt and return the previous mask for restore_interrupt_state(). */
-uint32_t disable_interrupts_and_save_state(void);
-void restore_interrupt_state(uint32_t saved);
-/* Publish sample metadata with the platform's memory-ordering barrier. */
-void board_memory_barrier(void);
-/* Optional profiling hooks, required only by builds that enable profiling. */
-#if defined(CHANNEL_ENABLE_CYCLE_PROFILING)
-void init_board_cycle_counter(void);
-uint32_t get_board_cycle_count(void);
-#endif
+/* STM32 physical outputs. Shared application code uses channel.h and platform.h. */
 
 /* ---- drive leds and analog switches ------------------------------------- */
 
@@ -67,7 +49,7 @@ void write_board_led(uint8_t led, uint8_t on);
  * and synchronization. A request does not restart its modulation phase. */
 void init_board_rgb_led(void);
 int set_board_rgb_colour(float red, float green, float blue, float brightness);
-/* Non-blocking main-loop service; simulation needs no physical modulation. */
+/* Non-blocking firmware main-loop service. */
 void service_board_leds(void);
 
 enum {
@@ -84,9 +66,6 @@ enum {
 
 /* Enable/disable a logical switch; the backend owns electrical polarity. */
 void write_board_switch(uint8_t sw, uint8_t enabled);
-
-/* Clear output-driver overlap diagnostics; does not restart playback. */
-void clear_audio_output_statistics(void);
 
 /* ---- set dac attenuation ------------------------------------------------ */
 

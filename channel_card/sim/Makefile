@@ -34,7 +34,7 @@ BERRY_SOURCES := $(patsubst $(ROOT)/%,%,$(sort $(wildcard $(ROOT)/$(BERRY)/src/*
 include $(ROOT)/app/sources.mk
 SOURCES := $(SHARED_APP_SOURCES) \
            berry_runtime/vm.c berry_runtime/vm_source.c berry_runtime/berry_backend.c \
-           $(BERRY_SOURCES) sim/main.cpp sim/serialdevices.cpp sim/board_sim.cpp
+           $(BERRY_SOURCES) sim/main.cpp sim/serialdevices.cpp sim/clock.cpp
 OBJECTS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(SOURCES)))
 
 INCLUDES := -I$(ROOT)/app -I$(ROOT)/berry_runtime -I$(ROOT)/$(BERRY)/src -I$(ROOT)/sim

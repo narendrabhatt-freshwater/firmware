@@ -90,6 +90,11 @@ static volatile uint8_t i2s1_fill_busy = 0;
 volatile uint32_t g_i2s1_fill_late = 0;
 
 static HAL_StatusTypeDef start_i2s2_playback(void);
+static uint32_t read_audio_refill_overlap_count(void);
+static void clear_audio_output_statistics(void);
+static const AudioOutputDiagnostics output_diagnostics = {
+    read_audio_refill_overlap_count, clear_audio_output_statistics
+};
 
 /* ---- start playback transfers ------------------------------------------- */
 
@@ -98,6 +103,7 @@ static HAL_StatusTypeDef start_i2s2_playback(void);
  */
 void start_audio_playback(void)
 {
+    set_audio_output_diagnostics(&output_diagnostics);
     if (!i2s_started) {
         memset(i2s1_tx_buf, 0, sizeof(i2s1_tx_buf));
         memset(i2s2_tx_buf, 0, sizeof(i2s2_tx_buf));
@@ -317,12 +323,12 @@ void HAL_I2S_ErrorCallback(I2S_HandleTypeDef *hi2s)
 
 /* ---- report output-driver diagnostics ----------------------------------- */
 
-uint32_t get_audio_refill_overlap_count(void)
+static uint32_t read_audio_refill_overlap_count(void)
 {
     return g_i2s1_fill_late;
 }
 
-void clear_audio_output_statistics(void)
+static void clear_audio_output_statistics(void)
 {
     g_i2s1_fill_late = 0u;
 }

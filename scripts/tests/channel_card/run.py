@@ -77,7 +77,7 @@ def check_boundaries():
         text = (ROOT / source).read_text()
         text = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
         assert not forbidden.search(text), f"Hardware leaked into {source}"
-        assert not re.search(r'#include\s+["<](?:main|cs4304|board_stm32|usb_device)\.h', text)
+        assert not re.search(r'#include\s+["<](?:main|board|cs4304|board_stm32|usb_device)\.h', text)
     for source in ("board_stm32.cpp", "usb_device.cpp"):
         assert "process_usb_messages(" not in (ROOT / "app" / source).read_text()
     print("PASS application/platform dependency boundaries")
@@ -89,7 +89,7 @@ def pty_check(work):
                 "berry_runtime/berry_runtime_modtab.c"]
     sources += [str(p.relative_to(ROOT)) for p in sorted(
         (ROOT / "berry_runtime/third_party/berry/src").glob("*.c"))]
-    sources += ["sim/serialdevices.cpp", "sim/board_sim.cpp", "tests/pty_main.cpp"]
+    sources += ["sim/serialdevices.cpp", "sim/clock.cpp", "tests/pty_main.cpp"]
     exe = work / "pty_sim"
     run(["make", "-f", TESTS / "Makefile", "ROOT=" + str(ROOT), "-j4", "OBJDIR=" + str(work / "obj"),
          "OUTPUT=" + str(exe), "SOURCES=" + " ".join(sources)])

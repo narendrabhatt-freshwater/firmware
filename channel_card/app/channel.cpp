@@ -24,7 +24,7 @@
 #include "transport.h"
 #include "channel.h"
 #include "audio.h"
-#include "board.h"
+#include "platform.h"
 #include "voice.h"
 #include "filter.h"
 #include "samples.h"
@@ -36,14 +36,22 @@
 
 /* ---- request a logical rgb colour --------------------------------------- */
 
+static const ChannelOutputs *s_outputs;
+
+void set_channel_outputs(const ChannelOutputs *outputs)
+{
+    s_outputs = outputs;
+}
+
 int set_channel_led_colour(float red, float green, float blue, float brightness)
 {
-    return set_board_rgb_colour(red, green, blue, brightness);
+    return s_outputs && s_outputs->set_led_colour
+        ? s_outputs->set_led_colour(red, green, blue, brightness) : 0;
 }
 
 /* ---- process console commands ------------------------------------------- */
 
-/* Channel Card RS485 console and status LEDs.
+/* Channel Card RS485 console.
  * main.c owns bring-up and the DAC handle; this file owns the interactive
  * console surface. */
 
@@ -60,33 +68,7 @@ static uint32_t get_rs485_transmit_timeout_ms(uint32_t nbytes)
     return calculate_rs485_transmit_timeout_ms(nbytes, get_rs485_baud_rate());
 }
 
-/** RS485 bus-aware transmit.
- *
- * Multi-drop protocol: two MCUs share the same transceiver (SN65HVD75).
- * Both PB3 (RS485_CTL = DE/RE̅) and PC12 (UART5_TX) are wired in parallel
- * with the other MCU's pins, so BOTH must be tri-stated (Hi-Z input) when
- * this card is not transmitting — otherwise the two push-pull drivers
- * fight each other and DE never rises.
- *
- * Idle state:  CTL = input (external 10 k pull-down R34 keeps DE low),
- *              TX  = input with pull-up (keeps the shared D net at mark).
- * Transmit:    check CTL reads LOW (bus free), then TX -> UART AF,
- *              CTL -> push-pull output driven HIGH, send, and release.
- *
- * All outgoing text is prefixed with the card tag [C] so the host/other
- * cards know which MCU responded.
- */
 #define RS485_TAG "[C] " /* response prefix tag for Channel Card */
-
-/** Wait up to timeout_ms for the bus to become free.  Returns 1 if free. */
-static uint8_t wait_for_rs485_bus(uint32_t timeout_ms)
-{
-    uint32_t t0 = get_board_time_ms();
-    while (!is_rs485_bus_free()) {
-        if ((get_board_time_ms() - t0) >= timeout_ms) return 0; /* timed out — bus still busy */
-    }
-    return 1;
-}
 
 /** Transmit a string on the RS485 bus with collision avoidance.
  * Waits for the bus to be free, asserts DE, sends data, releases DE.
@@ -95,14 +77,11 @@ static int __attribute__((unused)) send_rs485_text(const char *s)
 {
     if (!wait_for_rs485_bus(RS485_BUS_TIMEOUT_MS)) return -1; /* bus occupied — drop this message */
 
-    acquire_rs485_bus();
-
     {
         uint32_t n = (uint32_t)strlen(s);
         write_rs485_bytes((const uint8_t *)s, (uint16_t)n, get_rs485_transmit_timeout_ms(n));
     }
 
-    release_rs485_bus();
     return 0;
 }
 
@@ -153,12 +132,10 @@ static void send_rs485_reply(const char *s)
     memcpy(frame, RS485_TAG, tag_len);
     memcpy(frame + tag_len, s, body_len);
 
-    acquire_rs485_bus();
     if (write_rs485_bytes((const uint8_t *)frame, (uint16_t)(tag_len + body_len),
                          get_rs485_transmit_timeout_ms((uint32_t)(tag_len + body_len))) != 0) {
         rs485_tx_fail++;
     }
-    release_rs485_bus();
 }
 
 /*
@@ -210,41 +187,18 @@ static void send_rs485_voice_status(uint8_t active_mask, uint8_t pending_mask,
     }
     frame[VQ_FRAME_LEN - 1u] = '\n';
 
-    acquire_rs485_bus();
     if (write_rs485_bytes(frame, VQ_FRAME_LEN, get_rs485_transmit_timeout_ms(VQ_FRAME_LEN)) != 0) {
         rs485_tx_fail++;
     } else {
         rs485_vq_count++;
     }
-    release_rs485_bus();
 }
 
 /* ---- channel card control console (rs485) ------------------------------- */
 
-static uint8_t led_show_on = 1;
-
 /* RS485 commands are parsed below. Uploads use the binary USB protocol. */
-#define BOOT_DEFAULT_ATTEN_DB 0u
 /** Console-addressable filter slots. */
 #define NOTE_FILTER_CONSOLE_VOICES 8u
-
-/* ---- apply analog switch defaults --------------------------------------- */
-
-/** Enable the logical bypass route. */
-static void enable_audio_bypass(void)
-{
-    write_board_switch(BOARD_SWITCH_BYPASS, 1u);
-}
-
-/** Boot defaults: dry path + CH1 DAC trim 0 dB (`g 1 0`).
- * Runtime note commands do not touch gain or bypass. */
-static void apply_channel_boot_defaults(void)
-{
-    enable_audio_bypass();
-    if (is_dac_ready() != 0u) {
-        set_dac_channel_trim('1', (uint8_t)(BOOT_DEFAULT_ATTEN_DB * 2u));
-    }
-}
 
 /* ---- parse voice selection ---------------------------------------------- */
 
@@ -339,14 +293,15 @@ static void send_voice_pitch_tracking_settings(uint8_t voice)
 
 /* ---- handle dac gain commands ------------------------------------------- */
 
-/** g <ch> <dB>: CS4304 DAC atten. Caller already matched sscanf. */
+/** g <ch> <dB>: output attenuation. Caller already matched sscanf. */
 static void process_gain_command(char *line)
 {
     unsigned int ch, val;
 
     (void)sscanf(line, "g %u %u", &ch, &val);
-    if (ch >= 1 && ch <= 4 && val <= 127 && is_dac_ready() != 0u) {
-        set_dac_channel_trim((char)('0' + ch), (uint8_t)(val * 2u));
+    if (ch >= 1 && ch <= 4 && val <= 127 &&
+        (!s_outputs || !s_outputs->set_gain ||
+         s_outputs->set_gain((char)('0' + ch), (uint8_t)(val * 2u)) == 0)) {
         send_rs485_reply("ok\r\n");
     } else {
         send_rs485_reply("err:range\r\n");
@@ -1122,43 +1077,10 @@ void process_rs485_commands(void)
     }
 }
 
-/* ---- update status leds ------------------------------------------------- */
-
-/** Non-blocking fixed red/yellow chaser (150 ms per step).
- * The RGB package is exclusively VM-controlled. */
-static void update_status_led_pattern(void)
-{
-    static const uint8_t leds[2] = {BOARD_LED_R, BOARD_LED_Y};
-    static uint32_t t_next = 0;
-    static uint8_t step = 0;
-
-    if (!led_show_on) {
-        for (uint8_t i = 0; i < 2; i++) {
-            write_board_led(leds[i], 0u);
-        }
-        return;
-    }
-    if (get_board_time_ms() >= t_next) {
-        t_next = get_board_time_ms() + 150;
-        write_board_led(leds[step], 0u);
-        step = (step + 1) % 2;
-        write_board_led(leds[step], 1u);
-    }
-}
-
 /* ---- initialize and poll the console ------------------------------------ */
 
 void init_channel_card(void)
 {
-    init_board_rgb_led();
-    release_rs485_bus();
-    init_rs485_receiver();
-
-    for (uint8_t i = 0; i < BOARD_SWITCH_COUNT; i++) {
-        write_board_switch(i, 0u);
-    }
-    apply_channel_boot_defaults();
-
     init_voice_filters();
     init_voice_envelopes();
     init_sample_storage();
@@ -1166,12 +1088,6 @@ void init_channel_card(void)
     init_voices();
 
     send_rs485_reply("ok: ready — h for cmds\r\n");
-}
-
-void update_channel_leds(void)
-{
-    service_board_leds();
-    update_status_led_pattern();
 }
 
 /* ---- receive compiled voice programs ------------------------------------ */

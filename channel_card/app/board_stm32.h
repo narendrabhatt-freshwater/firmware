@@ -28,6 +28,11 @@ extern "C" {
 #endif
 typedef struct CS4304_HandleTypeDef CS4304_HandleTypeDef;
 void set_channel_dac_handle(CS4304_HandleTypeDef *handle);
+/* Bind callbacks before application interrupts can run. */
+void init_board_platform(void);
+/* Physical startup and periodic outputs belong to the firmware entry point. */
+void init_channel_board(void);
+void update_channel_leds(void);
 #ifdef __cplusplus
 }
 #endif

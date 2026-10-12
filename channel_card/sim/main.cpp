@@ -25,6 +25,7 @@
 #include "channel.h"
 #include "serialdevices.h"
 #include "usb.h"
+#include "transport.h"
 #include <signal.h>
 #include <stdio.h>
 
@@ -49,6 +50,7 @@ int main(void)
     signal(SIGPIPE, SIG_IGN);
 
     init_usb_protocol();
+    init_rs485_receiver();
     init_channel_card();
     fprintf(stderr, "sim: USB %s, RS485 %s (Ctrl+C to stop)\n", SIM_USB_PATH, SIM_RS485_PATH);
 

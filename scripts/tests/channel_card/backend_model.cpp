@@ -23,7 +23,11 @@
 
 #include "backend_model.h"
 #include "audio.h"
+#ifdef LEGACY_API
 #include "board.h"
+#else
+#include "platform.h"
+#endif
 #include "channel.h"
 #include "usb.h"
 #ifndef LEGACY_API
@@ -44,6 +48,7 @@ void reconnect() { ++epoch; connected=true; faulted=false; usb_rx.clear(); usb_t
 }
 using namespace model;
 uint32_t get_board_time_ms() { return time_ms++; }
+#ifdef LEGACY_API
 uint32_t disable_interrupts_and_save_state() { return 0; }
 void restore_interrupt_state(uint32_t) {}
 void write_board_led(uint8_t, uint8_t) {}
@@ -54,6 +59,12 @@ uint8_t is_rs485_bus_free() { return !bus_owned; }
 uint32_t get_rs485_baud_rate() { return 921600; }
 uint8_t is_dac_ready() { return 1; }
 void set_dac_channel_trim(char, uint8_t) {}
+#else
+static void release_bus() { bus_owned=false; }
+static void acquire_bus() { assert(!bus_owned); bus_owned=true; }
+static uint8_t bus_free() { return !bus_owned; }
+static uint32_t baud_rate() { return 921600; }
+#endif
 void init_rs485_receiver() { rs_rx.clear(); drops=0; }
 void clear_rs485_receive_state() { rs_rx.clear(); }
 uint8_t read_rs485_byte(uint8_t *out) {
@@ -66,12 +77,6 @@ int write_rs485_bytes(const uint8_t *p, uint16_t n, uint32_t) {
     rs_tx.insert(rs_tx.end(),p,p+n); return 0;
 }
 #else
-/* Preserve the old LED service's clock observations in this deterministic
- * model; physical PWM now belongs to the STM32 backend. */
-static bool rgb_controlled;
-void init_board_rgb_led() { rgb_controlled=false; (void)get_board_time_ms(); }
-int set_board_rgb_colour(float, float, float, float) { rgb_controlled=true; return 0; }
-void service_board_leds() { if (rgb_controlled) (void)get_board_time_ms(); }
 int start_rs485_transmit(const uint8_t *p, uint16_t n) {
     if (!p || !n || !pending.empty()) return -1;
     pending.assign(p,p+n); return 0;
@@ -82,11 +87,14 @@ int poll_rs485_transmit() {
     rs_tx.insert(rs_tx.end(),pending.begin(),pending.end()); pending.clear(); return 1;
 }
 void abort_rs485_transmit() { ++aborts; pending.clear(); }
-void board_memory_barrier() {}
-uint32_t get_audio_refill_overlap_count() { return 0; }
-void clear_audio_output_statistics() {}
 #endif
-void init_usb_device() { reconnect(); }
+void init_usb_device() {
+#ifndef LEGACY_API
+    static const Rs485BusServices bus = {acquire_bus, release_bus, bus_free, baud_rate};
+    set_rs485_bus_services(&bus);
+#endif
+    reconnect();
+}
 uint32_t read_usb_bytes(uint8_t *out,uint32_t n) {
     ++usb_services;
     if (faulted || !connected) return 0;

@@ -24,7 +24,7 @@
 #include "transport.h"
 #include "usb.h"
 #include "audio.h"
-#include "board.h"
+#include "platform.h"
 #include "voice.h"
 #include "channel.h"
 #include "samples.h"

@@ -22,7 +22,6 @@
 */
 
 #include "audio.h"
-#include "board.h"
 #include "voice.h"
 #include "stream.h"
 
@@ -50,6 +49,18 @@ void render_audio_samples(int32_t *samples, uint32_t sample_count)
 
 /* ---- query audio diagnostics -------------------------------------------- */
 
+static const AudioOutputDiagnostics *s_output_diagnostics;
+
+void set_audio_output_diagnostics(const AudioOutputDiagnostics *diagnostics)
+{
+    s_output_diagnostics = diagnostics;
+}
+
+uint32_t get_audio_refill_overlap_count(void)
+{
+    return s_output_diagnostics ? s_output_diagnostics->refill_overlap_count() : 0u;
+}
+
 uint32_t get_audio_stream_drop_count(void)
 {
     return get_stream_dropped_block_count();
@@ -59,7 +70,7 @@ void clear_audio_stream_statistics(void)
 {
     clear_stream_statistics();
     clear_voice_underrun_count();
-    clear_audio_output_statistics();
+    if (s_output_diagnostics) s_output_diagnostics->clear_statistics();
 }
 
 uint32_t get_audio_stream_max_buffered_samples(void)

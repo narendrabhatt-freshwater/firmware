@@ -22,7 +22,7 @@
 */
 
 #include "samples.h"
-#include "board.h"
+#include "platform.h"
 #include "platform_memory.h"
 #include <math.h>
 #include <string.h>

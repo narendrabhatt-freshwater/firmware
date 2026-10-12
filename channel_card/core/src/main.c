@@ -124,6 +124,8 @@ int main(void)
   MX_USB_OTG_HS_PCD_Init();
   /* USER CODE BEGIN 2 */
 
+  init_board_platform();
+
   /* Custom CDC device uses the generated HAL PCD and embedded Full-Speed PHY. */
   init_usb_protocol();
 
@@ -189,6 +191,7 @@ int main(void)
   /* filter_ctl (TIM3_CH1, PC6): keep LOW at boot. */
 
   /* RS485 idle Hi-Z, switch defaults, boot bypass/gain, ready banner. */
+  init_channel_board();
   init_channel_card();
 
   /* USER CODE END 2 */

@@ -197,7 +197,8 @@ The application is split by responsibility:
 | `audio_i2s.cpp` | I2S/DMA buffers and callbacks, I2S2 underrun guard | `audio_output.h` |
 | `board_stm32.cpp` | UART5, RS485 pins, board outputs, clock, synchronization and profiling | `board.h`, `transport.h`, `board_stm32.h` |
 | `cs4304.cpp` | CS4304 DAC register access, initialization, gain and mute | `cs4304.h` |
-| `channel.cpp` | RS485 commands, LED patterns, script uploads | `channel.h` |
+| `channel.cpp` | RS485 commands, script uploads, logical output requests | `channel.h` |
+| `platform.cpp` | Execution synchronization, with optional platform operations | `platform.h` |
 | `voice.cpp` | Note playback, envelopes, Berry adapter | `voice.h` |
 | `filter.cpp` | Four-pole kernel and per-voice filter control | `filter.h` |
 | `oscillator.cpp` | Wavetable oscillators, routing, interpolation helpers | `oscillator.h` |
@@ -208,7 +209,7 @@ The application is split by responsibility:
 
 The source list in `app/sources.mk` is shared by the firmware and simulator.
 Only `audio_i2s.cpp`, `board_stm32.cpp`, `usb_device.cpp`, and `cs4304.cpp`
-access STM32 registers or HAL. Shared sources use `board.h` and `transport.h`;
+access STM32 registers or HAL. Shared sources use `platform.h` and `transport.h`;
 the host build needs no STM32 headers. `platform_memory.h` selects target memory
 placement through the firmware build's `CHANNEL_PLATFORM_STM32` define.
 
@@ -247,17 +248,26 @@ Each platform owns its main loop. Firmware calls `process_usb_messages()`,
 again to service USB after a console reply. The simulator calls the same USB
 and RS485 functions and renders audio on its own schedule; it does not call
 the LED update. Both use the same application and protocol implementations.
-The simulator's no-op interrupt/barrier implementation is valid only under
-its single-threaded contract. `CHANNEL_ENABLE_CYCLE_PROFILING` enables cycle
+Generic synchronization defaults to single-threaded execution. STM32 binds
+interrupt preservation and memory-barrier operations before audio starts;
+a threaded host would need its own validated synchronization.
+`CHANNEL_ENABLE_CYCLE_PROFILING` enables cycle
 measurement in the firmware build. The simulator omits that instrumentation
 and has no cycle-counter backend; its cycle diagnostic fields remain zero.
 
-LED patterns and script colour/brightness requests remain application logic.
-`board.h` exposes logical status outputs and RGB requests; `board_stm32.cpp`
-owns GPIO mapping, RGB level quantization and software PWM. The main-loop pass
-services that backend at the existing point between RS485 commands and status
-pattern updates, preserving the PWM phase and tick rules. The simulator ignores
-LED, switch and DAC-trim requests; it does not retain or emulate those outputs.
+`init_board_platform()` binds STM32 synchronization, electrical RS485 bus
+services and physical colour/gain handlers. `init_channel_board()` initializes
+physical outputs and RS485 reception in their existing order, before
+`init_channel_card()` initializes shared application state and emits ready.
+The simulator initializes its byte receiver and the shared application directly.
+
+`board_stm32.cpp` owns LED patterns, GPIO mapping, RGB quantization and PWM.
+Shared scripts and commands make logical colour/gain requests through optional
+`ChannelOutputs` handlers. Without handlers these requests retain their existing
+headless acceptance behavior. The I2S driver supplies optional output diagnostics;
+without a driver, overlap counts are zero. Point-to-point transports need no
+electrical bus hooks. The simulator supplies its clock in `sim/clock.cpp` and
+byte ports in `sim/serialdevices.cpp`; it has no dummy board implementations.
 
 Use simple C++17 with plain functions and structs. Exceptions, RTTI, and
 thread-safe local-static initialization are disabled. Do not add virtual

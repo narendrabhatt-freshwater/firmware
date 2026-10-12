@@ -22,24 +22,52 @@
 */
 
 #include "transport.h"
-#include "board.h"
+#include "platform.h"
 #include "usb.h"
 
 /* ---- keep application services running during an rs485 reply ------------ */
 
+static const Rs485BusServices *s_bus;
+
+void set_rs485_bus_services(const Rs485BusServices *services)
+{
+    s_bus = services;
+}
+
+uint32_t get_rs485_baud_rate(void)
+{
+    return s_bus ? s_bus->baud_rate() : FW_RS485_BAUD;
+}
+
+uint8_t wait_for_rs485_bus(uint32_t timeout_ms)
+{
+    if (!s_bus) return 1u;
+    uint32_t started = get_board_time_ms();
+    while (!s_bus->is_free()) {
+        if ((uint32_t)(get_board_time_ms() - started) >= timeout_ms) return 0u;
+    }
+    return 1u;
+}
+
 int write_rs485_bytes(const uint8_t *data, uint16_t size, uint32_t timeout_ms)
 {
+    if (s_bus) s_bus->acquire();
     uint32_t started = get_board_time_ms();
-    if (start_rs485_transmit(data, size) != 0) return -1;
+    if (start_rs485_transmit(data, size) != 0) {
+        if (s_bus) s_bus->release();
+        return -1;
+    }
     int state = poll_rs485_transmit();
     while (state == 0) {
         process_usb_messages();
         state = poll_rs485_transmit();
         if (state == 0 && (uint32_t)(get_board_time_ms() - started) >= timeout_ms) {
             abort_rs485_transmit();
+            if (s_bus) s_bus->release();
             return -1;
         }
     }
     if (state < 0) abort_rs485_transmit();
+    if (s_bus) s_bus->release();
     return state > 0 ? 0 : -1;
 }

@@ -24,4 +24,4 @@
 # Application sources: no device drivers or host replacements here.
 SHARED_APP_SOURCES := app/audio.cpp app/channel.cpp app/filter.cpp \
                       app/oscillator.cpp app/voice.cpp app/samples.cpp \
-                      app/stream.cpp app/usb.cpp app/transport.cpp
+                      app/stream.cpp app/usb.cpp app/transport.cpp app/platform.cpp

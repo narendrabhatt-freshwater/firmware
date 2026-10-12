@@ -49,6 +49,14 @@ void render_audio_samples(int32_t *samples, uint32_t sample_count);
 
 /* ---- query audio diagnostics -------------------------------------------- */
 
+/* Optional output-driver diagnostics. No output device means zero overlaps.
+ * Bind a complete, static-lifetime table before playback begins. */
+typedef struct {
+    uint32_t (*refill_overlap_count)(void);
+    void (*clear_statistics)(void);
+} AudioOutputDiagnostics;
+void set_audio_output_diagnostics(const AudioOutputDiagnostics *diagnostics);
+
 uint32_t get_audio_stream_drop_count(void);
 void clear_audio_stream_statistics(void);
 uint32_t get_audio_stream_max_buffered_samples(void);

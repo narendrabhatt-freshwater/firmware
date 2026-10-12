@@ -81,7 +81,7 @@ if(BUILD_TESTING)
             "${CONTROL_TEST_CARD}/app/samples.cpp"
             "${CONTROL_TEST_CARD}/app/oscillator.cpp"
             "${CONTROL_TEST_CARD}/app/filter.cpp"
-            "${CONTROL_TEST_CARD}/sim/board_sim.cpp")
+            "${CONTROL_TEST_CARD}/app/platform.cpp")
         target_compile_features(voicebd_envelope_test PRIVATE cxx_std_17)
         target_compile_options(voicebd_envelope_test PRIVATE -Wall -Wextra -Werror)
         target_include_directories(voicebd_envelope_test PRIVATE

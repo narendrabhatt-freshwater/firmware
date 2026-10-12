@@ -23,6 +23,8 @@
 
 #include "transport.h"
 #include "board.h"
+#include "platform.h"
+#include "channel.h"
 #include "board_stm32.h"
 #include "cs4304.h"
 #include "main.h"
@@ -31,21 +33,21 @@
 
 /* ---- read time and mask interrupts -------------------------------------- */
 
-/* STM32H725 implementation of board.h and transport.h. The shared console in channel.cpp reaches hardware only here. */
+/* STM32H725 devices and the optional services bound to shared application code. */
 
 uint32_t get_board_time_ms(void)
 {
     return HAL_GetTick();
 }
 
-uint32_t disable_interrupts_and_save_state(void)
+static uint32_t save_board_interrupt_state(void)
 {
     uint32_t saved = __get_PRIMASK();
     __disable_irq();
     return saved;
 }
 
-void restore_interrupt_state(uint32_t saved)
+static void restore_board_interrupt_state(uint32_t saved)
 {
     __set_PRIMASK(saved);
 }
@@ -345,7 +347,7 @@ extern "C" void UART5_IRQHandler(void)
 /* ---- release and acquire the shared rs485 bus --------------------------- */
 
 /** Tri-state CTL and TX so the other MCU can use the bus (idle state). */
-void release_rs485_bus(void)
+static void release_rs485_bus(void)
 {
     GPIO_InitTypeDef gi = {};
 
@@ -369,7 +371,7 @@ void release_rs485_bus(void)
 }
 
 /** Take the bus: TX back to UART AF, CTL driven HIGH (transmit mode). */
-void acquire_rs485_bus(void)
+static void acquire_rs485_bus(void)
 {
     GPIO_InitTypeDef gi = {};
 
@@ -395,19 +397,19 @@ void acquire_rs485_bus(void)
 
 /** Check whether the RS485 bus is free (CTL low = no one transmitting).
  * Our own CTL is Hi-Z input while idle, so this reads the real DE line. */
-uint8_t is_rs485_bus_free(void)
+static uint8_t is_rs485_bus_free(void)
 {
     return (HAL_GPIO_ReadPin(RS485_CTL_GPIO_Port, RS485_CTL_Pin) == GPIO_PIN_RESET);
 }
 
-uint32_t get_rs485_baud_rate(void)
+static uint32_t get_uart_baud_rate(void)
 {
     return huart5.Init.BaudRate;
 }
 
 /* ---- publish shared state and profile script execution ------------------ */
 
-void board_memory_barrier(void)
+static void publish_board_memory(void)
 {
     __DMB();
 }
@@ -422,4 +424,66 @@ void init_board_cycle_counter(void)
 uint32_t get_board_cycle_count(void)
 {
     return DWT->CYCCNT;
+}
+
+/* ---- bind optional application services --------------------------------- */
+
+static int apply_channel_gain(char channel, uint8_t half_db)
+{
+    if (!is_dac_ready()) return -1;
+    set_dac_channel_trim(channel, half_db);
+    return 0;
+}
+
+void init_board_platform(void)
+{
+    static const PlatformSynchronization synchronization = {
+        save_board_interrupt_state, restore_board_interrupt_state, publish_board_memory
+    };
+    static const ChannelOutputs outputs = {set_board_rgb_colour, apply_channel_gain};
+    static const Rs485BusServices bus = {
+        acquire_rs485_bus, release_rs485_bus, is_rs485_bus_free, get_uart_baud_rate
+    };
+    set_platform_synchronization(&synchronization);
+    set_channel_outputs(&outputs);
+    set_rs485_bus_services(&bus);
+}
+
+/* Called at the original application-startup point, preserving output and
+ * receive initialization order before the shared application sends ready. */
+void init_channel_board(void)
+{
+    init_board_rgb_led();
+    release_rs485_bus();
+    init_rs485_receiver();
+    for (uint8_t i = 0; i < BOARD_SWITCH_COUNT; ++i) write_board_switch(i, 0u);
+    write_board_switch(BOARD_SWITCH_BYPASS, 1u);
+    if (is_dac_ready()) set_dac_channel_trim('1', 0u);
+}
+
+static uint8_t led_show_on = 1;
+
+/* ---- update status leds ------------------------------------------------- */
+
+/** Non-blocking fixed red/yellow chaser (150 ms per step).
+ * The RGB package is exclusively VM-controlled. */
+void update_channel_leds(void)
+{
+    static const uint8_t leds[2] = {BOARD_LED_R, BOARD_LED_Y};
+    static uint32_t t_next = 0;
+    static uint8_t step = 0;
+
+    service_board_leds();
+    if (!led_show_on) {
+        for (uint8_t i = 0; i < 2; i++) {
+            write_board_led(leds[i], 0u);
+        }
+        return;
+    }
+    if (get_board_time_ms() >= t_next) {
+        t_next = get_board_time_ms() + 150;
+        write_board_led(leds[step], 0u);
+        step = (step + 1) % 2;
+        write_board_led(leds[step], 1u);
+    }
 }

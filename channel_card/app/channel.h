@@ -30,23 +30,30 @@
 extern "C" {
 #endif
 
-/* ---- control the status leds -------------------------------------------- */
+/* Optional physical outputs, bound by firmware before application startup.
+ * Missing handlers accept logical requests without driving an output, keeping
+ * headless protocol/script behavior. Tables must have static lifetime. */
+typedef struct {
+    int (*set_led_colour)(float red, float green, float blue, float brightness);
+    int (*set_gain)(char channel, uint8_t half_db);
+} ChannelOutputs;
+void set_channel_outputs(const ChannelOutputs *outputs);
+
+/* ---- request a logical colour ------------------------------------------- */
 
 int set_channel_led_colour(float red, float green, float blue, float brightness);
-/* Service the RGB backend and advance the logical status pattern; non-blocking. */
-void update_channel_leds(void);
 
 /* ---- initialize and poll the console ------------------------------------ */
 
-/* Channel Card RS485 + USB CDC console and status LEDs.
+/* Channel Card RS485 + USB CDC console.
  * One command parser serves both transports. RS485 uses card address prefixes
  * (`c:` / `*:` / bare) and tagged replies (`[C]ok` / `[C]err:<token>`).
  * Stable error tokens: syntax, range, unknown, rxdrop.
- * Bring-up: initialize platform devices before init_channel_card().
+ * Bring-up: initialize platform devices and RS485 reception before init_channel_card().
  * Poll from the main loop after servicing the USB task. */
 
 /**
- * @brief Tri-state RS485 idle, apply boot defaults, and emit the ready banner.
+ * @brief Initialize application state and emit the ready banner.
  * @note Also initializes note filter / bank / envelope cold state.
  */
 void init_channel_card(void);

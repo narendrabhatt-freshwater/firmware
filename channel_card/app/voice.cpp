@@ -22,7 +22,7 @@
 */
 
 #include "voice.h"
-#include "board.h"
+#include "platform.h"
 #include "platform_memory.h"
 #include "channel.h"
 #include "filter.h"
