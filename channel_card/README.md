@@ -12,26 +12,30 @@ specifies framing, uploads, and flow control.
 
 ## Build
 
-Install GNU Make, a POSIX shell with standard tools (`awk`, `cmp`, `shasum`),
-and the GNU Arm
+From `channel_card/app/`, plain `make` builds the host simulator at `bin/sim`
+using a host C/C++ compiler. `make sim` is an explicit alias.
+
+To build the STM32 firmware, install GNU Make, a POSIX shell with standard tools
+(`awk`, `cmp`, `shasum`), and the GNU Arm
 embedded toolchain with newlib (`arm-none-eabi-gcc`, `arm-none-eabi-g++`, `arm-none-eabi-objcopy`,
 `arm-none-eabi-ar`, and `arm-none-eabi-objdump` on PATH). No build dependencies
 are downloaded. Python is not required. For systems with `sha256sum`, use
-`make SHA256=sha256sum`.
+`make board SHA256=sha256sum`.
 
 From `channel_card/app/`, run:
 
 ```sh
-make
+make board
 ```
 
 This builds Release firmware and writes **`bin/channel_MCU.bin`**, beside `app/`.
 The standalone `app/Makefile` compiles and links directly, keeping intermediate
 files under `build/release/`. CMake and Ninja are not required.
-Use `make -j4` to build with up to four parallel jobs.
-Use `make clean` to remove this build and its output binary.
+Use `make board -j4` to build with up to four parallel jobs.
+Use `make clean` to remove the board build and its output binary;
+`make -C ../sim clean` removes the simulator build.
 
-Every build prints the firmware size, built baud rate, toolchain, report timestamp,
+Every board build prints the firmware size, built baud rate, toolchain, report timestamp,
 checksum, and Flash/RAM allocation by memory region and section. To view the
 last successful build without compiling or changing settings:
 
@@ -47,17 +51,18 @@ The report includes used/free bytes and percentages for Flash, DTCM, AXI SRAM
 the Berry arena, DMA buffers, and the heap/stack reservation. These are linker
 allocations, including alignment, rather than measured runtime memory peaks.
 The saved report stays under `build/release/`; `bin/` contains the firmware binary
-(and `sim`, the host simulator, if `make sim` has been run).
+(and `sim`, the host simulator, if `make` has been run).
+The firmware-only SVN package omits the simulator; use `make board` there.
 
 The RS485 rate is set by `BAUDRATE ?= 921600` at the top of
 [`app/Makefile`](app/Makefile). Edit that value for the normal build rate,
 or override it for a build:
 
 ```sh
-make BAUDRATE=3000000
+make board BAUDRATE=3000000
 ```
 
-Changing the rate rebuilds the affected code automatically. Plain `make`
+Changing the rate rebuilds the affected code automatically. `make board`
 returns to the Makefile's value. Configure the host to use the same rate,
 with 8 data bits, no parity, and 1 stop bit (8N1).
 
@@ -66,7 +71,7 @@ with 8 data bits, no parity, and 1 stop bit (8N1).
 Install [STM32CubeProgrammer](https://www.st.com/en/development-tools/stm32cubeprog.html)
 for your host OS; CubeIDE is not required.
 
-1. Run `make` in `app/` to build the firmware.
+1. Run `make board` in `app/` to build the firmware.
 2. Connect the USB data cable, move the BOOT switch up, and press reset.
 3. In STM32CubeProgrammer, select USB, refresh the ports, and connect to the
    Channel Card bootloader.
@@ -207,11 +212,13 @@ The application is split by responsibility:
 | `usb.cpp` | Binary protocol, sample uploads | `usb.h` |
 | `usb_device.cpp` | CDC device on HAL PCD, descriptors, transfer queues | `transport.h`, `usb_device.h` |
 
-The source list in `app/sources.mk` is shared by the firmware and simulator.
+The firmware and simulator list application sources in their own Makefiles.
 Only `audio_i2s.cpp`, `board_stm32.cpp`, `usb_device.cpp`, and `cs4304.cpp`
 access STM32 registers or HAL. Shared sources use `platform.h` and `transport.h`;
-the host build needs no STM32 headers. `platform_memory.h` selects target memory
-placement through the firmware build's `CHANNEL_PLATFORM_STM32` define.
+the host build needs no STM32 headers. Each build supplies `platform_memory.h`
+through its include path: `core/inc/` defines STM32 RAM sections, and `sim/`
+defines host alignment. Application sources use the same storage declarations
+without platform-selection conditionals.
 
 `render_audio_samples(buffer, sample_count)` fills contiguous mono signed
 32-bit samples at 48 kHz. The caller owns valid storage and calls from one
@@ -269,6 +276,16 @@ without a driver, overlap counts are zero. Point-to-point transports need no
 electrical bus hooks. The simulator supplies its clock in `sim/clock.cpp` and
 byte ports in `sim/serialdevices.cpp`; it has no dummy board implementations.
 
+On macOS, `sim/clock.cpp` configures the simulator thread with the host streaming
+workers' scheduling policy: interactive QoS and a preemptible 1 ms time constraint
+with a 250 microsecond computation budget. Ordinary macOS waits can wake after
+the host's 5 ms command deadline; QoS alone is insufficient. Scheduling setup
+errors stop startup with a diagnostic before serial ports are created. Other
+hosts retain their existing scheduling policy; their streaming timing needs
+separate validation. This is a host scheduling requirement, not a change to
+application timing or protocol deadlines, and does not guarantee deadlines
+through system suspension or arbitrary system load.
+
 Use simple C++17 with plain functions and structs. Exceptions, RTTI, and
 thread-safe local-static initialization are disabled. Do not add virtual
 functions, STL containers, or dynamic initialization to this application.
@@ -276,8 +293,8 @@ Public interfaces use C linkage for generated C and the Berry runtime;
 interrupt handlers must also retain C linkage. The interpreter and generated
 STM32 sources keep their existing C implementation.
 
-Keep shared sources in `app/sources.mk`; backend sources, compiler flags and
-link settings belong in `app/Makefile` and `sim/Makefile`.
+Keep application source lists in both `app/Makefile` and `sim/Makefile` up to date;
+each Makefile also owns its backend sources, compiler flags and link settings.
 Preserve `USER CODE` markers when editing CubeMX-generated sources. All maintained directories use lowercase names, including HAL/CMSIS
 subfolders. If CubeMX regeneration restores names such as `Core`, `Drivers`,
 `Inc`, or `Src`, lowercase those folders and check the paths in `app/Makefile`

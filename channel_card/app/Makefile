@@ -23,7 +23,7 @@
 # Freshwater Channel Card — standalone GNU Make build
 ################################################################################
 
-# RS485, 8N1. Edit here, or override with: make BAUDRATE=3000000
+# RS485, 8N1. Edit here, or override with: make board BAUDRATE=3000000
 BAUDRATE ?= 921600
 CROSS_COMPILE ?= arm-none-eabi-
 SHA256 ?= shasum -a 256
@@ -49,7 +49,7 @@ BERRY := berry_runtime/third_party/berry
 
 .DEFAULT_GOAL := all
 .DELETE_ON_ERROR:
-.PHONY: all sim clean FORCE
+.PHONY: all sim board clean FORCE
 
 # ---- source lists (keep link order stable) ----------------------------------
 
@@ -69,8 +69,10 @@ CORE_SOURCES := \
     core/src/syscalls.c \
     startup_stm32h725xx.s
 
-include $(ROOT)/app/sources.mk
-APP_SOURCES := $(SHARED_APP_SOURCES) app/cs4304.cpp app/audio_dac.cpp \
+APP_SOURCES := app/audio.cpp app/channel.cpp app/filter.cpp \
+               app/oscillator.cpp app/voice.cpp app/samples.cpp \
+               app/stream.cpp app/usb.cpp app/transport.cpp app/platform.cpp \
+               app/cs4304.cpp app/audio_dac.cpp \
                app/audio_i2s.cpp app/board_stm32.cpp app/usb_device.cpp
 
 DRIVER_SOURCES := \
@@ -130,7 +132,7 @@ CFLAGS := $(COMMON_FLAGS)
 CXXFLAGS := $(COMMON_FLAGS) -std=c++17 -fno-rtti -fno-exceptions \
             -fno-threadsafe-statics
 ASFLAGS := $(CPU_FLAGS) -x assembler-with-cpp -O3 -DNDEBUG
-MCU_DEFINES := -DCHANNEL_PLATFORM_STM32 -DCHANNEL_ENABLE_CYCLE_PROFILING \
+MCU_DEFINES := -DCHANNEL_ENABLE_CYCLE_PROFILING \
                -DUSE_PWR_DIRECT_SMPS_SUPPLY -DUSE_HAL_DRIVER -DSTM32H725xx
 MCU_INCLUDES := -I$(ROOT)/core/inc \
                 -I$(ROOT)/drivers/stm32h7xx_hal_driver/inc \
@@ -175,7 +177,7 @@ FORCE:
 
 # ---- compile and link -------------------------------------------------------
 
-$(OBJECTS): $(CONFIG) $(MAKEFILE) $(ROOT)/app/sources.mk
+$(OBJECTS): $(CONFIG) $(MAKEFILE)
 
 $(OBJDIR)/%.c.o: $(ROOT)/%.c
 	@mkdir -p "$(@D)"
@@ -220,7 +222,9 @@ $(BINARY): $(BUILD_BINARY) $(INFO)
 	@cp "$(BUILD_BINARY)" "$@.tmp"
 	@mv "$@.tmp" "$@"
 
-all: $(BINARY) $(OBJDIR)/$(NAME).hex
+all: sim
+
+board: $(BINARY) $(OBJDIR)/$(NAME).hex
 	@cat "$(INFO)"
 
 # ---- firmware report --------------------------------------------------------

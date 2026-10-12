@@ -54,7 +54,7 @@ def selected(path):
         if rel in CARD_ROOT or rel in CARD_DOCS:
             return True
         if tail[0] == "app" and len(tail) == 2:
-            return suffix in {".cpp", ".h"} or tail[-1] in {"Makefile", "sources.mk"}
+            return suffix in {".cpp", ".h"} or tail[-1] == "Makefile"
         if tail[0] == "core" and len(tail) == 3:
             return (tail[1] == "src" and suffix == ".c" or
                     tail[1] == "inc" and suffix == ".h")
@@ -95,7 +95,6 @@ def validate(stage):
             raise ValueError(f"development tool in firmware package: {path.relative_to(stage)}")
     required = [*CARD_ROOT, *CARD_DOCS,
                 "app/Makefile",
-                "app/sources.mk",
                 "app/cs4304.cpp",
                 "app/audio.cpp",
                 "app/audio_dac.cpp",
@@ -115,7 +114,7 @@ def validate(stage):
                 "app/audio.h",
                 "app/audio_output.h",
                 "app/transport.h",
-                "app/platform_memory.h",
+                "core/inc/platform_memory.h",
                 "app/platform.h",
                 "app/board_stm32.h",
                 "app/usb_device.h",

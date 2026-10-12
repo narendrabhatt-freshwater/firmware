@@ -136,7 +136,7 @@ static uint8_t console_via_usb = 0;
 static uint32_t rs485_tx_fail;  /**< HAL_UART_Transmit did not return OK */
 static uint32_t rs485_tx_trunc; /**< reply longer than the frame buffer */
 
-/** Send a tagged response — see Channel RS485_Reply (1 ms DE turnaround).
+/** Send a tagged response — see Channel send_rs485_reply (1 ms DE turnaround).
  *
  * Frame must hold the longest single reply — an over-long reply is
  * truncated rather than dropped: a clipped line still terminates the

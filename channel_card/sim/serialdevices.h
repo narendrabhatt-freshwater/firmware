@@ -38,8 +38,10 @@ bool setup_serial_devices(const char *usb_path = SIM_USB_PATH,
 bool process_serial_io(uint64_t deadlineNs);
 void close_serial_devices(void);
 
-/* ---- host clock --------------------------------------------------------- */
+/* ---- host timing -------------------------------------------------------- */
 
+/* Call before opening serial ports. Returns false if scheduling setup fails. */
+bool init_simulator_timing(void);
 uint64_t get_simulator_time_ns(void);
 
 #endif

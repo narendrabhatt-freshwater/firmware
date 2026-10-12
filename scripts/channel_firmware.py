@@ -39,9 +39,9 @@ def show_status():
     report = BUILD / "channel_MCU.info"
     built_binary = BUILD / "channel_MCU.bin"
     if not report.is_file() or not BINARY.is_file():
-        raise ValueError("No firmware report available. Run make in app/ first.")
+        raise ValueError("No firmware report available. Run make board in app/ first.")
     if not built_binary.is_file() or BINARY.read_bytes() != built_binary.read_bytes():
-        raise ValueError("Output binary differs from the last build. Run make in app/ first.")
+        raise ValueError("Output binary differs from the last build. Run make board in app/ first.")
     print(report.read_text(), end="")
 
 
@@ -81,7 +81,7 @@ def flash_firmware(port, check):
                          "to its executable path.")
     if not BINARY.is_file() or not BINARY.stat().st_size or not os.access(BINARY, os.R_OK):
         raise ValueError(f"Firmware missing, empty, or unreadable: {BINARY}. "
-                         "Run make in app/ first.")
+                         "Run make board in app/ first.")
     print(f"Programmer: {programmer}\nFirmware:   {BINARY}", flush=True)
     if check:
         print("Programmer and firmware found. No board accessed.")

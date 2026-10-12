@@ -33,6 +33,7 @@ import signal
 import time
 import tty
 import subprocess
+import sys
 import tempfile
 
 TESTS = pathlib.Path(__file__).resolve().parent
@@ -49,11 +50,18 @@ def run(args, **kwargs):
     return result.stdout
 
 
+def application_sources(root, build="sim"):
+    makefile = (root / build / "Makefile").read_text().replace("\\\n", " ")
+    match = re.search(r"^APP_SOURCES\s*:=\s*(.*)$", makefile, re.M)
+    assert match, f"Missing application source list in {build}/Makefile"
+    return match[1].split()
+
+
 def build(root, work, main, legacy=False):
     sources = ["app/" + name + ".cpp" for name in
                ("audio", "channel", "filter", "oscillator", "voice", "samples", "stream", "usb")]
     if not legacy:
-        sources = re.findall(r"app/\w+\.cpp", (root / "app/sources.mk").read_text())
+        sources = application_sources(root)
         sources += ["app/audio_dac.cpp"]
     sources += ["berry_runtime/vm.c", "berry_runtime/vm_source.c",
                 "berry_runtime/berry_backend.c", "berry_runtime/berry_runtime_modtab.c"]
@@ -70,7 +78,8 @@ def build(root, work, main, legacy=False):
 
 
 def check_boundaries():
-    sources = re.findall(r"app/\w+\.cpp", (ROOT / "app/sources.mk").read_text())
+    sources = application_sources(ROOT)
+    assert set(sources) <= set(application_sources(ROOT, "app"))
     forbidden = re.compile(r"\b(?:HAL_\w+|DWT|CoreDebug|__disable_irq|__get_PRIMASK|"
                            r"__set_PRIMASK|__DMB|__arm__|__thumb__)\b")
     for source in sources:
@@ -84,7 +93,7 @@ def check_boundaries():
 
 
 def pty_check(work):
-    sources = re.findall(r"app/\w+\.cpp", (ROOT / "app/sources.mk").read_text())
+    sources = application_sources(ROOT)
     sources += ["berry_runtime/vm.c", "berry_runtime/vm_source.c", "berry_runtime/berry_backend.c",
                 "berry_runtime/berry_runtime_modtab.c"]
     sources += [str(p.relative_to(ROOT)) for p in sorted(
@@ -174,6 +183,13 @@ def main():
              TESTS / "serial_backend_test.cpp", "-o", serial])
         run([serial])
         print("PASS real serial backend: partial writes, errors, queues, flush, disconnect")
+        if sys.platform == "darwin":
+            timing = work / "simulator_timing_test"
+            run(["c++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
+                 "-I" + str(ROOT / "app"), "-I" + str(ROOT / "sim"),
+                 TESTS / "simulator_timing_test.cpp", "-o", timing])
+            run([timing])
+            print("PASS simulator scheduling: policy values and startup failure paths")
         pty_check(work)
         for name in ("protocol_test", "boundary_test", "dac_trace"):
             exe = build(ROOT, work / "current", name)

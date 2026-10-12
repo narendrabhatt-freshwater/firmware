@@ -85,7 +85,8 @@ if(BUILD_TESTING)
         target_compile_features(voicebd_envelope_test PRIVATE cxx_std_17)
         target_compile_options(voicebd_envelope_test PRIVATE -Wall -Wextra -Werror)
         target_include_directories(voicebd_envelope_test PRIVATE
-            "${CONTROL_TEST_CARD}/app")
+            "${CONTROL_TEST_CARD}/app"
+            "${CONTROL_TEST_CARD}/sim")
         target_link_libraries(voicebd_envelope_test PRIVATE voicebd_envelope_runtime m)
         add_test(NAME voicebd_envelope COMMAND voicebd_envelope_test "${BERRY_EXECUTABLE}"
             "${CMAKE_CURRENT_BINARY_DIR}/envelope control fixtures")

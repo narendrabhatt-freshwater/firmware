@@ -31,8 +31,10 @@ BERRY := berry_runtime/third_party/berry
 
 BERRY_SOURCES := $(patsubst $(ROOT)/%,%,$(sort $(wildcard $(ROOT)/$(BERRY)/src/*.c))) \
                  berry_runtime/berry_runtime_modtab.c
-include $(ROOT)/app/sources.mk
-SOURCES := $(SHARED_APP_SOURCES) \
+APP_SOURCES := app/audio.cpp app/channel.cpp app/filter.cpp \
+               app/oscillator.cpp app/voice.cpp app/samples.cpp \
+               app/stream.cpp app/usb.cpp app/transport.cpp app/platform.cpp
+SOURCES := $(APP_SOURCES) \
            berry_runtime/vm.c berry_runtime/vm_source.c berry_runtime/berry_backend.c \
            $(BERRY_SOURCES) sim/main.cpp sim/serialdevices.cpp sim/clock.cpp
 OBJECTS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(SOURCES)))
@@ -50,7 +52,7 @@ $(addprefix $(OBJDIR)/,$(addsuffix .o,$(BERRY_SOURCES))): CFLAGS := -std=c11 -w
 .PHONY: all clean
 all: $(SIMULATOR)
 
-$(OBJECTS): $(MAKEFILE) $(ROOT)/app/sources.mk
+$(OBJECTS): $(MAKEFILE)
 
 $(OBJDIR)/%.c.o: $(ROOT)/%.c
 	@mkdir -p "$(@D)"

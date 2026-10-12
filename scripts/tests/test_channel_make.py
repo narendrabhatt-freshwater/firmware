@@ -34,7 +34,8 @@ class ChannelMakeTests(unittest.TestCase):
 
     @classmethod
     def make(cls, *args):
-        return subprocess.run(["make", "-C", str(cls.card / "app"), "-j4", *args],
+        targets = args if "clean" in args else ("board", *args)
+        return subprocess.run(["make", "-C", str(cls.card / "app"), "-j4", *targets],
                               text=True, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, timeout=120)
 

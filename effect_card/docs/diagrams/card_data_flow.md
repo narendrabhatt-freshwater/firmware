@@ -136,7 +136,7 @@ board wires MOSI to SDIN2.
 ```mermaid
 flowchart LR
   subgraph isr [I2S1 DMA ISR 1 ms]
-    NB[NoteBank_NextSample]
+    NB[mix_next_audio_sample]
     DC2[CH2 DC VCA CV]
     Mix["I2S1 L=CH1 audio  R=CH2 CV"]
     NB --> Mix
@@ -241,8 +241,8 @@ in the sample path.
 ```mermaid
 flowchart LR
   subgraph ch_loop [Channel main loop]
-    Tud1[USB_App_Task: parse BODY and uploads]
-    Con1[Console_Poll RS485]
+    Tud1[process_usb_messages: parse BODY and uploads]
+    Con1[process_rs485_commands RS485]
     Tud1 --- Con1
   end
 

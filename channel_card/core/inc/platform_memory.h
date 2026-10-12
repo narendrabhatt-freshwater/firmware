@@ -23,12 +23,8 @@
 
 #ifndef CHANNEL_PLATFORM_MEMORY_H
 #define CHANNEL_PLATFORM_MEMORY_H
-/* Selected by the target build, not inferred from the host CPU architecture. */
-#if defined(CHANNEL_PLATFORM_STM32)
+/* STM32 storage placement, paired with STM32H725xG_flash.ld.
+ * The board Makefile supplies this header through its include path. */
 #define CHANNEL_ATTACK_STORAGE __attribute__((used, section(".attack_bank"), aligned(4)))
 #define CHANNEL_VM_STORAGE __attribute__((aligned(8), section(".vm_arena")))
-#else
-#define CHANNEL_ATTACK_STORAGE __attribute__((used, aligned(4)))
-#define CHANNEL_VM_STORAGE __attribute__((aligned(8)))
-#endif
 #endif

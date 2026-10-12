@@ -44,7 +44,7 @@ int main(void)
 {
     /* ---- initialize devices and application ----------------------------- */
 
-    if (!setup_serial_devices()) return 1;
+    if (!init_simulator_timing() || !setup_serial_devices()) return 1;
     signal(SIGINT, stop_simulator);
     signal(SIGTERM, stop_simulator);
     signal(SIGPIPE, SIG_IGN);

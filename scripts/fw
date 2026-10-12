@@ -220,9 +220,9 @@ cmd_build_one() {
     [[ "$BUILD_FORCE" -eq 0 ]] || make -C "$dir/app" clean
     info "build channel (Release)"
     if [[ -n "$BUILD_BAUD" ]]; then
-      make -C "$dir/app" "BAUDRATE=$BUILD_BAUD"
+      make -C "$dir/app" board "BAUDRATE=$BUILD_BAUD"
     else
-      make -C "$dir/app"
+      make -C "$dir/app" board
     fi
     ok "$(relpath "$(artifact "$card" bin)")"
     return

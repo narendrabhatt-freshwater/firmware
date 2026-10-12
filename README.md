@@ -50,9 +50,10 @@ conversion failed.
 
 ## 2. Building
 
-For Channel Card, run `make` inside `channel_card/app/`. It produces
+For Channel Card, run `make` inside `channel_card/app/` to build the host simulator
+at `channel_card/bin/sim`. Run `make board` to build the STM32 firmware at
 `channel_card/bin/channel_MCU.bin`. Set `BAUDRATE` in its Makefile or run
-`make BAUDRATE=3000000`. This standalone Makefile requires GNU Make, standard POSIX command-line tools,
+`make board BAUDRATE=3000000`. The board build requires GNU Make, standard POSIX command-line tools,
 and the GNU Arm toolchain; it does not use CMake or Ninja. See the
 [Channel guide](channel_card/README.md).
 

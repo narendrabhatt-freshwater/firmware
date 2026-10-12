@@ -24,6 +24,56 @@
 #include "platform.h"
 #include "serialdevices.h"
 #include <time.h>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/mach_time.h>
+#include <mach/thread_policy.h>
+#include <pthread.h>
+#include <pthread/qos.h>
+#include <stdio.h>
+#include <string.h>
+#endif
+
+/* ---- configure host scheduling ------------------------------------------ */
+
+bool init_simulator_timing(void)
+{
+#if defined(__APPLE__)
+    /* Without this setup, macOS sometimes delayed serial replies past the
+     * host's 5 ms timeout. Raising QoS alone did not fix it. */
+    int rc = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    if (rc) {
+        fprintf(stderr, "sim: setting thread QoS: %s\n", strerror(rc));
+        return false;
+    }
+    mach_timebase_info_data_t timebase{};
+    kern_return_t status = mach_timebase_info(&timebase);
+    if (status != KERN_SUCCESS || !timebase.numer) {
+        fprintf(stderr, "sim: cannot determine host timing units (%d)\n", status);
+        return false;
+    }
+    uint64_t period = 1000000ull * timebase.denom / timebase.numer;
+    if (period < 4u || period > UINT32_MAX) {
+        fprintf(stderr, "sim: host timing units cannot represent a 1 ms period\n");
+        return false;
+    }
+    thread_time_constraint_policy_data_t policy{};
+    policy.period = (uint32_t)period;
+    policy.computation = policy.period / 4u;
+    policy.constraint = policy.period;
+    policy.preemptible = TRUE;
+    mach_port_t thread = mach_thread_self();
+    status = thread_policy_set(thread, THREAD_TIME_CONSTRAINT_POLICY,
+                               reinterpret_cast<thread_policy_t>(&policy),
+                               THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+    (void)mach_port_deallocate(mach_task_self(), thread);
+    if (status != KERN_SUCCESS) {
+        fprintf(stderr, "sim: setting time-constraint scheduling: %s\n", mach_error_string(status));
+        return false;
+    }
+#endif
+    return true;
+}
 
 /* ---- read host time ----------------------------------------------------- */
 

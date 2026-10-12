@@ -154,7 +154,6 @@ until that join. Every `nX on <key> [velocity]` command is a note-on, including 
 | `vm`                       | Query the active-program voice mask                              |
 | `vm <voice>`               | Query active state, ABI target/version, and fault for one voice  |
 | `vm mem`                   | Shared-arena metrics followed by eight per-voice diagnostic lines |
-| `cpuload [0\|1]`           | Query or enable LED_Y/PB9 DMA-refill duty-cycle probe              |
 
 Script upload kind 3 accepts a complete 20…16404-byte FWSC container through
 offset-checked binary blocks. The full transaction is specified in §4.
@@ -175,16 +174,6 @@ frequency gain is signed deviation in Hz. Amplitude gain 0…1 converts the
 source to 0…1 and multiplies the target level; multiple amplitude modulators
 multiply. Routes form an acyclic pending-note graph committed by
 `start_note()` before the existing filter and envelope.
-
-### CPU-load scope probe
-
-`cpuload 1` assigns LED_Y/PB9 to the SPI1 DMA refill probe. The pin is low
-from entry to each half/full callback until all 48 frames have been refilled,
-and high for the remaining part of the 1 ms audio period. Therefore
-`CPU load = low pulse width / 1 ms`. This includes USB callback work, pending
-Berry event handlers, and all sample/oscillator/filter/envelope rendering.
-`cpuload 0` disables the probe and restores normal fixed-LED behavior;
-`cpuload` reports its current state.
 
 ### Digital low-pass filter
 
