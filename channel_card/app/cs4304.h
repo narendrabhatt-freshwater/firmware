@@ -1,3 +1,26 @@
+/*
+                                   __
+                               ___  \  \
+                          ___  \  \  \  \    _______
+                     ___  \  \  \  \  \__\__/_____  \
+                     \  \  \  \  \__\_______      \__\____
+                      \  \  \  \     ___ \  \________  \__/
+                       \  \  \__\___/_  \ \___/   \  \___
+                        \  \    ____  \  \________ \ ___/
+                         \__\__/ \  \  \____/  \  \
+                                  \  \     ___  \  \___
+                                   \__\___/ \  \ \____/
+                                           \  \
+                                              \  \___
+                 __                 _          \ ___/  _
+                / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+               | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+               |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+               |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+
+            (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+*/
+
 #ifndef CHANNEL_APP_CS4304_H
 #define CHANNEL_APP_CS4304_H
 
@@ -123,7 +146,7 @@ typedef struct CS4304_HandleTypeDef {
 #define CS4304_VOL_MIN 0xFF
 #define CS4304_ATTEN_DB(db) ((uint8_t)((db) * 2)) /* e.g. CS4304_ATTEN_DB(20) = −20 dB */
 
-/* Initial attenuation applied by CS4304_Init; the board uses 0 dB trim. */
+/* Initial attenuation applied by init_cs4304; the board uses 0 dB trim. */
 #define CS4304_INIT_ATTEN                                                                          \
     CS4304_VOL_0DB /* full scale; M031N level set by external 10k/1k divider */
 
@@ -136,43 +159,45 @@ typedef struct CS4304_HandleTypeDef {
 /* ---- exported functions ------------------------------------------------- */
 
 /** Scan the bus for the first ACKing device (8-bit addr), 0 if none. */
-uint16_t CS4304_ScanBus(I2C_HandleTypeDef *hi2c);
+uint16_t scan_cs4304_bus(I2C_HandleTypeDef *hi2c);
 
 /** Full init: HW reset → address probe/scan → SW_RESET → verify DEVID →
  * configure clocking/ASP (while GLOBAL_EN=0) → unmute, set volume, OUT_VU →
  * GLOBAL_EN=1. Output becomes active after the ~1 s startup delay. */
 /* ---- dac control interface ---------------------------------------------- */
 
-HAL_StatusTypeDef CS4304_Init(CS4304_HandleTypeDef *hcs4304);
+HAL_StatusTypeDef init_cs4304(CS4304_HandleTypeDef *hcs4304);
 
-HAL_StatusTypeDef CS4304_DeInit(CS4304_HandleTypeDef *hcs4304);
-HAL_StatusTypeDef CS4304_Reset(CS4304_HandleTypeDef *hcs4304);
+HAL_StatusTypeDef deinit_cs4304(CS4304_HandleTypeDef *hcs4304);
+HAL_StatusTypeDef reset_cs4304(CS4304_HandleTypeDef *hcs4304);
 
 /** 16-bit register access (address must be word-aligned). */
-HAL_StatusTypeDef CS4304_ReadReg(CS4304_HandleTypeDef *hcs4304, uint16_t reg, uint16_t *pData);
-HAL_StatusTypeDef CS4304_WriteReg(CS4304_HandleTypeDef *hcs4304, uint16_t reg, uint16_t data);
+HAL_StatusTypeDef read_cs4304_register(CS4304_HandleTypeDef *hcs4304, uint16_t reg,
+                                       uint16_t *pData);
+HAL_StatusTypeDef write_cs4304_register(CS4304_HandleTypeDef *hcs4304, uint16_t reg, uint16_t data);
 
 /** Mute all channels (1) / unmute (0). Latched via OUT_VU. */
-HAL_StatusTypeDef CS4304_SetMute(CS4304_HandleTypeDef *hcs4304, uint8_t mute);
+HAL_StatusTypeDef set_cs4304_mute(CS4304_HandleTypeDef *hcs4304, uint8_t mute);
 
 /** Per-channel mute bitmask: bit0 = Ch1 … bit3 = Ch4. Latched via OUT_VU. */
-HAL_StatusTypeDef CS4304_SetChannelMute(CS4304_HandleTypeDef *hcs4304, uint8_t mask);
+HAL_StatusTypeDef set_cs4304_channel_mute(CS4304_HandleTypeDef *hcs4304, uint8_t mask);
 
 /** Attenuation on all channels: 0x00 = 0 dB … 0xFF = −127.5 dB. */
-HAL_StatusTypeDef CS4304_SetVolume(CS4304_HandleTypeDef *hcs4304, uint8_t atten);
+HAL_StatusTypeDef set_cs4304_volume(CS4304_HandleTypeDef *hcs4304, uint8_t atten);
 
 /** Per-channel attenuation, channel = '1'..'4' or 'A'..'D'.
  * NOTE: overwritten by the next master volume change; for a persistent
- * per-channel offset use CS4304_SetChannelTrim instead. */
-HAL_StatusTypeDef CS4304_SetChannelVolume(CS4304_HandleTypeDef *hcs4304, char channel,
-                                          uint8_t atten);
+ * per-channel offset use set_cs4304_channel_trim instead. */
+HAL_StatusTypeDef set_cs4304_channel_volume(CS4304_HandleTypeDef *hcs4304, char channel,
+                                            uint8_t atten);
 
 /** Persistent per-channel trim: EXTRA attenuation (0.5 dB steps) applied on
  * top of the master volume, e.g. CS4304_ATTEN_DB(12) = −12 dB relative.
  * channel = '1'..'4' or 'A'..'D'. Re-applies volumes immediately. */
-HAL_StatusTypeDef CS4304_SetChannelTrim(CS4304_HandleTypeDef *hcs4304, char channel, uint8_t trim);
+HAL_StatusTypeDef set_cs4304_channel_trim(CS4304_HandleTypeDef *hcs4304, char channel,
+                                          uint8_t trim);
 
-CS4304_StateTypeDef CS4304_GetState(CS4304_HandleTypeDef *hcs4304);
+CS4304_StateTypeDef get_cs4304_state(CS4304_HandleTypeDef *hcs4304);
 
 #ifdef __cplusplus
 }

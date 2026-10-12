@@ -1,3 +1,26 @@
+/*
+                                   __
+                               ___  \  \
+                          ___  \  \  \  \    _______
+                     ___  \  \  \  \  \__\__/_____  \
+                     \  \  \  \  \__\_______      \__\____
+                      \  \  \  \     ___ \  \________  \__/
+                       \  \  \__\___/_  \ \___/   \  \___
+                        \  \    ____  \  \________ \ ___/
+                         \__\__/ \  \  \____/  \  \
+                                  \  \     ___  \  \___
+                                   \__\___/ \  \ \____/
+                                           \  \
+                                              \  \___
+                 __                 _          \ ___/  _
+                / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+               | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+               |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+               |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+
+            (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+*/
+
 #include "filter.h"
 #include "audio.h"
 #include <math.h>
@@ -9,7 +32,7 @@
 
 /* ---- convert cutoff frequency to angular frequency ---------------------- */
 
-double ButterFourPole_CutoffToOmega(double cutoff_hz, double sample_rate)
+double cutoff_to_omega(double cutoff_hz, double sample_rate)
 {
     const double pi = 3.14159265358979323846;
     double nyquist;
@@ -26,7 +49,7 @@ double ButterFourPole_CutoffToOmega(double cutoff_hz, double sample_rate)
 
 /* ---- reset filter history ----------------------------------------------- */
 
-void ButterFourPole_Reset(ButterFourPole_t *f)
+void reset_four_pole_filter(ButterFourPole_t *f)
 {
     if (f == 0) {
         return;
@@ -39,7 +62,7 @@ void ButterFourPole_Reset(ButterFourPole_t *f)
 
 /* ---- calculate low-pass coefficients ------------------------------------ */
 
-void ButterFourPole_InitLowPass(ButterFourPole_t *f, double omega, double g)
+void init_four_pole_low_pass_filter(ButterFourPole_t *f, double omega, double g)
 {
     double k;
     double p;
@@ -80,12 +103,12 @@ void ButterFourPole_InitLowPass(ButterFourPole_t *f, double omega, double g)
     f->coef[7] = -a3 * a0;
     f->coef[8] = -a4 * a0;
 
-    ButterFourPole_Reset(f);
+    reset_four_pole_filter(f);
 }
 
 /* ---- calculate high-pass coefficients ----------------------------------- */
 
-void ButterFourPole_InitHighPass(ButterFourPole_t *f, double omega, double g)
+void init_four_pole_high_pass_filter(ButterFourPole_t *f, double omega, double g)
 {
     double k;
     double p;
@@ -126,12 +149,12 @@ void ButterFourPole_InitHighPass(ButterFourPole_t *f, double omega, double g)
     f->coef[7] = -a3 * a0;
     f->coef[8] = -a4 * a0;
 
-    ButterFourPole_Reset(f);
+    reset_four_pole_filter(f);
 }
 
 /* ---- filter one sample -------------------------------------------------- */
 
-double ButterFourPole_Process(ButterFourPole_t *f, double in)
+double filter_four_pole_sample(ButterFourPole_t *f, double in)
 {
     double out;
 
@@ -174,7 +197,7 @@ static ButterFourPole_t s_filt[NOTE_FILTER_VOICES];
 
 /* ---- convert and constrain filter values -------------------------------- */
 
-static int32_t NoteFilter_DoubleToQ31(double x)
+static int32_t filter_sample_to_q31(double x)
 {
     if (x >= 1.0) {
         return (int32_t)0x7FFFFFFF;
@@ -185,7 +208,7 @@ static int32_t NoteFilter_DoubleToQ31(double x)
     return (int32_t)(x * 2147483647.0);
 }
 
-static double NoteFilter_ClampDesignHz(double fc)
+static double clamp_filter_design_frequency_hz(double fc)
 {
     if (fc < NOTE_FILTER_CUTOFF_MIN_HZ) {
         return NOTE_FILTER_CUTOFF_MIN_HZ;
@@ -200,7 +223,7 @@ static double NoteFilter_ClampDesignHz(double fc)
  * Effective fc from base + pitch-track.
  * k==0 or unknown note → base. Track never sets the bypass flag.
  */
-static double NoteFilter_ComputeEffective(uint8_t voice)
+static double calculate_voice_filter_cutoff_hz(uint8_t voice)
 {
     double base;
     double k;
@@ -213,32 +236,32 @@ static double NoteFilter_ComputeEffective(uint8_t voice)
     note = s_last_note_hz[voice];
 
     if (k <= 0.0 || !(note > 0.0)) {
-        return NoteFilter_ClampDesignHz(base);
+        return clamp_filter_design_frequency_hz(base);
     }
 
     ratio = note / NOTE_FILTER_F_REF_HZ;
     if (!(ratio > 0.0)) {
-        return NoteFilter_ClampDesignHz(base);
+        return clamp_filter_design_frequency_hz(base);
     }
 
     fc = base * pow(ratio, k);
-    return NoteFilter_ClampDesignHz(fc);
+    return clamp_filter_design_frequency_hz(fc);
 }
 
 /* ---- update filter coefficients ----------------------------------------- */
 
 /** Redesign LPF from effective cutoff + q. Caller: voice valid, not bypass. */
-static void NoteFilter_Redesign(uint8_t voice)
+static void calculate_voice_filter_coefficients(uint8_t voice)
 {
     double omega;
 
-    s_eff_hz[voice] = NoteFilter_ComputeEffective(voice);
-    omega = ButterFourPole_CutoffToOmega(s_eff_hz[voice], NOTE_FILTER_SAMPLE_RATE);
-    ButterFourPole_InitLowPass(&s_filt[voice], omega, s_q[voice]);
+    s_eff_hz[voice] = calculate_voice_filter_cutoff_hz(voice);
+    omega = cutoff_to_omega(s_eff_hz[voice], NOTE_FILTER_SAMPLE_RATE);
+    init_four_pole_low_pass_filter(&s_filt[voice], omega, s_q[voice]);
 }
 
 /** Re-apply design when base/k/q/note change and filter is active. */
-static void NoteFilter_ApplyActive(uint8_t voice)
+static void apply_voice_filter_coefficients(uint8_t voice)
 {
     if (s_bypass[voice] != 0u) {
         return;
@@ -247,12 +270,12 @@ static void NoteFilter_ApplyActive(uint8_t voice)
         s_base_hz[voice] >= NOTE_FILTER_CUTOFF_MAX_HZ) {
         return;
     }
-    NoteFilter_Redesign(voice);
+    calculate_voice_filter_coefficients(voice);
 }
 
 /* ---- initialize voice filters ------------------------------------------- */
 
-void NoteFilter_InitAll(void)
+void init_voice_filters(void)
 {
     uint8_t i;
 
@@ -263,21 +286,21 @@ void NoteFilter_InitAll(void)
         s_eff_hz[i] = NOTE_FILTER_CUTOFF_MAX_HZ;
         s_last_note_hz[i] = 0.0;
         s_bypass[i] = 1u;
-        ButterFourPole_Reset(&s_filt[i]);
+        reset_four_pole_filter(&s_filt[i]);
     }
 }
 
-void NoteFilter_Reset(uint8_t voice)
+void reset_voice_filter(uint8_t voice)
 {
     if (voice >= NOTE_FILTER_VOICES) {
         return;
     }
-    ButterFourPole_Reset(&s_filt[voice]);
+    reset_four_pole_filter(&s_filt[voice]);
 }
 
 /* ---- select the filter response ----------------------------------------- */
 
-const char *NoteFilter_PassName(NoteFilter_Pass_t pass)
+const char *get_filter_mode_name(NoteFilter_Pass_t pass)
 {
     if (pass == NOTE_FILTER_PASS_LP) {
         return "lp";
@@ -291,13 +314,13 @@ const char *NoteFilter_PassName(NoteFilter_Pass_t pass)
     return "?";
 }
 
-NoteFilter_Pass_t NoteFilter_GetPass(uint8_t voice)
+NoteFilter_Pass_t get_voice_filter_mode(uint8_t voice)
 {
     (void)voice;
     return NOTE_FILTER_PASS_LP;
 }
 
-int NoteFilter_SetPass(uint8_t voice, NoteFilter_Pass_t pass)
+int set_voice_filter_mode(uint8_t voice, NoteFilter_Pass_t pass)
 {
     if (voice >= NOTE_FILTER_VOICES) {
         return -1;
@@ -309,14 +332,14 @@ int NoteFilter_SetPass(uint8_t voice, NoteFilter_Pass_t pass)
     /* Already LP; re-apply base design if active. */
     if (s_base_hz[voice] >= NOTE_FILTER_CUTOFF_MIN_HZ &&
         s_base_hz[voice] < NOTE_FILTER_CUTOFF_MAX_HZ) {
-        return NoteFilter_SetCutoff(voice, s_base_hz[voice]);
+        return set_voice_filter_cutoff_hz(voice, s_base_hz[voice]);
     }
     return 0;
 }
 
 /* ---- set and query cutoff and resonance --------------------------------- */
 
-int NoteFilter_SetCutoff(uint8_t voice, double cutoff_hz)
+int set_voice_filter_cutoff_hz(uint8_t voice, double cutoff_hz)
 {
     if (voice >= NOTE_FILTER_VOICES) {
         return -1;
@@ -329,7 +352,7 @@ int NoteFilter_SetCutoff(uint8_t voice, double cutoff_hz)
         return -2;
     }
 
-    /* q must already be valid (NoteFilter_InitAll / SetQ). Do not silent-repair. */
+    /* q must already be valid (init_voice_filters / SetQ). Do not silent-repair. */
     if (s_q[voice] < NOTE_FILTER_Q_MIN || s_q[voice] > NOTE_FILTER_Q_MAX) {
         return -2;
     }
@@ -339,16 +362,16 @@ int NoteFilter_SetCutoff(uint8_t voice, double cutoff_hz)
     if (cutoff_hz >= NOTE_FILTER_CUTOFF_MAX_HZ) {
         s_bypass[voice] = 1u;
         s_eff_hz[voice] = NOTE_FILTER_CUTOFF_MAX_HZ;
-        NoteFilter_Reset(voice);
+        reset_voice_filter(voice);
         return 0;
     }
 
     s_bypass[voice] = 0u;
-    NoteFilter_Redesign(voice);
+    calculate_voice_filter_coefficients(voice);
     return 0;
 }
 
-double NoteFilter_GetCutoff(uint8_t voice)
+double get_voice_filter_cutoff_hz(uint8_t voice)
 {
     if (voice >= NOTE_FILTER_VOICES) {
         return 0.0;
@@ -362,7 +385,7 @@ double NoteFilter_GetCutoff(uint8_t voice)
     return s_eff_hz[voice];
 }
 
-double NoteFilter_GetBaseCutoff(uint8_t voice)
+double get_voice_filter_base_cutoff_hz(uint8_t voice)
 {
     if (voice >= NOTE_FILTER_VOICES) {
         return 0.0;
@@ -373,7 +396,7 @@ double NoteFilter_GetBaseCutoff(uint8_t voice)
     return s_base_hz[voice];
 }
 
-int NoteFilter_SetQ(uint8_t voice, double q)
+int set_voice_filter_resonance(uint8_t voice, double q)
 {
     if (voice >= NOTE_FILTER_VOICES) {
         return -1;
@@ -383,11 +406,11 @@ int NoteFilter_SetQ(uint8_t voice, double q)
     }
 
     s_q[voice] = q;
-    NoteFilter_ApplyActive(voice);
+    apply_voice_filter_coefficients(voice);
     return 0;
 }
 
-double NoteFilter_GetQ(uint8_t voice)
+double get_voice_filter_resonance(uint8_t voice)
 {
     if (voice >= NOTE_FILTER_VOICES) {
         return NOTE_FILTER_Q_DEFAULT;
@@ -400,7 +423,7 @@ double NoteFilter_GetQ(uint8_t voice)
 
 /* ---- configure pitch tracking ------------------------------------------- */
 
-int NoteFilter_SetPitchK(uint8_t voice, double k)
+int set_voice_filter_pitch_tracking(uint8_t voice, double k)
 {
     if (voice >= NOTE_FILTER_VOICES) {
         return -1;
@@ -410,11 +433,11 @@ int NoteFilter_SetPitchK(uint8_t voice, double k)
     }
 
     s_k[voice] = k;
-    NoteFilter_ApplyActive(voice);
+    apply_voice_filter_coefficients(voice);
     return 0;
 }
 
-double NoteFilter_GetPitchK(uint8_t voice)
+double get_voice_filter_pitch_tracking(uint8_t voice)
 {
     if (voice >= NOTE_FILTER_VOICES) {
         return NOTE_FILTER_K_DEFAULT;
@@ -425,7 +448,7 @@ double NoteFilter_GetPitchK(uint8_t voice)
     return s_k[voice];
 }
 
-void NoteFilter_OnNoteFreq(uint8_t voice, double freq_hz)
+void update_voice_filter_note_frequency(uint8_t voice, double freq_hz)
 {
     if (voice >= NOTE_FILTER_VOICES) {
         return;
@@ -437,13 +460,13 @@ void NoteFilter_OnNoteFreq(uint8_t voice, double freq_hz)
     s_last_note_hz[voice] = freq_hz;
     /* Absolute mode (k==0): keep coeffs; only cache pitch for a later fk. */
     if (s_k[voice] > 0.0) {
-        NoteFilter_ApplyActive(voice);
+        apply_voice_filter_coefficients(voice);
     }
 }
 
 /* ---- filter one sample -------------------------------------------------- */
 
-int32_t NoteFilter_Process(uint8_t voice, int32_t x)
+int32_t filter_voice_sample(uint8_t voice, int32_t x)
 {
     double in;
     double out;
@@ -456,6 +479,6 @@ int32_t NoteFilter_Process(uint8_t voice, int32_t x)
     }
 
     in = (double)x / 2147483647.0;
-    out = ButterFourPole_Process(&s_filt[voice], in);
-    return NoteFilter_DoubleToQ31(out);
+    out = filter_four_pole_sample(&s_filt[voice], in);
+    return filter_sample_to_q31(out);
 }

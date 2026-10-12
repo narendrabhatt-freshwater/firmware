@@ -63,23 +63,30 @@ if(BUILD_TESTING)
     # and renderer on the host; this does not build or flash MCU firmware.
     set(CONTROL_TEST_CARD "${CMAKE_CURRENT_SOURCE_DIR}/../channel_card")
     # voice_bd can also be distributed by itself, without the firmware tree.
-    if(EXISTS "${CONTROL_TEST_CARD}/runtime/CMakeLists.txt")
-        add_subdirectory("${CONTROL_TEST_CARD}/runtime" envelope_test_runtime)
+    if(EXISTS "${CONTROL_TEST_CARD}/app/voice.cpp")
+        set(CONTROL_TEST_RUNTIME "${CONTROL_TEST_CARD}/berry_runtime")
+        file(GLOB CONTROL_TEST_BERRY_SOURCES CONFIGURE_DEPENDS
+            "${CONTROL_TEST_RUNTIME}/third_party/berry/src/*.c")
+        add_library(voicebd_envelope_runtime STATIC
+            ${CONTROL_TEST_BERRY_SOURCES}
+            "${CONTROL_TEST_RUNTIME}/berry_runtime_modtab.c"
+            "${CONTROL_TEST_RUNTIME}/vm.c"
+            "${CONTROL_TEST_RUNTIME}/vm_source.c"
+            "${CONTROL_TEST_RUNTIME}/berry_backend.c")
+        target_include_directories(voicebd_envelope_runtime PUBLIC
+            "${CONTROL_TEST_RUNTIME}" "${CONTROL_TEST_RUNTIME}/third_party/berry/src")
         add_executable(voicebd_envelope_test envelope_controls_test.cpp envelope_controls.cpp
-            "${CONTROL_TEST_CARD}/Core/Src/audio/note_bank.c"
-            "${CONTROL_TEST_CARD}/Core/Src/audio/stream_ring.c"
-            "${CONTROL_TEST_CARD}/Core/Src/audio/note_envelope.c"
-            "${CONTROL_TEST_CARD}/Core/Src/audio/attack_bank.c"
-            "${CONTROL_TEST_CARD}/Core/Src/audio/wavetable_osc.c"
-            "${CONTROL_TEST_CARD}/Core/Src/audio/channel_vm.c"
-            "${CONTROL_TEST_CARD}/Core/Src/filters/note_filter.c"
-            "${CONTROL_TEST_CARD}/Core/Src/filters/butterworth_four_pole.c")
+            "${CONTROL_TEST_CARD}/app/voice.cpp"
+            "${CONTROL_TEST_CARD}/app/stream.cpp"
+            "${CONTROL_TEST_CARD}/app/samples.cpp"
+            "${CONTROL_TEST_CARD}/app/oscillator.cpp"
+            "${CONTROL_TEST_CARD}/app/filter.cpp"
+            "${CONTROL_TEST_CARD}/sim/board_sim.cpp")
         target_compile_features(voicebd_envelope_test PRIVATE cxx_std_17)
         target_compile_options(voicebd_envelope_test PRIVATE -Wall -Wextra -Werror)
         target_include_directories(voicebd_envelope_test PRIVATE
-            "${CONTROL_TEST_CARD}/Core/Inc/audio" "${CONTROL_TEST_CARD}/Core/Inc/drivers"
-            "${CONTROL_TEST_CARD}/Core/Inc/filters" "${CONTROL_TEST_CARD}/USB_APP")
-        target_link_libraries(voicebd_envelope_test PRIVATE script_runtime::berry berry_runtime m)
+            "${CONTROL_TEST_CARD}/app")
+        target_link_libraries(voicebd_envelope_test PRIVATE voicebd_envelope_runtime m)
         add_test(NAME voicebd_envelope COMMAND voicebd_envelope_test "${BERRY_EXECUTABLE}"
             "${CMAKE_CURRENT_BINARY_DIR}/envelope control fixtures")
     else()

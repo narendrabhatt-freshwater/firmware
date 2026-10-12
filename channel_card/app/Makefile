@@ -1,3 +1,24 @@
+#                                    __
+#                                ___  \  \
+#                           ___  \  \  \  \    _______
+#                      ___  \  \  \  \  \__\__/_____  \
+#                      \  \  \  \  \__\_______      \__\____
+#                       \  \  \  \     ___ \  \________  \__/
+#                        \  \  \__\___/_  \ \___/   \  \___
+#                         \  \    ____  \  \________ \ ___/
+#                          \__\__/ \  \  \____/  \  \
+#                                   \  \     ___  \  \___
+#                                    \__\___/ \  \ \____/
+#                                            \  \
+#                                               \  \___
+#                  __                 _          \ ___/  _
+#                 / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+#                | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+#                |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+#                |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+#
+#             (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+
 ################################################################################
 # Freshwater Channel Card — standalone GNU Make build
 ################################################################################
@@ -5,7 +26,7 @@
 # RS485, 8N1. Edit here, or override with: make BAUDRATE=3000000
 BAUDRATE ?= 921600
 CROSS_COMPILE ?= arm-none-eabi-
-PYTHON ?= python3
+SHA256 ?= shasum -a 256
 CC := $(CROSS_COMPILE)gcc
 CXX := $(CROSS_COMPILE)g++
 AR := $(CROSS_COMPILE)ar
@@ -28,9 +49,9 @@ BERRY := berry_runtime/third_party/berry
 
 .DEFAULT_GOAL := all
 .DELETE_ON_ERROR:
-.PHONY: all info simulator clean FORCE
+.PHONY: all sim clean FORCE
 
-# ---- source lists (keep link order stable) -----------------------------------
+# ---- source lists (keep link order stable) ----------------------------------
 
 CORE_SOURCES := \
     core/src/main.c \
@@ -48,19 +69,9 @@ CORE_SOURCES := \
     core/src/syscalls.c \
     startup_stm32h725xx.s
 
-APP_SOURCES := \
-    app/cs4304.cpp \
-    app/audio.cpp \
-    app/audio_i2s.cpp \
-    app/board_stm32.cpp \
-    app/channel.cpp \
-    app/filter.cpp \
-    app/oscillator.cpp \
-    app/voice.cpp \
-    app/samples.cpp \
-    app/stream.cpp \
-    app/usb.cpp \
-    app/usb_device.cpp
+include $(ROOT)/app/sources.mk
+APP_SOURCES := $(SHARED_APP_SOURCES) app/cs4304.cpp app/audio_dac.cpp \
+               app/audio_i2s.cpp app/board_stm32.cpp app/usb_device.cpp
 
 DRIVER_SOURCES := \
     core/src/system_stm32h7xx.c \
@@ -119,7 +130,8 @@ CFLAGS := $(COMMON_FLAGS)
 CXXFLAGS := $(COMMON_FLAGS) -std=c++17 -fno-rtti -fno-exceptions \
             -fno-threadsafe-statics
 ASFLAGS := $(CPU_FLAGS) -x assembler-with-cpp -O3 -DNDEBUG
-MCU_DEFINES := -DUSE_PWR_DIRECT_SMPS_SUPPLY -DUSE_HAL_DRIVER -DSTM32H725xx
+MCU_DEFINES := -DCHANNEL_PLATFORM_STM32 -DCHANNEL_ENABLE_CYCLE_PROFILING \
+               -DUSE_PWR_DIRECT_SMPS_SUPPLY -DUSE_HAL_DRIVER -DSTM32H725xx
 MCU_INCLUDES := -I$(ROOT)/core/inc \
                 -I$(ROOT)/drivers/stm32h7xx_hal_driver/inc \
                 -I$(ROOT)/drivers/stm32h7xx_hal_driver/inc/legacy \
@@ -147,14 +159,23 @@ $(BERRY_OBJECTS): PRIVATE_CFLAGS := -std=c11 -w
 export BAUDRATE
 export BUILD_SETTINGS = $(CC)|$(CXX)|$(AR)|$(OBJCOPY)|$(OBJDUMP)|$(CPPFLAGS)|$(CFLAGS)|$(CXXFLAGS)|$(ASFLAGS)|$(LDFLAGS)|$(BAUDRATE)|$(OBJECTS)
 $(CONFIG): FORCE
-	@mkdir -p "$(@D)"
-	@$(PYTHON) -c 'import os, pathlib, re, subprocess, sys; baud = os.environ["BAUDRATE"]; valid = re.fullmatch(r"[1-9][0-9]*", baud) and int(baud) <= 4000000; sys.exit("BAUDRATE must be a positive integer no greater than 4000000") if not valid else None; p = pathlib.Path(sys.argv[1]); versions = [subprocess.check_output([c, "--version"]).decode() for c in sys.argv[2:]]; data = os.environ["BUILD_SETTINGS"] + "\n" + "".join(versions); p.write_text(data) if not p.exists() or p.read_text() != data else None' "$@" "$(CC)" "$(CXX)"
+	@set -eu; \
+	awk 'BEGIN { baud = ENVIRON["BAUDRATE"]; \
+	    if (baud !~ /^[1-9][0-9]*$$/ || baud + 0 > 4000000) { \
+	        print "BAUDRATE must be a positive integer no greater than 4000000"; exit 1; \
+	    } }'; \
+	mkdir -p "$(@D)"; \
+	trap 'rm -f "$@.tmp"' EXIT HUP INT TERM; \
+	{ printf '%s\n' "$$BUILD_SETTINGS"; \
+	  "$(CC)" --version; printf '\n'; "$(CXX)" --version; printf '\n'; \
+	} > "$@.tmp"; \
+	if ! cmp -s "$@.tmp" "$@"; then mv "$@.tmp" "$@"; fi
 
 FORCE:
 
 # ---- compile and link -------------------------------------------------------
 
-$(OBJECTS): $(CONFIG) $(MAKEFILE)
+$(OBJECTS): $(CONFIG) $(MAKEFILE) $(ROOT)/app/sources.mk
 
 $(OBJDIR)/%.c.o: $(ROOT)/%.c
 	@mkdir -p "$(@D)"
@@ -202,90 +223,69 @@ $(BINARY): $(BUILD_BINARY) $(INFO)
 all: $(BINARY) $(OBJDIR)/$(NAME).hex
 	@cat "$(INFO)"
 
-# ---- firmware report (embedded to keep one build file) -----------------------
+# ---- firmware report --------------------------------------------------------
 
-define REPORT_SCRIPT
-import datetime
-import hashlib
-import pathlib
-import re
-import subprocess
-import sys
-
-elf, mapfile, binary, objdump, compiler, baud, output = sys.argv[1:]
-regions = []
-in_memory = False
-for line in pathlib.Path(mapfile).read_text().splitlines():
-    if line == "Memory Configuration":
-        in_memory = True
-    elif in_memory and line.startswith("*default*"):
-        break
-    elif in_memory:
-        match = re.match(r"(\w+)\s+(0x[0-9a-fA-F]+)\s+(0x[0-9a-fA-F]+)", line)
-        if match:
-            name, address, capacity = match.groups()
-            origin = int(address, 16)
-            regions.append([name, address, origin, int(capacity, 16), origin])
-if not regions:
-    raise SystemExit("No memory regions found in " + mapfile)
-sections = []
-section = None
-for line in subprocess.check_output([objdump, "-h", elf], text=True).splitlines():
-    match = re.match(r"\s*\d+\s+(\S+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)", line)
-    if match:
-        name, size, vma, lma = match.groups()
-        section = (name, int(size, 16), int(vma, 16), int(lma, 16))
-    elif section and "ALLOC" in line:
-        name, size, vma, lma = section
-        if size:
-            sections.append((name, vma, size))
-            addresses = [vma] + ([lma] if "LOAD" in line and lma != vma else [])
-            for start in addresses:
-                for region in regions:
-                    if region[2] <= start < region[2] + region[3]:
-                        region[4] = max(region[4], start + size)
-                        break
-        section = None
-if not sections:
-    raise SystemExit("No allocated ELF sections found in " + elf)
-data = pathlib.Path(binary).read_bytes()
-built = datetime.datetime.fromtimestamp(pathlib.Path(elf).stat().st_mtime, datetime.timezone.utc)
-version = subprocess.check_output([compiler, "--version"], text=True).splitlines()[0]
-lines = ["", "Channel Card firmware",
-         f"  Binary:      bin/channel_MCU.bin ({len(data)} bytes)",
-         "  Target:      STM32H725, Cortex-M7, Release",
-         f"  RS485:       {baud} baud, 8N1",
-         f"  Toolchain:   {version}",
-         f"  Built:       {built:%Y-%m-%d %H:%M:%S UTC}",
-         f"  SHA256:      {hashlib.sha256(data).hexdigest()}", "",
-         "Memory region  Origin      Used (B)    Capacity (B)  Free (B)    Used"]
-for name, address, origin, capacity, high in regions:
-    used = high - origin
-    percent = (10000 * used + capacity // 2) // capacity
-    lines.append(f"{name:<15}{address:<12}{used:<12}{capacity:<14}{capacity-used:<12}{percent//100}.{percent%100:02d}%")
-lines += ["", "Allocated sections       Address     Bytes"]
-lines += [f"{name:<25}0x{address:08x}  {size}" for name, address, size in sections]
-lines += ["", "RAM figures include linker reservations and alignment, not runtime peaks.",
-          "Initialized RAM also occupies flash; heap/stack reserve is shown above."]
-pathlib.Path(output).write_text("\n".join(lines) + "\n")
-endef
-export REPORT_SCRIPT
-
+# Keep reporting self-contained so an SVN checkout needs no Python helpers.
+# POSIX awk handles the map and ELF section listing on macOS and Linux.
 $(INFO): $(BUILD_BINARY) $(MAKEFILE)
-	@$(PYTHON) -c "$$REPORT_SCRIPT" "$(ELF)" "$(MAP)" "$(BUILD_BINARY)" "$(OBJDUMP)" "$(CXX)" "$(BAUDRATE)" "$@.tmp"
-	@mv "$@.tmp" "$@"
-
-# Report the last successful build without compiling or changing its baud rate.
-info:
-	@test -f "$(INFO)" && test -f "$(BINARY)" || \
-	    { echo "No firmware report available. Run make first."; exit 1; }
-	@cmp -s "$(BINARY)" "$(BUILD_BINARY)" || \
-	    { echo "Output binary differs from the last build. Run make first."; exit 1; }
-	@cat "$(INFO)"
+	@set -eu; \
+	trap 'rm -f "$@.tmp" "$@.sections" "$@.version" "$@.hash"' EXIT HUP INT TERM; \
+	"$(OBJDUMP)" -h "$(ELF)" > "$@.sections"; \
+	"$(CXX)" --version > "$@.version"; \
+	$(SHA256) "$(BUILD_BINARY)" > "$@.hash"; \
+	{ printf '\nChannel Card firmware\n'; \
+	  printf '  Binary:      bin/$(NAME).bin (%s bytes)\n' "$$(wc -c < "$(BUILD_BINARY)" | tr -d ' ')"; \
+	  printf '  Target:      STM32H725, Cortex-M7, Release\n'; \
+	  printf '  RS485:       %s baud, 8N1\n' "$$BAUDRATE"; \
+	  printf '  Toolchain:   %s\n' "$$(head -n 1 "$@.version")"; \
+	  printf '  Reported:    %s\n' "$$(date -u '+%Y-%m-%d %H:%M:%S UTC')"; \
+	  printf '  SHA256:      %s\n\n' "$$(awk '{print $$1}' "$@.hash")"; \
+	  awk 'function hex(s, n,i,d) { \
+	      sub(/^0[xX]/,"",s); s=tolower(s); n=0; \
+	      for(i=1;i<=length(s);i++) { d=index("0123456789abcdef",substr(s,i,1))-1; n=n*16+d; } \
+	      return n; \
+	  } \
+	  function allocate(address,size, i) { \
+	      for(i=1;i<=regions;i++) \
+	          if(address>=origin[i] && address<origin[i]+capacity[i]) { \
+	              if(address+size>high[i]) high[i]=address+size; break; \
+	          } \
+	  } \
+	  FNR==NR { \
+	      if($$0=="Memory Configuration") memory=1; \
+	      else if(memory && $$1=="*default*") memory=0; \
+	      else if(memory && $$2 ~ /^0x/ && $$3 ~ /^0x/) { \
+	          ++regions; name[regions]=$$1; address[regions]=$$2; \
+	          origin[regions]=hex($$2); capacity[regions]=hex($$3); high[regions]=origin[regions]; \
+	      } \
+	      next; \
+	  } \
+	  $$1 ~ /^[0-9]+$$/ && NF>=5 { section=$$2; size=hex($$3); vma=hex($$4); lma=hex($$5); pending=1; next; } \
+	  pending && /ALLOC/ { \
+	      if(size) { \
+	          ++sections; section_name[sections]=section; section_vma[sections]=vma; section_size[sections]=size; \
+	          allocate(vma,size); if(/LOAD/ && lma!=vma) allocate(lma,size); \
+	      } \
+	      pending=0; \
+	  } \
+	  END { \
+	      if(!regions || !sections) { print "No memory regions or allocated ELF sections found"; exit 1; } \
+	      print "Memory region  Origin      Used (B)    Capacity (B)  Free (B)    Used"; \
+	      for(i=1;i<=regions;i++) { \
+	          used=high[i]-origin[i]; percent=int((10000*used+capacity[i]/2)/capacity[i]); \
+	          printf "%-15s%-12s%-12d%-14d%-12d%d.%02d%%\n",name[i],address[i],used,capacity[i],capacity[i]-used,int(percent/100),percent%100; \
+	      } \
+	      print "\nAllocated sections       Address     Bytes"; \
+	      for(i=1;i<=sections;i++) printf "%-25s0x%08x  %d\n",section_name[i],section_vma[i],section_size[i]; \
+	      print "\nRAM figures include linker reservations and alignment, not runtime peaks."; \
+	      print "Initialized RAM also occupies flash; heap/stack reserve is shown above."; \
+	  }' "$(MAP)" "$@.sections"; \
+	} > "$@.tmp"; \
+	mv "$@.tmp" "$@"
 
 # Host simulator: the same application sources behind virtual ports. Built
 # with the host compiler by sim/Makefile; it does not use the Arm toolchain.
-simulator:
+sim:
 	@test -f "$(ROOT)/sim/Makefile" || \
 	    { echo "The simulator sources (sim/) are not part of this package."; exit 1; }
 	@$(MAKE) -C "$(ROOT)/sim"

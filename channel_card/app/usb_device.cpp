@@ -1,3 +1,28 @@
+/*
+                                   __
+                               ___  \  \
+                          ___  \  \  \  \    _______
+                     ___  \  \  \  \  \__\__/_____  \
+                     \  \  \  \  \__\_______      \__\____
+                      \  \  \  \     ___ \  \________  \__/
+                       \  \  \__\___/_  \ \___/   \  \___
+                        \  \    ____  \  \________ \ ___/
+                         \__\__/ \  \  \____/  \  \
+                                  \  \     ___  \  \___
+                                   \__\___/ \  \ \____/
+                                           \  \
+                                              \  \___
+                 __                 _          \ ___/  _
+                / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+               | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+               |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+               |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+
+            (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+*/
+
+#include "transport.h"
+#include "usb_device.h"
 #include "usb.h"
 #include "usb_otg.h"
 #include "main.h"
@@ -46,7 +71,7 @@ static uint8_t ctrl_stage; /* 0 idle, 1 data IN, 2 data OUT, 3 status IN, 4 stat
  * priority inversion: these sections publish at most one 512-byte receive
  * transfer, copy at most 64 bytes to the parser (or one small reply), and update
  * queue indices/endpoints. Restore the caller's mask. */
-static uint32_t queue_lock(void)
+static uint32_t lock_usb_queues(void)
 {
 #if defined(__arm__) || defined(__thumb__)
     uint32_t saved = __get_PRIMASK();
@@ -58,7 +83,7 @@ static uint32_t queue_lock(void)
 #endif
 }
 
-static void queue_unlock(uint32_t saved)
+static void unlock_usb_queues(uint32_t saved)
 {
 #if defined(__arm__) || defined(__thumb__)
     __set_PRIMASK(saved);
@@ -70,7 +95,7 @@ static void queue_unlock(uint32_t saved)
 
 /* ---- handle control endpoint transfers ---------------------------------- */
 
-static void stall_control(void)
+static void stall_usb_control_endpoint(void)
 {
     ++control_stalls;
     ctrl_stage = 0;
@@ -78,13 +103,13 @@ static void stall_control(void)
     (void)HAL_PCD_EP_SetStall(PCD, 0x80);
 }
 
-static void status_in(void)
+static void send_usb_control_status(void)
 {
     ctrl_stage = 3;
     (void)HAL_PCD_EP_Transmit(PCD, 0x80, ctrl, 0);
 }
 
-static void next_control_in(void)
+static void send_next_usb_control_packet(void)
 {
     uint16_t n = ctrl_left > 64 ? 64 : ctrl_left;
     if (n && ctrl_next != ctrl) memcpy(ctrl, ctrl_next, n);
@@ -93,19 +118,19 @@ static void next_control_in(void)
     (void)HAL_PCD_EP_Transmit(PCD, 0x80, ctrl, n);
 }
 
-static void control_in(const uint8_t *data, uint16_t size, uint16_t wanted)
+static void begin_usb_control_transfer(const uint8_t *data, uint16_t size, uint16_t wanted)
 {
     uint16_t n = size < wanted ? size : wanted;
     ctrl_stage = 1;
     ctrl_next = data;
     ctrl_left = n;
     ctrl_zlp = (uint8_t)(n && n < wanted && (n % 64) == 0);
-    next_control_in();
+    send_next_usb_control_packet();
 }
 
 /* ---- receive bulk endpoint data ----------------------------------------- */
 
-static void arm_out(void)
+static void arm_usb_receive(void)
 {
     /* Reserve room for the entire transfer, including its unpublished tail. */
     if (configuration && !faulted && !rx_armed && RX_SIZE - (rx_wr - rx_rd) >= RX_TRANSFER_BYTES) {
@@ -120,7 +145,7 @@ static void arm_out(void)
  * HAL advances xfer_count only after copying a complete packet from the FIFO.
  * Publishing that prefix early avoids waiting for all eight packets or a ZLP.
  * Completion publishes only the remaining suffix, never the same bytes twice. */
-static void publish_out(uint32_t received)
+static void publish_usb_received_bytes(uint32_t received)
 {
     if (received < rx_published || received > RX_TRANSFER_BYTES ||
         received - rx_published > RX_SIZE - (rx_wr - rx_rd)) {
@@ -141,7 +166,7 @@ static void publish_out(uint32_t received)
 
 /* ---- transmit queued bulk data ------------------------------------------ */
 
-static void kick_in(void)
+static void transmit_queued_usb_bytes(void)
 {
     if (!configuration || suspended || tx_busy) return;
     uint32_t n = tx_wr - tx_rd;
@@ -161,7 +186,7 @@ static void kick_in(void)
 
 /* ---- reset transport queues and link state ------------------------------ */
 
-static void reset_queues(void)
+static void reset_usb_queues(void)
 {
     rx_wr = rx_rd = tx_wr = tx_rd = 0;
     rx_published = 0;
@@ -170,7 +195,7 @@ static void reset_queues(void)
     ++epoch;
 }
 
-static void reset_link(void)
+static void reset_usb_connection(void)
 {
     /* DTR is not a USB endpoint reset. Preserve DATA0/DATA1 synchronisation with
      * the host, keep the OUT transaction armed, and discard only application data. */
@@ -185,25 +210,25 @@ static void reset_link(void)
      * newly queued HELLO reply. No DATA PID bits are changed. */
     USBx_INEP(1)->DIEPINT = 0xFFu;
 #endif
-    reset_queues();
+    reset_usb_queues();
     rx_armed = armed;
     rx_published = received;
-    arm_out();
+    arm_usb_receive();
 }
 
-static void close_data(void)
+static void close_usb_data_endpoints(void)
 {
     (void)HAL_PCD_EP_Close(PCD, BULK_OUT);
     (void)HAL_PCD_EP_Close(PCD, BULK_IN);
     (void)HAL_PCD_EP_Close(PCD, NOTIFY_IN);
 }
 
-static void open_data(void)
+static void open_usb_data_endpoints(void)
 {
     (void)HAL_PCD_EP_Open(PCD, BULK_OUT, 64, EP_TYPE_BULK);
     (void)HAL_PCD_EP_Open(PCD, BULK_IN, 64, EP_TYPE_BULK);
     (void)HAL_PCD_EP_Open(PCD, NOTIFY_IN, 8, EP_TYPE_INTR);
-    arm_out();
+    arm_usb_receive();
 }
 
 /* ---- handle usb reset and control requests ------------------------------ */
@@ -213,7 +238,7 @@ void HAL_PCD_ResetCallback(PCD_HandleTypeDef *pcd)
     (void)pcd;
     ++resets;
     configuration = dtr = suspended = ctrl_stage = 0;
-    reset_queues();
+    reset_usb_queues();
     (void)HAL_PCD_EP_Open(PCD, 0, 64, EP_TYPE_CTRL);
     (void)HAL_PCD_EP_Open(PCD, 0x80, 64, EP_TYPE_CTRL);
 }
@@ -229,49 +254,49 @@ void HAL_PCD_SetupStageCallback(PCD_HandleTypeDef *pcd)
     ctrl_stage = ctrl_out = 0;
     if (bm == 0x80 && request == 6) {
         uint16_t size = 0;
-        const uint8_t *desc = USB_Descriptor((uint8_t)(value >> 8), (uint8_t)value, &size);
+        const uint8_t *desc = get_usb_descriptor((uint8_t)(value >> 8), (uint8_t)value, &size);
         if (desc) {
-            control_in(desc, size, length);
+            begin_usb_control_transfer(desc, size, length);
             return;
         }
     } else if (bm == 0 && request == 5 && value < 128 && !index && !length && !configuration) {
         /* DWC2 latches the address for the status handshake: program it before
          * submitting the ZLP, matching the controller's working device driver. */
         (void)HAL_PCD_SetAddress(PCD, (uint8_t)value);
-        status_in();
+        send_usb_control_status();
         return;
     } else if (bm == 0 && request == 9 && value <= 1 && !index && !length) {
-        if (configuration) close_data();
+        if (configuration) close_usb_data_endpoints();
         configuration = (uint8_t)value;
         dtr = 0;
-        reset_queues();
-        if (configuration) open_data();
-        status_in();
+        reset_usb_queues();
+        if (configuration) open_usb_data_endpoints();
+        send_usb_control_status();
         return;
     } else if (bm == 0x80 && request == 8 && !value && !index && length == 1) {
         ctrl[0] = configuration;
-        control_in(ctrl, 1, length);
+        begin_usb_control_transfer(ctrl, 1, length);
         return;
     } else if ((bm == 0x80 || bm == 0x81 || bm == 0x82) && request == 0 && !value && length == 2) {
         ctrl[0] = ctrl[1] = 0;
         if (bm == 0x80 && index) {
-            stall_control();
+            stall_usb_control_endpoint();
             return;
         }
         if (bm == 0x81 && (!configuration || index > 1)) {
-            stall_control();
+            stall_usb_control_endpoint();
             return;
         }
         if (bm == 0x82) {
             if (index != 0 && index != 0x80 &&
                 (!configuration || (index != BULK_OUT && index != BULK_IN && index != NOTIFY_IN))) {
-                stall_control();
+                stall_usb_control_endpoint();
                 return;
             }
             ctrl[0] =
                 (index & 0x80) ? PCD->IN_ep[index & 15].is_stall : PCD->OUT_ep[index & 15].is_stall;
         }
-        control_in(ctrl, 2, length);
+        begin_usb_control_transfer(ctrl, 2, length);
         return;
     } else if (bm == 2 && (request == 1 || request == 3) && !value && !length && configuration &&
                (index == BULK_OUT || index == BULK_IN || index == NOTIFY_IN)) {
@@ -281,24 +306,24 @@ void HAL_PCD_SetupStageCallback(PCD_HandleTypeDef *pcd)
             (void)HAL_PCD_EP_ClrStall(PCD, (uint8_t)index);
             if (index == BULK_OUT) {
                 rx_armed = 0;
-                arm_out();
+                arm_usb_receive();
             }
             if (index == BULK_IN) {
                 tx_busy = 0;
-                kick_in();
+                transmit_queued_usb_bytes();
             }
         }
-        status_in();
+        send_usb_control_status();
         return;
     } else if (bm == 0x81 && request == 10 && !value && index < 2 && length == 1 && configuration) {
         ctrl[0] = 0;
-        control_in(ctrl, 1, length);
+        begin_usb_control_transfer(ctrl, 1, length);
         return;
     } else if (bm == 1 && request == 11 && !value && index < 2 && !length && configuration) {
-        status_in();
+        send_usb_control_status();
         return;
     } else if (bm == 0xA1 && request == 0x21 && !value && !index && length == 7 && configuration) {
-        control_in(line_coding, 7, length);
+        begin_usb_control_transfer(line_coding, 7, length);
         return;
     } else if (bm == 0x21 && request == 0x20 && !value && !index && length == 7 && configuration) {
         ctrl_out = 1;
@@ -309,12 +334,12 @@ void HAL_PCD_SetupStageCallback(PCD_HandleTypeDef *pcd)
         uint8_t next = (uint8_t)(value & 1);
         if (next != dtr) {
             dtr = next;
-            reset_link();
+            reset_usb_connection();
         }
-        status_in();
+        send_usb_control_status();
         return;
     }
-    stall_control();
+    stall_usb_control_endpoint();
 }
 
 /* ---- handle endpoint completions ---------------------------------------- */
@@ -324,13 +349,13 @@ void HAL_PCD_DataInStageCallback(PCD_HandleTypeDef *pcd, uint8_t ep)
     (void)pcd;
     if (ep == 1) {
         tx_busy = 0;
-        kick_in();
+        transmit_queued_usb_bytes();
         return;
     }
     if (ep != 0) return;
     if (ctrl_stage == 1) {
         if (ctrl_left) {
-            next_control_in();
+            send_next_usb_control_packet();
             return;
         }
         if (ctrl_zlp) {
@@ -352,21 +377,21 @@ void HAL_PCD_DataOutStageCallback(PCD_HandleTypeDef *pcd, uint8_t ep)
         if (ctrl_stage == 2 && ctrl_out && n == 7) {
             memcpy(line_coding, ctrl, 7);
             ctrl_out = 0;
-            status_in();
+            send_usb_control_status();
         } else if (ctrl_stage == 4)
             ctrl_stage = 0;
         else
-            stall_control();
+            stall_usb_control_endpoint();
         return;
     }
     if (ep != 1) return;
     rx_armed = 0;
     if (!dtr || faulted) {
-        arm_out();
+        arm_usb_receive();
         return;
     }
-    publish_out(n);
-    arm_out();
+    publish_usb_received_bytes(n);
+    arm_usb_receive();
 }
 
 /* ---- handle usb link transitions ---------------------------------------- */
@@ -381,20 +406,20 @@ void HAL_PCD_ResumeCallback(PCD_HandleTypeDef *pcd)
 {
     (void)pcd;
     suspended = 0;
-    kick_in();
-    arm_out();
+    transmit_queued_usb_bytes();
+    arm_usb_receive();
 }
 
 void HAL_PCD_DisconnectCallback(PCD_HandleTypeDef *pcd)
 {
     (void)pcd;
     configuration = dtr = 0;
-    reset_queues();
+    reset_usb_queues();
 }
 
 /* ---- initialize the usb peripheral -------------------------------------- */
 
-void USB_Device_Init(void)
+void init_usb_device(void)
 {
     /* Preserve the previously working PLL3 USB clock. Generated PCD init has
      * already configured the embedded PHY and the interrupt. No USB DMA. */
@@ -420,12 +445,13 @@ void USB_Device_Init(void)
 
 /* ---- read and write transport queues ------------------------------------ */
 
-uint32_t USB_Device_Read(uint8_t *dst, uint32_t size)
+uint32_t read_usb_bytes(uint8_t *dst, uint32_t size)
 {
-    uint32_t saved = queue_lock();
-    if (dtr && !faulted && rx_armed) publish_out(HAL_PCD_EP_GetRxCount(PCD, BULK_OUT));
+    uint32_t saved = lock_usb_queues();
+    if (dtr && !faulted && rx_armed)
+        publish_usb_received_bytes(HAL_PCD_EP_GetRxCount(PCD, BULK_OUT));
     if (faulted) {
-        queue_unlock(saved);
+        unlock_usb_queues(saved);
         return 0;
     }
     uint32_t n = rx_wr - rx_rd;
@@ -436,14 +462,14 @@ uint32_t USB_Device_Read(uint8_t *dst, uint32_t size)
     memcpy(dst, rx + at, first);
     memcpy(dst + first, rx, n - first);
     rx_rd = rd + n;
-    arm_out();
-    queue_unlock(saved);
+    arm_usb_receive();
+    unlock_usb_queues(saved);
     return n;
 }
 
-uint8_t USB_Device_Write(const uint8_t *src, uint32_t size)
+uint8_t write_usb_bytes(const uint8_t *src, uint32_t size)
 {
-    uint32_t saved = queue_lock();
+    uint32_t saved = lock_usb_queues();
     uint8_t ok = (uint8_t)(configuration && dtr && size <= TX_SIZE - (tx_wr - tx_rd));
     if (ok) {
         uint32_t wr = tx_wr, at = wr % TX_SIZE, first = size;
@@ -451,39 +477,39 @@ uint8_t USB_Device_Write(const uint8_t *src, uint32_t size)
         memcpy(tx + at, src, first);
         memcpy(tx, src + first, size - first);
         tx_wr = wr + size;
-        kick_in();
+        transmit_queued_usb_bytes();
     }
-    queue_unlock(saved);
+    unlock_usb_queues(saved);
     return ok;
 }
 
 /* ---- query transport state ---------------------------------------------- */
 
-uint32_t USB_Device_TxFree(void)
+uint32_t get_usb_transmit_free_bytes(void)
 {
     return TX_SIZE - (tx_wr - tx_rd);
 }
 
-uint32_t USB_Device_Epoch(void)
+uint32_t get_usb_connection_generation(void)
 {
     return epoch;
 }
 
-uint8_t USB_Device_Connected(void)
+uint8_t is_usb_connected(void)
 {
     return (uint8_t)(configuration && dtr && !faulted && !suspended);
 }
 
-void USB_Device_Fault(void)
+void fault_usb_connection(void)
 {
-    uint32_t saved = queue_lock();
+    uint32_t saved = lock_usb_queues();
     /* Let any already armed packet finish and then leave OUT NAKed. STALL/clear
      * would reset endpoint PID on only one side during DTR recovery. */
     faulted = 1;
-    queue_unlock(saved);
+    unlock_usb_queues(saved);
 }
 
-void USB_Device_Debug(char *text, uint32_t size)
+void format_usb_device_status(char *text, uint32_t size)
 {
     uint32_t gint = 0, mask = 0, ahb = 0, cfg = 0, ctl = 0, otg = 0, phy = 0;
 #if defined(__arm__) || defined(__thumb__)
@@ -538,7 +564,7 @@ static_assert(sizeof(configuration_descriptor) == 75, "CDC descriptor length");
 
 /* ---- select a usb descriptor -------------------------------------------- */
 
-const uint8_t *USB_Descriptor(uint8_t type, uint8_t index, uint16_t *size)
+const uint8_t *get_usb_descriptor(uint8_t type, uint8_t index, uint16_t *size)
 {
     static uint8_t string[66];
     char serial[32];

@@ -1,8 +1,8 @@
 #include "envelope_controls.h"
-#include "note_bank.h"
-#include "note_envelope.h"
-#include "note_filter.h"
-#include "stream_ring.h"
+#include "voice.h"
+#include "samples.h"
+#include "filter.h"
+#include "stream.h"
 
 #include <array>
 #include <cmath>
@@ -34,11 +34,13 @@ std::array<int8_t, 1024> pcm;
 void supply()
 {
     for (unsigned v = 0; v < NOTE_BANK_VOICES; ++v) {
-        auto session = StreamRing_CurrentSession(v);
-        if (session != 255 && StreamRing_CurrentFree(v) >= pcm.size())
-            require(StreamRing_WriteBody(v, session, pcm.data(), pcm.size()) == 1, "Current BODY rejected");
-        if (StreamRing_HasPending(v) && StreamRing_FreeLevel(v) >= pcm.size())
-            require(StreamRing_WriteBody(v, StreamRing_TargetSession(v), pcm.data(), pcm.size()) == 1,
+        auto session = get_current_stream_session(v);
+        if (session != 255 && get_current_stream_free_samples(v) >= pcm.size())
+            require(write_stream_body_samples(v, session, pcm.data(), pcm.size()) == 1,
+                    "Current BODY rejected");
+        if (has_pending_voice_stream(v) && get_stream_free_samples(v) >= pcm.size())
+            require(write_stream_body_samples(v, get_target_stream_session(v),
+                                             pcm.data(), pcm.size()) == 1,
                     "Pending BODY rejected");
     }
 }
@@ -47,13 +49,13 @@ int32_t render(unsigned milliseconds)
     int32_t sample = 0;
     while (milliseconds--) {
         supply();
-        NoteBank_VmBoundaryBegin();
-        for (unsigned i = 0; i < 48; ++i) sample = NoteBank_NextSample();
-        NoteBank_VmBoundaryEnd();
+        begin_voice_audio_block();
+        for (unsigned i = 0; i < 48; ++i) sample = mix_next_audio_sample();
+        end_voice_audio_block();
     }
-    require(NoteBank_HoldCount() == 0, "BODY underrun");
+    require(get_voice_underrun_count() == 0, "BODY underrun");
     for (unsigned v = 0; v < NOTE_BANK_VOICES; ++v)
-        require(NoteBank_VmFaultCount(v) == 0, "VM fault");
+        require(get_voice_script_fault_count(v) == 0, "VM fault");
     return sample;
 }
 
@@ -70,31 +72,33 @@ void load(envelope_controls::settings const& settings,
     std::ifstream input(bec, std::ios::binary);
     require(bool(input), "Cannot open compiled program");
     std::vector<char> program{std::istreambuf_iterator<char>(input), {}};
-    StreamRing_Init();
-    StreamRing_StatsClear();
-    AttackBank_Init();
-    NoteFilter_InitAll();
-    NoteEnv_Init();
-    NoteBank_Init();
+    init_voice_streams();
+    clear_stream_statistics();
+    init_sample_storage();
+    init_voice_filters();
+    init_voice_envelopes();
+    init_voices();
     pcm.fill(64);
-    require(AttackBank_Load(0, reinterpret_cast<uint8_t*>(pcm.data()), 512) == 0, "Attack load failed");
+    require(load_sample_data(0, reinterpret_cast<uint8_t*>(pcm.data()), 512) == 0,
+            "Attack load failed");
     for (unsigned v = 0; v < NOTE_BANK_VOICES; ++v) {
-        require(NoteBank_VmUploadBegin(v) == 0, "Upload begin failed");
-        require(NoteBank_VmUploadFeed(v, program.data(), program.size()) == 0, "Upload feed failed");
-        require(NoteBank_VmUploadCommit(v) == 0, "Upload commit failed");
+        require(begin_voice_script_upload(v) == 0, "Upload begin failed");
+        require(append_voice_script_upload_bytes(v, program.data(), program.size()) == 0,
+                "Upload feed failed");
+        require(commit_voice_script_upload(v) == 0, "Upload commit failed");
     }
 }
 void on(uint8_t velocity = 127, uint8_t session = 1)
 {
-    require(NoteBank_NoteOnSampleSession(0, 0, 60, velocity, session) == 0, "Note-on failed");
+    require(queue_streamed_sample_note(0, 0, 60, velocity, session) == 0, "Note-on failed");
 }
 void off()
 {
-    require(NoteBank_NoteOff(0) == 0, "Note-off failed");
+    require(queue_voice_note_off(0) == 0, "Note-off failed");
 }
 } // namespace
 
-extern "C" int ChannelLed_Set(float, float, float, float) { return 0; }
+extern "C" int set_channel_led_colour(float, float, float, float) { return 0; }
 
 int main(int argc, char** argv) try
 {
@@ -124,15 +128,15 @@ int main(int argc, char** argv) try
     on(1);
     require(render(1) > 0, "Low-gain attack was rounded to silence");
     render(49);
-    near(NoteEnv_Amplitude(0), 0.0001, 0.000001);
+    near(get_voice_amplitude(0), 0.0001, 0.000001);
     render(2450);
-    near(NoteEnv_Amplitude(0), 0.005);
+    near(get_voice_amplitude(0), 0.005);
     render(2510);
-    near(NoteEnv_Amplitude(0), 0.01, 0.0000001);
+    near(get_voice_amplitude(0), 0.01, 0.0000001);
     off(); render(6);
-    require(!NoteBank_IsActive(0), "Default release did not finish");
+    require(!is_voice_active(0), "Default release did not finish");
     on(127, 2); render(50);
-    near(NoteEnv_Amplitude(0), 0.0001, 0.000001);
+    near(get_voice_amplitude(0), 0.0001, 0.000001);
 
     // Short attack, sustain * gain, and a timed release interrupted mid-attack.
     value = parse(":a 5", defaults).value;
@@ -140,16 +144,16 @@ int main(int argc, char** argv) try
     value = parse(":g 0.2", value).value;
     value = parse(":r 250", value).value;
     load(value, compiler, directory);
-    on(); render(1); near(NoteEnv_Amplitude(0), 0.016);
-    render(4); near(NoteEnv_Amplitude(0), 0.08);
-    render(20); near(NoteEnv_Amplitude(0), 0.08);
-    off(); render(125); near(NoteEnv_Amplitude(0), 0.04);
-    render(126); require(!NoteBank_IsActive(0), "Timed release did not finish");
+    on(); render(1); near(get_voice_amplitude(0), 0.016);
+    render(4); near(get_voice_amplitude(0), 0.08);
+    render(20); near(get_voice_amplitude(0), 0.08);
+    off(); render(125); near(get_voice_amplitude(0), 0.04);
+    render(126); require(!is_voice_active(0), "Timed release did not finish");
     value.attack_ms = 1000;
     load(value, compiler, directory);
-    on(); render(250); near(NoteEnv_Amplitude(0), 0.02);
-    off(); render(125); near(NoteEnv_Amplitude(0), 0.01);
-    render(126); require(!NoteBank_IsActive(0), "Interrupted attack release did not finish");
+    on(); render(250); near(get_voice_amplitude(0), 0.02);
+    off(); render(125); near(get_voice_amplitude(0), 0.01);
+    render(126); require(!is_voice_active(0), "Interrupted attack release did not finish");
 
     // Bypass ignores sustain and timings but retains the selected linear gain.
     value = parse(":e off", value).value;
@@ -158,12 +162,12 @@ int main(int argc, char** argv) try
     value.release_ms = 5000;
     load(value, compiler, directory);
     on(1); require(render(1) > 0, "Bypass gain was silent");
-    near(NoteEnv_Amplitude(0), 0.01, 0.0000001);
-    render(50); near(NoteEnv_Amplitude(0), 0.01, 0.0000001);
+    near(get_voice_amplitude(0), 0.01, 0.0000001);
+    render(50); near(get_voice_amplitude(0), 0.01, 0.0000001);
     on(127, 2); render(10);
-    require(StreamRing_CurrentSession(0) == 2, "Replacement did not activate");
-    near(NoteEnv_Amplitude(0), 0.01, 0.0000001);
-    off(); render(1); require(!NoteBank_IsActive(0), "Bypass note-off was not immediate");
+    require(get_current_stream_session(0) == 2, "Replacement did not activate");
+    near(get_voice_amplitude(0), 0.01, 0.0000001);
+    off(); render(1); require(!is_voice_active(0), "Bypass note-off was not immediate");
 
     // Envelope-on replacement, release during the steal, zero duration/level,
     // and scientific-notation levels all need valid lifecycle behavior.
@@ -171,26 +175,26 @@ int main(int argc, char** argv) try
     value.attack_ms = 5;
     load(value, compiler, directory);
     on(); render(10); on(127, 2); render(12);
-    near(NoteEnv_Amplitude(0), 1.0);
-    require(StreamRing_CurrentSession(0) == 2, "Envelope replacement did not activate");
+    near(get_voice_amplitude(0), 1.0);
+    require(get_current_stream_session(0) == 2, "Envelope replacement did not activate");
     on(127, 3); render(1); off(); render(10);
-    require(!NoteBank_IsActive(0) && !StreamRing_HasPending(0), "Release revived a pending note");
+    require(!is_voice_active(0) && !has_pending_voice_stream(0), "Release revived a pending note");
     value.attack_ms = 0; value.release_ms = 0;
     load(value, compiler, directory);
-    on(); render(1); near(NoteEnv_Amplitude(0), 1.0);
-    off(); render(1); require(!NoteBank_IsActive(0), "Zero release did not stop");
+    on(); render(1); near(get_voice_amplitude(0), 1.0);
+    off(); render(1); require(!is_voice_active(0), "Zero release did not stop");
     value.sustain = 0;
     load(value, compiler, directory);
     on(); require(render(10) == 0, "Zero sustain leaked audio");
-    off(); render(1); require(!NoteBank_IsActive(0), "Silent note was not retired");
+    off(); render(1); require(!is_voice_active(0), "Silent note was not retired");
     value.enabled = false; value.gain = 0;
     load(value, compiler, directory);
     on(); require(render(10) == 0, "Zero gain leaked audio");
-    off(); render(1); require(!NoteBank_IsActive(0), "Zero gain note was not retired");
+    off(); render(1); require(!is_voice_active(0), "Zero gain note was not retired");
     value.gain = 0.000001;
     load(value, compiler, directory);
     on(); require(render(1) > 0, "Small gain was lost in generated source");
-    near(NoteEnv_Amplitude(0), value.gain, 0.000000001);
+    near(get_voice_amplitude(0), value.gain, 0.000000001);
 
     rejected([&] { compile(directory / "missing compiler", directory / "envelope test.be",
                            directory / "failed.bec"); });

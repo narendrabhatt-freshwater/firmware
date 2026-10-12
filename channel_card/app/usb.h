@@ -1,3 +1,26 @@
+/*
+                                   __
+                               ___  \  \
+                          ___  \  \  \  \    _______
+                     ___  \  \  \  \  \__\__/_____  \
+                     \  \  \  \  \__\_______      \__\____
+                      \  \  \  \     ___ \  \________  \__/
+                       \  \  \__\___/_  \ \___/   \  \___
+                        \  \    ____  \  \________ \ ___/
+                         \__\__/ \  \  \____/  \  \
+                                  \  \     ___  \  \___
+                                   \__\___/ \  \ \____/
+                                           \  \
+                                              \  \___
+                 __                 _          \ ___/  _
+                / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+               | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+               |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+               |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+
+            (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+*/
+
 #ifndef CHANNEL_APP_USB_H
 #define CHANNEL_APP_USB_H
 
@@ -12,8 +35,6 @@ extern "C" {
 /* Channel Card binary CDC protocol, version 2. No USB packet boundaries on wire. */
 /* ---- wire constants ----------------------------------------------------- */
 
-#define USB_STREAM_VID 0xCAFEu
-#define USB_STREAM_PID 0x4032u
 #define USB_STREAM_VERSION 2u
 #define USB_STREAM_HEADER_BYTES 5u
 #define USB_STREAM_PAYLOAD_MAX 1024u
@@ -39,17 +60,17 @@ enum { USB_UPLOAD_ATTACK = 1, USB_UPLOAD_WAVE, USB_UPLOAD_SCRIPT };
 
 /* ---- read and write little-endian values -------------------------------- */
 
-static inline uint16_t USB_Read16(const uint8_t *p)
+static inline uint16_t read_usb_uint16_le(const uint8_t *p)
 {
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
 }
 
-static inline uint32_t USB_Read32(const uint8_t *p)
+static inline uint32_t read_usb_uint32_le(const uint8_t *p)
 {
-    return (uint32_t)USB_Read16(p) | ((uint32_t)USB_Read16(p + 2) << 16);
+    return (uint32_t)read_usb_uint16_le(p) | ((uint32_t)read_usb_uint16_le(p + 2) << 16);
 }
 
-static inline void USB_Write16(uint8_t *p, uint16_t n)
+static inline void write_usb_uint16_le(uint8_t *p, uint16_t n)
 {
     p[0] = (uint8_t)n;
     p[1] = (uint8_t)(n >> 8);
@@ -63,7 +84,7 @@ typedef struct {
     uint16_t used, need;
 } USB_Parser;
 
-static inline void USB_ParserReset(USB_Parser *p)
+static inline void reset_usb_parser(USB_Parser *p)
 {
     p->used = 0;
     p->need = USB_STREAM_HEADER_BYTES;
@@ -71,12 +92,12 @@ static inline void USB_ParserReset(USB_Parser *p)
 
 /* The caller fills bytes+used, stopping at need, then commits the copied span.
  * 0 incomplete, 1 complete (caller must reset), -1 invalid header/span. */
-static inline int USB_ParserCommit(USB_Parser *p, uint16_t count)
+static inline int commit_usb_parser_bytes(USB_Parser *p, uint16_t count)
 {
     if (p->used >= p->need || p->need > sizeof p->bytes || count > p->need - p->used) return -1;
     p->used += count;
     if (p->used == USB_STREAM_HEADER_BYTES) {
-        uint16_t size = USB_Read16(p->bytes + 3);
+        uint16_t size = read_usb_uint16_le(p->bytes + 3);
         if (size > USB_STREAM_PAYLOAD_MAX || p->bytes[0] < USB_MSG_HELLO ||
             p->bytes[0] > USB_MSG_PROBE)
             return -1;
@@ -85,48 +106,36 @@ static inline int USB_ParserCommit(USB_Parser *p, uint16_t count)
     return p->used == p->need;
 }
 
-/* ---- control usb transfers ---------------------------------------------- */
-
-void USB_Device_Init(void);
-uint32_t USB_Device_Read(uint8_t *dst, uint32_t size);
-uint8_t USB_Device_Write(const uint8_t *src, uint32_t size);
-uint32_t USB_Device_TxFree(void);
-uint32_t USB_Device_Epoch(void);
-uint8_t USB_Device_Connected(void);
-void USB_Device_Fault(void);
-void USB_Device_Debug(char *text, uint32_t size);
-const uint8_t *USB_Descriptor(uint8_t type, uint8_t index, uint16_t *size);
-
 /* ---- upload sample data ------------------------------------------------- */
 
 /* CDC binary load of one signed-int8 attack head. */
 
-uint8_t AttackUpload_IsActive(void);
-int AttackUpload_Begin(uint16_t wave_id, uint32_t nbytes);
+uint8_t is_sample_upload_active(void);
+int begin_sample_upload(uint16_t wave_id, uint32_t nbytes);
 /** Resolve logical wavetable 0..7 to card-owned attack-bank storage. */
-int AttackUpload_BeginWavetable(uint8_t wave, uint32_t nbytes);
-uint32_t AttackUpload_Feed(const uint8_t *buf, uint32_t len);
-void AttackUpload_Abort(void);
+int begin_wavetable_upload(uint8_t wave, uint32_t nbytes);
+uint32_t append_sample_upload_bytes(const uint8_t *buf, uint32_t len);
+void abort_sample_upload(void);
 
 /* ---- process usb traffic ------------------------------------------------ */
 
-/* Binary CDC application layer. Call USB_App_Task from the main loop. */
+/* Binary CDC application layer. Call process_usb_messages from the main loop. */
 
-void USB_App_Init(void);
+void init_usb_protocol(void);
 
-void USB_App_Task(void);
+void process_usb_messages(void);
 
-void USB_CDC_WriteStr(const char *s);
+void write_usb_text(const char *s);
 
-uint32_t USB_App_RxMsgCount(void);
-uint32_t USB_App_RxByteCount(void);
-uint32_t USB_App_BlockCount(void);
-uint32_t USB_App_BadCount(void);
+uint32_t get_usb_received_body_count(void);
+uint32_t get_usb_received_byte_count(void);
+uint32_t get_usb_received_frame_count(void);
+uint32_t get_usb_error_count(void);
 /** Transport faults are counted in reason 4. */
-uint32_t USB_App_BadReasonCount(uint8_t reason);
+uint32_t get_usb_error_reason_count(uint8_t reason);
 /** Last processed BODY sequence. */
-uint16_t USB_App_LastPackSequence(void);
-void USB_App_StatsClear(void);
+uint16_t get_usb_last_body_sequence(void);
+void clear_usb_statistics(void);
 
 #ifdef __cplusplus
 }

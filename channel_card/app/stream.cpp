@@ -1,3 +1,26 @@
+/*
+                                   __
+                               ___  \  \
+                          ___  \  \  \  \    _______
+                     ___  \  \  \  \  \__\__/_____  \
+                     \  \  \  \  \__\_______      \__\____
+                      \  \  \  \     ___ \  \________  \__/
+                       \  \  \__\___/_  \ \___/   \  \___
+                        \  \    ____  \  \________ \ ___/
+                         \__\__/ \  \  \____/  \  \
+                                  \  \     ___  \  \___
+                                   \__\___/ \  \ \____/
+                                           \  \
+                                              \  \___
+                 __                 _          \ ___/  _
+                / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+               | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+               |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+               |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+
+            (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+*/
+
 #include "stream.h"
 #include "usb.h"
 #include <stddef.h>
@@ -40,78 +63,78 @@ static volatile uint32_t s_min_fill = 0xFFFFFFFFu;
 
 /* ---- publish and read ring state ---------------------------------------- */
 
-static uint32_t load(const uint32_t *p)
+static uint32_t load_stream_state(const uint32_t *p)
 {
     return __atomic_load_n(p, __ATOMIC_ACQUIRE);
 }
 
-static void publish(uint32_t *p, uint32_t v)
+static void publish_stream_state(uint32_t *p, uint32_t v)
 {
     __atomic_store_n(p, v, __ATOMIC_RELEASE);
 }
 
-static unsigned current(uint32_t s)
+static unsigned get_current_queue_index(uint32_t s)
 {
     return s & 255u;
 }
 
-static unsigned pending(uint32_t s)
+static unsigned get_pending_queue_index(uint32_t s)
 {
     return (s >> 8) & 255u;
 }
 
-static uint32_t state_next(uint32_t s, unsigned c, unsigned p)
+static uint32_t make_next_stream_state(uint32_t s, unsigned c, unsigned p)
 {
     return ((s + 65536u) & 0xffff0000u) | (p << 8) | c;
 }
 
-static int change(Ring *r, uint32_t *s, unsigned c, unsigned p)
+static int compare_exchange_stream_state(Ring *r, uint32_t *s, unsigned c, unsigned p)
 {
-    return __atomic_compare_exchange_n(&r->state, s, state_next(*s, c, p), 0, __ATOMIC_ACQ_REL,
-                                       __ATOMIC_ACQUIRE);
+    return __atomic_compare_exchange_n(&r->state, s, make_next_stream_state(*s, c, p), 0,
+                                       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
 }
 
-static void retire(Ring *r, unsigned q)
+static void retire_stream_queue(Ring *r, unsigned q)
 {
     if (q < QUEUES) __atomic_fetch_or(&r->retired, 1u << q, __ATOMIC_RELEASE);
 }
 
 /* ---- manage ring storage nodes ------------------------------------------ */
 
-static unsigned next_node(Ring *r, unsigned n)
+static unsigned get_next_stream_node(Ring *r, unsigned n)
 {
     return r->info[n] & 511u;
 }
 
-static unsigned node_length(Ring *r, unsigned n)
+static unsigned get_stream_node_sample_count(Ring *r, unsigned n)
 {
     return r->info[n] >> 9;
 }
 
-static void set_next(Ring *r, unsigned n, unsigned next)
+static void set_next_stream_node(Ring *r, unsigned n, unsigned next)
 {
     r->info[n] = (uint16_t)((r->info[n] & ~511u) | next);
 }
 
-static unsigned allocate_node(Ring *r)
+static unsigned allocate_stream_node(Ring *r)
 {
     unsigned n = r->free_node;
     if (n == NO_NODE) __builtin_trap();
-    r->free_node = (uint16_t)next_node(r, n);
+    r->free_node = (uint16_t)get_next_stream_node(r, n);
     r->info[n] = NO_NODE;
     r->block[n] = NONE;
     return n;
 }
 
-static void free_node(Ring *r, unsigned n)
+static void free_stream_node(Ring *r, unsigned n)
 {
-    set_next(r, n, r->free_node);
+    set_next_stream_node(r, n, r->free_node);
     r->free_node = (uint16_t)n;
 }
 
 /* ---- initialize and reclaim ring storage -------------------------------- */
 
-static void initialize(Ring *r)
+static void init_stream_storage(Ring *r)
 {
     if (r->initialized) return;
     for (unsigned i = 0; i < BLOCKS; i++)
@@ -126,7 +149,7 @@ static void initialize(Ring *r)
     r->initialized = 1;
 }
 
-static void free_data(Ring *r, Queue *q, unsigned n)
+static void free_stream_data_block(Ring *r, Queue *q, unsigned n)
 {
     unsigned b = r->block[n];
     if (b == NONE) return;
@@ -137,72 +160,72 @@ static void free_data(Ring *r, Queue *q, unsigned n)
     if (q) ++q->reclaimed;
 }
 
-static void reclaim(Ring *r)
+static void reclaim_stream_storage(Ring *r)
 {
     uint32_t retired = __atomic_exchange_n(&r->retired, 0, __ATOMIC_ACQ_REL);
     for (unsigned i = 0; i < QUEUES; i++) {
         Queue *q = &r->queue[i];
         if (!q->allocated) continue;
-        uint32_t pos = load(&q->position);
+        uint32_t pos = load_stream_state(&q->position);
         unsigned head = pos & 511u;
         unsigned n = q->reclaim;
         while (n != NO_NODE && (n != head || (retired & (1u << i)))) {
-            unsigned next = next_node(r, n);
-            free_data(r, q, n);
-            free_node(r, n);
+            unsigned next = get_next_stream_node(r, n);
+            free_stream_data_block(r, q, n);
+            free_stream_node(r, n);
             n = next;
         }
         q->reclaim = (uint16_t)n;
         if (retired & (1u << i))
             q->allocated = 0;
         else if (pos & 512u)
-            free_data(r, q, head);
+            free_stream_data_block(r, q, head);
     }
 }
 
 /* ---- reset voice rings -------------------------------------------------- */
 
-void StreamRing_Reset(uint8_t v)
+void reset_voice_stream(uint8_t v)
 {
     if (v >= SAMPLE_VOICES) return;
     Ring *r = &rings[v];
-    initialize(r);
-    uint32_t s = load(&r->state), old;
+    init_stream_storage(r);
+    uint32_t s = load_stream_state(&r->state), old;
     do {
         old = s;
-    } while (!change(r, &s, NONE, NONE));
-    retire(r, current(old));
-    retire(r, pending(old));
+    } while (!compare_exchange_stream_state(r, &s, NONE, NONE));
+    retire_stream_queue(r, get_current_queue_index(old));
+    retire_stream_queue(r, get_pending_queue_index(old));
     r->consuming = 0;
 }
 
-void StreamRing_ResetAll(void)
+void reset_all_voice_streams(void)
 {
     for (unsigned v = 0; v < SAMPLE_VOICES; v++)
-        StreamRing_Reset(v);
+        reset_voice_stream(v);
 }
 
-void StreamRing_Init(void)
+void init_voice_streams(void)
 {
     s_last_body_sequence = 0;
     s_audio_frames = s_last_body_frame = 0;
     s_have_body = 0;
-    StreamRing_ResetAll();
+    reset_all_voice_streams();
 }
 
 /* ---- manage current and pending sessions -------------------------------- */
 
-void StreamRing_Prime(uint8_t v)
+void mark_voice_stream_consuming(uint8_t v)
 {
     if (v < SAMPLE_VOICES) rings[v].consuming = 1;
 }
 
-void StreamRing_ArmPending(uint8_t v, uint16_t wave, uint8_t session)
+void prepare_pending_voice_stream(uint8_t v, uint16_t wave, uint8_t session)
 {
     if (v >= SAMPLE_VOICES) return;
     Ring *r = &rings[v];
-    initialize(r);
-    reclaim(r);
+    init_stream_storage(r);
+    reclaim_stream_storage(r);
     unsigned n = 0;
     while (n < QUEUES && r->queue[n].allocated)
         ++n;
@@ -212,152 +235,155 @@ void StreamRing_ArmPending(uint8_t v, uint16_t wave, uint8_t session)
     ++q->generation;
     q->consumed = q->completed = q->reclaimed = 0;
     q->skip = 0;
-    q->head = q->tail = q->reclaim = (uint16_t)allocate_node(r);
+    q->head = q->tail = q->reclaim = (uint16_t)allocate_stream_node(r);
     q->dummy = 1;
     q->wave = wave;
     q->session = session;
-    publish(&q->published, 0);
-    publish(&q->position, 512u | q->head);
-    uint32_t s = load(&r->state), old;
+    publish_stream_state(&q->published, 0);
+    publish_stream_state(&q->position, 512u | q->head);
+    uint32_t s = load_stream_state(&r->state), old;
     do {
         old = s;
-    } while (!change(r, &s, current(s), n));
-    retire(r, pending(old));
+    } while (!compare_exchange_stream_state(r, &s, get_current_queue_index(s), n));
+    retire_stream_queue(r, get_pending_queue_index(old));
 }
 
-int StreamRing_StartNote(uint8_t v)
+int activate_pending_voice_stream(uint8_t v)
 {
     if (v >= SAMPLE_VOICES) return -1;
     Ring *r = &rings[v];
-    uint32_t s = load(&r->state), old;
+    uint32_t s = load_stream_state(&r->state), old;
     do {
         old = s;
-        if (pending(s) >= QUEUES) return -1;
-    } while (!change(r, &s, pending(s), NONE));
-    retire(r, current(old));
+        if (get_pending_queue_index(s) >= QUEUES) return -1;
+    } while (!compare_exchange_stream_state(r, &s, get_pending_queue_index(s), NONE));
+    retire_stream_queue(r, get_current_queue_index(old));
     r->consuming = 1;
     return 0;
 }
 
-void StreamRing_DiscardPending(uint8_t v)
+void discard_pending_voice_stream(uint8_t v)
 {
     if (v >= SAMPLE_VOICES) return;
     Ring *r = &rings[v];
-    uint32_t s = load(&r->state), old;
+    uint32_t s = load_stream_state(&r->state), old;
     do {
         old = s;
-    } while (!change(r, &s, current(s), NONE));
-    retire(r, pending(old));
+    } while (!compare_exchange_stream_state(r, &s, get_current_queue_index(s), NONE));
+    retire_stream_queue(r, get_pending_queue_index(old));
 }
 
-void StreamRing_EndCurrent(uint8_t v)
+void end_current_voice_stream(uint8_t v)
 {
     if (v >= SAMPLE_VOICES) return;
     Ring *r = &rings[v];
-    uint32_t s = load(&r->state), old;
+    uint32_t s = load_stream_state(&r->state), old;
     do {
         old = s;
-    } while (!change(r, &s, NONE, pending(s)));
-    retire(r, current(old));
+    } while (!compare_exchange_stream_state(r, &s, NONE, get_pending_queue_index(s)));
+    retire_stream_queue(r, get_current_queue_index(old));
     r->consuming = 0;
 }
 
-void StreamRing_Release(uint8_t v)
+void release_voice_stream(uint8_t v)
 {
-    StreamRing_Reset(v);
+    reset_voice_stream(v);
 }
 
 /* ---- query ring sessions and capacity ----------------------------------- */
 
-uint8_t StreamRing_CurrentSession(uint8_t v)
+uint8_t get_current_stream_session(uint8_t v)
 {
     if (v >= SAMPLE_VOICES) return NONE;
     Ring *r = &rings[v];
-    unsigned i = current(load(&r->state));
+    unsigned i = get_current_queue_index(load_stream_state(&r->state));
     return i < QUEUES ? r->queue[i].session : NONE;
 }
 
-static uint32_t fill(Queue *q)
+static uint32_t get_queue_buffered_samples(Queue *q)
 {
-    return (uint16_t)((load(&q->published) >> 16) - q->consumed);
+    return (uint16_t)((load_stream_state(&q->published) >> 16) - q->consumed);
 }
 
-uint32_t StreamRing_CurrentFill(uint8_t v)
+uint32_t get_current_stream_buffered_samples(uint8_t v)
 {
     if (v >= SAMPLE_VOICES) return 0;
     Ring *r = &rings[v];
-    unsigned i = current(load(&r->state));
-    return i < QUEUES ? fill(&r->queue[i]) : 0;
+    unsigned i = get_current_queue_index(load_stream_state(&r->state));
+    return i < QUEUES ? get_queue_buffered_samples(&r->queue[i]) : 0;
 }
 
-uint32_t StreamRing_PendingFill(uint8_t v)
+uint32_t get_pending_stream_buffered_samples(uint8_t v)
 {
     if (v >= SAMPLE_VOICES) return 0;
     Ring *r = &rings[v];
-    unsigned i = pending(load(&r->state));
-    return i < QUEUES ? fill(&r->queue[i]) : 0;
+    unsigned i = get_pending_queue_index(load_stream_state(&r->state));
+    return i < QUEUES ? get_queue_buffered_samples(&r->queue[i]) : 0;
 }
 
-uint32_t StreamRing_FillLevel(uint8_t v)
+uint32_t get_stream_buffered_samples(uint8_t v)
 {
-    return StreamRing_CurrentFill(v);
+    return get_current_stream_buffered_samples(v);
 }
 
-uint32_t StreamRing_FreeLevel(uint8_t v)
+uint32_t get_stream_free_samples(uint8_t v)
 {
     if (v >= SAMPLE_VOICES) return 0;
     Ring *r = &rings[v];
-    uint32_t count = r->free_count, retired = load(&r->retired);
+    uint32_t count = r->free_count, retired = load_stream_state(&r->retired);
     for (unsigned i = 0; i < QUEUES; i++) {
         Queue *q = &r->queue[i];
         if (!q->allocated) continue;
         uint16_t available =
-            (uint16_t)((retired & (1u << i)) ? load(&q->published) : (load(&q->position) >> 16));
+            (uint16_t)((retired & (1u << i)) ? load_stream_state(&q->published)
+                                           : (load_stream_state(&q->position) >> 16));
         count += (uint16_t)(available - q->reclaimed);
     }
     return count * BLOCK;
 }
 
-uint32_t StreamRing_CurrentFree(uint8_t v)
+uint32_t get_current_stream_free_samples(uint8_t v)
 {
-    return StreamRing_FreeLevel(v);
+    return get_stream_free_samples(v);
 }
 
-uint8_t StreamRing_HasPending(uint8_t v)
+uint8_t has_pending_voice_stream(uint8_t v)
 {
-    return v < SAMPLE_VOICES && pending(load(&rings[v].state)) < QUEUES;
+    return v < SAMPLE_VOICES &&
+           get_pending_queue_index(load_stream_state(&rings[v].state)) < QUEUES;
 }
 
-uint8_t StreamRing_TargetSession(uint8_t v)
+uint8_t get_target_stream_session(uint8_t v)
 {
     if (v >= SAMPLE_VOICES) return NONE;
     Ring *r = &rings[v];
-    uint32_t s = load(&r->state);
-    unsigned i = pending(s);
-    if (i >= QUEUES) i = current(s);
+    uint32_t s = load_stream_state(&r->state);
+    unsigned i = get_pending_queue_index(s);
+    if (i >= QUEUES) i = get_current_queue_index(s);
     return i < QUEUES ? r->queue[i].session : NONE;
 }
 
-uint32_t StreamRing_TargetFill(uint8_t v)
+uint32_t get_target_stream_buffered_samples(uint8_t v)
 {
-    return StreamRing_HasPending(v) ? StreamRing_PendingFill(v) : StreamRing_CurrentFill(v);
+    return has_pending_voice_stream(v) ? get_pending_stream_buffered_samples(v)
+                                      : get_current_stream_buffered_samples(v);
 }
 
 /* ---- reserve an incoming body block ------------------------------------- */
 
-int StreamRing_WriteBegin(uint8_t v, uint8_t session, uint8_t sof, uint16_t wave, uint32_t n,
-                          StreamRing_Write_t *w)
+int begin_stream_write(uint8_t v, uint8_t session, uint8_t sof, uint16_t wave, uint32_t n,
+                       StreamRing_Write_t *w)
 {
     if (!w) return STREAM_RING_WRITE_ERROR;
     memset(w, 0, sizeof *w);
     if (v >= SAMPLE_VOICES || !n || n > USB_STREAM_NSAMP_MAX) return STREAM_RING_WRITE_ERROR;
     Ring *r = &rings[v];
-    reclaim(r);
-    uint32_t s = load(&r->state);
-    unsigned qi = pending(s);
+    reclaim_stream_storage(r);
+    uint32_t s = load_stream_state(&r->state);
+    unsigned qi = get_pending_queue_index(s);
     if (qi >= QUEUES || r->queue[qi].wave != wave ||
         (r->queue[qi].session != session && !(sof && r->queue[qi].session == NONE)))
-        qi = current(s);
+        qi = get_current_queue_index(s);
     if (qi >= QUEUES || r->queue[qi].wave != wave || session == NONE ||
         (r->queue[qi].session != session && !(sof && r->queue[qi].session == NONE))) {
         ++s_stale_pkts;
@@ -375,14 +401,14 @@ int StreamRing_WriteBegin(uint8_t v, uint8_t session, uint8_t sof, uint16_t wave
     w->session = session;
     w->bank = (uint8_t)qi;
     w->generation = q->generation;
-    w->pending = qi == pending(s);
+    w->pending = qi == get_pending_queue_index(s);
     w->sof = sof;
     w->nsamp = n;
     w->active = 1;
     unsigned left = n;
     w->head = w->tail = w->cursor = NO_NODE;
     for (unsigned i = 0; i < blocks; i++) {
-        unsigned node = allocate_node(r), b = r->free_head;
+        unsigned node = allocate_stream_node(r), b = r->free_head;
         r->free_head = (uint8_t)r->data[b * BLOCK];
         --r->free_count;
         r->block[node] = (uint8_t)b;
@@ -392,54 +418,55 @@ int StreamRing_WriteBegin(uint8_t v, uint8_t session, uint8_t sof, uint16_t wave
         if (w->head == NO_NODE)
             w->head = w->cursor = (uint16_t)node;
         else
-            set_next(r, w->tail, node);
+            set_next_stream_node(r, w->tail, node);
         w->tail = (uint16_t)node;
     }
     return STREAM_RING_WRITE_OK;
 }
 
-uint8_t StreamRing_WriteIsCurrent(const StreamRing_Write_t *w)
+uint8_t is_stream_write_current(const StreamRing_Write_t *w)
 {
     if (!w || !w->active || w->voice >= SAMPLE_VOICES || w->bank >= QUEUES) return 0;
     Ring *r = &rings[w->voice];
-    uint32_t s = load(&r->state);
+    uint32_t s = load_stream_state(&r->state);
     Queue *q = &r->queue[w->bank];
-    return (current(s) == w->bank || pending(s) == w->bank) && q->generation == w->generation &&
+    return (get_current_queue_index(s) == w->bank || get_pending_queue_index(s) == w->bank) &&
+           q->generation == w->generation &&
            q->session == w->session;
 }
 
-int8_t *StreamRing_WriteSpan(StreamRing_Write_t *w, uint32_t *n)
+int8_t *get_stream_write_span(StreamRing_Write_t *w, uint32_t *n)
 {
     if (n) *n = 0;
     if (!w || !w->active || w->cursor == NO_NODE || w->written >= w->nsamp) return NULL;
     Ring *r = &rings[w->voice];
-    if (n) *n = node_length(r, w->cursor) - w->offset;
+    if (n) *n = get_stream_node_sample_count(r, w->cursor) - w->offset;
     return &r->data[r->block[w->cursor] * BLOCK + w->offset];
 }
 
-int StreamRing_WriteAdvance(StreamRing_Write_t *w, uint32_t n)
+int advance_stream_write(StreamRing_Write_t *w, uint32_t n)
 {
     if (!w || !w->active || w->cursor == NO_NODE || !n) return -1;
     Ring *r = &rings[w->voice];
-    if (n > (uint32_t)(node_length(r, w->cursor) - w->offset)) return -1;
+    if (n > (uint32_t)(get_stream_node_sample_count(r, w->cursor) - w->offset)) return -1;
     w->written += n;
     w->offset += (uint8_t)n;
-    if (w->offset == node_length(r, w->cursor)) {
-        w->cursor = (uint16_t)next_node(r, w->cursor);
+    if (w->offset == get_stream_node_sample_count(r, w->cursor)) {
+        w->cursor = (uint16_t)get_next_stream_node(r, w->cursor);
         w->offset = 0;
     }
     return 0;
 }
 
-void StreamRing_WriteAbort(StreamRing_Write_t *w)
+void abort_stream_write(StreamRing_Write_t *w)
 {
     if (!w || !w->active) return;
     Ring *r = &rings[w->voice];
     unsigned n = w->head;
     while (n != NO_NODE) {
-        unsigned next = next_node(r, n);
-        free_data(r, NULL, n);
-        free_node(r, n);
+        unsigned next = get_next_stream_node(r, n);
+        free_stream_data_block(r, NULL, n);
+        free_stream_node(r, n);
         n = next;
     }
     w->active = 0;
@@ -447,26 +474,26 @@ void StreamRing_WriteAbort(StreamRing_Write_t *w)
 
 /* ---- commit received body samples --------------------------------------- */
 
-uint32_t StreamRing_WriteCommit(StreamRing_Write_t *w)
+uint32_t commit_stream_write(StreamRing_Write_t *w)
 {
     if (!w || !w->active || w->written != w->nsamp) return 0;
     Ring *r = &rings[w->voice];
     uint8_t zero = 1;
-    for (unsigned n = w->head; n != NO_NODE; n = next_node(r, n))
-        for (unsigned i = 0; i < node_length(r, n); i++)
+    for (unsigned n = w->head; n != NO_NODE; n = get_next_stream_node(r, n))
+        for (unsigned i = 0; i < get_stream_node_sample_count(r, n); i++)
             if (r->data[r->block[n] * BLOCK + i]) zero = 0;
-    if (!StreamRing_WriteIsCurrent(w)) {
-        StreamRing_WriteAbort(w);
+    if (!is_stream_write_current(w)) {
+        abort_stream_write(w);
         return 0;
     }
     Queue *q = &r->queue[w->bank];
-    uint32_t pub = load(&q->published);
+    uint32_t pub = load_stream_state(&q->published);
     uint16_t wr = (uint16_t)pub, total = (uint16_t)(pub >> 16);
-    set_next(r, q->tail, w->head);
+    set_next_stream_node(r, q->tail, w->head);
     q->tail = w->tail;
     wr = (uint16_t)(wr + (w->nsamp + BLOCK - 1) / BLOCK);
     w->active = 0;
-    publish(&q->published, ((uint32_t)(uint16_t)(total + w->nsamp) << 16) | wr);
+    publish_stream_state(&q->published, ((uint32_t)(uint16_t)(total + w->nsamp) << 16) | wr);
     ++s_rx_pkts;
     if (zero) ++s_zero_pkts;
     if (w->sof) ++s_sof_pkts;
@@ -475,44 +502,47 @@ uint32_t StreamRing_WriteCommit(StreamRing_Write_t *w)
 
 /* ---- write a complete body block ---------------------------------------- */
 
-uint32_t StreamRing_WriteVoice(uint8_t v, uint8_t session, uint8_t sof, uint16_t wave,
-                               const int8_t *s, uint32_t n)
+uint32_t write_voice_stream_samples(uint8_t v, uint8_t session, uint8_t sof, uint16_t wave,
+                                    const int8_t *s, uint32_t n)
 {
     if (!s) return 0;
     StreamRing_Write_t w;
-    if (StreamRing_WriteBegin(v, session, sof, wave, n, &w) != 0) return 0;
+    if (begin_stream_write(v, session, sof, wave, n, &w) != 0) return 0;
     while (w.written < n) {
         uint32_t span;
-        int8_t *d = StreamRing_WriteSpan(&w, &span);
+        int8_t *d = get_stream_write_span(&w, &span);
         if (!d || !span) {
-            StreamRing_WriteAbort(&w);
+            abort_stream_write(&w);
             return 0;
         }
         memcpy(d, s + w.written, span);
-        if (StreamRing_WriteAdvance(&w, span)) {
-            StreamRing_WriteAbort(&w);
+        if (advance_stream_write(&w, span)) {
+            abort_stream_write(&w);
             return 0;
         }
     }
-    return StreamRing_WriteCommit(&w);
+    return commit_stream_write(&w);
 }
 
-int StreamRing_WriteBody(uint8_t v, uint8_t session, const int8_t *s, uint16_t n)
+int write_stream_body_samples(uint8_t v, uint8_t session, const int8_t *s, uint16_t n)
 {
     if (v >= SAMPLE_VOICES || !s || !n || n > USB_STREAM_PAYLOAD_MAX) return -1;
     Ring *r = &rings[v];
-    uint32_t state = load(&r->state);
-    unsigned qi = pending(state);
-    if (qi >= QUEUES || r->queue[qi].session != session) qi = current(state);
+    uint32_t state = load_stream_state(&r->state);
+    unsigned qi = get_pending_queue_index(state);
+    if (qi >= QUEUES || r->queue[qi].session != session) qi = get_current_queue_index(state);
     if (qi >= QUEUES || r->queue[qi].session != session) {
         ++s_stale_pkts;
         ++s_last_body_sequence;
         return 0;
     }
     Queue *q = &r->queue[qi];
-    if (((n + BLOCK - 1) / BLOCK) * BLOCK > StreamRing_FreeLevel(v)) return -1;
+    if (((n + BLOCK - 1) / BLOCK) * BLOCK > get_stream_free_samples(v)) return -1;
     unsigned accepted =
-        StreamRing_WriteVoice(v, session, qi == pending(state) && fill(q) == 0, q->wave, s, n);
+        write_voice_stream_samples(v, session,
+                                   qi == get_pending_queue_index(state) &&
+                                       get_queue_buffered_samples(q) == 0,
+                                   q->wave, s, n);
     s_last_body_frame = s_audio_frames;
     s_have_body = 1;
     ++s_last_body_sequence;
@@ -521,22 +551,22 @@ int StreamRing_WriteBody(uint8_t v, uint8_t session, const int8_t *s, uint16_t n
 
 /* ---- consume samples from the current ring ------------------------------ */
 
-int StreamRing_Read(uint8_t v, uint32_t offset, int8_t *out, uint32_t count)
+int peek_stream_samples(uint8_t v, uint32_t offset, int8_t *out, uint32_t count)
 {
     if (v >= SAMPLE_VOICES || !out) return -1;
     Ring *r = &rings[v];
-    unsigned qi = current(load(&r->state));
+    unsigned qi = get_current_queue_index(load_stream_state(&r->state));
     if (qi >= QUEUES) return -1;
     Queue *q = &r->queue[qi];
-    uint32_t available = fill(q);
+    uint32_t available = get_queue_buffered_samples(q);
     if (offset > available || count > available - offset) return -1;
     offset += q->skip;
-    unsigned n = q->dummy ? next_node(r, q->head) : q->head;
+    unsigned n = q->dummy ? get_next_stream_node(r, q->head) : q->head;
     while (count) {
-        uint32_t length = node_length(r, n);
+        uint32_t length = get_stream_node_sample_count(r, n);
         if (offset >= length) {
             offset -= length;
-            n = next_node(r, n);
+            n = get_next_stream_node(r, n);
             continue;
         }
         uint32_t take = length - offset;
@@ -545,31 +575,31 @@ int StreamRing_Read(uint8_t v, uint32_t offset, int8_t *out, uint32_t count)
             *out++ = r->data[r->block[n] * BLOCK + offset + i];
         count -= take;
         offset = 0;
-        n = next_node(r, n);
+        n = get_next_stream_node(r, n);
     }
     return 0;
 }
 
-uint32_t StreamRing_Consume(uint8_t v, int8_t *out, uint32_t count)
+uint32_t read_stream_samples(uint8_t v, int8_t *out, uint32_t count)
 {
     if (v >= SAMPLE_VOICES || !count) return 0;
     Ring *r = &rings[v];
-    unsigned qi = current(load(&r->state));
+    unsigned qi = get_current_queue_index(load_stream_state(&r->state));
     if (qi >= QUEUES) return 0;
     Queue *q = &r->queue[qi];
-    uint32_t available = fill(q);
+    uint32_t available = get_queue_buffered_samples(q);
     if (count > available) count = available;
     uint32_t consumed = count;
     unsigned changed = 0;
     q->consumed += (uint16_t)count;
     while (count) {
         if (q->dummy) {
-            q->head = (uint16_t)next_node(r, q->head);
+            q->head = (uint16_t)get_next_stream_node(r, q->head);
             q->dummy = 0;
             changed = 1;
         }
         unsigned n = q->head;
-        uint32_t length = node_length(r, n) - q->skip;
+        uint32_t length = get_stream_node_sample_count(r, n) - q->skip;
         uint32_t take = count < length ? count : length;
         if (out)
             for (uint32_t i = 0; i < take; i++)
@@ -585,92 +615,93 @@ uint32_t StreamRing_Consume(uint8_t v, int8_t *out, uint32_t count)
         changed = 1;
     }
     if (changed)
-        publish(&q->position, ((uint32_t)q->completed << 16) | (q->dummy ? 512u : 0u) | q->head);
+        publish_stream_state(&q->position,
+                             ((uint32_t)q->completed << 16) | (q->dummy ? 512u : 0u) | q->head);
     if (r->consuming && available - consumed < s_min_fill) s_min_fill = available - consumed;
     return consumed;
 }
 
-int StreamRing_GetRel(uint8_t v, uint32_t offset, int8_t *out)
+int peek_stream_sample(uint8_t v, uint32_t offset, int8_t *out)
 {
-    return StreamRing_Read(v, offset, out, 1);
+    return peek_stream_samples(v, offset, out, 1);
 }
 
-void StreamRing_Advance(uint8_t v, uint32_t n)
+void skip_stream_samples(uint8_t v, uint32_t n)
 {
-    (void)StreamRing_Consume(v, NULL, n);
+    (void)read_stream_samples(v, NULL, n);
 }
 
 /* ---- query and clear ring statistics ------------------------------------ */
 
-uint32_t StreamRing_MaxFill(void)
+uint32_t get_max_stream_buffered_samples(void)
 {
     uint32_t n = 0;
     for (unsigned v = 0; v < SAMPLE_VOICES; v++) {
-        uint32_t f = StreamRing_CurrentFill(v);
+        uint32_t f = get_current_stream_buffered_samples(v);
         if (f > n) n = f;
     }
     return n;
 }
 
-void StreamRing_ObserveFill(uint8_t v)
+void record_stream_buffered_samples(uint8_t v)
 {
     if (v < SAMPLE_VOICES && rings[v].consuming) {
-        uint32_t f = StreamRing_CurrentFill(v);
+        uint32_t f = get_current_stream_buffered_samples(v);
         if (f < s_min_fill) s_min_fill = f;
     }
 }
 
-uint16_t StreamRing_LastBodySequence(void)
+uint16_t get_last_stream_body_sequence(void)
 {
     return s_last_body_sequence;
 }
 
-uint32_t StreamRing_MinFill(void)
+uint32_t get_min_stream_buffered_samples(void)
 {
     return s_min_fill;
 }
 
-uint32_t StreamRing_DropCount(void)
+uint32_t get_stream_dropped_block_count(void)
 {
     return s_drop_pkts;
 }
 
-uint32_t StreamRing_RxCount(void)
+uint32_t get_stream_received_block_count(void)
 {
     return s_rx_pkts;
 }
 
-uint32_t StreamRing_SofCount(void)
+uint32_t get_stream_start_block_count(void)
 {
     return s_sof_pkts;
 }
 
-uint32_t StreamRing_ZeroCount(void)
+uint32_t get_stream_silent_block_count(void)
 {
     return s_zero_pkts;
 }
 
-uint32_t StreamRing_StaleCount(void)
+uint32_t get_stream_stale_block_count(void)
 {
     return s_stale_pkts;
 }
 
-uint32_t StreamRing_FutureCount(void)
+uint32_t get_stream_future_block_count(void)
 {
     return s_future_pkts;
 }
 
-uint32_t StreamRing_FullCount(void)
+uint32_t get_stream_full_buffer_count(void)
 {
     return s_full_pkts;
 }
 
-uint32_t StreamRing_SupersededCount(void)
+uint32_t get_stream_superseded_block_count(void)
 {
     return s_superseded_pkts;
 }
 
-void StreamRing_StatsClear(void)
+void clear_stream_statistics(void)
 {
     s_drop_pkts = 0u;
     s_rx_pkts = 0u;
@@ -683,17 +714,17 @@ void StreamRing_StatsClear(void)
     s_min_fill = 0xFFFFFFFFu;
 }
 
-void StreamRing_DropCountClear(void)
+void reset_stream_statistics(void)
 {
-    StreamRing_StatsClear();
+    clear_stream_statistics();
 }
 
-void StreamRing_AudioFrame(void)
+void record_stream_audio_sample(void)
 {
     ++s_audio_frames;
 }
 
-uint8_t StreamRing_BodyAgeMs(void)
+uint8_t get_stream_body_age_ms(void)
 {
     uint32_t frames = s_audio_frames - s_last_body_frame;
     if (s_have_body == 0u || frames >= 254u * 48u) return 255u;

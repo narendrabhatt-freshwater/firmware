@@ -1,3 +1,26 @@
+/*
+                                   __
+                               ___  \  \
+                          ___  \  \  \  \    _______
+                     ___  \  \  \  \  \__\__/_____  \
+                     \  \  \  \  \__\_______      \__\____
+                      \  \  \  \     ___ \  \________  \__/
+                       \  \  \__\___/_  \ \___/   \  \___
+                        \  \    ____  \  \________ \ ___/
+                         \__\__/ \  \  \____/  \  \
+                                  \  \     ___  \  \___
+                                   \__\___/ \  \ \____/
+                                           \  \
+                                              \  \___
+                 __                 _          \ ___/  _
+                / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+               | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+               |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+               |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+
+            (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+*/
+
 #ifndef CHANNEL_APP_AUDIO_H
 #define CHANNEL_APP_AUDIO_H
 
@@ -15,46 +38,21 @@ extern "C" {
 
 /* ---- render audio samples ----------------------------------------------- */
 
-/* The I2S driver refills one millisecond at a time. Script handlers run once
- * per refill, so every caller of Audio_RenderI2S1() uses this frame count. */
-#define AUDIO_REFILL_FRAMES (AUDIO_SAMPLE_RATE_HZ / 1000u)
+/* Application cadence, never a device buffer-size requirement. */
+#define AUDIO_PROCESSING_INTERVAL_SAMPLES (AUDIO_SAMPLE_RATE_HZ / 1000u)
 
-/* Fill interleaved L+R frames: the note-bank mix on the left (CH1) and the
- * CH2 control voltage on the right, bracketed by the script boundary hooks. */
-void Audio_RenderI2S1(int32_t *buf, uint32_t frames);
-
-/* Slewed control-voltage samples for channel index 1..3 (CH2..CH4). */
-int32_t Audio_DC_NextSample(uint8_t ch);
-void Audio_FillDC(int32_t *buf, uint32_t num_frames, uint8_t chL, uint8_t chR);
-void Audio_FillDCSlot(int32_t *buf, uint32_t num_frames, uint8_t ch, uint8_t slot);
-
-/* Refills that began before the previous one finished. */
-extern volatile uint32_t g_i2s1_fill_late;
-
-/* ---- control audio playback --------------------------------------------- */
-
-/* Start both I2S outputs independently of USB enumeration. CH1 carries the
- * note-bank mix; CH2–CH4 carry calibrated DC outputs. Set their targets
- * with Audio_SetDCLevel() before starting playback. */
-void Audio_StartPlayback(void);
-
-/* Set calibrated DC output for channel 2..4, percent -100..100.
- * The output slews toward the target, including during startup. */
-void Audio_SetDCLevel(uint8_t channel, int8_t percent);
-
-/* Service the I2S2 underrun guard from the TIM7 interrupt. */
-void Audio_I2S2_Pump(void);
+/* Fill sample_count contiguous mono int32 samples with the existing mix
+ * scaling. One caller at a time; no allocation or read-ahead. A zero count
+ * is a no-op (samples may be NULL); otherwise storage must be valid.
+ * Script boundaries follow rendered samples, including across calls. */
+void render_audio_samples(int32_t *samples, uint32_t sample_count);
 
 /* ---- query audio diagnostics -------------------------------------------- */
 
-uint32_t Audio_Bridge_UsbDropCount(void);
-void Audio_Bridge_UsbDropCountClear(void);
-uint32_t Audio_Bridge_MaxFill(void);
-uint32_t Audio_Bridge_FillLate(void);
-
-/* LED_Y is low throughout each SPI1 DMA refill and high while idle. */
-void Audio_Bridge_CpuLoadProbeSet(uint8_t enabled);
-uint8_t Audio_Bridge_CpuLoadProbeGet(void);
+uint32_t get_audio_stream_drop_count(void);
+void clear_audio_stream_statistics(void);
+uint32_t get_audio_stream_max_buffered_samples(void);
+uint32_t get_audio_refill_overlap_count(void);
 
 #ifdef __cplusplus
 }

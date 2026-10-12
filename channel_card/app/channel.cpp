@@ -1,3 +1,27 @@
+/*
+                                   __
+                               ___  \  \
+                          ___  \  \  \  \    _______
+                     ___  \  \  \  \  \__\__/_____  \
+                     \  \  \  \  \__\_______      \__\____
+                      \  \  \  \     ___ \  \________  \__/
+                       \  \  \__\___/_  \ \___/   \  \___
+                        \  \    ____  \  \________ \ ___/
+                         \__\__/ \  \  \____/  \  \
+                                  \  \     ___  \  \___
+                                   \__\___/ \  \ \____/
+                                           \  \
+                                              \  \___
+                 __                 _          \ ___/  _
+                / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+               | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+               |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+               |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+
+            (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+*/
+
+#include "transport.h"
 #include "channel.h"
 #include "audio.h"
 #include "board.h"
@@ -10,59 +34,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ---- drive the status leds ---------------------------------------------- */
+/* ---- request a logical rgb colour --------------------------------------- */
 
-/* The RGB pins are plain GPIOs, so brightness uses 4-bit, 1 kHz software PWM.
- * That gives a 62.5 Hz frame while keeping ChannelConsole_Poll non-blocking. */
-
-static volatile uint8_t s_level[3];
-static uint8_t s_phase;
-static volatile uint8_t s_controlled;
-static uint32_t s_last_tick;
-
-/* ---- initialize the rgb led --------------------------------------------- */
-
-void ChannelLed_Init(void)
+int set_channel_led_colour(float red, float green, float blue, float brightness)
 {
-    s_level[0] = s_level[1] = s_level[2] = 0u;
-    s_phase = 0u;
-    s_controlled = 0u;
-    s_last_tick = Board_Millis();
-}
-
-/* ---- convert normalized led levels -------------------------------------- */
-
-static uint8_t led_level(float color, float brightness)
-{
-    float scaled = color * brightness * 16.0f;
-    return (uint8_t)(scaled + 0.5f);
-}
-
-/* ---- set the rgb led ---------------------------------------------------- */
-
-int ChannelLed_Set(float red, float green, float blue, float brightness)
-{
-    s_level[0] = led_level(red, brightness);
-    s_level[1] = led_level(green, brightness);
-    s_level[2] = led_level(blue, brightness);
-    s_controlled = 1u;
-    return 0;
-}
-
-/* ---- apply pending led changes ------------------------------------------ */
-
-void ChannelLed_Task(void)
-{
-    uint32_t now;
-    uint8_t i;
-
-    if (!s_controlled) return;
-    now = Board_Millis();
-    if (now == s_last_tick) return;
-    s_last_tick = now;
-    s_phase = (uint8_t)((s_phase + 1u) & 0x0fu);
-    for (i = 0u; i < 3u; ++i)
-        Board_LedWrite((uint8_t)(BOARD_LED_RGB_R + i), s_phase < s_level[i] ? 1u : 0u);
+    return set_board_rgb_colour(red, green, blue, brightness);
 }
 
 /* ---- process console commands ------------------------------------------- */
@@ -79,9 +55,9 @@ void ChannelLed_Task(void)
 #define RS485_ECHO 0
 
 /* Keep blocking TX close to its wire time so USB audio can be serviced. */
-static uint32_t RS485_TxDeadlineMs(uint32_t nbytes)
+static uint32_t get_rs485_transmit_timeout_ms(uint32_t nbytes)
 {
-    return fw_rs485_tx_deadline_ms(nbytes, Board_Rs485Baud());
+    return calculate_rs485_transmit_timeout_ms(nbytes, get_rs485_baud_rate());
 }
 
 /** RS485 bus-aware transmit.
@@ -103,11 +79,11 @@ static uint32_t RS485_TxDeadlineMs(uint32_t nbytes)
 #define RS485_TAG "[C] " /* response prefix tag for Channel Card */
 
 /** Wait up to timeout_ms for the bus to become free.  Returns 1 if free. */
-static uint8_t RS485_WaitBusFree(uint32_t timeout_ms)
+static uint8_t wait_for_rs485_bus(uint32_t timeout_ms)
 {
-    uint32_t t0 = Board_Millis();
-    while (!Board_Rs485BusFree()) {
-        if ((Board_Millis() - t0) >= timeout_ms) return 0; /* timed out — bus still busy */
+    uint32_t t0 = get_board_time_ms();
+    while (!is_rs485_bus_free()) {
+        if ((get_board_time_ms() - t0) >= timeout_ms) return 0; /* timed out — bus still busy */
     }
     return 1;
 }
@@ -115,23 +91,23 @@ static uint8_t RS485_WaitBusFree(uint32_t timeout_ms)
 /** Transmit a string on the RS485 bus with collision avoidance.
  * Waits for the bus to be free, asserts DE, sends data, releases DE.
  * Returns 0 on success, -1 if the bus was busy (timeout). */
-static int __attribute__((unused)) RS485_Send(const char *s)
+static int __attribute__((unused)) send_rs485_text(const char *s)
 {
-    if (!RS485_WaitBusFree(RS485_BUS_TIMEOUT_MS)) return -1; /* bus occupied — drop this message */
+    if (!wait_for_rs485_bus(RS485_BUS_TIMEOUT_MS)) return -1; /* bus occupied — drop this message */
 
-    Board_Rs485Acquire();
+    acquire_rs485_bus();
 
     {
         uint32_t n = (uint32_t)strlen(s);
-        Uart5Rx_Transmit((const uint8_t *)s, (uint16_t)n, RS485_TxDeadlineMs(n));
+        write_rs485_bytes((const uint8_t *)s, (uint16_t)n, get_rs485_transmit_timeout_ms(n));
     }
 
-    Board_Rs485Release();
+    release_rs485_bus();
     return 0;
 }
 
 /* When a command arrives over the USB CDC console, replies must go back
- * over USB instead of the RS485 bus.  Console_ExecFromUSB() sets this
+ * over USB instead of the RS485 bus.  execute_usb_command() sets this
  * for the duration of the command. */
 /* Main-loop parser state; reset is also available from the USB console. */
 static uint8_t rs485_line[96];
@@ -142,7 +118,7 @@ static uint8_t console_note_event;
 
 /* RS485 path counters (internal; no console cmd). */
 static uint32_t rs485_cmd_count; /**< commands executed from the bus */
-static uint32_t rs485_tx_fail;   /**< HAL_UART_Transmit did not return OK */
+static uint32_t rs485_tx_fail;   /**< RS485 transmission failed or timed out */
 static uint32_t rs485_tx_trunc;  /**< reply longer than the frame buffer */
 static uint32_t rs485_vq_count;  /**< exact refill-status frames transmitted */
 
@@ -154,7 +130,7 @@ static uint32_t rs485_vq_count;  /**< exact refill-status frames transmitted */
  * Frame must hold the longest reply (~110 chars) — a short buffer silently
  * swallowed those ACKs and looked like a dead bus. Truncate rather than
  * drop: a clipped line still terminates the host's exchange. */
-static void RS485_Reply(const char *s)
+static void send_rs485_reply(const char *s)
 {
     if (console_note_event) return;
     char frame[224];
@@ -163,7 +139,7 @@ static void RS485_Reply(const char *s)
     size_t max_body;
 
     if (console_via_usb) {
-        USB_CDC_WriteStr(s);
+        write_usb_text(s);
         return;
     }
 
@@ -177,12 +153,12 @@ static void RS485_Reply(const char *s)
     memcpy(frame, RS485_TAG, tag_len);
     memcpy(frame + tag_len, s, body_len);
 
-    Board_Rs485Acquire();
-    if (Uart5Rx_Transmit((const uint8_t *)frame, (uint16_t)(tag_len + body_len),
-                         RS485_TxDeadlineMs((uint32_t)(tag_len + body_len))) != 0) {
+    acquire_rs485_bus();
+    if (write_rs485_bytes((const uint8_t *)frame, (uint16_t)(tag_len + body_len),
+                         get_rs485_transmit_timeout_ms((uint32_t)(tag_len + body_len))) != 0) {
         rs485_tx_fail++;
     }
-    Board_Rs485Release();
+    release_rs485_bus();
 }
 
 /*
@@ -201,10 +177,11 @@ static uint16_t rs485_vq_sequence;
 
 /* ---- send packed voice status ------------------------------------------- */
 
-static void RS485_ReplyVq(uint8_t active_mask, uint8_t pending_mask, const uint8_t *sessions,
-                          const uint8_t *current_sessions, const uint32_t *remaining_us,
-                          const uint16_t *free_samples, uint16_t body_sequence, uint8_t body_age_ms,
-                          const uint16_t *refill_samples)
+static void send_rs485_voice_status(uint8_t active_mask, uint8_t pending_mask,
+                                    const uint8_t *sessions, const uint8_t *current_sessions,
+                                    const uint32_t *remaining_us, const uint16_t *free_samples,
+                                    uint16_t body_sequence, uint8_t body_age_ms,
+                                    const uint16_t *refill_samples)
 {
     uint8_t frame[VQ_FRAME_LEN] = {};
     frame[0] = VQ_SYNC_0;
@@ -233,38 +210,18 @@ static void RS485_ReplyVq(uint8_t active_mask, uint8_t pending_mask, const uint8
     }
     frame[VQ_FRAME_LEN - 1u] = '\n';
 
-    Board_Rs485Acquire();
-    if (Uart5Rx_Transmit(frame, VQ_FRAME_LEN, RS485_TxDeadlineMs(VQ_FRAME_LEN)) != 0) {
+    acquire_rs485_bus();
+    if (write_rs485_bytes(frame, VQ_FRAME_LEN, get_rs485_transmit_timeout_ms(VQ_FRAME_LEN)) != 0) {
         rs485_tx_fail++;
     } else {
         rs485_vq_count++;
     }
-    Board_Rs485Release();
+    release_rs485_bus();
 }
 
 /* ---- channel card control console (rs485) ------------------------------- */
 
 static uint8_t led_show_on = 1;
-
-/* Analog-switch GPIO table. Driven once at init (all OFF, then the
- * session default turns bypass ON); there is no runtime switch command. */
-typedef struct {
-    const char *name;
-    uint8_t id;
-    uint8_t active_low; /* 1 = LOW enables the switch (ON) */
-} SwitchDef_t;
-
-static const SwitchDef_t switches[] = {
-    {"hp", BOARD_SWITCH_HP, 1},
-    {"bp", BOARD_SWITCH_BP, 1},
-    {"lp", BOARD_SWITCH_LP, 1},
-    {"vca", BOARD_SWITCH_VCA, 1},
-    {"bypass", BOARD_SWITCH_BYPASS, 1},
-    {"vcf", BOARD_SWITCH_VCF, 1},
-    {"scf", BOARD_SWITCH_SCF, 1},
-    {"hp_ctl", BOARD_SWITCH_HP_CTL, 0},
-};
-#define NUM_SWITCHES (sizeof(switches) / sizeof(switches[0]))
 
 /* RS485 commands are parsed below. Uploads use the binary USB protocol. */
 #define BOOT_DEFAULT_ATTEN_DB 0u
@@ -273,26 +230,26 @@ static const SwitchDef_t switches[] = {
 
 /* ---- apply analog switch defaults --------------------------------------- */
 
-/** Bypass is active-low (LOW = ON). */
-static void Console_SetBypassOn(void)
+/** Enable the logical bypass route. */
+static void enable_audio_bypass(void)
 {
-    Board_SwitchWrite(BOARD_SWITCH_BYPASS, 0u);
+    write_board_switch(BOARD_SWITCH_BYPASS, 1u);
 }
 
 /** Boot defaults: dry path + CH1 DAC trim 0 dB (`g 1 0`).
  * Runtime note commands do not touch gain or bypass. */
-static void Console_ApplyBootDefaults(void)
+static void apply_channel_boot_defaults(void)
 {
-    Console_SetBypassOn();
-    if (Board_DacReady() != 0u) {
-        Board_DacSetTrim('1', (uint8_t)(BOOT_DEFAULT_ATTEN_DB * 2u));
+    enable_audio_bypass();
+    if (is_dac_ready() != 0u) {
+        set_dac_channel_trim('1', (uint8_t)(BOOT_DEFAULT_ATTEN_DB * 2u));
     }
 }
 
 /* ---- parse voice selection ---------------------------------------------- */
 
 /** Map hex digit '0'..'9','a'..'f' → 0..15; else 0xFF. */
-static uint8_t Console_ParseNoteSlot(char hex_digit)
+static uint8_t parse_voice_index(char hex_digit)
 {
     if (hex_digit >= '0' && hex_digit <= '9') {
         return (uint8_t)(hex_digit - '0');
@@ -304,40 +261,40 @@ static uint8_t Console_ParseNoteSlot(char hex_digit)
 }
 
 /** Apply nX on <key> <velocity> [@session]. */
-static void Console_NoteOn(uint8_t note, uint8_t key, uint8_t velocity, uint16_t session,
-                           uint16_t sample)
+static void queue_console_note(uint8_t note, uint8_t key, uint8_t velocity, uint16_t session,
+                               uint16_t sample)
 {
-    if (NoteBank_VmUploadIsBusy() != 0u) {
-        RS485_Reply("err:vm-busy\r\n");
+    if (is_voice_script_upload_busy() != 0u) {
+        send_rs485_reply("err:vm-busy\r\n");
         return;
     }
-    if (NoteBank_VmIsActive(note) == 0u) {
-        RS485_Reply("err:no-program\r\n");
+    if (is_voice_script_active(note) == 0u) {
+        send_rs485_reply("err:no-program\r\n");
         return;
     }
 
     int result;
     if (sample != UINT16_MAX)
-        result = NoteBank_NoteOnSampleSession(note, sample, key, velocity, (uint8_t)session);
+        result = queue_streamed_sample_note(note, sample, key, velocity, (uint8_t)session);
     else if (session < USB_STREAM_SESSION_MOD)
-        result = NoteBank_NoteOnSession(note, key, velocity, (uint8_t)session);
+        result = queue_streamed_voice_note(note, key, velocity, (uint8_t)session);
     else
-        result = NoteBank_NoteOn(note, key, velocity);
-    RS485_Reply(result == 0    ? "ok\r\n"
-                : result == -3 ? "err:busy\r\n"
-                : result == -2 ? "err:no-program\r\n"
+        result = queue_voice_note(note, key, velocity);
+    send_rs485_reply(result == 0    ? "ok\r\n"
+                     : result == -3 ? "err:busy\r\n"
+                     : result == -2 ? "err:no-program\r\n"
                                : "err:range\r\n");
 }
 
 /** Hard-stop every voice and reset Berry state without unloading programs. */
-static void Console_AllNotesOff(void)
+static void request_console_voice_stop(void)
 {
-    NoteBank_AllNotesOff();
+    request_stop_all_voices();
 }
 
 /* ---- describe console commands ------------------------------------------ */
 
-static void Console_Help(void)
+static void send_command_help(void)
 {
     char b[320];
     /* One tagged line — leading \\r\\n would make the host see bare "[C]". */
@@ -345,60 +302,61 @@ static void Console_Help(void)
              "ok: reset (RS485 RX) | SAMPLE n0..n7 on sample key velocity @session | on key "
              "[velocity] [@session] | off | "
              "clear | n off | al id n | wl wave n | vmload v n | vm [v] | ar id Hz | a | vq | "
-             "usb | cpuload [0|1] | "
+             "usb | "
              "f0..f7 Hz [q] | fk0..fk7 k | g ch dB\r\n");
-    RS485_Reply(b);
+    send_rs485_reply(b);
 }
 
 /* ---- report filter settings --------------------------------------------- */
 
-static void Console_FilterReply(uint8_t voice)
+static void send_voice_filter_settings(uint8_t voice)
 {
     char b[128];
-    double base = NoteFilter_GetBaseCutoff(voice);
-    double fc = NoteFilter_GetCutoff(voice);
-    double k = NoteFilter_GetPitchK(voice);
+    double base = get_voice_filter_base_cutoff_hz(voice);
+    double fc = get_voice_filter_cutoff_hz(voice);
+    double k = get_voice_filter_pitch_tracking(voice);
 
     if (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) {
         snprintf(b, sizeof b, "ok: f%u %.1f Hz (bypass) k %.2f q %.2f\r\n", (unsigned)voice, base,
-                 k, NoteFilter_GetQ(voice));
+                 k, get_voice_filter_resonance(voice));
     } else if (k > 0.0) {
         snprintf(b, sizeof b, "ok: f%u base %.1f → %.1f Hz k %.2f q %.2f\r\n", (unsigned)voice,
-                 base, fc, k, NoteFilter_GetQ(voice));
+                 base, fc, k, get_voice_filter_resonance(voice));
     } else {
         snprintf(b, sizeof b, "ok: f%u %.1f Hz k %.2f q %.2f\r\n", (unsigned)voice, fc, k,
-                 NoteFilter_GetQ(voice));
+                 get_voice_filter_resonance(voice));
     }
-    RS485_Reply(b);
+    send_rs485_reply(b);
 }
 
-static void Console_FkReply(uint8_t voice)
+static void send_voice_pitch_tracking_settings(uint8_t voice)
 {
     char b[48];
-    snprintf(b, sizeof b, "ok: fk%u %.2f\r\n", (unsigned)voice, NoteFilter_GetPitchK(voice));
-    RS485_Reply(b);
+    snprintf(b, sizeof b, "ok: fk%u %.2f\r\n", (unsigned)voice,
+             get_voice_filter_pitch_tracking(voice));
+    send_rs485_reply(b);
 }
 
 /* ---- handle dac gain commands ------------------------------------------- */
 
 /** g <ch> <dB>: CS4304 DAC atten. Caller already matched sscanf. */
-static void Console_CmdGain(char *line)
+static void process_gain_command(char *line)
 {
     unsigned int ch, val;
 
     (void)sscanf(line, "g %u %u", &ch, &val);
-    if (ch >= 1 && ch <= 4 && val <= 127 && Board_DacReady() != 0u) {
-        Board_DacSetTrim((char)('0' + ch), (uint8_t)(val * 2u));
-        RS485_Reply("ok\r\n");
+    if (ch >= 1 && ch <= 4 && val <= 127 && is_dac_ready() != 0u) {
+        set_dac_channel_trim((char)('0' + ch), (uint8_t)(val * 2u));
+        send_rs485_reply("ok\r\n");
     } else {
-        RS485_Reply("err:range\r\n");
+        send_rs485_reply("err:range\r\n");
     }
 }
 
 /* ---- handle filter commands --------------------------------------------- */
 
 /** f0..f7 / f: LPF on first 8 voices; optional q = DF4 g. */
-static void Console_CmdFilter(char *line, char *b, size_t bsz)
+static void process_filter_command(char *line, char *b, size_t bsz)
 {
     const char *rest;
     double fc;
@@ -414,36 +372,36 @@ static void Console_CmdFilter(char *line, char *b, size_t bsz)
             rest++;
         }
         if (*rest == '\0') {
-            Console_FilterReply(note);
+            send_voice_filter_settings(note);
             return;
         }
         nscan = sscanf(rest, "%lf %lf", &fc, &q);
         if (nscan < 1) {
-            RS485_Reply("err:syntax\r\n");
+            send_rs485_reply("err:syntax\r\n");
             return;
         }
         if (nscan == 2) {
-            rc = NoteFilter_SetQ(note, q);
+            rc = set_voice_filter_resonance(note, q);
             if (rc != 0) {
-                RS485_Reply("err:range\r\n");
+                send_rs485_reply("err:range\r\n");
                 return;
             }
         }
-        rc = NoteFilter_SetCutoff(note, fc);
+        rc = set_voice_filter_cutoff_hz(note, fc);
         if (rc != 0) {
-            RS485_Reply("err:range\r\n");
+            send_rs485_reply("err:range\r\n");
             return;
         }
-        Console_FilterReply(note);
+        send_voice_filter_settings(note);
         return;
     }
 
     if ((line[1] >= '8' && line[1] <= '9') || (line[1] >= 'a' && line[1] <= 'f')) {
         if (line[2] == '\0' || line[2] == ' ') {
-            RS485_Reply("err:range\r\n");
+            send_rs485_reply("err:range\r\n");
             return;
         }
-        RS485_Reply("err:syntax\r\n");
+        send_rs485_reply("err:syntax\r\n");
         return;
     }
 
@@ -456,49 +414,49 @@ static void Console_CmdFilter(char *line, char *b, size_t bsz)
             /* Compact dump of f0..f7 effective/q/k. */
             int n = snprintf(b, bsz, "ok:");
             for (uint8_t i = 0; i < NOTE_FILTER_CONSOLE_VOICES && n > 0 && (size_t)n < bsz; i++) {
-                fc = NoteFilter_GetCutoff(i);
+                fc = get_voice_filter_cutoff_hz(i);
                 n += snprintf(b + n, bsz - (size_t)n, " f%u=%.0f/%.2f/k%.2f", (unsigned)i, fc,
-                              NoteFilter_GetQ(i), NoteFilter_GetPitchK(i));
+                              get_voice_filter_resonance(i), get_voice_filter_pitch_tracking(i));
             }
             if ((size_t)n < bsz - 2u) {
                 snprintf(b + n, bsz - (size_t)n, "\r\n");
             }
-            RS485_Reply(b);
+            send_rs485_reply(b);
             return;
         }
         nscan = sscanf(rest, "%lf %lf", &fc, &q);
         if (nscan < 1) {
-            RS485_Reply("err:syntax\r\n");
+            send_rs485_reply("err:syntax\r\n");
             return;
         }
         for (uint8_t i = 0; i < NOTE_FILTER_CONSOLE_VOICES; i++) {
             if (nscan == 2) {
-                rc = NoteFilter_SetQ(i, q);
+                rc = set_voice_filter_resonance(i, q);
                 if (rc != 0) {
-                    RS485_Reply("err:range\r\n");
+                    send_rs485_reply("err:range\r\n");
                     return;
                 }
             }
-            rc = NoteFilter_SetCutoff(i, fc);
+            rc = set_voice_filter_cutoff_hz(i, fc);
             if (rc != 0) {
-                RS485_Reply("err:range\r\n");
+                send_rs485_reply("err:range\r\n");
                 return;
             }
         }
         snprintf(b, bsz, "ok: f %.1f Hz%s k %.2f q %.2f\r\n", fc,
                  (fc == 0.0 || fc >= NOTE_FILTER_CUTOFF_MAX_HZ) ? " (bypass)" : "",
-                 NoteFilter_GetPitchK(0), NoteFilter_GetQ(0));
-        RS485_Reply(b);
+                 get_voice_filter_pitch_tracking(0), get_voice_filter_resonance(0));
+        send_rs485_reply(b);
         return;
     }
 
-    RS485_Reply("err:unknown\r\n");
+    send_rs485_reply("err:unknown\r\n");
 }
 
 /* ---- handle pitch tracking commands ------------------------------------- */
 
 /** fk / fk0..fk7: filter pitch-track k (voices 0..7). */
-static void Console_CmdFk(char *line, char *b, size_t bsz)
+static void process_pitch_tracking_command(char *line, char *b, size_t bsz)
 {
     const char *rest;
     double kd;
@@ -514,27 +472,27 @@ static void Console_CmdFk(char *line, char *b, size_t bsz)
             int n = snprintf(b, bsz, "ok:");
             for (uint8_t i = 0; i < NOTE_FILTER_CONSOLE_VOICES && n > 0 && (size_t)n < bsz; i++) {
                 n += snprintf(b + n, bsz - (size_t)n, " fk%u=%.2f", (unsigned)i,
-                              NoteFilter_GetPitchK(i));
+                              get_voice_filter_pitch_tracking(i));
             }
             if ((size_t)n < bsz - 2u) {
                 snprintf(b + n, bsz - (size_t)n, "\r\n");
             }
-            RS485_Reply(b);
+            send_rs485_reply(b);
             return;
         }
         if (sscanf(rest, "%lf", &kd) != 1) {
-            RS485_Reply("err:syntax\r\n");
+            send_rs485_reply("err:syntax\r\n");
             return;
         }
         for (uint8_t i = 0; i < NOTE_FILTER_CONSOLE_VOICES; i++) {
-            rc = NoteFilter_SetPitchK(i, kd);
+            rc = set_voice_filter_pitch_tracking(i, kd);
             if (rc != 0) {
-                RS485_Reply("err:range\r\n");
+                send_rs485_reply("err:range\r\n");
                 return;
             }
         }
         snprintf(b, bsz, "ok: fk %.2f\r\n", kd);
-        RS485_Reply(b);
+        send_rs485_reply(b);
         return;
     }
 
@@ -545,29 +503,29 @@ static void Console_CmdFk(char *line, char *b, size_t bsz)
             rest++;
         }
         if (*rest == '\0') {
-            Console_FkReply(note);
+            send_voice_pitch_tracking_settings(note);
             return;
         }
         if (sscanf(rest, "%lf", &kd) != 1) {
-            RS485_Reply("err:syntax\r\n");
+            send_rs485_reply("err:syntax\r\n");
             return;
         }
-        rc = NoteFilter_SetPitchK(note, kd);
+        rc = set_voice_filter_pitch_tracking(note, kd);
         if (rc != 0) {
-            RS485_Reply("err:range\r\n");
+            send_rs485_reply("err:range\r\n");
             return;
         }
-        Console_FkReply(note);
+        send_voice_pitch_tracking_settings(note);
         return;
     }
 
     if ((line[2] >= '8' && line[2] <= '9') || (line[2] >= 'a' && line[2] <= 'f')) {
         if (line[3] == '\0' || line[3] == ' ') {
-            RS485_Reply("err:range\r\n");
+            send_rs485_reply("err:range\r\n");
             return;
         }
     }
-    RS485_Reply("err:syntax\r\n");
+    send_rs485_reply("err:syntax\r\n");
 }
 
 /* ---- handle voice status queries ---------------------------------------- */
@@ -575,7 +533,7 @@ static void Console_CmdFk(char *line, char *b, size_t bsz)
 /**
  * vq — per-voice playback duration and exact total writable credit.
  */
-static void Console_CmdVoiceQuery(void)
+static void process_voice_status_command(void)
 {
     char b[384];
     int n;
@@ -590,27 +548,27 @@ static void Console_CmdVoiceQuery(void)
     uint8_t i;
 
     {
-        uint32_t saved = Board_IrqSave();
+        uint32_t saved = disable_interrupts_and_save_state();
         for (i = 0u; i < NOTE_BANK_VOICES; i++) {
-            if (NoteBank_IsActive(i) != 0u) mask |= (uint8_t)(1u << i);
-            free_samples[i] = (uint16_t)StreamRing_FreeLevel(i);
-            sessions[i] = StreamRing_TargetSession(i);
-            current_sessions[i] = StreamRing_CurrentSession(i);
-            remaining_us[i] = NoteBank_RemainingUs(i);
-            refill_samples[i] = NoteBank_RefillSamples5ms(i);
-            if (StreamRing_HasPending(i) != 0u)
+            if (is_voice_active(i) != 0u) mask |= (uint8_t)(1u << i);
+            free_samples[i] = (uint16_t)get_stream_free_samples(i);
+            sessions[i] = get_target_stream_session(i);
+            current_sessions[i] = get_current_stream_session(i);
+            remaining_us[i] = get_voice_buffered_time_us(i);
+            refill_samples[i] = get_voice_refill_samples_5ms(i);
+            if (has_pending_voice_stream(i) != 0u)
                 pending_mask = (uint8_t)(pending_mask | (uint8_t)(1u << i));
         }
         /* Credit and acknowledgement must describe the same USB state. A newer
          * acknowledgement with older free space grants already-used space again. */
-        body_sequence = StreamRing_LastBodySequence();
-        body_age_ms = StreamRing_BodyAgeMs();
-        Board_IrqRestore(saved);
+        body_sequence = get_last_stream_body_sequence();
+        body_age_ms = get_stream_body_age_ms();
+        restore_interrupt_state(saved);
     }
 
     if (!console_via_usb) {
-        RS485_ReplyVq(mask, pending_mask, sessions, current_sessions, remaining_us, free_samples,
-                      body_sequence, body_age_ms, refill_samples);
+        send_rs485_voice_status(mask, pending_mask, sessions, current_sessions, remaining_us,
+                               free_samples, body_sequence, body_age_ms, refill_samples);
         return;
     }
 
@@ -619,7 +577,7 @@ static void Console_CmdVoiceQuery(void)
                  (unsigned)body_sequence);
     for (i = 0u; i < NOTE_BANK_VOICES; i++) {
         if (n < 0 || (size_t)n >= sizeof b) {
-            RS485_Reply("err:buf\r\n");
+            send_rs485_reply("err:buf\r\n");
             return;
         }
         n += snprintf(b + n, sizeof b - (size_t)n, " %u %lu %u", (unsigned)sessions[i],
@@ -628,30 +586,30 @@ static void Console_CmdVoiceQuery(void)
             n += snprintf(b + n, sizeof b - (size_t)n, " %u", (unsigned)refill_samples[i]);
     }
     if (n < 0 || (size_t)n >= sizeof b - 2u) {
-        RS485_Reply("err:buf\r\n");
+        send_rs485_reply("err:buf\r\n");
         return;
     }
     b[n++] = '\r';
     b[n++] = '\n';
     b[n] = '\0';
-    RS485_Reply(b);
+    send_rs485_reply(b);
 }
 
 /* ---- handle note commands ----------------------------------------------- */
 
 /** clear / n off: hard-stop all voices and reset Berry state at the next boundary. */
-static void Console_CmdNoteAll(char *line)
+static void process_all_voices_command(char *line)
 {
     if (strcmp(line, "n off") != 0 && strcmp(line, "clear") != 0) {
-        RS485_Reply("err:syntax\r\n");
+        send_rs485_reply("err:syntax\r\n");
         return;
     }
-    Console_AllNotesOff();
-    RS485_Reply(strcmp(line, "clear") == 0 ? "ok:clear rt=1\r\n" : "ok\r\n");
+    request_console_voice_stop();
+    send_rs485_reply(strcmp(line, "clear") == 0 ? "ok:clear rt=1\r\n" : "ok\r\n");
 }
 
 /** n0..n7: note bank on CH1 (also answers unknown; slots 8..f err:range). */
-static void Console_CmdNoteSlot(char *line)
+static void process_voice_note_command(char *line)
 {
     unsigned int key;
     unsigned int velocity = 127u;
@@ -663,29 +621,29 @@ static void Console_CmdNoteSlot(char *line)
     if (line[0] != 'n' || line[1] == '\0') {
         char reply[128];
         (void)snprintf(reply, sizeof(reply), "err:unknown received <%s>\r\n", line);
-        RS485_Reply(reply);
+        send_rs485_reply(reply);
         return;
     }
 
-    note = Console_ParseNoteSlot(line[1]);
+    note = parse_voice_index(line[1]);
     if (note == 0xFFu || (line[2] != '\0' && line[2] != ' ')) {
-        RS485_Reply("err:syntax\r\n");
+        send_rs485_reply("err:syntax\r\n");
         return;
     }
     if (note >= NOTE_BANK_VOICES) {
-        RS485_Reply("err:range\r\n");
+        send_rs485_reply("err:range\r\n");
         return;
     }
 
     /* A slot token without `on` or `off` is not a command. */
     if (line[2] == '\0') {
-        RS485_Reply("err:syntax\r\n");
+        send_rs485_reply("err:syntax\r\n");
         return;
     }
 
     if (strcmp(line + 3, "off") == 0) {
-        NoteBank_NoteOff(note);
-        RS485_Reply("ok\r\n");
+        queue_voice_note_off(note);
+        send_rs485_reply("ok\r\n");
         return;
     }
     unsigned int sample;
@@ -693,24 +651,25 @@ static void Console_CmdNoteSlot(char *line)
     if (nscan == 4) {
         if (sample >= ATTACK_BANK_SAMPLE_COUNT || key >= FW_SCRIPT_CHANNEL_KEY_COUNT ||
             velocity == 0u || velocity > 127u || session >= USB_STREAM_SESSION_MOD) {
-            RS485_Reply("err:range\r\n");
+            send_rs485_reply("err:range\r\n");
             return;
         }
-        Console_NoteOn(note, (uint8_t)key, (uint8_t)velocity, (uint16_t)session, (uint16_t)sample);
+        queue_console_note(note, (uint8_t)key, (uint8_t)velocity, (uint16_t)session,
+                           (uint16_t)sample);
         return;
     }
     nscan = sscanf(line + 3, "on %u %u @%u %c", &key, &velocity, &session, &extra);
     if (nscan == 3) {
         if (key >= FW_SCRIPT_CHANNEL_KEY_COUNT || velocity == 0u || velocity > 127u ||
             session >= USB_STREAM_SESSION_MOD) {
-            RS485_Reply("err:range\r\n");
+            send_rs485_reply("err:range\r\n");
             return;
         }
     } else {
         nscan = sscanf(line + 3, "on %u %u %c", &key, &velocity, &extra);
         if (nscan == 2) {
             if (key >= FW_SCRIPT_CHANNEL_KEY_COUNT || velocity == 0u || velocity > 127u) {
-                RS485_Reply("err:range\r\n");
+                send_rs485_reply("err:range\r\n");
                 return;
             }
             session = USB_STREAM_SESSION_MOD;
@@ -719,178 +678,179 @@ static void Console_CmdNoteSlot(char *line)
             nscan = sscanf(line + 3, "on %u @%u %c", &key, &session, &extra);
             if (nscan == 2) {
                 if (key >= FW_SCRIPT_CHANNEL_KEY_COUNT || session >= USB_STREAM_SESSION_MOD) {
-                    RS485_Reply("err:range\r\n");
+                    send_rs485_reply("err:range\r\n");
                     return;
                 }
             } else {
                 nscan = sscanf(line + 3, "on %u %c", &key, &extra);
                 if (nscan != 1) {
-                    RS485_Reply("err:syntax\r\n");
+                    send_rs485_reply("err:syntax\r\n");
                     return;
                 }
                 if (key >= FW_SCRIPT_CHANNEL_KEY_COUNT) {
-                    RS485_Reply("err:range\r\n");
+                    send_rs485_reply("err:range\r\n");
                     return;
                 }
                 session = USB_STREAM_SESSION_MOD;
             }
         }
     }
-    Console_NoteOn(note, (uint8_t)key, (uint8_t)velocity, (uint16_t)session, UINT16_MAX);
+    queue_console_note(note, (uint8_t)key, (uint8_t)velocity, (uint16_t)session, UINT16_MAX);
 }
 
 /* ---- handle sample and upload commands ---------------------------------- */
 
 /** a — loaded count + 256-bit hex mask (bit 0 = wave 0). */
-static void Console_CmdAttackQuery(void)
+static void process_sample_status_command(void)
 {
     char b[96];
     uint8_t mask[32];
     int n;
     uint8_t i;
 
-    AttackBank_LoadedMask(mask);
-    n = snprintf(b, sizeof b, "ok: a %u ", (unsigned)AttackBank_LoadedCount());
+    get_loaded_sample_mask(mask);
+    n = snprintf(b, sizeof b, "ok: a %u ", (unsigned)get_loaded_sample_count());
     for (i = 0u; i < 32u && n > 0 && (size_t)n < sizeof b; i++) {
         n += snprintf(b + n, sizeof b - (size_t)n, "%02x", (unsigned)mask[i]);
     }
     if (n > 0 && (size_t)n < sizeof b) {
         snprintf(b + n, sizeof b - (size_t)n, "\r\n");
     }
-    RS485_Reply(b);
+    send_rs485_reply(b);
 }
 
 /** al <wave_id> <nbytes> — CDC signed-int8 load (1..ATTACK_BANK_BYTES). */
-static void Console_CmdAttackLoad(char *line)
+static void process_sample_upload_command(char *line)
 {
     unsigned int wid;
     unsigned long nbytes;
 
     if (!console_via_usb) {
-        RS485_Reply("err:usb\r\n");
+        send_rs485_reply("err:usb\r\n");
         return;
     }
     if (sscanf(line, "al %u %lu", &wid, &nbytes) != 2) {
-        RS485_Reply("err:syntax\r\n");
+        send_rs485_reply("err:syntax\r\n");
         return;
     }
-    if (AttackUpload_Begin((uint16_t)wid, (uint32_t)nbytes) != 0) {
-        RS485_Reply("err:range\r\n");
+    if (begin_sample_upload((uint16_t)wid, (uint32_t)nbytes) != 0) {
+        send_rs485_reply("err:range\r\n");
         return;
     }
-    RS485_Reply("ok:ready\r\n");
+    send_rs485_reply("ok:ready\r\n");
 }
 
 /** wl <logical-wave> <nbytes> — card resolves logical 0..7 to bank storage. */
-static void Console_CmdWavetableLoad(char *line)
+static void process_wavetable_upload_command(char *line)
 {
     unsigned int wave;
     unsigned long nbytes;
     if (!console_via_usb) {
-        RS485_Reply("err:usb\r\n");
+        send_rs485_reply("err:usb\r\n");
         return;
     }
     if (sscanf(line, "wl %u %lu", &wave, &nbytes) != 2 || wave >= ATTACK_BANK_WAVETABLE_COUNT) {
-        RS485_Reply("err:syntax\r\n");
+        send_rs485_reply("err:syntax\r\n");
         return;
     }
-    if (AttackUpload_BeginWavetable((uint8_t)wave, (uint32_t)nbytes) != 0) {
-        RS485_Reply("err:range\r\n");
+    if (begin_wavetable_upload((uint8_t)wave, (uint32_t)nbytes) != 0) {
+        send_rs485_reply("err:range\r\n");
         return;
     }
-    RS485_Reply("ok:ready\r\n");
+    send_rs485_reply("ok:ready\r\n");
 }
 
 /** vmload <voice> <nbytes> — receive one Channel ABI2 FWSC container over CDC. */
-static void Console_CmdVmLoad(char *line)
+static void process_script_upload_command(char *line)
 {
     unsigned int voice;
     unsigned long nbytes;
     if (!console_via_usb) {
-        RS485_Reply("err:usb\r\n");
+        send_rs485_reply("err:usb\r\n");
         return;
     }
     if (sscanf(line, "vmload %u %lu", &voice, &nbytes) != 2 || voice >= FW_VM_CHANNEL_VOICE_COUNT) {
-        RS485_Reply("err:syntax\r\n");
+        send_rs485_reply("err:syntax\r\n");
         return;
     }
-    if (NoteBank_AnyActive() != 0u) {
-        RS485_Reply("err:vm-busy\r\n");
+    if (has_active_voices() != 0u) {
+        send_rs485_reply("err:vm-busy\r\n");
         return;
     }
-    if (AttackUpload_IsActive() != 0u || VmUpload_Begin((uint8_t)voice, (uint32_t)nbytes) != 0) {
-        RS485_Reply("err:range\r\n");
+    if (is_sample_upload_active() != 0u ||
+        begin_script_upload((uint8_t)voice, (uint32_t)nbytes) != 0) {
+        send_rs485_reply("err:range\r\n");
         return;
     }
-    RS485_Reply("ok:ready\r\n");
+    send_rs485_reply("ok:ready\r\n");
 }
 
 /* ---- report script status ----------------------------------------------- */
 
-static void Console_CmdVmStatus(char *line)
+static void process_script_status_command(char *line)
 {
     char reply[192];
     unsigned int voice;
     if (strcmp(line, "vm mem") == 0) {
-        const FwVmMemoryMetrics *m = NoteBank_VmMemoryMetrics();
+        const FwVmMemoryMetrics *m = get_voice_script_memory_metrics();
         (void)snprintf(reply, sizeof(reply), "ok:vm mem %lu %lu %lu %lu %lu %lu %lu %lu %u\r\n",
                        (unsigned long)m->arena_size, (unsigned long)m->arena_current,
                        (unsigned long)m->arena_peak, (unsigned long)m->arena_largest_free,
                        (unsigned long)m->load_allocations, (unsigned long)m->handler_allocations,
                        (unsigned long)m->load_gc, (unsigned long)m->handler_gc,
                        (unsigned)m->shared_vm_valid);
-        RS485_Reply(reply);
+        send_rs485_reply(reply);
         for (voice = 0u; voice < FW_VM_CHANNEL_VOICE_COUNT; ++voice) {
             (void)snprintf(reply, sizeof(reply), "ok:vm memv %u %u %lu %lu\r\n", voice,
-                           (unsigned)NoteBank_VmFault((uint8_t)voice),
-                           (unsigned long)NoteBank_VmMaxCycles((uint8_t)voice),
-                           (unsigned long)NoteBank_VmFaultCount((uint8_t)voice));
-            RS485_Reply(reply);
+                           (unsigned)get_voice_script_fault((uint8_t)voice),
+                           (unsigned long)get_voice_script_max_cycles((uint8_t)voice),
+                           (unsigned long)get_voice_script_fault_count((uint8_t)voice));
+            send_rs485_reply(reply);
         }
         return;
     } else if (strcmp(line, "vm") == 0) {
         (void)snprintf(reply, sizeof(reply), "ok:vm mask %02x\r\n",
-                       (unsigned)NoteBank_VmActiveMask());
+                       (unsigned)get_active_voice_script_mask());
     } else if (sscanf(line, "vm %u", &voice) != 1 || voice >= FW_VM_CHANNEL_VOICE_COUNT) {
         (void)snprintf(reply, sizeof(reply), "err:syntax\r\n");
-    } else if (NoteBank_VmIsActive((uint8_t)voice) != 0u) {
+    } else if (is_voice_script_active((uint8_t)voice) != 0u) {
         (void)snprintf(reply, sizeof(reply), "ok:vm %u active %lu %u %u\r\n", voice,
                        (unsigned long)FW_VM_TARGET_CHANNEL, (unsigned)FW_VM_TARGET_CHANNEL_VERSION,
-                       (unsigned)NoteBank_VmFault((uint8_t)voice));
+                       (unsigned)get_voice_script_fault((uint8_t)voice));
     } else {
         (void)snprintf(reply, sizeof(reply), "ok:vm %u inactive %u\r\n", voice,
-                       (unsigned)NoteBank_VmFault((uint8_t)voice));
+                       (unsigned)get_voice_script_fault((uint8_t)voice));
     }
-    RS485_Reply(reply);
+    send_rs485_reply(reply);
 }
 
 /* ---- set sample root pitch ---------------------------------------------- */
 
 /** ar <wave_id> <root_hz> — attack-head native pitch for on-card rate-scale. */
-static void Console_CmdRoot(char *line)
+static void process_sample_root_frequency_command(char *line)
 {
     unsigned int wid;
     float hz;
 
     if (sscanf(line, "ar %u %f", &wid, &hz) != 2) {
-        RS485_Reply("err:syntax\r\n");
+        send_rs485_reply("err:syntax\r\n");
         return;
     }
     if (wid >= ATTACK_BANK_COUNT || !(hz > 0.0f)) {
-        RS485_Reply("err:range\r\n");
+        send_rs485_reply("err:range\r\n");
         return;
     }
-    AttackBank_SetRootHz((uint16_t)wid, hz);
+    set_sample_root_frequency_hz((uint16_t)wid, hz);
     {
         char b[48];
         snprintf(b, sizeof b, "ok: ar %u %.6g\r\n", wid, (double)hz);
-        RS485_Reply(b);
+        send_rs485_reply(b);
     }
 }
 
 /* ---- dispatch console commands ------------------------------------------ */
 
-static void Console_Exec(char *line)
+static void execute_channel_command(char *line)
 {
     char b[160];
     unsigned int ch, val;
@@ -901,115 +861,95 @@ static void Console_Exec(char *line)
 
     /* Clear receive state before replying so the acknowledgement survives. */
     if (strcmp(line, "reset") == 0) {
-        Uart5Rx_Clear();
+        clear_rs485_receive_state();
         rs485_line_len = 0u;
         rs485_line[0] = '\0';
-        RS485_Reply("ok:reset\r\n");
+        send_rs485_reply("ok:reset\r\n");
         return;
     }
 
-    /* ---- h / help / ? ------------------------------------------------------- */
+    /* ---- h / help / ? --------------------------------------------------- */
 
     if (strcmp(line, "h") == 0 || strcmp(line, "help") == 0 || strcmp(line, "?") == 0) {
-        Console_Help();
+        send_command_help();
         return;
     }
 
     if (strncmp(line, "vmload ", 7) == 0) {
-        Console_CmdVmLoad(line);
+        process_script_upload_command(line);
         return;
     }
 
     if (strcmp(line, "vm") == 0 || strncmp(line, "vm ", 3) == 0) {
-        Console_CmdVmStatus(line);
+        process_script_status_command(line);
         return;
     }
 
-    if (strcmp(line, "cpuload") == 0) {
-        (void)snprintf(b, sizeof b, "ok: cpuload %u\r\n", (unsigned)Audio_Bridge_CpuLoadProbeGet());
-        RS485_Reply(b);
-        return;
-    }
-
-    if (strncmp(line, "cpuload ", 8) == 0) {
-        unsigned int enabled;
-        char extra;
-        if (sscanf(line + 8, "%u %c", &enabled, &extra) != 1 || enabled > 1u) {
-            RS485_Reply("err:syntax\r\n");
-            return;
-        }
-        Audio_Bridge_CpuLoadProbeSet((uint8_t)enabled);
-        led_show_on = enabled == 0u ? 1u : 0u;
-        (void)snprintf(b, sizeof b, "ok: cpuload %u\r\n", enabled);
-        RS485_Reply(b);
-        return;
-    }
-
-    /* ---- al <id> nbytes: cdc attack head upload ----------------------------- */
+    /* ---- al <id> nbytes: cdc attack head upload ------------------------- */
 
     if (strncmp(line, "al ", 3) == 0) {
-        Console_CmdAttackLoad(line);
+        process_sample_upload_command(line);
         return;
     }
 
-    /* ---- wl <logical-wave> nbytes: card-placed oscillator wavetable --------- */
+    /* ---- wl <logical-wave> nbytes: card-placed oscillator wavetable ----- */
 
     if (strncmp(line, "wl ", 3) == 0) {
-        Console_CmdWavetableLoad(line);
+        process_wavetable_upload_command(line);
         return;
     }
 
-    /* ---- ar <id> <hz>: sample root pitch ------------------------------------ */
+    /* ---- ar <id> <hz>: sample root pitch -------------------------------- */
 
     if (strncmp(line, "ar ", 3) == 0) {
-        Console_CmdRoot(line);
+        process_sample_root_frequency_command(line);
         return;
     }
 
-    /* ---- a: loaded heads (slot = voice) ------------------------------------- */
+    /* ---- a: loaded heads (slot = voice) --------------------------------- */
 
     if (strcmp(line, "a") == 0) {
-        Console_CmdAttackQuery();
+        process_sample_status_command();
         return;
     }
 
-    /* ---- vq: active-voice mask + exact per-voice free samples --------------- */
+    /* ---- vq: active-voice mask + exact per-voice free samples ----------- */
 
     if (strcmp(line, "vq") == 0) {
-        Console_CmdVoiceQuery();
+        process_voice_status_command();
         return;
     }
 
     if (strcmp(line, "rs485") == 0) {
         char debug[128];
         (void)snprintf(debug, sizeof debug, "ok: rs485 rxdrop %lu txfail %lu trunc %lu\r\n",
-                       (unsigned long)Uart5Rx_DroppedCount(), (unsigned long)rs485_tx_fail,
+                       (unsigned long)get_rs485_dropped_byte_count(), (unsigned long)rs485_tx_fail,
                        (unsigned long)rs485_tx_trunc);
-        RS485_Reply(debug);
+        send_rs485_reply(debug);
         return;
     }
     if (strcmp(line, "usbdev") == 0) {
         char debug[300];
-        USB_Device_Debug(debug, sizeof debug);
-        RS485_Reply(debug);
+        format_usb_device_status(debug, sizeof debug);
+        send_rs485_reply(debug);
         return;
     }
-    /* ---- usb [0]: body counters (fifo drop, hold, fill) --------------------- */
+    /* ---- usb [0]: body counters (fifo drop, hold, fill) ----------------- */
 
     if (strncmp(line, "usb", 3) == 0 && (line[3] == '\0' || line[3] == ' ')) {
         if (line[3] == ' ') {
             unsigned z = 1u;
             if (sscanf(line + 4, "%u", &z) != 1 || z != 0u) {
-                RS485_Reply("err:syntax\r\n");
+                send_rs485_reply("err:syntax\r\n");
                 return;
             }
-            Audio_Bridge_UsbDropCountClear();
-            USB_App_StatsClear();
+            clear_audio_stream_statistics();
+            clear_usb_statistics();
             rs485_vq_count = 0u;
         }
         {
             char min_s[12];
-            uint32_t minf = StreamRing_MinFill();
+            uint32_t minf = get_min_stream_buffered_samples();
             char usb_b[300];
 
             if (minf == 0xFFFFFFFFu) {
@@ -1024,62 +964,68 @@ static void Console_Exec(char *line)
                 "z %lu sof %lu vq %lu win %lu rx %lu bytes %lu "
                 "bad %lu h%lu s%lu f%lu c%lu u%lu late %lu "
                 "stale %lu future %lu full %lu superseded %lu\r\n",
-                (unsigned long)Audio_Bridge_UsbDropCount(), (unsigned long)NoteBank_HoldCount(),
-                min_s, (unsigned long)Audio_Bridge_MaxFill(), (unsigned long)StreamRing_ZeroCount(),
-                (unsigned long)StreamRing_SofCount(), (unsigned long)rs485_vq_count,
-                (unsigned long)USB_App_BlockCount(), (unsigned long)USB_App_RxMsgCount(),
-                (unsigned long)USB_App_RxByteCount(), (unsigned long)USB_App_BadCount(),
-                (unsigned long)USB_App_BadReasonCount(0u),
-                (unsigned long)USB_App_BadReasonCount(1u),
-                (unsigned long)USB_App_BadReasonCount(2u),
-                (unsigned long)USB_App_BadReasonCount(3u),
-                (unsigned long)USB_App_BadReasonCount(4u), (unsigned long)Audio_Bridge_FillLate(),
-                (unsigned long)StreamRing_StaleCount(), (unsigned long)StreamRing_FutureCount(),
-                (unsigned long)StreamRing_FullCount(), (unsigned long)StreamRing_SupersededCount());
-            RS485_Reply(usb_b);
+                (unsigned long)get_audio_stream_drop_count(),
+                (unsigned long)get_voice_underrun_count(), min_s,
+                (unsigned long)get_audio_stream_max_buffered_samples(),
+                (unsigned long)get_stream_silent_block_count(),
+                (unsigned long)get_stream_start_block_count(), (unsigned long)rs485_vq_count,
+                (unsigned long)get_usb_received_frame_count(),
+                (unsigned long)get_usb_received_body_count(),
+                (unsigned long)get_usb_received_byte_count(), (unsigned long)get_usb_error_count(),
+                (unsigned long)get_usb_error_reason_count(0u),
+                (unsigned long)get_usb_error_reason_count(1u),
+                (unsigned long)get_usb_error_reason_count(2u),
+                (unsigned long)get_usb_error_reason_count(3u),
+                (unsigned long)get_usb_error_reason_count(4u),
+                (unsigned long)get_audio_refill_overlap_count(),
+                (unsigned long)get_stream_stale_block_count(),
+                (unsigned long)get_stream_future_block_count(),
+                (unsigned long)get_stream_full_buffer_count(),
+                (unsigned long)get_stream_superseded_block_count());
+            send_rs485_reply(usb_b);
         }
         return;
     }
 
-    /* ---- g <ch> <db>: cs4304 dac atten -------------------------------------- */
+    /* ---- g <ch> <db>: cs4304 dac atten ---------------------------------- */
 
     if (sscanf(line, "g %u %u", &ch, &val) == 2) {
         (void)ch;
         (void)val;
-        Console_CmdGain(line);
+        process_gain_command(line);
         return;
     }
 
-    /* ---- fk / fk0..fk7: filter pitch-track (before bare f) ------------------ */
+    /* ---- fk / fk0..fk7: filter pitch-track (before bare f) -------------- */
 
     if (line[0] == 'f' && line[1] == 'k') {
-        Console_CmdFk(line, b, sizeof b);
+        process_pitch_tracking_command(line, b, sizeof b);
         return;
     }
 
-    /* ---- f0..f7 / f: lpf on first 8 voices; optional q = df4 g -------------- */
+    /* ---- f0..f7 / f: lpf on first 8 voices; optional q = df4 g ---------- */
 
     if (line[0] == 'f') {
-        Console_CmdFilter(line, b, sizeof b);
+        process_filter_command(line, b, sizeof b);
         return;
     }
 
     if (strcmp(line, "clear") == 0) {
-        Console_CmdNoteAll(line);
+        process_all_voices_command(line);
         return;
     }
 
     if (line[0] == 'n') {
         console_note_event = 1u;
         if (line[1] == '\0' || line[1] == ' ')
-            Console_CmdNoteAll(line);
+            process_all_voices_command(line);
         else
-            Console_CmdNoteSlot(line);
+            process_voice_note_command(line);
         console_note_event = 0u;
         return;
     }
 
-    Console_CmdNoteSlot(line);
+    process_voice_note_command(line);
 }
 
 /* ---- resolve rs485 addressing ------------------------------------------- */
@@ -1092,7 +1038,7 @@ static void Console_Exec(char *line)
  * If addressed to us, strips the prefix and returns 1.
  * If addressed to another card, returns 0 (ignore).
  * The stripped command is written back to `line`. */
-static uint8_t RS485_IsForMe(char *line)
+static uint8_t is_command_for_channel_card(char *line)
 {
     /* Check for "X:" prefix (at least 2 chars, second is ':') */
     if (line[0] != '\0' && line[1] == ':') {
@@ -1113,15 +1059,15 @@ static uint8_t RS485_IsForMe(char *line)
 
 /* Legacy internal entry point. The binary USB receiver does not dispatch
  * text through this function. */
-void Console_ExecFromUSB(char *line)
+void execute_usb_command(char *line)
 {
     if (line == NULL) {
         return;
     }
-    if (!RS485_IsForMe(line)) /* accept "c:", "*:" or bare commands */
+    if (!is_command_for_channel_card(line)) /* accept "c:", "*:" or bare commands */
         return;
     console_via_usb = 1;
-    Console_Exec(line);
+    execute_channel_command(line);
     console_via_usb = 0;
 }
 
@@ -1129,21 +1075,21 @@ void Console_ExecFromUSB(char *line)
 
 /** Poll RX, echo typing, run a command on Enter. Non-blocking.
  * Messages addressed to other cards are ignored. */
-static void Console_Poll(void)
+void process_rs485_commands(void)
 {
     uint8_t c;
 
-    while (Uart5Rx_Get(&c)) {
+    while (read_rs485_byte(&c)) {
         if (c == '\r' || c == '\n') {
 #if RS485_ECHO
-            RS485_Send("\r\n");
+            send_rs485_text("\r\n");
 #endif
             rs485_line[rs485_line_len] = '\0';
 
             /* Execute only commands addressed to this card or broadcast. */
-            if (RS485_IsForMe((char *)rs485_line)) {
+            if (is_command_for_channel_card((char *)rs485_line)) {
                 rs485_cmd_count++;
-                Console_Exec((char *)rs485_line);
+                execute_channel_command((char *)rs485_line);
             }
             /* else: message for another card — silently ignore */
 
@@ -1153,7 +1099,7 @@ static void Console_Poll(void)
             if (rs485_line_len > 0) {
                 rs485_line_len--;
 #if RS485_ECHO
-                RS485_Send("\b \b");
+                send_rs485_text("\b \b");
 #endif
             }
         } else if (c >= 32 && c < 127 && rs485_line_len < sizeof(rs485_line) - 1) {
@@ -1170,7 +1116,7 @@ static void Console_Poll(void)
             }
 #if RS485_ECHO
             char e[2] = {(char)c, '\0'};
-            RS485_Send(e); /* echo typing */
+            send_rs485_text(e); /* echo typing */
 #endif
         }
     }
@@ -1180,66 +1126,52 @@ static void Console_Poll(void)
 
 /** Non-blocking fixed red/yellow chaser (150 ms per step).
  * The RGB package is exclusively VM-controlled. */
-static void LED_Task(void)
+static void update_status_led_pattern(void)
 {
     static const uint8_t leds[2] = {BOARD_LED_R, BOARD_LED_Y};
     static uint32_t t_next = 0;
     static uint8_t step = 0;
 
-    ChannelLed_Task();
-    if (Audio_Bridge_CpuLoadProbeGet() != 0u) {
-        Board_LedWrite(BOARD_LED_R, 0u);
-        return;
-    }
     if (!led_show_on) {
         for (uint8_t i = 0; i < 2; i++) {
-            Board_LedWrite(leds[i], 0u);
+            write_board_led(leds[i], 0u);
         }
         return;
     }
-    if (Board_Millis() >= t_next) {
-        t_next = Board_Millis() + 150;
-        Board_LedWrite(leds[step], 0u);
+    if (get_board_time_ms() >= t_next) {
+        t_next = get_board_time_ms() + 150;
+        write_board_led(leds[step], 0u);
         step = (step + 1) % 2;
-        Board_LedWrite(leds[step], 1u);
+        write_board_led(leds[step], 1u);
     }
 }
 
 /* ---- initialize and poll the console ------------------------------------ */
 
-void ChannelConsole_Init(void)
+void init_channel_card(void)
 {
-    ChannelLed_Init();
-    Board_Rs485Release();
-    Uart5Rx_Init();
+    init_board_rgb_led();
+    release_rs485_bus();
+    init_rs485_receiver();
 
-    for (uint8_t i = 0; i < NUM_SWITCHES; i++) {
-        Board_SwitchWrite(switches[i].id, switches[i].active_low ? 1u : 0u);
+    for (uint8_t i = 0; i < BOARD_SWITCH_COUNT; i++) {
+        write_board_switch(i, 0u);
     }
-    Console_ApplyBootDefaults();
+    apply_channel_boot_defaults();
 
-    NoteFilter_InitAll();
-    NoteEnv_Init();
-    AttackBank_Init();
-    StreamRing_Init();
-    NoteBank_Init();
+    init_voice_filters();
+    init_voice_envelopes();
+    init_sample_storage();
+    init_voice_streams();
+    init_voices();
 
-    RS485_Reply("ok: ready — h for cmds\r\n");
+    send_rs485_reply("ok: ready — h for cmds\r\n");
 }
 
-void ChannelConsole_Poll(void)
+void update_channel_leds(void)
 {
-    Console_Poll();
-    LED_Task();
-}
-
-/* ---- run one main-loop pass --------------------------------------------- */
-
-void ChannelApp_Step(void)
-{
-    USB_App_Task();        /* Binary CDC BODY/uploads */
-    ChannelConsole_Poll(); /* RS485 console + LED chaser */
-    USB_App_Task();        /* Drain CDC after a console TX */
+    service_board_leds();
+    update_status_led_pattern();
 }
 
 /* ---- receive compiled voice programs ------------------------------------ */
@@ -1251,14 +1183,14 @@ static uint32_t s_received;
 
 /* ---- query and abort a script upload ------------------------------------ */
 
-uint8_t VmUpload_IsActive(void)
+uint8_t is_script_upload_active(void)
 {
     return s_active;
 }
 
-void VmUpload_Abort(void)
+void abort_script_upload(void)
 {
-    if (s_active != 0u) NoteBank_VmUploadAbort(s_voice);
+    if (s_active != 0u) abort_voice_script_upload(s_voice);
     s_active = 0u;
     s_expected = 0u;
     s_received = 0u;
@@ -1266,12 +1198,12 @@ void VmUpload_Abort(void)
 
 /* ---- begin a script upload ---------------------------------------------- */
 
-int VmUpload_Begin(uint8_t voice, uint32_t nbytes)
+int begin_script_upload(uint8_t voice, uint32_t nbytes)
 {
     if (voice >= FW_VM_CHANNEL_VOICE_COUNT || s_active != 0u ||
         nbytes < FW_SCRIPT_CONTAINER_HEADER_SIZE ||
         nbytes > FW_SCRIPT_CONTAINER_HEADER_SIZE + FW_SCRIPT_MAX_PAYLOAD ||
-        NoteBank_VmUploadBegin(voice) != 0)
+        begin_voice_script_upload(voice) != 0)
         return -1;
     s_voice = voice;
     s_expected = nbytes;
@@ -1282,29 +1214,29 @@ int VmUpload_Begin(uint8_t voice, uint32_t nbytes)
 
 /* ---- receive and commit a script upload --------------------------------- */
 
-uint32_t VmUpload_Feed(const uint8_t *data, uint32_t size)
+uint32_t append_script_upload_bytes(const uint8_t *data, uint32_t size)
 {
     uint32_t take;
     if (s_active == 0u || data == NULL) return 0u;
     take = size;
     if (take > s_expected - s_received) take = s_expected - s_received;
-    if (NoteBank_VmUploadFeed(s_voice, data, take) != 0) {
-        USB_CDC_WriteStr("err:vm-container\r\n");
-        VmUpload_Abort();
+    if (append_voice_script_upload_bytes(s_voice, data, take) != 0) {
+        write_usb_text("err:vm-container\r\n");
+        abort_script_upload();
         return take;
     }
     s_received += take;
     if (s_received == s_expected) {
         char reply[64];
-        if (NoteBank_VmUploadCommit(s_voice) != 0) {
+        if (commit_voice_script_upload(s_voice) != 0) {
             (void)snprintf(reply, sizeof(reply), "err:vm %u %u\r\n", (unsigned)s_voice,
-                           (unsigned)NoteBank_VmFault(s_voice));
+                           (unsigned)get_voice_script_fault(s_voice));
         } else {
             (void)snprintf(reply, sizeof(reply), "ok:vm %u %lu %u\r\n", (unsigned)s_voice,
                            (unsigned long)FW_VM_TARGET_CHANNEL,
                            (unsigned)FW_VM_TARGET_CHANNEL_VERSION);
         }
-        USB_CDC_WriteStr(reply);
+        write_usb_text(reply);
         s_active = 0u;
         s_expected = 0u;
         s_received = 0u;

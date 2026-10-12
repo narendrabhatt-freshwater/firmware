@@ -29,7 +29,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "audio.h"
+#include "audio_output.h"
+#include "board_stm32.h"
 #include "cs4304.h"
 #include "channel.h"
 #include "usb.h"
@@ -124,7 +125,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   /* Custom CDC device uses the generated HAL PCD and embedded Full-Speed PHY. */
-  USB_App_Init();
+  init_usb_protocol();
 
   /* --- Power-on status sequence: flash fixed red/yellow LEDs only.
    * The RGB package is reserved for VM scripts and stays off at boot. --- */
@@ -151,26 +152,26 @@ int main(void)
   hcs4304.hi2c = &hi2c5;
   hcs4304.DevAddr = CS4304_I2C_ADDR_C5_GND_0R;
 
-  if (CS4304_Init(&hcs4304) != HAL_OK)
+  if (init_cs4304(&hcs4304) != HAL_OK)
   {
     HAL_GPIO_WritePin(LED_R_GPIO_Port, LED_R_Pin, GPIO_PIN_SET);
   }
 
   /* CH1 carries the note mix; CH2-CH4 carry control voltages. */
   hcs4304.MasterMask = 0x01;
-  CS4304_SetVolume(&hcs4304, hcs4304.Volume); /* re-apply with the mask */
+  set_cs4304_volume(&hcs4304, hcs4304.Volume); /* re-apply with the mask */
 
   /* Bind the DAC handle used by console gain commands. */
-  ChannelConsole_SetDacHandle(&hcs4304);
+  set_channel_dac_handle(&hcs4304);
 
   /* Set calibrated zero targets before playback; CH2-CH4 slew toward
    * these levels from the first DMA buffer. */
-  Audio_SetDCLevel(2, 0);
-  Audio_SetDCLevel(3, 0);
-  Audio_SetDCLevel(4, 0);
+  set_control_voltage_target(2, 0);
+  set_control_voltage_target(3, 0);
+  set_control_voltage_target(4, 0);
 
   /* DAC timing runs independently of USB traffic and enumeration. */
-  Audio_StartPlayback();
+  start_audio_playback();
 
   /* MX_TIM12_Init() reconfigured PB15 as TIM12_CH2 AF — override it back
    * to plain GPIO output so hp_ctl stays a GPIO. */
@@ -188,7 +189,7 @@ int main(void)
   /* filter_ctl (TIM3_CH1, PC6): keep LOW at boot. */
 
   /* RS485 idle Hi-Z, switch defaults, boot bypass/gain, ready banner. */
-  ChannelConsole_Init();
+  init_channel_card();
 
   /* USER CODE END 2 */
 
@@ -200,7 +201,10 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-    ChannelApp_Step(); /* USB task, RS485 console + LEDs, USB task */
+    process_usb_messages();
+    process_rs485_commands();
+    update_channel_leds();
+    process_usb_messages(); /* Drain USB after a console reply. */
   }
   /* USER CODE END 3 */
 }

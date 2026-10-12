@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INPUTS = ("channel_card", "berry_compiler", "scripts/channel_release.py",
           "scripts/svn_publish.sh")
 CARD_ROOT = {"README.md",
-             "channel_MCU.ioc", "startup_stm32h725xx.s", "STM32H725xG_flash.ld", "flash.sh"}
+             "channel_MCU.ioc", "startup_stm32h725xx.s", "STM32H725xG_flash.ld"}
 COMPILER_ROOT = {"CMakeLists.txt", "Makefile", "README.md", "berry.c",
                  "berry.linux-arm64"}
 CARD_DOCS = {"PROTOCOL.md"}
@@ -48,11 +48,13 @@ def selected(path):
     product, *tail = parts
     rel = "/".join(tail)
     suffix = PurePosixPath(path).suffix
+    if suffix in {".py", ".pyc", ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd", ".command"}:
+        return False
     if product == "channel_card":
         if rel in CARD_ROOT or rel in CARD_DOCS:
             return True
         if tail[0] == "app" and len(tail) == 2:
-            return suffix in {".cpp", ".h"} or tail[-1] == "Makefile"
+            return suffix in {".cpp", ".h"} or tail[-1] in {"Makefile", "sources.mk"}
         if tail[0] == "core" and len(tail) == 3:
             return (tail[1] == "src" and suffix == ".c" or
                     tail[1] == "inc" and suffix == ".h")
@@ -86,10 +88,18 @@ def markdown_links(path):
 
 
 def validate(stage):
+    for path in stage.rglob("*"):
+        if path.is_file() and (path.suffix in {".py", ".pyc", ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd", ".command"}
+                               or any(part in {"tests", "test", "scripts", "__pycache__"}
+                                      for part in path.relative_to(stage).parts)):
+            raise ValueError(f"development tool in firmware package: {path.relative_to(stage)}")
     required = [*CARD_ROOT, *CARD_DOCS,
                 "app/Makefile",
+                "app/sources.mk",
                 "app/cs4304.cpp",
                 "app/audio.cpp",
+                "app/audio_dac.cpp",
+                "app/transport.cpp",
                 "app/audio_i2s.cpp",
                 "app/board_stm32.cpp",
                 "app/channel.cpp",
@@ -102,6 +112,11 @@ def validate(stage):
                 "app/usb_device.cpp",
                 "app/cs4304.h",
                 "app/audio.h",
+                "app/audio_output.h",
+                "app/transport.h",
+                "app/platform_memory.h",
+                "app/board_stm32.h",
+                "app/usb_device.h",
                 "app/board.h",
                 "app/channel.h",
                 "app/filter.h",
@@ -126,8 +141,6 @@ def validate(stage):
         raise ValueError("bundled compiler must be a little-endian ELF64 ARM64 executable")
     if not os.access(binary, os.X_OK):
         raise ValueError("bundled ARM64 compiler is not executable")
-    if not os.access(stage / "flash.sh", os.X_OK):
-        raise ValueError("flash.sh is not executable")
     # The host intentionally has a different berry_conf.h, but shared code and
     # ABI declarations must match the device snapshot byte for byte.
     shared = {

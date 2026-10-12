@@ -1,3 +1,26 @@
+/*
+                                   __
+                               ___  \  \
+                          ___  \  \  \  \    _______
+                     ___  \  \  \  \  \__\__/_____  \
+                     \  \  \  \  \__\_______      \__\____
+                      \  \  \  \     ___ \  \________  \__/
+                       \  \  \__\___/_  \ \___/   \  \___
+                        \  \    ____  \  \________ \ ___/
+                         \__\__/ \  \  \____/  \  \
+                                  \  \     ___  \  \___
+                                   \__\___/ \  \ \____/
+                                           \  \
+                                              \  \___
+                 __                 _          \ ___/  _
+                / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+               | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+               |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+               |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+
+            (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+*/
+
 #include "cs4304.h"
 
 /* ---- control the dac ---------------------------------------------------- */
@@ -16,12 +39,12 @@
 
 /* ---- control dac reset -------------------------------------------------- */
 
-static void CS4304_AssertReset(void)
+static void assert_cs4304_reset(void)
 {
     HAL_GPIO_WritePin(DAC_RST_GPIO_Port, DAC_RST_Pin, GPIO_PIN_RESET);
 }
 
-static void CS4304_ReleaseReset(void)
+static void release_cs4304_reset(void)
 {
     HAL_GPIO_WritePin(DAC_RST_GPIO_Port, DAC_RST_Pin, GPIO_PIN_SET);
 }
@@ -29,24 +52,24 @@ static void CS4304_ReleaseReset(void)
 /* ---- write and latch dac attenuation ------------------------------------ */
 
 /** Write one channel's OUT_VOL_CTRL register from mute flag + attenuation. */
-static HAL_StatusTypeDef CS4304_WriteVol(CS4304_HandleTypeDef *h, uint16_t reg, uint8_t mute,
-                                         uint8_t atten)
+static HAL_StatusTypeDef write_cs4304_volume_register(CS4304_HandleTypeDef *h, uint16_t reg,
+                                                      uint8_t mute, uint8_t atten)
 {
     uint16_t val = (mute ? CS4304_OUT_MUTE_BIT : 0x0000) | atten;
-    return CS4304_WriteReg(h, reg, val);
+    return write_cs4304_register(h, reg, val);
 }
 
 /** Latch pending volume/mute changes (OUT_VU, write-only). */
-static HAL_StatusTypeDef CS4304_LatchVolume(CS4304_HandleTypeDef *h)
+static HAL_StatusTypeDef latch_cs4304_volume(CS4304_HandleTypeDef *h)
 {
-    return CS4304_WriteReg(h, CS4304_REG_OUT_VOL_CTRL5, CS4304_OUT_VU);
+    return write_cs4304_register(h, CS4304_REG_OUT_VOL_CTRL5, CS4304_OUT_VU);
 }
 
 /* ---- calculate per-channel attenuation ---------------------------------- */
 
 /** Effective attenuation for one channel: master volume (if the channel
  * follows it, per MasterMask) plus per-channel trim, clamped. */
-static uint8_t CS4304_ChanAtten(const CS4304_HandleTypeDef *h, uint8_t ch)
+static uint8_t get_cs4304_channel_attenuation(const CS4304_HandleTypeDef *h, uint8_t ch)
 {
     uint32_t base = ((h->MasterMask >> ch) & 1u) ? h->Volume : 0u;
     uint32_t total = base + (uint32_t)h->Trim[ch];
@@ -54,23 +77,24 @@ static uint8_t CS4304_ChanAtten(const CS4304_HandleTypeDef *h, uint8_t ch)
 }
 
 /** Write all four volume registers (master volume + per-channel trim) + latch. */
-static HAL_StatusTypeDef CS4304_ApplyVolume(CS4304_HandleTypeDef *h)
+static HAL_StatusTypeDef apply_cs4304_volume(CS4304_HandleTypeDef *h)
 {
     static const uint16_t vol_regs[4] = {CS4304_REG_OUT_VOL_CTRL1_0, CS4304_REG_OUT_VOL_CTRL1_1,
                                          CS4304_REG_OUT_VOL_CTRL2_0, CS4304_REG_OUT_VOL_CTRL2_1};
     HAL_StatusTypeDef status;
 
     for (uint8_t i = 0; i < 4; i++) {
-        status = CS4304_WriteVol(h, vol_regs[i], h->IsMuted, CS4304_ChanAtten(h, i));
+        status = write_cs4304_volume_register(h, vol_regs[i], h->IsMuted,
+                                             get_cs4304_channel_attenuation(h, i));
         if (status != HAL_OK) return status;
     }
 
-    return CS4304_LatchVolume(h);
+    return latch_cs4304_volume(h);
 }
 
 /* ---- inspect the dac control bus ---------------------------------------- */
 
-uint16_t CS4304_ScanBus(I2C_HandleTypeDef *hi2c)
+uint16_t scan_cs4304_bus(I2C_HandleTypeDef *hi2c)
 {
     if (hi2c == NULL) {
         return 0;
@@ -86,7 +110,7 @@ uint16_t CS4304_ScanBus(I2C_HandleTypeDef *hi2c)
 
 /* ---- read and write dac registers --------------------------------------- */
 
-HAL_StatusTypeDef CS4304_ReadReg(CS4304_HandleTypeDef *hcs4304, uint16_t reg, uint16_t *pData)
+HAL_StatusTypeDef read_cs4304_register(CS4304_HandleTypeDef *hcs4304, uint16_t reg, uint16_t *pData)
 {
     uint8_t buf[2];
     HAL_StatusTypeDef status;
@@ -103,7 +127,7 @@ HAL_StatusTypeDef CS4304_ReadReg(CS4304_HandleTypeDef *hcs4304, uint16_t reg, ui
     return status;
 }
 
-HAL_StatusTypeDef CS4304_WriteReg(CS4304_HandleTypeDef *hcs4304, uint16_t reg, uint16_t data)
+HAL_StatusTypeDef write_cs4304_register(CS4304_HandleTypeDef *hcs4304, uint16_t reg, uint16_t data)
 {
     uint8_t buf[2];
 
@@ -120,7 +144,7 @@ HAL_StatusTypeDef CS4304_WriteReg(CS4304_HandleTypeDef *hcs4304, uint16_t reg, u
 
 /* ---- initialize the dac ------------------------------------------------- */
 
-HAL_StatusTypeDef CS4304_Init(CS4304_HandleTypeDef *hcs4304)
+HAL_StatusTypeDef init_cs4304(CS4304_HandleTypeDef *hcs4304)
 {
     HAL_StatusTypeDef status;
 
@@ -139,15 +163,15 @@ HAL_StatusTypeDef CS4304_Init(CS4304_HandleTypeDef *hcs4304)
     hcs4304->State = CS4304_STATE_RESET;
 
     /* 1. Hardware reset */
-    CS4304_AssertReset();
+    assert_cs4304_reset();
     HAL_Delay(CS4304_RESET_PULSE_MS);
-    CS4304_ReleaseReset();
+    release_cs4304_reset();
     HAL_Delay(CS4304_RESET_RECOVERY_MS);
 
     /* 2. Resolve I2C address (CONFIG5-strapped; scan as fallback) */
     if (hcs4304->DevAddr == 0 ||
         HAL_I2C_IsDeviceReady(hcs4304->hi2c, hcs4304->DevAddr, 3, CS4304_I2C_TIMEOUT) != HAL_OK) {
-        hcs4304->DevAddr = CS4304_ScanBus(hcs4304->hi2c);
+        hcs4304->DevAddr = scan_cs4304_bus(hcs4304->hi2c);
         if (hcs4304->DevAddr == 0) {
             hcs4304->State = CS4304_STATE_ERROR;
             return HAL_ERROR;
@@ -155,11 +179,11 @@ HAL_StatusTypeDef CS4304_Init(CS4304_HandleTypeDef *hcs4304)
     }
 
     /* 3. Software reset to defaults */
-    (void)CS4304_WriteReg(hcs4304, CS4304_REG_SW_RESET, CS4304_SW_RESET_KEY);
+    (void)write_cs4304_register(hcs4304, CS4304_REG_SW_RESET, CS4304_SW_RESET_KEY);
     HAL_Delay(2);
 
     /* 4. Verify DEVID */
-    status = CS4304_ReadReg(hcs4304, CS4304_REG_DEVID, &hcs4304->DevId);
+    status = read_cs4304_register(hcs4304, CS4304_REG_DEVID, &hcs4304->DevId);
     if (status != HAL_OK || hcs4304->DevId != CS4304_DEVID_VALUE) {
         hcs4304->State = CS4304_STATE_ERROR;
         return HAL_ERROR;
@@ -169,23 +193,23 @@ HAL_StatusTypeDef CS4304_Init(CS4304_HandleTypeDef *hcs4304)
      *    - PLL enabled, MCLK reference @ 24.576 MHz (= 256·fs at 96 kHz)
      *    - Sample rate 96 kHz (CS4304_SAMPLE_RATE_ACTIVE)
      *    - ASP Secondary Mode, I2S format, BCLK non-inverted, normal order   */
-    status = CS4304_WriteReg(hcs4304, CS4304_REG_CHIP_ENABLE, 0x0000);
+    status = write_cs4304_register(hcs4304, CS4304_REG_CHIP_ENABLE, 0x0000);
     if (status != HAL_OK) {
         hcs4304->State = CS4304_STATE_ERROR;
         return status;
     }
 
-    (void)CS4304_WriteReg(hcs4304, CS4304_REG_CLK_CFG_0, CS4304_CLK_CFG_0_PLL_MCLK_24M576);
-    (void)CS4304_WriteReg(hcs4304, CS4304_REG_CLK_CFG_1, CS4304_SAMPLE_RATE_ACTIVE);
-    (void)CS4304_WriteReg(hcs4304, CS4304_REG_ASP_CFG, CS4304_ASP_CFG_SECONDARY_I2S);
-    (void)CS4304_WriteReg(hcs4304, CS4304_REG_SIGNAL_PATH_CFG, CS4304_SIGNAL_PATH_I2S);
-    (void)CS4304_WriteReg(hcs4304, CS4304_REG_OUT_RAMP_SUM, 0x0022);
-    (void)CS4304_WriteReg(hcs4304, CS4304_REG_OUT_FILTER, 0x0200);
+    (void)write_cs4304_register(hcs4304, CS4304_REG_CLK_CFG_0, CS4304_CLK_CFG_0_PLL_MCLK_24M576);
+    (void)write_cs4304_register(hcs4304, CS4304_REG_CLK_CFG_1, CS4304_SAMPLE_RATE_ACTIVE);
+    (void)write_cs4304_register(hcs4304, CS4304_REG_ASP_CFG, CS4304_ASP_CFG_SECONDARY_I2S);
+    (void)write_cs4304_register(hcs4304, CS4304_REG_SIGNAL_PATH_CFG, CS4304_SIGNAL_PATH_I2S);
+    (void)write_cs4304_register(hcs4304, CS4304_REG_OUT_RAMP_SUM, 0x0022);
+    (void)write_cs4304_register(hcs4304, CS4304_REG_OUT_FILTER, 0x0200);
 
     /* 6. GLOBAL_EN = 1 — latches clocking/ASP config.
      *    Note: output becomes active after the DAC startup delay (~1 s
      *    default, STARTUP_DELAY register) once valid clocks are present.    */
-    status = CS4304_WriteReg(hcs4304, CS4304_REG_CHIP_ENABLE, CS4304_GLOBAL_EN);
+    status = write_cs4304_register(hcs4304, CS4304_REG_CHIP_ENABLE, CS4304_GLOBAL_EN);
     if (status != HAL_OK) {
         hcs4304->State = CS4304_STATE_ERROR;
         return status;
@@ -195,8 +219,8 @@ HAL_StatusTypeDef CS4304_Init(CS4304_HandleTypeDef *hcs4304)
      *    Per the official Cirrus bring-up scripts, OUT_ENABLES / volume /
      *    OUT_VU are written AFTER GLOBAL_EN = 1.
      *    (Channels default to MUTED — unmute + OUT_VU is mandatory.)        */
-    (void)CS4304_WriteReg(hcs4304, CS4304_REG_OUT_ENABLES, CS4304_OUT_EN_ALL);
-    status = CS4304_ApplyVolume(hcs4304);
+    (void)write_cs4304_register(hcs4304, CS4304_REG_OUT_ENABLES, CS4304_OUT_EN_ALL);
+    status = apply_cs4304_volume(hcs4304);
     if (status != HAL_OK) {
         hcs4304->State = CS4304_STATE_ERROR;
         return status;
@@ -208,30 +232,30 @@ HAL_StatusTypeDef CS4304_Init(CS4304_HandleTypeDef *hcs4304)
 
 /* ---- stop and reset the dac --------------------------------------------- */
 
-HAL_StatusTypeDef CS4304_DeInit(CS4304_HandleTypeDef *hcs4304)
+HAL_StatusTypeDef deinit_cs4304(CS4304_HandleTypeDef *hcs4304)
 {
     if (hcs4304 == NULL) {
         return HAL_ERROR;
     }
 
     if (hcs4304->hi2c != NULL && hcs4304->DevAddr != 0) {
-        (void)CS4304_WriteReg(hcs4304, CS4304_REG_CHIP_ENABLE, 0x0000);
+        (void)write_cs4304_register(hcs4304, CS4304_REG_CHIP_ENABLE, 0x0000);
     }
 
-    CS4304_AssertReset();
+    assert_cs4304_reset();
     hcs4304->State = CS4304_STATE_RESET;
     return HAL_OK;
 }
 
-HAL_StatusTypeDef CS4304_Reset(CS4304_HandleTypeDef *hcs4304)
+HAL_StatusTypeDef reset_cs4304(CS4304_HandleTypeDef *hcs4304)
 {
     if (hcs4304 == NULL) {
         return HAL_ERROR;
     }
 
-    CS4304_AssertReset();
+    assert_cs4304_reset();
     HAL_Delay(CS4304_RESET_PULSE_MS);
-    CS4304_ReleaseReset();
+    release_cs4304_reset();
     HAL_Delay(CS4304_RESET_RECOVERY_MS);
 
     /* Registers are back to defaults — full re-init required. */
@@ -242,7 +266,7 @@ HAL_StatusTypeDef CS4304_Reset(CS4304_HandleTypeDef *hcs4304)
 
 /* ---- configure dac mute ------------------------------------------------- */
 
-HAL_StatusTypeDef CS4304_SetMute(CS4304_HandleTypeDef *hcs4304, uint8_t mute)
+HAL_StatusTypeDef set_cs4304_mute(CS4304_HandleTypeDef *hcs4304, uint8_t mute)
 {
     HAL_StatusTypeDef status;
 
@@ -251,14 +275,14 @@ HAL_StatusTypeDef CS4304_SetMute(CS4304_HandleTypeDef *hcs4304, uint8_t mute)
     }
 
     hcs4304->IsMuted = mute ? 1 : 0;
-    status = CS4304_ApplyVolume(hcs4304);
+    status = apply_cs4304_volume(hcs4304);
     if (status == HAL_OK) {
         hcs4304->State = mute ? CS4304_STATE_MUTED : CS4304_STATE_PLAYING;
     }
     return status;
 }
 
-HAL_StatusTypeDef CS4304_SetChannelMute(CS4304_HandleTypeDef *hcs4304, uint8_t mask)
+HAL_StatusTypeDef set_cs4304_channel_mute(CS4304_HandleTypeDef *hcs4304, uint8_t mask)
 {
     static const uint16_t vol_regs[4] = {CS4304_REG_OUT_VOL_CTRL1_0, CS4304_REG_OUT_VOL_CTRL1_1,
                                          CS4304_REG_OUT_VOL_CTRL2_0, CS4304_REG_OUT_VOL_CTRL2_1};
@@ -270,26 +294,27 @@ HAL_StatusTypeDef CS4304_SetChannelMute(CS4304_HandleTypeDef *hcs4304, uint8_t m
 
     for (uint8_t i = 0; i < 4; i++) {
         status =
-            CS4304_WriteVol(hcs4304, vol_regs[i], (mask >> i) & 1u, CS4304_ChanAtten(hcs4304, i));
+            write_cs4304_volume_register(hcs4304, vol_regs[i], (mask >> i) & 1u,
+                                        get_cs4304_channel_attenuation(hcs4304, i));
         if (status != HAL_OK) return status;
     }
-    return CS4304_LatchVolume(hcs4304);
+    return latch_cs4304_volume(hcs4304);
 }
 
 /* ---- configure dac attenuation ------------------------------------------ */
 
-HAL_StatusTypeDef CS4304_SetVolume(CS4304_HandleTypeDef *hcs4304, uint8_t atten)
+HAL_StatusTypeDef set_cs4304_volume(CS4304_HandleTypeDef *hcs4304, uint8_t atten)
 {
     if (hcs4304 == NULL) {
         return HAL_ERROR;
     }
 
     hcs4304->Volume = atten;
-    return CS4304_ApplyVolume(hcs4304);
+    return apply_cs4304_volume(hcs4304);
 }
 
-HAL_StatusTypeDef CS4304_SetChannelVolume(CS4304_HandleTypeDef *hcs4304, char channel,
-                                          uint8_t atten)
+HAL_StatusTypeDef set_cs4304_channel_volume(CS4304_HandleTypeDef *hcs4304, char channel,
+                                            uint8_t atten)
 {
     HAL_StatusTypeDef status;
     uint16_t reg;
@@ -323,14 +348,14 @@ HAL_StatusTypeDef CS4304_SetChannelVolume(CS4304_HandleTypeDef *hcs4304, char ch
         return HAL_ERROR;
     }
 
-    status = CS4304_WriteVol(hcs4304, reg, hcs4304->IsMuted, atten);
+    status = write_cs4304_volume_register(hcs4304, reg, hcs4304->IsMuted, atten);
     if (status == HAL_OK) {
-        status = CS4304_LatchVolume(hcs4304);
+        status = latch_cs4304_volume(hcs4304);
     }
     return status;
 }
 
-HAL_StatusTypeDef CS4304_SetChannelTrim(CS4304_HandleTypeDef *hcs4304, char channel, uint8_t trim)
+HAL_StatusTypeDef set_cs4304_channel_trim(CS4304_HandleTypeDef *hcs4304, char channel, uint8_t trim)
 {
     uint8_t idx;
 
@@ -364,12 +389,12 @@ HAL_StatusTypeDef CS4304_SetChannelTrim(CS4304_HandleTypeDef *hcs4304, char chan
     }
 
     hcs4304->Trim[idx] = trim;
-    return CS4304_ApplyVolume(hcs4304);
+    return apply_cs4304_volume(hcs4304);
 }
 
 /* ---- query dac state ---------------------------------------------------- */
 
-CS4304_StateTypeDef CS4304_GetState(CS4304_HandleTypeDef *hcs4304)
+CS4304_StateTypeDef get_cs4304_state(CS4304_HandleTypeDef *hcs4304)
 {
     if (hcs4304 == NULL) {
         return CS4304_STATE_ERROR;

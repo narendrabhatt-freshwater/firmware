@@ -12,10 +12,12 @@ specifies framing, uploads, and flow control.
 
 ## Build
 
-Install GNU Make, Python 3 (for build validation and reports), and the GNU Arm
+Install GNU Make, a POSIX shell with standard tools (`awk`, `cmp`, `shasum`),
+and the GNU Arm
 embedded toolchain with newlib (`arm-none-eabi-gcc`, `arm-none-eabi-g++`, `arm-none-eabi-objcopy`,
 `arm-none-eabi-ar`, and `arm-none-eabi-objdump` on PATH). No build dependencies
-are downloaded.
+are downloaded. Python is not required. For systems with `sha256sum`, use
+`make SHA256=sha256sum`.
 
 From `channel_card/app/`, run:
 
@@ -29,20 +31,23 @@ files under `build/release/`. CMake and Ninja are not required.
 Use `make -j4` to build with up to four parallel jobs.
 Use `make clean` to remove this build and its output binary.
 
-Every build prints the firmware size, built baud rate, toolchain, timestamp,
+Every build prints the firmware size, built baud rate, toolchain, report timestamp,
 checksum, and Flash/RAM allocation by memory region and section. To view the
 last successful build without compiling or changing settings:
 
 ```sh
-make info
+cat ../build/release/channel_MCU.info
 ```
+
+The Makefile handles validation and reporting directly. The firmware package
+contains no Python tools, shell-script files, or test harnesses.
 
 The report includes used/free bytes and percentages for Flash, DTCM, AXI SRAM
 (`RAM_D1`), `RAM_D2`, `RAM_D3`, and ITCM. Section sizes show sample storage,
 the Berry arena, DMA buffers, and the heap/stack reservation. These are linker
 allocations, including alignment, rather than measured runtime memory peaks.
 The saved report stays under `build/release/`; `bin/` contains the firmware binary
-(and `sim`, the host simulator, if `make simulator` has been run).
+(and `sim`, the host simulator, if `make sim` has been run).
 
 The RS485 rate is set by `BAUDRATE ?= 921600` at the top of
 [`app/Makefile`](app/Makefile). Edit that value for the normal build rate,
@@ -59,28 +64,17 @@ with 8 data bits, no parity, and 1 stop bit (8N1).
 ## Flash
 
 Install [STM32CubeProgrammer](https://www.st.com/en/development-tools/stm32cubeprog.html)
-for your host OS. The script uses its command-line programmer; CubeIDE is not
-required. Standard macOS application and Linux installation paths are detected.
-For another location, put `STM32_Programmer_CLI` on PATH or set
-`CUBE_PROGRAMMER` to the full executable path.
+for your host OS; CubeIDE is not required.
 
 1. Run `make` in `app/` to build the firmware.
-2. Run `./flash.sh` from `channel_card/` (or `../flash.sh` from `app/`).
-3. The script waits for USB bootloader mode. Connect the USB data cable, move
-   the BOOT switch up, and press reset. Press Ctrl+C to cancel the wait.
-4. After successful verification, move BOOT down and press reset to run.
+2. Connect the USB data cable, move the BOOT switch up, and press reset.
+3. In STM32CubeProgrammer, select USB, refresh the ports, and connect to the
+   Channel Card bootloader.
+4. Download `bin/channel_MCU.bin` at `0x08000000` with verification enabled.
+5. After successful verification, move BOOT down and press reset to run.
 
-Flashing uses the existing `bin/channel_MCU.bin` at `0x08000000`; it does not
-rebuild or change its baud rate. The script stops with an explanation if the
-programmer or binary is missing, USB enumeration fails, or writing or
-verification fails. With multiple bootloaders connected, identify the Channel
-Card's port and use `./flash.sh --port USB2` (substitute its port). This waits
-for that port before flashing.
-Use `./flash.sh --check` to check the programmer and binary without accessing
-the board. The script can be invoked from any directory.
-
-For GUI flashing, select USB in STM32CubeProgrammer, connect to the bootloader,
-download `bin/channel_MCU.bin` at `0x08000000`, and enable verification.
+Flashing uses the built binary; configure the desired baud rate before building.
+With multiple bootloaders attached, select the Channel Card's USB port.
 
 The running device uses USB VID/PID `cafe:4032` and a serial number derived
 from its hardware UID: `CHCARD-<24 hex digits>`. Select the corresponding CDC
@@ -166,7 +160,6 @@ Pitch tracking uses `fc = fbase × (noteHz / 261.625565)^k`.
 | `rs485` | RS485 | Report receive drops, transmit failures, and reply truncations. |
 | `usbdev` | RS485 | Report USB peripheral and endpoint state. |
 | `usb 0` | RS485 | Clear BODY transport counters and return the new values. |
-| `cpuload [0\|1]` | RS485 | Query or enable the LED_Y DMA-refill scope probe. Low is busy; high is idle. |
 
 Send `c:reset\r` and wait for `ok:reset` before sending another RS485 command:
 bytes already queued behind reset are discarded. The command must reach a
@@ -180,20 +173,14 @@ Full upload sequencing and reply fields are documented in
 
 ### Service diagnostics
 
-`vm mem`, `usb`, `usbdev`, `rs485`, and `cpuload` report runtime or transport state.
-
-With `cpuload 1`, LED_Y/PB9 goes low on entry to each SPI1 DMA half-buffer
-callback and high after its 48-frame refill completes. At 48 kHz the period is
-1 ms, so scope duty cycle is `low_time / 1 ms`. The pulse includes USB callback
-work, pending Berry handlers, and sample/oscillator/filter/envelope mixing.
-Use `cpuload 0` to return the fixed LEDs to normal operation.
+`vm mem`, `usb`, `usbdev`, and `rs485` report runtime or transport state.
 
 Pitch-track smoke with a loaded sample: `f0 300`, `fk0 1`, `n0 on 60` then
 `n0 on 72` — corner should roughly double with the octave (query `f0`).
 
 ## Source layout and maintenance
 
-- `app/`: twelve C++ implementations, their headers, and the Release Makefile.
+- `app/`: shared application, replaceable device backends, and build configuration.
 - `berry_runtime/`: first-party script runtime and shared ABI declarations;
   `third_party/berry/` retains the vendored interpreter.
 - `core/` and `drivers/`: STM32 initialization, interrupt glue, HAL, and CMSIS.
@@ -204,24 +191,73 @@ The application is split by responsibility:
 
 | Implementation | Contents | Header |
 | --- | --- | --- |
-| `audio.cpp` | Calibrated DC outputs and one-refill audio rendering | `audio.h` |
-| `audio_i2s.cpp` | I2S/DMA buffers and callbacks, I2S2 underrun guard, load probe | `audio.h` |
-| `board_stm32.cpp` | UART5 interrupt and RS485 bus pins, LEDs, switches, tick, DAC trim | `board.h`, `channel.h` |
+| `audio.cpp` | Mono audio rendering and sample-clocked script intervals | `audio.h` |
+| `audio_dac.cpp` | Calibrated control voltages and DAC slot packing | `audio_output.h` |
+| `transport.cpp` | Bounded RS485 completion wait with USB service | `transport.h` |
+| `audio_i2s.cpp` | I2S/DMA buffers and callbacks, I2S2 underrun guard | `audio_output.h` |
+| `board_stm32.cpp` | UART5, RS485 pins, board outputs, clock, synchronization and profiling | `board.h`, `transport.h`, `board_stm32.h` |
 | `cs4304.cpp` | CS4304 DAC register access, initialization, gain and mute | `cs4304.h` |
-| `channel.cpp` | RS485 commands, LED patterns, script uploads, main-loop pass | `channel.h` |
+| `channel.cpp` | RS485 commands, LED patterns, script uploads | `channel.h` |
 | `voice.cpp` | Note playback, envelopes, Berry adapter | `voice.h` |
 | `filter.cpp` | Four-pole kernel and per-voice filter control | `filter.h` |
 | `oscillator.cpp` | Wavetable oscillators, routing, interpolation helpers | `oscillator.h` |
 | `samples.cpp` | Sample attack storage and playheads | `samples.h` |
 | `stream.cpp` | Per-voice BODY rings | `stream.h` |
 | `usb.cpp` | Binary protocol, sample uploads | `usb.h` |
-| `usb_device.cpp` | CDC device on HAL PCD, descriptors, transfer queues | `usb.h` |
+| `usb_device.cpp` | CDC device on HAL PCD, descriptors, transfer queues | `transport.h`, `usb_device.h` |
 
-Only `audio_i2s.cpp`, `board_stm32.cpp`, `usb_device.cpp`, and `cs4304.cpp` touch
-STM32 registers or HAL. The other implementations reach hardware through
-`board.h` and the `USB_Device_*` and `Uart5Rx_*` functions, and also build
-with a host compiler. Keep register access, HAL calls, and interrupt handlers
-in those four files. `main()` runs `ChannelApp_Step()` as its whole loop body.
+The source list in `app/sources.mk` is shared by the firmware and simulator.
+Only `audio_i2s.cpp`, `board_stm32.cpp`, `usb_device.cpp`, and `cs4304.cpp`
+access STM32 registers or HAL. Shared sources use `board.h` and `transport.h`;
+the host build needs no STM32 headers. `platform_memory.h` selects target memory
+placement through the firmware build's `CHANNEL_PLATFORM_STM32` define.
+
+`render_audio_samples(buffer, sample_count)` fills contiguous mono signed
+32-bit samples at 48 kHz. The caller owns valid storage and calls from one
+execution context. Zero samples does nothing. Scripts retain their existing
+48-sample processing intervals across calls, so one 96-sample request and two
+48-sample requests have identical results with the same inputs available at
+the same sample positions. The renderer allocates no memory and does not render
+ahead. Voice clear and transport reset do not reset its sample clock.
+
+The output backend owns DAC packing and control-voltage calibration/slew.
+`AUDIO_I2S_HALF_FRAMES` in `audio_i2s.cpp` selects DMA size (default 48), without
+changing the application interval. Larger output buffers can change real-time
+command latency and require hardware timing measurements. They do not change
+the supported sample rate.
+
+`transport.h` defines replaceable RS485 and USB byte interfaces. RS485 start
+borrows the caller's buffer until completion or abort; completion means the
+backend finished transmission, not that a receiver acknowledged it. Shared
+`transport.cpp` preserves the bounded wait and USB servicing while UART
+interrupts transmit. The device driver does not dispatch application protocols.
+USB reads may return any prefix; writes copy the entire buffer or reject it
+without accepting a prefix. A successful write means queued. Protocol framing,
+uploads, session credits and pending replies remain shared application state.
+
+USB connection generations invalidate old transport bytes and protocol state.
+STM32 reset, configuration changes, DTR transitions and disconnect use the
+existing reset paths; suspend/resume change readiness without starting a new
+generation. Faulted receive remains blocked until an existing lifecycle reset,
+while queued replies may drain. The simulator maps PTY connection/flush events
+to generations; it does not emulate USB endpoints or electrical timing.
+
+Each platform owns its main loop. Firmware calls `process_usb_messages()`,
+`process_rs485_commands()`, `update_channel_leds()`, then `process_usb_messages()`
+again to service USB after a console reply. The simulator calls the same USB
+and RS485 functions and renders audio on its own schedule; it does not call
+the LED update. Both use the same application and protocol implementations.
+The simulator's no-op interrupt/barrier implementation is valid only under
+its single-threaded contract. `CHANNEL_ENABLE_CYCLE_PROFILING` enables cycle
+measurement in the firmware build. The simulator omits that instrumentation
+and has no cycle-counter backend; its cycle diagnostic fields remain zero.
+
+LED patterns and script colour/brightness requests remain application logic.
+`board.h` exposes logical status outputs and RGB requests; `board_stm32.cpp`
+owns GPIO mapping, RGB level quantization and software PWM. The main-loop pass
+services that backend at the existing point between RS485 commands and status
+pattern updates, preserving the PWM phase and tick rules. The simulator ignores
+LED, switch and DAC-trim requests; it does not retain or emulate those outputs.
 
 Use simple C++17 with plain functions and structs. Exceptions, RTTI, and
 thread-safe local-static initialization are disabled. Do not add virtual
@@ -230,7 +266,8 @@ Public interfaces use C linkage for generated C and the Berry runtime;
 interrupt handlers must also retain C linkage. The interpreter and generated
 STM32 sources keep their existing C implementation.
 
-Keep source lists, compiler flags, and link settings in `app/Makefile`.
+Keep shared sources in `app/sources.mk`; backend sources, compiler flags and
+link settings belong in `app/Makefile` and `sim/Makefile`.
 Preserve `USER CODE` markers when editing CubeMX-generated sources. All maintained directories use lowercase names, including HAL/CMSIS
 subfolders. If CubeMX regeneration restores names such as `Core`, `Drivers`,
 `Inc`, or `Src`, lowercase those folders and check the paths in `app/Makefile`
@@ -248,10 +285,26 @@ braces on the opening line. Use 79-column section comments as in the MAS
 
 ```
 
-A section can group related small helpers. Comments explain purpose, contracts,
-and hardware constraints. Preserve public names, copyright notices, and vendor
-formatting. Local tests and development tools are maintained separately from
-the SVN package.
+A section can group related small helpers. Start every application and simulator
+source, header, test, and build file with the standard Freshwater ASCII/copyright
+header from `sim/main.cpp`. Use `#` comments for headers and section dividers in
+scripts and Makefiles, keeping script shebangs first. Comments explain contracts
+and hardware constraints that the code cannot express. Preserve Freshwater file
+headers, copyright notices, and vendor formatting. Local tests and development
+tools are maintained separately from the SVN package.
+
+Function names follow MAS: lowercase words separated by underscores, describing
+the operation and its object. Use `process_rs485_commands()`, `render_audio_samples()`,
+and `read_rs485_byte()` rather than implementation-specific names in shared code.
+Use `read` for consuming input, `peek` for inspecting buffered input, `get` for
+state queries, and `render` or `mix` for producing samples. Predicates use `is`,
+`has`, or `can`; include units such as `_ms`, `_hz`, or `_bytes` where needed.
+Keep voice operations distinct from their underlying channel-script adapter
+operations, and name queued requests separately from immediate actions.
+Hardware helpers may name their peripheral. HAL callbacks, interrupt handlers,
+generated entry points, shared Berry APIs, and script-visible names retain their
+required names. Update declarations, callers, simulator replacements, tests,
+and documentation together when renaming an application function.
 
 The compiler's shared ABI/source snapshot and vendored Berry files must match
 this firmware revision. The host and target `berry_conf.h` configurations are
@@ -260,7 +313,7 @@ same firmware release.
 
 ## Hardware constraints
 
-Audio DMA refills 48 frames per half-buffer at 48 kHz. USB traffic does not
+Audio DMA defaults to 48 frames per half-buffer at 48 kHz. USB traffic does not
 clock the DAC. I2S DMA buffers use AXI SRAM because DMA1 cannot access DTCM.
 The I2S1 master must start before the I2S2 slave. I2S2 requires its existing
 underrun handling and IOSWP wiring configuration. Keep these constraints when
@@ -275,5 +328,5 @@ DAC channels 2–4 supply VCA gain, VCF cutoff, and VCF resonance control voltag
 respectively. Startup sets their calibrated 0 V targets before playback,
 then slews toward those targets from the first DMA buffer. No diagnostic
 tones are generated. Their calibration and slew limits are in
-`app/audio.cpp`; there is no console command to set them. The analog
+`app/audio_dac.cpp`; there is no console command to set them. The analog
 switch defaults are in `core/src/gpio.c` and `app/channel.cpp`.

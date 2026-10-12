@@ -52,7 +52,7 @@ conversion failed.
 
 For Channel Card, run `make` inside `channel_card/app/`. It produces
 `channel_card/bin/channel_MCU.bin`. Set `BAUDRATE` in its Makefile or run
-`make BAUDRATE=3000000`. This standalone Makefile requires GNU Make, Python 3,
+`make BAUDRATE=3000000`. This standalone Makefile requires GNU Make, standard POSIX command-line tools,
 and the GNU Arm toolchain; it does not use CMake or Ninja. See the
 [Channel guide](channel_card/README.md).
 
@@ -103,6 +103,19 @@ pressing reset, try a different USB port/cable, and check
 Device Manager for "STM32 BOOTLOADER" (install the driver bundled with
 STM32CubeProgrammer if it is flagged).
 
+Local Channel Card tooling stays outside the firmware/SVN directory:
+
+```sh
+python3 scripts/channel_firmware.py status
+python3 scripts/channel_firmware.py flash --check
+python3 scripts/channel_firmware.py flash
+```
+
+The flash helper waits for USB bootloader mode, writes the existing binary and
+verifies it. Use `--port USB2` after `flash` to select a specific bootloader.
+Use `--card-root /path/to/firmware` before `status` or `flash` to operate on a
+separate checkout. The helper is not needed to build or flash the SVN package.
+
 ---
 
 ## 4. Regenerating from STM32CubeMX — read this first
@@ -124,7 +137,8 @@ in both projects already lives inside them.
 
 ### 4.2 Keep source lists outside generated build files
 
-Channel Card maintains all build rules and source lists in `app/Makefile`;
+Channel Card maintains build rules in `app/Makefile` and shared source lists
+in `app/sources.mk`;
 any CMake files produced by CubeMX are unused.
 
 On Effect Card, `cmake/stm32cubemx/CMakeLists.txt` is regenerated from the
@@ -147,7 +161,7 @@ In CubeMX:
 - Middleware → **USB_DEVICE class: Disable**
 
 Do not enable a second USB middleware stack. Channel Card uses the generated
-`MX_USB_OTG_HS_PCD_Init()`, custom CDC setup in `USB_App_Init()`, and
+`MX_USB_OTG_HS_PCD_Init()`, custom CDC setup in `init_usb_protocol()`, and
 `HAL_PCD_IRQHandler()` directly. Effect Card continues using TinyUSB and its
 `tud_int_handler()` IRQ routing. Keep hand-written code in USER CODE sections.
 
@@ -156,8 +170,8 @@ Do not enable a second USB middleware stack. Channel Card uses the generated
 After every regeneration, verify these survived (they are all in USER
 CODE blocks, but check anyway):
 
-- [ ] `USB_App_Init()` called in `main()`
-- [ ] `USB_App_Task()` called in the main `while(1)` loop
+- [ ] `init_usb_protocol()` (Channel) / `USB_App_Init()` (Effect) called in `main()`
+- [ ] Channel main loop services USB, RS485 and LEDs; Effect main loop calls `USB_App_Task()`
 - [ ] HAL PCD IRQ handler on Channel; `tud_int_handler(0)` on Effect
 - [ ] Source lists preserved in Channel `app/Makefile` or Effect top-level `CMakeLists.txt`
 - [ ] Project builds and the board still enumerates over USB
@@ -285,3 +299,24 @@ board; see the [Channel wire protocol](channel_card/PROTOCOL.md).
 
 Effect Card remains the existing mono 32-bit 96 kHz UAC2 microphone with CDC
 console, eight ADC inputs and 48 V rail control.
+
+## Local Channel Card development checks
+
+Development tests live in `scripts/tests/channel_card/`, outside the firmware
+and SVN package. If needed, run:
+
+```sh
+python3 scripts/tests/channel_card/run.py
+python3 -m unittest discover -s scripts/tests -p 'test_channel_*.py'
+```
+
+The host harness builds the matching Berry compiler and test executables in
+temporary directories. It checks audio/state equivalence across buffer sizes,
+script boundaries, DAC control voltages, transport backpressure and errors,
+and isolated simulator ports. `--baseline /path/to/old/channel_card` compares
+against a captured pre-refactor source tree. Hardware timing and throughput
+still require board measurements.
+
+`channel_card/` has no test harnesses or Python/shell-script files. Its Makefiles
+build standalone. `scripts/channel_release.py` also rejects development scripts
+and test directories from the staged SVN package.

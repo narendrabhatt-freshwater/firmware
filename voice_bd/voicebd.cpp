@@ -33,6 +33,10 @@
 #include <fcntl.h>
 #include <cerrno>
 #include <libserialport.h>
+#include <cstdlib>
+#include <limits.h>
+#include <sys/stat.h>
+#include <termios.h>
 #if defined(__APPLE__)
 // macOS exposes the serial receive latency through IOSSDATALAT.
 #include <IOKit/serial/ioss.h>
@@ -44,10 +48,8 @@
 #include <mach/thread_policy.h>
 #endif
 #if defined(__linux__)
-#include <cstdlib>
 #include <pthread.h>
 #include <sched.h>
-#include <sys/stat.h>
 #endif
 #include <algorithm>
 #include <array>
@@ -285,6 +287,60 @@ class serial_port
 private:
     struct sp_port* port_ = nullptr;
     bool opened_ = false;
+    int pty_ = -1;
+
+    bool wait_pty(short events, std::chrono::steady_clock::time_point deadline)
+    {
+        for (;;) {
+            pollfd pfd{pty_, events, 0};
+            int ready = ::poll(&pfd, 1, limit_poll_timeout(-1, deadline));
+            if (ready > 0) return true; // The following I/O reports EOF/errors.
+            if (ready < 0 && errno != EINTR) return false;
+            if (std::chrono::steady_clock::now() >= deadline) {
+                errno = ETIMEDOUT;
+                return false;
+            }
+        }
+    }
+
+    static bool is_pty(std::string const& name)
+    {
+        char path[PATH_MAX];
+        if (!::realpath(name.c_str(), path)) return false;
+#if defined(__APPLE__)
+        const std::string prefix = "/dev/ttys";
+#else
+        const std::string prefix = "/dev/pts/";
+#endif
+        std::string resolved(path);
+        struct stat info{};
+        return resolved.compare(0, prefix.size(), prefix) == 0 &&
+            resolved.size() > prefix.size() &&
+            resolved.find_first_not_of("0123456789", prefix.size()) == std::string::npos &&
+            ::stat(path, &info) == 0 && S_ISCHR(info.st_mode);
+    }
+
+    bool open_pty(std::string const& name, std::string& error)
+    {
+        pty_ = ::open(name.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
+        termios mode{};
+        bool ready = pty_ >= 0 && ::tcgetattr(pty_, &mode) == 0;
+        if (ready) {
+            ::cfmakeraw(&mode);
+            mode.c_cflag |= CLOCAL | CREAD;
+            mode.c_cc[VMIN] = 1;
+            mode.c_cc[VTIME] = 0;
+            // Packet-mode PTY masters observe this flush as a new connection.
+            ready = ::tcsetattr(pty_, TCSANOW, &mode) == 0 && ::tcflush(pty_, TCIOFLUSH) == 0;
+        }
+        if (!ready) {
+            error = "opening PTY " + name + " failed: " + std::error_code(errno, std::generic_category()).message();
+            close();
+            return false;
+        }
+        opened_ = true;
+        return true;
+    }
 
 public:
     serial_port() = default;
@@ -296,6 +352,8 @@ public:
         std::string& error)
     {
         close();
+        // PTYs support raw bytes, but not hardware modem/latency controls.
+        if (is_pty(name)) return open_pty(name, error);
         enum sp_return result = sp_get_port_by_name(name.c_str(), &port_);
         if (result != SP_OK) {
             error = serial_error("locating " + name, result);
@@ -350,6 +408,11 @@ public:
 
     void close()
     {
+        if (pty_ >= 0) {
+            ::close(pty_);
+            pty_ = -1;
+            opened_ = false;
+        }
         if (!port_) return;
         if (opened_) (void)sp_close(port_);
         sp_free_port(port_);
@@ -361,6 +424,23 @@ public:
     {
         if (!opened_) {
             error = "serial port is not open";
+            return false;
+        }
+        if (pty_ >= 0) {
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
+            size_t sent = 0;
+            while (sent < size) {
+                if (!wait_pty(POLLOUT, deadline)) break;
+                int n = write_nonblocking(static_cast<char const*>(data) + sent, size - sent);
+                if (n < 0) break;
+                sent += static_cast<size_t>(n);
+                if (sent < size && std::chrono::steady_clock::now() >= deadline) {
+                    errno = ETIMEDOUT;
+                    break;
+                }
+            }
+            if (sent == size) return true;
+            error = "PTY write failed: " + std::error_code(errno, std::generic_category()).message();
             return false;
         }
         enum sp_return const result = sp_blocking_write(
@@ -375,20 +455,42 @@ public:
     size_t read(void* data, size_t capacity, unsigned timeout_ms)
     {
         if (!opened_ || capacity == 0u) return 0u;
+        if (pty_ >= 0) {
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms == 0u ? 1u : timeout_ms);
+            while (wait_pty(POLLIN, deadline)) {
+                int n = read_nonblocking(data, capacity);
+                if (n != 0) return n > 0 ? static_cast<size_t>(n) : 0u;
+                if (std::chrono::steady_clock::now() >= deadline) break;
+            }
+            return 0u;
+        }
         enum sp_return const result = sp_blocking_read_next(
             port_, data, capacity, timeout_ms == 0u ? 1u : timeout_ms);
         return result > 0 ? static_cast<size_t>(result) : 0u;
     }
 
     int fd() const {
+        if (pty_ >= 0) return pty_;
         int handle=-1; if (port_) (void)sp_get_port_handle(port_,&handle); return handle;
     }
     int read_nonblocking(void* data,size_t n) {
+        if (pty_ >= 0) {
+            if (!n) return 0;
+            ssize_t got = ::read(pty_, data, n);
+            if (got > 0) return static_cast<int>(got);
+            if (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return 0;
+            return -1; // EOF is a disconnect, not an empty receive queue.
+        }
         return sp_nonblocking_read(port_,data,n);
     }
     int write_nonblocking(void const* data,size_t n) {
+        if (pty_ >= 0) {
+            ssize_t sent = ::write(pty_, data, n);
+            if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return 0;
+            return static_cast<int>(sent);
+        }
         return sp_nonblocking_write(port_,data,n);
-          }
+    }
     bool is_open() const { return opened_; }
 
 };

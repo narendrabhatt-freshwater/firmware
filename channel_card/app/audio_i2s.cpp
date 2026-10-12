@@ -1,4 +1,29 @@
+/*
+                                   __
+                               ___  \  \
+                          ___  \  \  \  \    _______
+                     ___  \  \  \  \  \__\__/_____  \
+                     \  \  \  \  \__\_______      \__\____
+                      \  \  \  \     ___ \  \________  \__/
+                       \  \  \__\___/_  \ \___/   \  \___
+                        \  \    ____  \  \________ \ ___/
+                         \__\__/ \  \  \____/  \  \
+                                  \  \     ___  \  \___
+                                   \__\___/ \  \ \____/
+                                           \  \
+                                              \  \___
+                 __                 _          \ ___/  _
+                / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+               | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+               |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+               |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+
+            (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+*/
+
 #include "audio.h"
+#include "audio_output.h"
+#include "board.h"
 #include "main.h"
 #include "i2s.h"
 #include <stdint.h>
@@ -16,14 +41,19 @@
  * Each I2S frame = 2 × 32-bit words (L + R) = 8 bytes
  * DMA buffer is double-buffered: half/full IRQs each refill one half.
  *
- * Retain the 1 ms audio refill cadence independently of CDC transfer timing.
- * Each DMA half contains AUDIO_SAMPLE_RATE_HZ/1000 frames.
+ * Default to 48 frames per half. This device setting is independent of
+ * the application script interval; e.g. 96 needs no application change.
  */
-#define AUDIO_I2S_HALF_FRAMES AUDIO_REFILL_FRAMES
+#ifndef AUDIO_I2S_HALF_FRAMES
+#define AUDIO_I2S_HALF_FRAMES 48u
+#endif
 #define AUDIO_I2S_BUF_FRAMES (AUDIO_I2S_HALF_FRAMES * 2u)
 #define AUDIO_I2S_BUF_SIZE (AUDIO_I2S_BUF_FRAMES * 2u) /* × 2 for L+R, 32-bit words */
-static_assert((AUDIO_SAMPLE_RATE_HZ % 1000u) == 0u,
-              "I2S half must be an integer millisecond at AUDIO_SAMPLE_RATE_HZ");
+static_assert(AUDIO_I2S_HALF_FRAMES > 0u && AUDIO_I2S_BUF_SIZE <= 65535u,
+              "DMA transfer must fit the HAL uint16 size");
+
+static_assert(AUDIO_SAMPLE_RATE_HZ == 48000u,
+              "This board clock and DAC configuration require 48 kHz");
 
 /* I2S2 (CH3/CH4) enabled. Slave TX on SPI2 requires two workarounds:
  *  1. UDR wedge — the H7 slave halts on underrun until the flag is
@@ -42,7 +72,7 @@ static_assert((AUDIO_SAMPLE_RATE_HZ % 1000u) == 0u,
  * IMPORTANT: DMA1 (D2 domain) cannot access DTCM RAM where .bss lives.
  * Both buffers are placed in AXI SRAM (RAM_D1) via the .dma_buffer section
  * (see STM32H725xG_flash.ld). Section is NOLOAD: buffers are cleared
- * explicitly in Audio_StartPlayback() before DMA starts.
+ * explicitly in start_audio_playback() before DMA starts.
  */
 /* I2S1 DMA buffer for channels 1+2 */
 static int32_t i2s1_tx_buf[AUDIO_I2S_BUF_SIZE] __attribute__((aligned(4), section(".dma_buffer")));
@@ -51,41 +81,31 @@ static int32_t i2s1_tx_buf[AUDIO_I2S_BUF_SIZE] __attribute__((aligned(4), sectio
 static int32_t i2s2_tx_buf[AUDIO_I2S_BUF_SIZE] __attribute__((aligned(4), section(".dma_buffer")));
 
 static volatile uint8_t i2s_started = 0;
-static volatile uint8_t s_cpu_load_probe = 0u;
-
-/* ---- drive the audio load probe ----------------------------------------- */
-
-static inline void Audio_CpuLoadProbeBusy(uint8_t busy)
-{
-    if (s_cpu_load_probe != 0u) {
-        /* Direct BSRR keeps probe overhead deterministic. Low=busy, high=idle. */
-        LED_Y_GPIO_Port->BSRR = busy != 0u ? (uint32_t)LED_Y_Pin << 16u : (uint32_t)LED_Y_Pin;
-    }
-}
 
 /* I2S1 sample fill runs in the DMA half/full ISR. Deferring refill to the
  * main loop can miss the 1 ms deadline when USB or RS485 work runs first,
  * causing DMA to replay the previous half. Eight voices at 48 kHz fit the
  * callback budget. */
 static volatile uint8_t i2s1_fill_busy = 0;
+volatile uint32_t g_i2s1_fill_late = 0;
 
-static HAL_StatusTypeDef I2S2_Start(void);
+static HAL_StatusTypeDef start_i2s2_playback(void);
 
 /* ---- start playback transfers ------------------------------------------- */
 
 /**
  * @brief  Start standalone I2S playback without waiting for USB.
  */
-void Audio_StartPlayback(void)
+void start_audio_playback(void)
 {
     if (!i2s_started) {
         memset(i2s1_tx_buf, 0, sizeof(i2s1_tx_buf));
         memset(i2s2_tx_buf, 0, sizeof(i2s2_tx_buf));
-        Audio_FillDCSlot(i2s1_tx_buf, AUDIO_I2S_BUF_FRAMES, 1, 1);
+        render_control_voltage_slot(i2s1_tx_buf, AUDIO_I2S_BUF_FRAMES, 1, 1);
         HAL_I2S_Transmit_DMA(&hi2s1, (uint16_t *)i2s1_tx_buf, AUDIO_I2S_BUF_SIZE);
 #if AUDIO_USE_I2S2
         HAL_Delay(2);
-        I2S2_Start();
+        start_i2s2_playback();
 #endif
         i2s_started = 1;
     }
@@ -102,7 +122,7 @@ static uint8_t pump_slot = 0; /* 0 = CH3 (L), 1 = CH4 (R) */
 
 /* ---- service the secondary i2s output ----------------------------------- */
 
-void Audio_I2S2_Pump(void)
+void service_i2s2_underrun(void)
 {
     if (!i2s2_pump_on) {
         return;
@@ -123,9 +143,9 @@ void Audio_I2S2_Pump(void)
     if (i2s2_pump_on && ((SPI2->SR & SPI_SR_TXP) != 0u)) {
         int32_t s;
         if (pump_slot == 0) {
-            s = Audio_DC_NextSample(2); /* CH3 on I2S2 left slot */
+            s = render_next_control_voltage_sample(2); /* CH3 on I2S2 left slot */
         } else {
-            s = Audio_DC_NextSample(3); /* CH4 on I2S2 right slot */
+            s = render_next_control_voltage_sample(3); /* CH4 on I2S2 right slot */
         }
         SPI2->TXDR = (uint32_t)s;
         pump_slot ^= 1u;
@@ -138,7 +158,7 @@ void Audio_I2S2_Pump(void)
 
 /* ---- configure the secondary i2s timer ---------------------------------- */
 
-static void I2S2_PumpTimerInit(void)
+static void init_i2s2_underrun_timer(void)
 {
     static uint8_t inited = 0;
     if (inited) {
@@ -159,9 +179,9 @@ static void I2S2_PumpTimerInit(void)
 /* ---- start the secondary i2s peripheral --------------------------------- */
 
 /* Prefill CH3/CH4 with slewed DC samples before starting the transfer. */
-static HAL_StatusTypeDef I2S2_Start(void)
+static HAL_StatusTypeDef start_i2s2_playback(void)
 {
-    Audio_FillDC(&i2s2_tx_buf[0], AUDIO_I2S_BUF_FRAMES, 2, 3);
+    render_control_voltage_channels(&i2s2_tx_buf[0], AUDIO_I2S_BUF_FRAMES, 2, 3);
 #if AUDIO_I2S2_IT
     {
         /* H7 SPI: a SLAVE transmits on MISO, but the board wires PC1 = MOSI to
@@ -184,7 +204,7 @@ static HAL_StatusTypeDef I2S2_Start(void)
         /* Keep HAL fully dormant (TXP too): the TIM7 pump owns the FIFO. */
         __HAL_I2S_DISABLE_IT(&hi2s2, (I2S_IT_TXP | I2S_IT_UDR | I2S_IT_FRE));
         pump_slot = 0;
-        I2S2_PumpTimerInit();
+        init_i2s2_underrun_timer();
         i2s2_pump_on = 1;
         return st;
     }
@@ -204,7 +224,7 @@ static HAL_StatusTypeDef I2S2_Start(void)
         __HAL_I2S_CLEAR_UDRFLAG(&hi2s2);
         __HAL_I2S_CLEAR_TIFREFLAG(&hi2s2);
         __HAL_I2S_DISABLE_IT(&hi2s2, (I2S_IT_TXP | I2S_IT_UDR | I2S_IT_FRE));
-        I2S2_PumpTimerInit();
+        init_i2s2_underrun_timer();
         i2s2_pump_on = 1;
         return st;
     }
@@ -217,7 +237,7 @@ static HAL_StatusTypeDef I2S2_Start(void)
  * Fill one free half of i2s1_tx_buf (CH2 right + CH1 left).
  * Called from the I2S1 DMA half/full ISR.
  */
-static void Audio_I2S1_FillHalf(uint8_t half)
+static void refill_i2s1_buffer_half(uint8_t half)
 {
     int32_t *buf = (half == 0u) ? &i2s1_tx_buf[0] : &i2s1_tx_buf[AUDIO_I2S_BUF_FRAMES];
     const uint32_t frames = AUDIO_I2S_BUF_FRAMES / 2u;
@@ -228,22 +248,8 @@ static void Audio_I2S1_FillHalf(uint8_t half)
         Error_Handler();
     }
     i2s1_fill_busy = 1u;
-    Audio_RenderI2S1(buf, frames);
+    render_dac_audio_frames(buf, frames);
     i2s1_fill_busy = 0u;
-}
-
-/* ---- control the audio load probe --------------------------------------- */
-
-void Audio_Bridge_CpuLoadProbeSet(uint8_t enabled)
-{
-    s_cpu_load_probe = enabled != 0u ? 1u : 0u;
-    LED_Y_GPIO_Port->BSRR =
-        s_cpu_load_probe != 0u ? (uint32_t)LED_Y_Pin : (uint32_t)LED_Y_Pin << 16u;
-}
-
-uint8_t Audio_Bridge_CpuLoadProbeGet(void)
-{
-    return s_cpu_load_probe;
 }
 
 /* ---- service i2s dma callbacks ------------------------------------------ */
@@ -255,11 +261,9 @@ uint8_t Audio_Bridge_CpuLoadProbeGet(void)
 void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 {
     if (hi2s->Instance == SPI1) {
-        Audio_CpuLoadProbeBusy(1u);
-        Audio_I2S1_FillHalf(0u);
-        Audio_CpuLoadProbeBusy(0u);
+        refill_i2s1_buffer_half(0u);
     } else if (hi2s->Instance == SPI2) {
-        Audio_FillDC(&i2s2_tx_buf[0], AUDIO_I2S_BUF_FRAMES / 2, 2, 3);
+        render_control_voltage_channels(&i2s2_tx_buf[0], AUDIO_I2S_BUF_FRAMES / 2, 2, 3);
     }
 }
 
@@ -270,16 +274,15 @@ void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
 void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s)
 {
     if (hi2s->Instance == SPI1) {
-        Audio_CpuLoadProbeBusy(1u);
-        Audio_I2S1_FillHalf(1u);
-        Audio_CpuLoadProbeBusy(0u);
+        refill_i2s1_buffer_half(1u);
     } else if (hi2s->Instance == SPI2) {
 #if AUDIO_I2S2_IT
         /* IT mode: no half-complete events — refill the WHOLE buffer here,
          * then re-arm the interrupt transfer (self-sustaining chain). */
-        Audio_FillDC(&i2s2_tx_buf[0], AUDIO_I2S_BUF_FRAMES, 2, 3);
+        render_control_voltage_channels(&i2s2_tx_buf[0], AUDIO_I2S_BUF_FRAMES, 2, 3);
 #else
-        Audio_FillDC(&i2s2_tx_buf[AUDIO_I2S_BUF_FRAMES], AUDIO_I2S_BUF_FRAMES / 2, 2, 3);
+        render_control_voltage_channels(&i2s2_tx_buf[AUDIO_I2S_BUF_FRAMES],
+                                        AUDIO_I2S_BUF_FRAMES / 2, 2, 3);
 #endif
 #if AUDIO_I2S2_IT
         HAL_I2S_Transmit_IT(&hi2s2, (uint16_t *)i2s2_tx_buf, AUDIO_I2S_BUF_SIZE);
@@ -310,4 +313,16 @@ void HAL_I2S_ErrorCallback(I2S_HandleTypeDef *hi2s)
 #endif
         __HAL_I2S_DISABLE_IT(hi2s, (I2S_IT_UDR | I2S_IT_FRE));
     }
+}
+
+/* ---- report output-driver diagnostics ----------------------------------- */
+
+uint32_t get_audio_refill_overlap_count(void)
+{
+    return g_i2s1_fill_late;
+}
+
+void clear_audio_output_statistics(void)
+{
+    g_i2s1_fill_late = 0u;
 }

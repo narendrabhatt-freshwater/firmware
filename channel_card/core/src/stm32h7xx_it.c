@@ -256,11 +256,11 @@ void SPI2_IRQHandler(void)
 /**
  * @brief TIM7 — underrun-guard tick for the SPI2/I2S2 slave (audio_bridge.c).
  */
-extern void Audio_I2S2_Pump(void);
+extern void service_i2s2_underrun(void);
 void TIM7_IRQHandler(void)
 {
   TIM7->SR = 0;
-  Audio_I2S2_Pump();
+  service_i2s2_underrun();
 }
 
 /* USER CODE END 1 */

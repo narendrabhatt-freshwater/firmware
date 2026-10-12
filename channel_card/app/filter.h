@@ -1,3 +1,26 @@
+/*
+                                   __
+                               ___  \  \
+                          ___  \  \  \  \    _______
+                     ___  \  \  \  \  \__\__/_____  \
+                     \  \  \  \  \__\_______      \__\____
+                      \  \  \  \     ___ \  \________  \__/
+                       \  \  \__\___/_  \ \___/   \  \___
+                        \  \    ____  \  \________ \ ___/
+                         \__\__/ \  \  \____/  \  \
+                                  \  \     ___  \  \___
+                                   \__\___/ \  \ \____/
+                                           \  \
+                                              \  \___
+                 __                 _          \ ___/  _
+                / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+               | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+               |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+               |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+
+            (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+*/
+
 #ifndef CHANNEL_APP_FILTER_H
 #define CHANNEL_APP_FILTER_H
 
@@ -31,31 +54,31 @@ typedef struct {
  * @param sample_rate Sample rate (Hz). Must match AUDIO_SAMPLE_RATE_HZ in use.
  * @return omega in radians/sample.
  */
-double ButterFourPole_CutoffToOmega(double cutoff_hz, double sample_rate);
+double cutoff_to_omega(double cutoff_hz, double sample_rate);
 
 /**
  * @brief Design a low-pass section at omega with shape parameter g.
  * @param f     Filter instance (non-NULL).
- * @param omega Digital cutoff from ButterFourPole_CutoffToOmega().
+ * @param omega Digital cutoff from cutoff_to_omega().
  * @param g     Shape (typically 0.5..10; 1.0 ≈ Butterworth).
  * @note Clears delay lines after loading coefficients.
  */
-void ButterFourPole_InitLowPass(ButterFourPole_t *f, double omega, double g);
+void init_four_pole_low_pass_filter(ButterFourPole_t *f, double omega, double g);
 
 /**
  * @brief Design a high-pass section at omega with shape parameter g.
  * @param f     Filter instance (non-NULL).
- * @param omega Digital cutoff from ButterFourPole_CutoffToOmega().
+ * @param omega Digital cutoff from cutoff_to_omega().
  * @param g     Shape (typically 0.5..10; 1.0 ≈ Butterworth).
  * @note Clears delay lines after loading coefficients.
  */
-void ButterFourPole_InitHighPass(ButterFourPole_t *f, double omega, double g);
+void init_four_pole_high_pass_filter(ButterFourPole_t *f, double omega, double g);
 
 /**
  * @brief Zero delay lines only; coefficients are left unchanged.
  * @param f Filter instance (non-NULL).
  */
-void ButterFourPole_Reset(ButterFourPole_t *f);
+void reset_four_pole_filter(ButterFourPole_t *f);
 
 /**
  * @brief Process one sample through the DF4 section.
@@ -63,14 +86,14 @@ void ButterFourPole_Reset(ButterFourPole_t *f);
  * @param in Input sample (same units as the design, typically ±1.0).
  * @return Filtered output sample.
  */
-double ButterFourPole_Process(ButterFourPole_t *f, double in);
+double filter_four_pole_sample(ButterFourPole_t *f, double in);
 
 /* ---- configure voice filters -------------------------------------------- */
 
 /* Per-voice 4-pole Butterworth LPF for the note bank.
  * Voice-bank wrapper around butterworth_four_pole. The hot path uses double
  * (H725 FPU) intentionally; Q31 conversion happens only at
- * NoteFilter_Process edges. Pass API is low-pass only in this build;
+ * filter_voice_sample edges. Pass API is low-pass only in this build;
  * high-pass / band-pass enum values are reserved.
  * Pitch-track (CMI / classic key follow): f0 sets fbase at C4; fk sets k;
  * fc = fbase * (f_note/C4)^k = fbase * 2^(k*n/12). Cold-path redesign only. */
@@ -115,7 +138,7 @@ typedef enum {
  * @brief Establish default state for all voices (LP, default q/k, bypass).
  * @note Call once at bring-up before note-bank playback. Safe to call again.
  */
-void NoteFilter_InitAll(void);
+void init_voice_filters(void);
 
 /**
  * @brief Set one voice's base LPF cutoff at C4 (Hz).
@@ -127,21 +150,21 @@ void NoteFilter_InitAll(void);
  * @note At MAX (or 0 alias) the filter is bypassed (identity) and delays
  *       are cleared. Otherwise applies pitch-track (if k>0) and redesigns.
  */
-int NoteFilter_SetCutoff(uint8_t voice, double cutoff_hz);
+int set_voice_filter_cutoff_hz(uint8_t voice, double cutoff_hz);
 
 /**
  * @brief Effective cutoff last designed for voice (Hz).
  * @param voice Voice index 0..15.
  * @return Effective fc, or NOTE_FILTER_CUTOFF_MAX_HZ if bypassed / invalid.
  */
-double NoteFilter_GetCutoff(uint8_t voice);
+double get_voice_filter_cutoff_hz(uint8_t voice);
 
 /**
  * @brief Programmed base cutoff at C4 (Hz), before pitch-track.
  * @param voice Voice index 0..15.
  * @return Base Hz, or NOTE_FILTER_CUTOFF_MAX_HZ if never set / invalid.
  */
-double NoteFilter_GetBaseCutoff(uint8_t voice);
+double get_voice_filter_base_cutoff_hz(uint8_t voice);
 
 /**
  * @brief Set DF4 g/q for voice.
@@ -152,14 +175,14 @@ double NoteFilter_GetBaseCutoff(uint8_t voice);
  * @retval -2 q out of range.
  * @note If not bypassed, redesigns from current effective cutoff.
  */
-int NoteFilter_SetQ(uint8_t voice, double q);
+int set_voice_filter_resonance(uint8_t voice, double q);
 
 /**
  * @brief Last q set for voice.
  * @param voice Voice index 0..15.
  * @return Stored q, or NOTE_FILTER_Q_DEFAULT if never configured / invalid.
  */
-double NoteFilter_GetQ(uint8_t voice);
+double get_voice_filter_resonance(uint8_t voice);
 
 /**
  * @brief Set pitch-track constant k (fc = fbase * (f_note/C4)^k).
@@ -170,14 +193,14 @@ double NoteFilter_GetQ(uint8_t voice);
  * @retval -2 k out of range.
  * @note Reapplies effective cutoff from cached note freq when not bypassed.
  */
-int NoteFilter_SetPitchK(uint8_t voice, double k);
+int set_voice_filter_pitch_tracking(uint8_t voice, double k);
 
 /**
  * @brief Last pitch-track k for voice.
  * @param voice Voice index 0..15.
  * @return Stored k, or NOTE_FILTER_K_DEFAULT if invalid.
  */
-double NoteFilter_GetPitchK(uint8_t voice);
+double get_voice_filter_pitch_tracking(uint8_t voice);
 
 /**
  * @brief Note-on / pitch change: cache freq and retune if k > 0.
@@ -185,7 +208,7 @@ double NoteFilter_GetPitchK(uint8_t voice);
  * @param freq_hz Oscillator frequency (Hz). <=0 is ignored (no redesign).
  * @note Cold path only. No-op when bypassed.
  */
-void NoteFilter_OnNoteFreq(uint8_t voice, double freq_hz);
+void update_voice_filter_note_frequency(uint8_t voice, double freq_hz);
 
 /**
  * @brief Set pass type for voice.
@@ -196,27 +219,27 @@ void NoteFilter_OnNoteFreq(uint8_t voice, double freq_hz);
  * @retval -2 unsupported pass (HP/BP).
  * @note Redesigns from current base unless bypassed.
  */
-int NoteFilter_SetPass(uint8_t voice, NoteFilter_Pass_t pass);
+int set_voice_filter_mode(uint8_t voice, NoteFilter_Pass_t pass);
 
 /**
  * @brief Current pass type for voice (always LP in this build if voice valid).
  * @param voice Voice index 0..15 (ignored while only LP is implemented).
  * @return NOTE_FILTER_PASS_LP.
  */
-NoteFilter_Pass_t NoteFilter_GetPass(uint8_t voice);
+NoteFilter_Pass_t get_voice_filter_mode(uint8_t voice);
 
 /**
  * @brief Stable short name for a pass enum.
  * @param pass Pass type.
  * @return "lp", "hp", "bp", or "?" if unknown.
  */
-const char *NoteFilter_PassName(NoteFilter_Pass_t pass);
+const char *get_filter_mode_name(NoteFilter_Pass_t pass);
 
 /**
  * @brief Zero delay lines for one voice (call on note-off / steal).
  * @param voice Voice index 0..15; out-of-range is a no-op.
  */
-void NoteFilter_Reset(uint8_t voice);
+void reset_voice_filter(uint8_t voice);
 
 /**
  * @brief Process one Q31 sample through the voice's 4-pole LPF.
@@ -224,7 +247,7 @@ void NoteFilter_Reset(uint8_t voice);
  * @param x     Input sample (Q31).
  * @return Filtered Q31 sample, or x unchanged when bypassed / invalid voice.
  */
-int32_t NoteFilter_Process(uint8_t voice, int32_t x);
+int32_t filter_voice_sample(uint8_t voice, int32_t x);
 
 #ifdef __cplusplus
 }

@@ -1,4 +1,29 @@
+/*
+                                   __
+                               ___  \  \
+                          ___  \  \  \  \    _______
+                     ___  \  \  \  \  \__\__/_____  \
+                     \  \  \  \  \__\_______      \__\____
+                      \  \  \  \     ___ \  \________  \__/
+                       \  \  \__\___/_  \ \___/   \  \___
+                        \  \    ____  \  \________ \ ___/
+                         \__\__/ \  \  \____/  \  \
+                                  \  \     ___  \  \___
+                                   \__\___/ \  \ \____/
+                                           \  \
+                                              \  \___
+                 __                 _          \ ___/  _
+                / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+               | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+               |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+               |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+
+            (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+*/
+
 #include "samples.h"
+#include "board.h"
+#include "platform_memory.h"
 #include <math.h>
 #include <string.h>
 
@@ -6,9 +31,6 @@
 
 /* AXI signed-int8 attack heads; rate-scaled playheads (n0 pitch). */
 
-#if defined(__arm__) || defined(__thumb__)
-#include "main.h"
-#endif
 
 #ifndef ATTACK_DEFAULT_ROOT_HZ
 #define ATTACK_DEFAULT_ROOT_HZ 261.625565f
@@ -21,13 +43,7 @@ typedef struct {
     uint8_t playing;
 } AttackVoice_t;
 
-#if defined(__APPLE__)
-#define ATTACK_BANK_SECTION __attribute__((used, aligned(4)))
-#else
-#define ATTACK_BANK_SECTION __attribute__((used, section(".attack_bank"), aligned(4)))
-#endif
-
-static int8_t s_data[ATTACK_BANK_COUNT][ATTACK_BANK_LEN] ATTACK_BANK_SECTION;
+static int8_t s_data[ATTACK_BANK_COUNT][ATTACK_BANK_LEN] CHANNEL_ATTACK_STORAGE;
 
 static uint8_t s_loaded[ATTACK_BANK_COUNT];
 static uint32_t s_len[ATTACK_BANK_COUNT];
@@ -37,14 +53,14 @@ static volatile uint8_t s_write_active;
 
 /* ---- convert attack samples --------------------------------------------- */
 
-static int32_t AttackBank_S8ToQ31(int8_t s)
+static int32_t sample_int8_to_q31(int8_t s)
 {
     return (int32_t)s * 16777216;
 }
 
 /* ---- initialize the attack bank ----------------------------------------- */
 
-void AttackBank_Init(void)
+void init_sample_storage(void)
 {
     uint16_t i;
 
@@ -62,63 +78,58 @@ void AttackBank_Init(void)
     }
 }
 
-void AttackBank_SetWriteActive(uint8_t active)
+void set_sample_storage_write_lock(uint8_t active)
 {
     s_write_active = active != 0u ? 1u : 0u;
 }
 
-uint8_t AttackBank_WriteIsActive(void)
+uint8_t is_sample_storage_write_locked(void)
 {
     return s_write_active;
 }
 
 /* ---- load and commit attack data ---------------------------------------- */
 
-int AttackBank_Load(uint16_t wave_id, const uint8_t *data, uint32_t nbytes)
+int load_sample_data(uint16_t wave_id, const uint8_t *data, uint32_t nbytes)
 {
     if (wave_id >= ATTACK_BANK_COUNT || data == NULL || nbytes == 0u ||
         nbytes > ATTACK_BANK_BYTES) {
         return -1;
     }
-    int8_t *dst = AttackBank_WritePtr(wave_id);
+    int8_t *dst = get_sample_write_buffer(wave_id);
     if (dst == NULL) return -1;
     memcpy(dst, data, nbytes);
     memset(dst + nbytes, 0, ATTACK_BANK_BYTES - nbytes);
-    return AttackBank_Commit(wave_id, nbytes);
+    return commit_sample_data(wave_id, nbytes);
 }
 
-int8_t *AttackBank_WritePtr(uint16_t wave_id)
+int8_t *get_sample_write_buffer(uint16_t wave_id)
 {
     if (wave_id >= ATTACK_BANK_COUNT) return NULL;
     return s_data[wave_id];
 }
 
-const int8_t *AttackBank_Table(uint16_t wave_id)
+const int8_t *get_sample_data(uint16_t wave_id)
 {
     if (wave_id >= ATTACK_BANK_COUNT) return NULL;
     return s_data[wave_id];
 }
 
-int AttackBank_Commit(uint16_t wave_id, uint32_t nsamp)
+int commit_sample_data(uint16_t wave_id, uint32_t nsamp)
 {
     if (wave_id >= ATTACK_BANK_COUNT || nsamp == 0u || nsamp > ATTACK_BANK_LEN) return -1;
-#if defined(__arm__) || defined(__thumb__)
-    uint32_t primask = __get_PRIMASK();
-    __disable_irq();
-    __DMB();
-#endif
+    uint32_t saved = disable_interrupts_and_save_state();
+    board_memory_barrier();
     s_len[wave_id] = nsamp;
     s_loaded[wave_id] = 1u;
-#if defined(__arm__) || defined(__thumb__)
-    __DMB();
-    __set_PRIMASK(primask);
-#endif
+    board_memory_barrier();
+    restore_interrupt_state(saved);
     return 0;
 }
 
 /* ---- query loaded attacks ----------------------------------------------- */
 
-uint32_t AttackBank_GetLen(uint16_t wave_id)
+uint32_t get_sample_length(uint16_t wave_id)
 {
     if (wave_id >= ATTACK_BANK_COUNT || s_loaded[wave_id] == 0u) {
         return 0u;
@@ -126,7 +137,7 @@ uint32_t AttackBank_GetLen(uint16_t wave_id)
     return s_len[wave_id];
 }
 
-uint8_t AttackBank_IsLoaded(uint16_t wave_id)
+uint8_t is_sample_loaded(uint16_t wave_id)
 {
     if (wave_id >= ATTACK_BANK_COUNT) {
         return 0u;
@@ -134,7 +145,7 @@ uint8_t AttackBank_IsLoaded(uint16_t wave_id)
     return s_loaded[wave_id];
 }
 
-uint16_t AttackBank_LoadedCount(void)
+uint16_t get_loaded_sample_count(void)
 {
     uint16_t i;
     uint16_t n = 0u;
@@ -146,7 +157,7 @@ uint16_t AttackBank_LoadedCount(void)
     return n;
 }
 
-void AttackBank_LoadedMask(uint8_t *out)
+void get_loaded_sample_mask(uint8_t *out)
 {
     uint16_t i;
     if (out == NULL) {
@@ -162,7 +173,7 @@ void AttackBank_LoadedMask(uint8_t *out)
 
 /* ---- set the sample root frequency -------------------------------------- */
 
-void AttackBank_SetRootHz(uint16_t wave_id, float root_hz)
+void set_sample_root_frequency_hz(uint16_t wave_id, float root_hz)
 {
     if (wave_id >= ATTACK_BANK_COUNT || !(root_hz > 0.0f) || !isfinite(root_hz)) {
         return;
@@ -170,7 +181,7 @@ void AttackBank_SetRootHz(uint16_t wave_id, float root_hz)
     s_root_hz[wave_id] = root_hz;
 }
 
-float AttackBank_GetRootHz(uint16_t wave_id)
+float get_sample_root_frequency_hz(uint16_t wave_id)
 {
     if (wave_id >= ATTACK_BANK_COUNT) {
         return ATTACK_DEFAULT_ROOT_HZ;
@@ -180,7 +191,7 @@ float AttackBank_GetRootHz(uint16_t wave_id)
 
 /* ---- start and stop attack playback ------------------------------------- */
 
-int AttackBank_NoteOn(uint8_t voice, uint16_t wave_id, float phase_inc)
+int start_sample_playback(uint8_t voice, uint16_t wave_id, float phase_inc)
 {
     if (voice >= SAMPLE_VOICES || wave_id >= ATTACK_BANK_COUNT || s_loaded[wave_id] == 0u) {
         return -1;
@@ -201,7 +212,7 @@ int AttackBank_NoteOn(uint8_t voice, uint16_t wave_id, float phase_inc)
     return 0;
 }
 
-void AttackBank_Stop(uint8_t voice)
+void stop_sample_playback(uint8_t voice)
 {
     if (voice < SAMPLE_VOICES) {
         s_voices[voice].playing = 0u;
@@ -209,15 +220,15 @@ void AttackBank_Stop(uint8_t voice)
     }
 }
 
-void AttackBank_StopAll(void)
+void stop_all_sample_playback(void)
 {
     uint8_t i;
     for (i = 0u; i < SAMPLE_VOICES; i++) {
-        AttackBank_Stop(i);
+        stop_sample_playback(i);
     }
 }
 
-uint8_t AttackBank_IsPlaying(uint8_t voice)
+uint8_t is_sample_playing(uint8_t voice)
 {
     if (voice >= SAMPLE_VOICES) {
         return 0u;
@@ -227,7 +238,7 @@ uint8_t AttackBank_IsPlaying(uint8_t voice)
 
 /* ---- read attack samples ------------------------------------------------ */
 
-int32_t AttackBank_NextSample(uint8_t voice)
+int32_t render_next_stored_sample(uint8_t voice)
 {
     AttackVoice_t *v;
     uint16_t wid;
@@ -257,19 +268,19 @@ int32_t AttackBank_NextSample(uint8_t voice)
     if (ph >= (float)n) {
         v->playing = 0u;
         v->phase = 0.0f;
-        return AttackBank_S8ToQ31(s_data[wid][n - 1u]);
+        return sample_int8_to_q31(s_data[wid][n - 1u]);
     }
 
     i0 = (uint32_t)ph;
     if (i0 >= n) {
         v->playing = 0u;
-        return AttackBank_S8ToQ31(s_data[wid][n - 1u]);
+        return sample_int8_to_q31(s_data[wid][n - 1u]);
     }
     i1 = i0 + 1u;
     frac = ph - (float)i0;
-    a = (double)AttackBank_S8ToQ31(s_data[wid][i0]);
+    a = (double)sample_int8_to_q31(s_data[wid][i0]);
     if (i1 < n) {
-        b = (double)AttackBank_S8ToQ31(s_data[wid][i1]);
+        b = (double)sample_int8_to_q31(s_data[wid][i1]);
         y = a + (b - a) * (double)frac;
     } else {
         y = a;
@@ -284,10 +295,10 @@ int32_t AttackBank_NextSample(uint8_t voice)
     return (int32_t)lround(y);
 }
 
-int32_t AttackBank_SampleAt(uint16_t wave_id, uint32_t index)
+int32_t get_sample_value_at(uint16_t wave_id, uint32_t index)
 {
     if (wave_id >= ATTACK_BANK_COUNT || index >= s_len[wave_id] || s_loaded[wave_id] == 0u) {
         return 0;
     }
-    return AttackBank_S8ToQ31(s_data[wave_id][index]);
+    return sample_int8_to_q31(s_data[wave_id][index]);
 }

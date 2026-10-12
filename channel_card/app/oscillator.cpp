@@ -1,3 +1,26 @@
+/*
+                                   __
+                               ___  \  \
+                          ___  \  \  \  \    _______
+                     ___  \  \  \  \  \__\__/_____  \
+                     \  \  \  \  \__\_______      \__\____
+                      \  \  \  \     ___ \  \________  \__/
+                       \  \  \__\___/_  \ \___/   \  \___
+                        \  \    ____  \  \________ \ ___/
+                         \__\__/ \  \  \____/  \  \
+                                  \  \     ___  \  \___
+                                   \__\___/ \  \ \____/
+                                           \  \
+                                              \  \___
+                 __                 _          \ ___/  _
+                / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+               | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+               |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+               |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+
+            (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+*/
+
 #include "oscillator.h"
 #include "vm_channel.h"
 #include "samples.h"
@@ -19,7 +42,7 @@ static uint8_t s_ready;
 
 /* ---- calculate interpolation coefficients ------------------------------- */
 
-static float Interp8_Sinc(float x)
+static float calculate_interpolation_sinc(float x)
 {
     float pix;
     if (x > -1.0e-6f && x < 1.0e-6f) {
@@ -31,7 +54,7 @@ static float Interp8_Sinc(float x)
 
 /* ---- initialize interpolation tables ------------------------------------ */
 
-void Interp8_Init(void)
+void init_sample_interpolation(void)
 {
     uint32_t p;
     uint32_t t;
@@ -54,7 +77,7 @@ void Interp8_Init(void)
             if (x > -4.0f && x < 4.0f) {
                 w = 0.5f * (1.0f + cosf((float)M_PI * x / 4.0f));
             }
-            tap[t] = Interp8_Sinc(x) * w;
+            tap[t] = calculate_interpolation_sinc(x) * w;
             sum += tap[t];
         }
         if (sum < 1.0e-6f) {
@@ -79,7 +102,7 @@ void Interp8_Init(void)
 
 /* ---- resolve an interpolation tap --------------------------------------- */
 
-static uint32_t Interp8_Index(int32_t i, uint32_t n, uint8_t wrap)
+static uint32_t resolve_interpolation_index(int32_t i, uint32_t n, uint8_t wrap)
 {
     int32_t nn = (int32_t)n;
     if (n == 0u) {
@@ -103,7 +126,7 @@ static uint32_t Interp8_Index(int32_t i, uint32_t n, uint8_t wrap)
 
 /* ---- interpolate sample buffers ----------------------------------------- */
 
-int32_t Interp8_S16(const int16_t *tab, uint32_t n, uint32_t phase_q16, uint8_t wrap)
+int32_t interpolate_int16_sample(const int16_t *tab, uint32_t n, uint32_t phase_q16, uint8_t wrap)
 {
     uint32_t i0;
     uint32_t p;
@@ -123,13 +146,13 @@ int32_t Interp8_S16(const int16_t *tab, uint32_t n, uint32_t phase_q16, uint8_t 
     i0 = phase_q16 >> 16;
     p = (phase_q16 >> 8) & (INTERP8_PHASES - 1u);
     for (t = 0u; t < INTERP8_TAPS; t++) {
-        uint32_t idx = Interp8_Index((int32_t)i0 + (int32_t)t - 3, n, wrap);
+        uint32_t idx = resolve_interpolation_index((int32_t)i0 + (int32_t)t - 3, n, wrap);
         acc += (int64_t)tab[idx] * (int64_t)s_kern[p][t];
     }
     return (int32_t)((acc >> 15) << 16);
 }
 
-int32_t Interp8_Q31(const int32_t *tab, uint32_t n, uint32_t phase_q16, uint8_t wrap)
+int32_t interpolate_q31_sample(const int32_t *tab, uint32_t n, uint32_t phase_q16, uint8_t wrap)
 {
     uint32_t i0;
     uint32_t p;
@@ -149,7 +172,7 @@ int32_t Interp8_Q31(const int32_t *tab, uint32_t n, uint32_t phase_q16, uint8_t 
     i0 = phase_q16 >> 16;
     p = (phase_q16 >> 8) & (INTERP8_PHASES - 1u);
     for (t = 0u; t < INTERP8_TAPS; t++) {
-        uint32_t idx = Interp8_Index((int32_t)i0 + (int32_t)t - 3, n, wrap);
+        uint32_t idx = resolve_interpolation_index((int32_t)i0 + (int32_t)t - 3, n, wrap);
         acc += (int64_t)tab[idx] * (int64_t)s_kern[p][t];
     }
     return (int32_t)(acc >> 15);
@@ -157,7 +180,7 @@ int32_t Interp8_Q31(const int32_t *tab, uint32_t n, uint32_t phase_q16, uint8_t 
 
 /* ---- interpolate explicit sample taps ----------------------------------- */
 
-int32_t Interp8_Q31Taps(const int32_t taps[INTERP8_TAPS], uint32_t phase_q16)
+int32_t interpolate_q31_taps(const int32_t taps[INTERP8_TAPS], uint32_t phase_q16)
 {
     uint32_t p;
     uint32_t t;
@@ -173,7 +196,7 @@ int32_t Interp8_Q31Taps(const int32_t taps[INTERP8_TAPS], uint32_t phase_q16)
     return (int32_t)(acc >> 15);
 }
 
-int32_t Interp8_S16Taps(const int16_t taps[INTERP8_TAPS], uint32_t phase_q16)
+int32_t interpolate_int16_taps(const int16_t taps[INTERP8_TAPS], uint32_t phase_q16)
 {
     uint32_t p;
     uint32_t t;
@@ -244,41 +267,41 @@ static uint8_t s_handle_wrapped;
 
 /* Weak hooks let host tests inject allocation failure. Production uses the
  * card heap and therefore has no oscillator-instance count constant. */
-extern "C" WAVETABLE_OSC_WEAK void *WavetableOsc_Allocate(size_t size)
+extern "C" WAVETABLE_OSC_WEAK void *allocate_oscillator_memory(size_t size)
 {
     return malloc(size);
 }
 
-extern "C" WAVETABLE_OSC_WEAK void WavetableOsc_Deallocate(void *pointer)
+extern "C" WAVETABLE_OSC_WEAK void free_oscillator_memory(void *pointer)
 {
     free(pointer);
 }
 
-static void WavetableOsc_ReleaseList(WavetableOscEntry_t **head)
+static void free_oscillator_list(WavetableOscEntry_t **head)
 {
     WavetableOscEntry_t *entry = *head;
     *head = NULL;
     while (entry != NULL) {
         WavetableOscEntry_t *next = entry->next;
-        WavetableOsc_Deallocate(entry);
+        free_oscillator_memory(entry);
         entry = next;
     }
 }
 
-static void WavetableOsc_ReleaseRoutes(WavetableOscRoute_t **head)
+static void free_oscillator_routes(WavetableOscRoute_t **head)
 {
     WavetableOscRoute_t *route = *head;
     *head = NULL;
     while (route != NULL) {
         WavetableOscRoute_t *next = route->next;
-        WavetableOsc_Deallocate(route);
+        free_oscillator_memory(route);
         route = next;
     }
 }
 
 /* ---- resolve oscillator handles ----------------------------------------- */
 
-static WavetableOscEntry_t *WavetableOsc_Find(WavetableOscEntry_t *entry, uint32_t handle)
+static WavetableOscEntry_t *find_oscillator(WavetableOscEntry_t *entry, uint32_t handle)
 {
     while (entry != NULL) {
         if (entry->handle == handle) return entry;
@@ -287,7 +310,7 @@ static WavetableOscEntry_t *WavetableOsc_Find(WavetableOscEntry_t *entry, uint32
     return NULL;
 }
 
-static uint8_t WavetableOsc_HandleInList(const WavetableOscEntry_t *entry, uint32_t handle)
+static uint8_t is_oscillator_handle_in_list(const WavetableOscEntry_t *entry, uint32_t handle)
 {
     while (entry != NULL) {
         if (entry->handle == handle) {
@@ -298,19 +321,19 @@ static uint8_t WavetableOsc_HandleInList(const WavetableOscEntry_t *entry, uint3
     return 0u;
 }
 
-static uint8_t WavetableOsc_HandleInUse(uint32_t handle)
+static uint8_t is_oscillator_handle_in_use(uint32_t handle)
 {
     uint8_t voice;
     for (voice = 0u; voice < SAMPLE_VOICES; voice++) {
-        if (WavetableOsc_HandleInList(s_active_head[voice], handle) != 0u ||
-            WavetableOsc_HandleInList(s_pending_head[voice], handle) != 0u) {
+        if (is_oscillator_handle_in_list(s_active_head[voice], handle) != 0u ||
+            is_oscillator_handle_in_list(s_pending_head[voice], handle) != 0u) {
             return 1u;
         }
     }
     return 0u;
 }
 
-static uint32_t WavetableOsc_NewHandle(void)
+static uint32_t allocate_oscillator_handle(void)
 {
     uint32_t handle;
     uint32_t attempts = 0u;
@@ -332,7 +355,7 @@ static uint32_t WavetableOsc_NewHandle(void)
         if (s_next_handle > OSC_HANDLE_MAX) {
             s_next_handle = 1u;
         }
-        if (WavetableOsc_HandleInUse(handle) == 0u) {
+        if (is_oscillator_handle_in_use(handle) == 0u) {
             return handle;
         }
         attempts++;
@@ -342,23 +365,23 @@ static uint32_t WavetableOsc_NewHandle(void)
 
 /* ---- initialize oscillator state ---------------------------------------- */
 
-void WavetableOsc_Init(void)
+void init_wavetable_oscillators(void)
 {
-    WavetableOsc_StopAll();
+    stop_all_oscillators();
     s_next_handle = 1u;
     s_handle_wrapped = 0u;
 }
 
-void WavetableOsc_BeginPending(uint8_t voice)
+void begin_pending_oscillators(uint8_t voice)
 {
     if (voice < SAMPLE_VOICES) {
-        WavetableOsc_DiscardPending(voice);
+        discard_pending_oscillators(voice);
     }
 }
 
 /* ---- declare a pending oscillator --------------------------------------- */
 
-int WavetableOsc_AddPending(uint8_t voice, uint8_t wave, float frequency_hz, uint32_t *handle_out)
+int add_pending_oscillator(uint8_t voice, uint8_t wave, float frequency_hz, uint32_t *handle_out)
 {
     uint16_t wave_id;
     uint32_t length;
@@ -371,8 +394,8 @@ int WavetableOsc_AddPending(uint8_t voice, uint8_t wave, float frequency_hz, uin
         return -1;
     }
     wave_id = (uint16_t)(WAVETABLE_OSC_WAVE_FIRST + wave);
-    length = AttackBank_GetLen(wave_id);
-    if (length < 2u || length > ATTACK_BANK_LEN || AttackBank_Table(wave_id) == NULL) {
+    length = get_sample_length(wave_id);
+    if (length < 2u || length > ATTACK_BANK_LEN || get_sample_data(wave_id) == NULL) {
         return -1;
     }
 
@@ -382,13 +405,13 @@ int WavetableOsc_AddPending(uint8_t voice, uint8_t wave, float frequency_hz, uin
         increment = 1.0;
     }
 
-    entry = (WavetableOscEntry_t *)WavetableOsc_Allocate(sizeof(*entry));
+    entry = (WavetableOscEntry_t *)allocate_oscillator_memory(sizeof(*entry));
     if (entry == NULL) {
         return -1;
     }
-    handle = WavetableOsc_NewHandle();
+    handle = allocate_oscillator_handle();
     if (handle == 0u) {
-        WavetableOsc_Deallocate(entry);
+        free_oscillator_memory(entry);
         return -1;
     }
 
@@ -419,7 +442,7 @@ int WavetableOsc_AddPending(uint8_t voice, uint8_t wave, float frequency_hz, uin
 
 /* ---- connect pending oscillator routes ---------------------------------- */
 
-int WavetableOsc_AddRoutePending(uint8_t voice, uint32_t source_handle, int32_t target,
+int add_pending_oscillator_route(uint8_t voice, uint32_t source_handle, int32_t target,
                                  uint8_t parameter, float gain)
 {
     WavetableOscEntry_t *source;
@@ -428,10 +451,10 @@ int WavetableOsc_AddRoutePending(uint8_t voice, uint32_t source_handle, int32_t 
 
     if (voice >= SAMPLE_VOICES || !isfinite(gain) || parameter >= FW_VM_CHANNEL_ROUTE_COUNT)
         return -1;
-    source = WavetableOsc_Find(s_pending_head[voice], source_handle);
+    source = find_oscillator(s_pending_head[voice], source_handle);
     if (source == NULL) return -1;
     if (target > 0) {
-        target_entry = WavetableOsc_Find(s_pending_head[voice], (uint32_t)target);
+        target_entry = find_oscillator(s_pending_head[voice], (uint32_t)target);
         if (target_entry == NULL || target_entry == source) return -1;
     }
     if ((parameter == FW_VM_CHANNEL_ROUTE_AUDIO &&
@@ -447,7 +470,7 @@ int WavetableOsc_AddRoutePending(uint8_t voice, uint32_t source_handle, int32_t 
         if (route->source == source && route->target_id == target && route->parameter == parameter)
             return -1;
 
-    route = (WavetableOscRoute_t *)WavetableOsc_Allocate(sizeof(*route));
+    route = (WavetableOscRoute_t *)allocate_oscillator_memory(sizeof(*route));
     if (route == NULL) return -1;
     route->source = source;
     route->target = target_entry;
@@ -463,7 +486,7 @@ int WavetableOsc_AddRoutePending(uint8_t voice, uint32_t source_handle, int32_t 
 
 /* ---- validate the pending oscillator graph ------------------------------ */
 
-int WavetableOsc_FinalizePending(uint8_t voice)
+int finalize_pending_oscillators(uint8_t voice)
 {
     WavetableOscEntry_t *entry;
     WavetableOscEntry_t *tail = NULL;
@@ -509,16 +532,16 @@ int WavetableOsc_FinalizePending(uint8_t voice)
 
 /* ---- activate and retire oscillator graphs ------------------------------ */
 
-void WavetableOsc_ActivatePending(uint8_t voice)
+void activate_pending_oscillators(uint8_t voice)
 {
     WavetableOscEntry_t *entry;
     if (voice >= SAMPLE_VOICES) {
         return;
     }
     if (s_pending_head[voice] != NULL && s_pending_render[voice] == NULL &&
-        WavetableOsc_FinalizePending(voice) != 0)
+        finalize_pending_oscillators(voice) != 0)
         return;
-    WavetableOsc_StopActive(voice);
+    stop_active_oscillators(voice);
     s_active_head[voice] = s_pending_head[voice];
     s_active_routes[voice] = s_pending_routes[voice];
     s_active_render[voice] = s_pending_render[voice];
@@ -533,59 +556,59 @@ void WavetableOsc_ActivatePending(uint8_t voice)
     }
 }
 
-void WavetableOsc_DiscardPending(uint8_t voice)
+void discard_pending_oscillators(uint8_t voice)
 {
     if (voice < SAMPLE_VOICES) {
-        WavetableOsc_ReleaseList(&s_pending_head[voice]);
-        WavetableOsc_ReleaseRoutes(&s_pending_routes[voice]);
+        free_oscillator_list(&s_pending_head[voice]);
+        free_oscillator_routes(&s_pending_routes[voice]);
         s_pending_tail[voice] = NULL;
         s_pending_render[voice] = NULL;
     }
 }
 
-void WavetableOsc_StopActive(uint8_t voice)
+void stop_active_oscillators(uint8_t voice)
 {
     if (voice < SAMPLE_VOICES) {
-        WavetableOsc_ReleaseList(&s_active_head[voice]);
-        WavetableOsc_ReleaseRoutes(&s_active_routes[voice]);
+        free_oscillator_list(&s_active_head[voice]);
+        free_oscillator_routes(&s_active_routes[voice]);
         s_active_render[voice] = NULL;
         s_sample_frequency_mod[voice] = 0.0f;
         s_sample_amplitude_gain[voice] = 1.0f;
     }
 }
 
-void WavetableOsc_Stop(uint8_t voice)
+void stop_voice_oscillators(uint8_t voice)
 {
     if (voice < SAMPLE_VOICES) {
-        WavetableOsc_StopActive(voice);
-        WavetableOsc_DiscardPending(voice);
+        stop_active_oscillators(voice);
+        discard_pending_oscillators(voice);
     }
 }
 
-void WavetableOsc_StopAll(void)
+void stop_all_oscillators(void)
 {
     uint8_t voice;
     for (voice = 0u; voice < SAMPLE_VOICES; voice++) {
-        WavetableOsc_Stop(voice);
+        stop_voice_oscillators(voice);
     }
 }
 
-uint8_t WavetableOsc_HandleIsValid(uint8_t voice, uint32_t handle)
+uint8_t is_oscillator_handle_valid(uint8_t voice, uint32_t handle)
 {
     if (voice >= SAMPLE_VOICES || handle == 0u || handle > OSC_HANDLE_MAX) {
         return 0u;
     }
-    return WavetableOsc_HandleInList(s_active_head[voice], handle) != 0u ||
-                   WavetableOsc_HandleInList(s_pending_head[voice], handle) != 0u
+    return is_oscillator_handle_in_list(s_active_head[voice], handle) != 0u ||
+                   is_oscillator_handle_in_list(s_pending_head[voice], handle) != 0u
                ? 1u
                : 0u;
 }
 
 /* ---- advance a wavetable oscillator ------------------------------------- */
 
-static int32_t WavetableOsc_Next(WavetableOscEntry_t *entry)
+static int32_t render_next_oscillator_sample(WavetableOscEntry_t *entry)
 {
-    const int8_t *table = AttackBank_Table(entry->wave_id);
+    const int8_t *table = get_sample_data(entry->wave_id);
     uint32_t period = (uint32_t)entry->length << 16;
     uint32_t index = entry->phase >> 16;
     uint32_t next = index + 1u;
@@ -607,7 +630,7 @@ static int32_t WavetableOsc_Next(WavetableOscEntry_t *entry)
     return sample;
 }
 
-static int32_t WavetableOsc_Saturate(double value)
+static int32_t clamp_oscillator_sample(double value)
 {
     if (value > 2147483647.0) return INT32_MAX;
     if (value < -2147483648.0) return INT32_MIN;
@@ -616,7 +639,7 @@ static int32_t WavetableOsc_Saturate(double value)
 
 /* ---- render oscillator modulation --------------------------------------- */
 
-static int32_t WavetableOsc_Render(WavetableOscEntry_t *entry)
+static int32_t render_oscillator_sample(WavetableOscEntry_t *entry)
 {
     double hz = (double)entry->frequency_hz + (double)entry->frequency_mod_hz;
     double increment;
@@ -628,16 +651,17 @@ static int32_t WavetableOsc_Render(WavetableOscEntry_t *entry)
     increment =
         hz * (double)entry->length * (double)OSC_PHASE_ONE / (double)WAVETABLE_OSC_SAMPLE_RATE_HZ;
     entry->increment = (uint32_t)(increment + 0.5);
-    sample = WavetableOsc_Next(entry);
+    sample = render_next_oscillator_sample(entry);
     amplitude = (double)entry->amplitude_gain;
     if (!isfinite(amplitude)) amplitude = amplitude > 0.0 ? 2147483648.0 : 0.0;
     if (amplitude < 0.0) amplitude = 0.0;
-    return WavetableOsc_Saturate((double)sample * amplitude);
+    return clamp_oscillator_sample((double)sample * amplitude);
 }
 
 /* ---- mix oscillators with the sample voice ------------------------------ */
 
-void WavetableOsc_BeginSample(uint8_t voice, float *sample_frequency_hz, float *sample_amplitude)
+void apply_oscillator_sample_modulation(uint8_t voice, float *sample_frequency_hz,
+                                        float *sample_amplitude)
 {
     WavetableOscEntry_t *entry;
     WavetableOscRoute_t *route;
@@ -654,7 +678,7 @@ void WavetableOsc_BeginSample(uint8_t voice, float *sample_frequency_hz, float *
     }
     for (entry = s_active_render[voice]; entry != NULL; entry = entry->render_next) {
         float normalized;
-        entry->rendered_sample = WavetableOsc_Render(entry);
+        entry->rendered_sample = render_oscillator_sample(entry);
         normalized = (float)((double)entry->rendered_sample / 2147483648.0);
         for (route = s_active_routes[voice]; route != NULL; route = route->next) {
             if (route->source != entry) continue;
@@ -682,7 +706,7 @@ void WavetableOsc_BeginSample(uint8_t voice, float *sample_frequency_hz, float *
     }
 }
 
-int32_t WavetableOsc_MixSample(uint8_t voice, int32_t sample)
+int32_t mix_voice_oscillators(uint8_t voice, int32_t sample)
 {
     WavetableOscEntry_t *entry;
     WavetableOscRoute_t *route;
@@ -700,10 +724,10 @@ int32_t WavetableOsc_MixSample(uint8_t voice, int32_t sample)
         weighted_sum += (double)entry->rendered_sample * weight;
         total_weight += weight;
     }
-    return WavetableOsc_Saturate(weighted_sum / total_weight);
+    return clamp_oscillator_sample(weighted_sum / total_weight);
 }
 
-int64_t WavetableOsc_NextSum(uint8_t voice, uint32_t *count_out)
+int64_t mix_next_oscillator_samples(uint8_t voice, uint32_t *count_out)
 {
     int64_t sum = 0;
     uint32_t count = 0u;
@@ -712,7 +736,7 @@ int64_t WavetableOsc_NextSum(uint8_t voice, uint32_t *count_out)
     if (voice < SAMPLE_VOICES) {
         entry = s_active_head[voice];
         while (entry != NULL) {
-            sum += WavetableOsc_Next(entry);
+            sum += render_next_oscillator_sample(entry);
             entry = entry->next;
             count++;
         }

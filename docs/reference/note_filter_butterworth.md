@@ -38,7 +38,7 @@ are complementary, not a substitute.
 
 **Floating point:** coefficients, delays, and per-sample filtering use
 `double` (H725 FPU). Q31 conversion happens only at the
-`NoteFilter_Process` edges. This is an intentional exception to the
+`filter_voice_sample` edges. This is an intentional exception to the
 usual no-float-on-the-hot-path rule, confined to this module.
 
 ---
@@ -56,7 +56,7 @@ usual no-float-on-the-hot-path rule, confined to this module.
 
 ---
 
-## 3. Design (what `ButterFourPole_InitLowPass` does)
+## 3. Design (what `init_four_pole_low_pass_filter` does)
 
 One 4th-order direct-form section per voice — five feedforward and four
 feedback coefficients (`coef[9]`) with four delay states (`d[4]`). No
@@ -70,7 +70,7 @@ first converted to a digital frequency:
 \omega = 2\pi f_c / f_s
 \]
 
-(`ButterFourPole_CutoffToOmega`, clamped to \([0,\ 0.999 \cdot f_s/2]\)).
+(`cutoff_to_omega`, clamped to \([0,\ 0.999 \cdot f_s/2]\)).
 
 The shape parameter `g` (console `q`) enters through
 

@@ -75,7 +75,8 @@ class ChannelReleaseTests(unittest.TestCase):
         self.assertFalse((self.package / "CMakeLists.txt").exists())
         self.assertFalse((self.package / "CMakePresets.json").exists())
         self.assertFalse((self.package / "berry_runtime/CMakeLists.txt").exists())
-        self.assertTrue((self.package / "flash.sh").stat().st_mode & 0o111)
+        self.assertFalse((self.package / "software").exists())
+        self.assertFalse(list(self.package.rglob("*.py")))
         self.assertTrue((self.package / "berry_compiler/berry.linux-arm64").stat().st_mode & 0o111)
         for p in self.package.rglob("*"):
             if p.is_file():
@@ -84,7 +85,8 @@ class ChannelReleaseTests(unittest.TestCase):
                 self.assertTrue(release.selected(original), rel)
 
     def test_excluded_categories(self):
-        for path in ["channel_card/tests/test_usb.c", "channel_card/tests/fixtures/test.bec",
+        for path in ["channel_card/software/firmware.py", "channel_card/app/build.py",
+                     "channel_card/tests/test_usb.c", "channel_card/tests/fixtures/test.bec",
                      "channel_card/app/test_transport.cpp", "channel_card/app/usb_test.cpp",
                      "channel_card/build/channel_MCU.bin", "channel_card/.vscode/settings.json",
                      "channel_card/docs/board.png", "channel_card/scripts/flash_dfu.sh",

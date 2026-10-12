@@ -43,15 +43,23 @@ class ChannelMakeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         return result
 
+    def firmware_status(self, **environment):
+        return subprocess.run(
+            ["python3", str(ROOT / "scripts/channel_firmware.py"),
+             "--card-root", str(self.card), "status"],
+            env={**os.environ, **environment}, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=10)
+
     def artifact_times(self):
         return {p.relative_to(self.card): p.stat().st_mtime_ns
                 for p in self.build.rglob("*") if p.is_file()} | {
                     Path("bin/channel_MCU.bin"): self.binary.stat().st_mtime_ns}
 
-    def test_noop_and_info_do_not_rebuild_or_change_baud(self):
+    def test_noop_and_status_do_not_rebuild_or_change_baud(self):
         before = self.artifact_times()
         self.successful_make()
-        result = self.successful_make("info", "BAUDRATE=3000000")
+        result = self.firmware_status(BAUDRATE="3000000")
+        self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("921600 baud", result.stdout)
         self.assertEqual(before, self.artifact_times())
 
@@ -105,7 +113,10 @@ class ChannelMakeTests(unittest.TestCase):
         self.successful_make("clean")
         self.assertFalse(self.build.exists())
         self.assertFalse(self.binary.exists())
-        self.assertNotEqual(self.make("info").returncode, 0)
+        result = self.firmware_status()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No firmware report available", result.stdout)
+        self.assertFalse(self.build.exists())
         self.successful_make()
         self.assertEqual(self.baseline, self.binary.read_bytes())
 

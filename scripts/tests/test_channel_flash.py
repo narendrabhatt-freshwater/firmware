@@ -1,4 +1,4 @@
-"""Exercise the flashing wrapper with a fake programmer; never access a board."""
+"""Exercise firmware status and flashing with a fake programmer; never access a board."""
 
 import json
 import os
@@ -19,11 +19,12 @@ class ChannelFlashTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="channel flash ")
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         (self.root / "app").mkdir()
         (self.root / "bin").mkdir()
-        self.script = self.root / "flash.sh"
-        shutil.copy2(ROOT / "channel_card/flash.sh", self.script)
+        self.script = self.root / "scripts/channel_firmware.py"
+        self.script.parent.mkdir()
+        shutil.copy2(ROOT / "scripts/channel_firmware.py", self.script)
         shutil.copy2(ROOT / "channel_card/app/Makefile", self.root / "app/Makefile")
         self.binary = self.root / "bin/channel_MCU.bin"
         self.binary.write_bytes(b"mock firmware")
@@ -46,7 +47,7 @@ sys.exit(int(os.environ.get('WRITE_EXIT', '0')))
                         CALL_LOG=str(self.log), USB_LIST="Device Index : USB1\n")
 
     def run_script(self, *args):
-        return subprocess.run([str(self.script), *args], cwd="/", env=self.env,
+        return subprocess.run([str(self.script), "--card-root", str(self.root), "flash", *args], cwd="/", env=self.env,
                               text=True, capture_output=True, timeout=8)
 
     def calls(self):
@@ -55,6 +56,40 @@ sys.exit(int(os.environ.get('WRITE_EXIT', '0')))
     def test_check_and_help_never_access_programmer(self):
         for option in ["--check", "--help"]:
             self.assertEqual(self.run_script(option).returncode, 0)
+        self.assertEqual(self.calls(), [])
+
+    def run_status(self):
+        return subprocess.run([str(self.script), "--card-root", str(self.root), "status"], cwd="/", env=self.env,
+                              text=True, capture_output=True, timeout=3)
+
+    def test_status_reads_report_without_tools_or_rebuild(self):
+        build = self.root / "build/release"
+        build.mkdir(parents=True)
+        (build / "channel_MCU.bin").write_bytes(self.binary.read_bytes())
+        report = build / "channel_MCU.info"
+        report.write_text("Firmware built at 3000000 baud\n")
+        stamp = report.stat().st_mtime_ns
+        self.env["CUBE_PROGRAMMER"] = str(self.root / "missing")
+        result = self.run_status()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, report.read_text())
+        self.assertEqual(report.stat().st_mtime_ns, stamp)
+        self.assertEqual(self.calls(), [])
+        self.binary.write_bytes(b"different firmware")
+        result = self.run_status()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("differs from the last build", result.stderr)
+
+    def test_status_requires_successful_build(self):
+        result = self.run_status()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Run make", result.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_command_required_without_accessing_programmer(self):
+        result = subprocess.run([str(self.script)], env=self.env,
+                                text=True, capture_output=True, timeout=3)
+        self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.calls(), [])
 
     def test_missing_programmer(self):
@@ -98,7 +133,7 @@ sys.exit(int(os.environ.get('WRITE_EXIT', '0')))
 
     def test_cancel_wait_never_writes(self):
         self.env["WAIT_POLLS"] = "10000"
-        proc = subprocess.Popen([str(self.script)], env=self.env, start_new_session=True,
+        proc = subprocess.Popen([str(self.script), "--card-root", str(self.root), "flash"], env=self.env, start_new_session=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             deadline = time.monotonic() + 4
