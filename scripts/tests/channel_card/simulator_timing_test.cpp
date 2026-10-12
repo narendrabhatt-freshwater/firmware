@@ -71,6 +71,16 @@ static void reset()
 
 int main()
 {
+    const uint32_t block_sizes[] = {32, 48, 64, 96, 256};
+    for (uint32_t samples : block_sizes) {
+        uint64_t first = start_audio_clock(samples, 48000);
+        for (uint64_t block = 2; block <= 48001; ++block) {
+            uint64_t expected = block * samples * 1000000000ULL / 48000
+                              - (uint64_t)samples * 1000000000ULL / 48000;
+            assert(schedule_next_audio_block() - first == expected);
+        }
+    }
+
     reset();
     assert(init_simulator_timing());
     assert(qos_calls == 1 && timebase_calls == 1 && policy_calls == 1 && releases == 1);

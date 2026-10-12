@@ -160,6 +160,7 @@ static bool receive_serial_bytes(Port &port)
     if (packet[0] == TIOCPKT_DATA && n > 1) {
         memcpy(port.rx + port.received, packet + 1, (size_t)n - 1);
         port.received += (size_t)n - 1;
+        fprintf(stderr, "sim: received %zu bytes from %s\n", n - 1, port.path);
     }
     return true;
 }

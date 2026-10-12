@@ -89,3 +89,28 @@ uint32_t get_board_time_ms(void)
     static const uint64_t start = get_simulator_time_ns();
     return (uint32_t)((get_simulator_time_ns() - start) / 1000000);
 }
+
+/* ---- schedule audio blocks ---------------------------------------------- */
+
+static uint64_t next_audio_time;
+static uint64_t block_samples_ns;
+static uint64_t audio_fraction;
+static uint32_t audio_sample_rate;
+
+uint64_t start_audio_clock(uint32_t sample_count, uint32_t sample_rate_hz)
+{
+    next_audio_time = get_simulator_time_ns();
+    block_samples_ns = (uint64_t)sample_count * 1000000000u;
+    audio_sample_rate = sample_rate_hz;
+    audio_fraction = 0;
+    return schedule_next_audio_block();
+}
+
+uint64_t schedule_next_audio_block(void)
+{
+    /* Keep the remainder so block sizes like 32 or 64 don't cause drift. */
+    audio_fraction += block_samples_ns;
+    next_audio_time += audio_fraction / audio_sample_rate;
+    audio_fraction %= audio_sample_rate;
+    return next_audio_time;
+}

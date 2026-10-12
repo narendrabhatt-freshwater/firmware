@@ -29,6 +29,10 @@
 #include <signal.h>
 #include <stdio.h>
 
+#ifndef SIM_AUDIO_SAMPLES
+#define SIM_AUDIO_SAMPLES 48u
+#endif
+
 /* ---- handle termination signals ----------------------------------------- */
 
 static volatile sig_atomic_t stopped;
@@ -36,6 +40,21 @@ static volatile sig_atomic_t stopped;
 static void stop_simulator(int)
 {
     stopped = 1;
+}
+
+/* Print one complete block per second. */
+static void print_audio_block(const int32_t *block, uint32_t sample_count)
+{
+    static uint64_t last_print = 0;
+    uint64_t now = get_simulator_time_ns();
+    if (now - last_print < 1000000000ULL) return;
+
+    fprintf(stderr, "sim: block:");
+    for (uint32_t i = 0; i < sample_count; ++i) {
+        fprintf(stderr, " %ld", (long)block[i]);
+    }
+    fprintf(stderr, "\n");
+    last_print = now;
 }
 
 /* ---- run the simulator -------------------------------------------------- */
@@ -56,34 +75,24 @@ int main(void)
 
     /* ---- service serial ports and render audio -------------------------- */
 
-    /* Device request size, independent of the application's script interval. */
-#ifndef SIM_AUDIO_SAMPLES
-#define SIM_AUDIO_SAMPLES 48u
-#endif
     constexpr uint32_t sample_count = SIM_AUDIO_SAMPLES;
     static_assert(sample_count > 0, "Audio requests must advance time");
-    uint64_t audio_fraction = 0;
-    uint64_t nextAudio = get_simulator_time_ns();
-    auto advance_audio_deadline = [&]() {
-        audio_fraction += (uint64_t)sample_count * 1000000000u;
-        nextAudio += audio_fraction / AUDIO_SAMPLE_RATE_HZ;
-        audio_fraction %= AUDIO_SAMPLE_RATE_HZ;
-    };
-    advance_audio_deadline();
+    uint64_t next_audio = start_audio_clock(sample_count, AUDIO_SAMPLE_RATE_HZ);
     int result = 0;
     while (!stopped) {
-        if (!process_serial_io(nextAudio)) {
+        if (!process_serial_io(next_audio)) {
             result = 1;
             break;
         }
         process_usb_messages();
         process_rs485_commands();
         process_usb_messages(); /* Drain USB after a console reply. */
-        if (get_simulator_time_ns() < nextAudio) continue;
+        if (get_simulator_time_ns() < next_audio) continue;
 
         int32_t block[sample_count];
         render_audio_samples(block, sample_count);
-        advance_audio_deadline();
+        next_audio = schedule_next_audio_block();
+        print_audio_block(block, sample_count);
     }
 
     /* ---- close devices -------------------------------------------------- */
