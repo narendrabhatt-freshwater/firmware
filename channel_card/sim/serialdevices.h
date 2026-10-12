@@ -44,8 +44,4 @@ void close_serial_devices(void);
 bool init_simulator_timing(void);
 uint64_t get_simulator_time_ns(void);
 
-/* Positive sample count and rate. Start once before scheduling more blocks. */
-uint64_t start_audio_clock(uint32_t sample_count, uint32_t sample_rate_hz);
-uint64_t schedule_next_audio_block(void);
-
 #endif

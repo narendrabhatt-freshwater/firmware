@@ -36,13 +36,18 @@ APP_SOURCES := app/audio.cpp app/channel.cpp app/filter.cpp \
                app/stream.cpp app/usb.cpp app/transport.cpp app/platform.cpp
 SOURCES := $(APP_SOURCES) \
            berry_runtime/vm.c berry_runtime/vm_source.c berry_runtime/berry_backend.c \
-           $(BERRY_SOURCES) sim/main.cpp sim/serialdevices.cpp sim/clock.cpp
+           $(BERRY_SOURCES) sim/main.cpp sim/serialdevices.cpp sim/clock.cpp \
+           sim/audio_device.cpp
 OBJECTS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(SOURCES)))
 
-INCLUDES := -I$(ROOT)/app -I$(ROOT)/berry_runtime -I$(ROOT)/$(BERRY)/src -I$(ROOT)/sim
-COMMON_FLAGS := -O2 -g -Wall -MMD -MP
+PORTAUDIO_PREFIX ?= $(firstword $(foreach p,/opt/local /opt/homebrew /usr/local,$(if $(wildcard $(p)/include/portaudio.h),$(p))))
+PORTAUDIO_CFLAGS ?= $(if $(PORTAUDIO_PREFIX),-I$(PORTAUDIO_PREFIX)/include)
+PORTAUDIO_LIBS ?= $(if $(PORTAUDIO_PREFIX),-L$(PORTAUDIO_PREFIX)/lib) -lportaudio
+INCLUDES := -I$(ROOT)/app -I$(ROOT)/berry_runtime -I$(ROOT)/$(BERRY)/src -I$(ROOT)/sim $(PORTAUDIO_CFLAGS)
+COMMON_FLAGS := -O2 -g -Wall -MMD -MP -pthread
 CFLAGS := -std=c11 -Wextra -Werror
 CXXFLAGS := -std=c++17 -fno-rtti -fno-exceptions -fno-threadsafe-statics
+LDLIBS := -lm -pthread $(PORTAUDIO_LIBS)
 $(addprefix $(OBJDIR)/,$(addsuffix .o,$(BERRY_SOURCES))): CFLAGS := -std=c11 -w
 
 # ---- build and clean --------------------------------------------------------
@@ -64,7 +69,7 @@ $(OBJDIR)/%.cpp.o: $(ROOT)/%.cpp
 
 $(SIMULATOR): $(OBJECTS)
 	@mkdir -p "$(@D)"
-	$(HOST_CXX) $^ -o "$@" -lm
+	$(HOST_CXX) $^ -o "$@" $(LDLIBS)
 
 clean:
 	@rm -rf "$(OBJDIR)"

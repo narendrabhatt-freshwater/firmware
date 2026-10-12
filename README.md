@@ -308,15 +308,27 @@ and SVN package. If needed, run:
 
 ```sh
 python3 scripts/tests/channel_card/run.py
+python3 scripts/tests/channel_card/run.py --audio  # macOS: plays a quiet test tone
 python3 -m unittest discover -s scripts/tests -p 'test_channel_*.py'
 ```
 
 The host harness builds the matching Berry compiler and test executables in
 temporary directories. It checks audio/state equivalence across buffer sizes,
 script boundaries, DAC control voltages, transport backpressure and errors,
-and isolated simulator ports. `--baseline /path/to/old/channel_card` compares
+and isolated simulator ports. Envelope checks exercise the bundled program's
+attack, sustain, full and interrupted release, retrigger fades, pending-note
+cancellation, hard clear, and eight independently releasing voices. They verify
+identical PCM across render request sizes from 1 to 1024 samples.
+`--baseline /path/to/old/channel_card` compares
 against a captured pre-refactor source tree. Hardware timing and throughput
 still require board measurements.
+
+The optional `--audio` check uploads a Berry program and wavetable over USB,
+starts/releases a note over RS485, streams BODY using reported credit, and
+verifies the real Mac sound device requests samples through PortAudio. It checks submitted stereo PCM
+for the expected oscillator/sample tones, the bundled envelope's 50 ms attack
+and 250 ms release, and final silence. It reports callback timing and stream latency;
+it does not record the speakers or measure physical output latency.
 
 `channel_card/` has no test harnesses or Python/shell-script files. Its Makefiles
 build standalone. `scripts/channel_release.py` also rejects development scripts

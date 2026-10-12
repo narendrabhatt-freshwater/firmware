@@ -195,7 +195,7 @@ bool process_serial_io(uint64_t deadlineNs)
     uint64_t now = get_simulator_time_ns();
     uint64_t delay = deadlineNs > now ? deadlineNs - now : 0;
     for (Port *port : {&usb, &rs485}) {
-        /* Closed PTYs stay readable at EOF; check them on the audio tick. */
+        /* Closed PTYs stay readable at EOF; check them on the serial service tick. */
         if (!port->connected) continue;
         bool canRead = port != &usb || !usbFault;
         if (canRead && port->received < sizeof port->rx) FD_SET(port->fd, &readable);

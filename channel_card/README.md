@@ -15,6 +15,27 @@ specifies framing, uploads, and flow control.
 From `channel_card/app/`, plain `make` builds the host simulator at `bin/sim`
 using a host C/C++ compiler. `make sim` is an explicit alias.
 
+On macOS, run `channel_card/bin/sim` from the repository root to play through
+the Mac's default sound output (selected in System Settings → Sound). The
+simulator exposes `/tmp/sim-usb` and `/tmp/sim-rs485` for the host application's
+normal program/sample uploads, note commands and streaming. Load and play a
+note through that host to hear it; startup itself is silent. Ctrl+C stops audio
+and removes both simulator port links.
+
+Playback uses PortAudio's default output stream and render callback, as MAS
+does. PortAudio supplies an output buffer and frame count; the callback calls
+the shared 48 kHz mono renderer for that count and copies each signed 32-bit
+sample to both output channels. PortAudio handles conversion to the device
+format. The stream requests 128 frames per callback, matching MAS; rendering
+accepts the actual frame count supplied by PortAudio. Startup reports the
+stream's output latency, which does not measure command-to-speaker latency.
+
+Install PortAudio before building. The Makefile finds MacPorts (`/opt/local`)
+and Homebrew installations; use `make PORTAUDIO_PREFIX=/path/to/prefix` for a
+custom installation. Audio starts with the simulator, without a command-line
+switch. Automated transport tests link a test-only PortAudio implementation;
+the simulator itself always opens the sound device.
+
 To build the STM32 firmware, install GNU Make, a POSIX shell with standard tools
 (`awk`, `cmp`, `shasum`), and the GNU Arm
 embedded toolchain with newlib (`arm-none-eabi-gcc`, `arm-none-eabi-g++`, `arm-none-eabi-objcopy`,
@@ -253,11 +274,17 @@ to generations; it does not emulate USB endpoints or electrical timing.
 Each platform owns its main loop. Firmware calls `process_usb_messages()`,
 `process_rs485_commands()`, `update_channel_leds()`, then `process_usb_messages()`
 again to service USB after a console reply. The simulator calls the same USB
-and RS485 functions and renders audio on its own schedule; it does not call
-the LED update. Both use the same application and protocol implementations.
+and RS485 functions and renders audio when PortAudio requests a buffer;
+it does not call the LED update.
+Both use the same application and protocol implementations.
 Generic synchronization defaults to single-threaded execution. STM32 binds
 interrupt preservation and memory-barrier operations before audio starts;
-a threaded host would need its own validated synchronization.
+the simulator follows MAS's direct callback arrangement, with protocol
+processing on the main thread and rendering on PortAudio's callback thread.
+There is no application mutex around either path.
+An isolated ThreadSanitizer check detects unsynchronized access to the voice
+active flag during program upload; passing playback tests do not establish
+that this concurrent application access is safe.
 `CHANNEL_ENABLE_CYCLE_PROFILING` enables cycle
 measurement in the firmware build. The simulator omits that instrumentation
 and has no cycle-counter backend; its cycle diagnostic fields remain zero.
@@ -274,7 +301,8 @@ Shared scripts and commands make logical colour/gain requests through optional
 headless acceptance behavior. The I2S driver supplies optional output diagnostics;
 without a driver, overlap counts are zero. Point-to-point transports need no
 electrical bus hooks. The simulator supplies its clock in `sim/clock.cpp` and
-byte ports in `sim/serialdevices.cpp`; it has no dummy board implementations.
+byte ports in `sim/serialdevices.cpp`, and native output in `sim/audio_device.cpp`;
+it has no dummy board implementations.
 
 On macOS, `sim/clock.cpp` configures the simulator thread with the host streaming
 workers' scheduling policy: interactive QoS and a preemptible 1 ms time constraint

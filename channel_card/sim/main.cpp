@@ -21,17 +21,13 @@
             (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
 */
 
-#include "audio.h"
+#include "audio_device.h"
 #include "channel.h"
 #include "serialdevices.h"
 #include "usb.h"
 #include "transport.h"
 #include <signal.h>
 #include <stdio.h>
-
-#ifndef SIM_AUDIO_SAMPLES
-#define SIM_AUDIO_SAMPLES 48u
-#endif
 
 /* ---- handle termination signals ----------------------------------------- */
 
@@ -42,28 +38,15 @@ static void stop_simulator(int)
     stopped = 1;
 }
 
-/* Print one complete block per second. */
-static void print_audio_block(const int32_t *block, uint32_t sample_count)
-{
-    static uint64_t last_print = 0;
-    uint64_t now = get_simulator_time_ns();
-    if (now - last_print < 1000000000ULL) return;
-
-    fprintf(stderr, "sim: block:");
-    for (uint32_t i = 0; i < sample_count; ++i) {
-        fprintf(stderr, " %ld", (long)block[i]);
-    }
-    fprintf(stderr, "\n");
-    last_print = now;
-}
-
 /* ---- run the simulator -------------------------------------------------- */
 
-int main(void)
+int main(int argc, char **argv)
 {
-    /* ---- initialize devices and application ----------------------------- */
-
-    if (!init_simulator_timing() || !setup_serial_devices()) return 1;
+    if (argc != 1) {
+        fprintf(stderr, "Usage: %s\n", argv[0]);
+        return 1;
+    }
+    if (!init_simulator_timing()) return 1;
     signal(SIGINT, stop_simulator);
     signal(SIGTERM, stop_simulator);
     signal(SIGPIPE, SIG_IGN);
@@ -71,32 +54,35 @@ int main(void)
     init_usb_protocol();
     init_rs485_receiver();
     init_channel_card();
+    if (!start_audio_device()) return 1;
+    /* Publish ports only after the sound device is ready for playback. */
+    if (!setup_serial_devices()) {
+        stop_audio_device();
+        return 1;
+    }
     fprintf(stderr, "sim: USB %s, RS485 %s (Ctrl+C to stop)\n", SIM_USB_PATH, SIM_RS485_PATH);
 
-    /* ---- service serial ports and render audio -------------------------- */
+    /* ---- service commands while PortAudio requests samples -------------- */
 
-    constexpr uint32_t sample_count = SIM_AUDIO_SAMPLES;
-    static_assert(sample_count > 0, "Audio requests must advance time");
-    uint64_t next_audio = start_audio_clock(sample_count, AUDIO_SAMPLE_RATE_HZ);
     int result = 0;
     while (!stopped) {
-        if (!process_serial_io(next_audio)) {
+        /* This wait discovers PTY connections; it never generates audio. */
+        if (!process_serial_io(get_simulator_time_ns() + 1000000u)) {
             result = 1;
             break;
         }
         process_usb_messages();
         process_rs485_commands();
-        process_usb_messages(); /* Drain USB after a console reply. */
-        if (get_simulator_time_ns() < next_audio) continue;
-
-        int32_t block[sample_count];
-        render_audio_samples(block, sample_count);
-        next_audio = schedule_next_audio_block();
-        print_audio_block(block, sample_count);
+        process_usb_messages();
+        if (!process_audio_device()) {
+            result = 1;
+            break;
+        }
     }
 
-    /* ---- close devices -------------------------------------------------- */
+    /* ---- stop callbacks before closing their application context -------- */
 
+    if (!stop_audio_device()) result = 1;
     close_serial_devices();
     return result;
 }

@@ -34,10 +34,11 @@ BERRY_SOURCES := $(patsubst $(ROOT)/%,%,$(sort $(wildcard $(ROOT)/$(BERRY)/src/*
                  berry_runtime/berry_runtime_modtab.c
 OBJECTS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(SOURCES)))
 
-INCLUDES := -I$(ROOT)/app -I$(ROOT)/berry_runtime -I$(ROOT)/$(BERRY)/src -I$(ROOT)/sim
+INCLUDES := -I$(ROOT)/app -I$(ROOT)/berry_runtime -I$(ROOT)/$(BERRY)/src -I$(ROOT)/sim $(EXTRA_INCLUDES)
 COMMON_FLAGS := -O2 -g -Wall -MMD -MP
 CFLAGS := -std=c11 -Wextra -Werror
 CXXFLAGS := -std=c++17 -fno-rtti -fno-exceptions -fno-threadsafe-statics
+LDLIBS ?= -lm
 $(addprefix $(OBJDIR)/,$(addsuffix .o,$(BERRY_SOURCES))): CFLAGS := -std=c11 -w
 
 # ---- build and clean --------------------------------------------------------
@@ -63,7 +64,7 @@ $(OBJDIR)/%.cpp.o: $(ROOT)/%.cpp
 
 $(OUTPUT): $(OBJECTS)
 	@mkdir -p "$(@D)"
-	$(HOST_CXX) $^ -o "$@" -lm
+	$(HOST_CXX) $^ -o "$@" $(LDLIBS)
 
 clean:
 	@rm -rf "$(OBJDIR)"
