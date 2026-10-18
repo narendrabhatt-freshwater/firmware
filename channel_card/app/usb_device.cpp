@@ -22,6 +22,7 @@
 */
 
 #include "transport.h"
+#include "transport_buffer.h"
 #include "usb_device.h"
 #include "usb.h"
 #include "usb_otg.h"
@@ -38,8 +39,6 @@
  * to make a command visible to the parser.
  */
 #define PCD (&hpcd_USB_OTG_HS)
-#define RX_SIZE 8192u
-#define TX_SIZE 2048u
 #define RX_TRANSFER_BYTES 512u
 #define BULK_OUT 0x01u
 #define BULK_IN 0x81u
@@ -49,11 +48,10 @@
  * those CPU accesses and faster than the uncached AXI DMA region. */
 #define USB_RAM __attribute__((aligned(4)))
 #endif
-static uint8_t rx[RX_SIZE] USB_RAM, tx[TX_SIZE] USB_RAM;
+static UsbTransport transport USB_RAM;
 static uint8_t out_packet[RX_TRANSFER_BYTES] USB_RAM, in_packet[64] USB_RAM;
 static uint32_t rx_published;
-static volatile uint32_t rx_wr, rx_rd, tx_wr, tx_rd, epoch;
-static volatile uint8_t configuration, dtr, suspended, faulted, rx_armed, tx_busy;
+static volatile uint8_t rx_armed, tx_busy;
 static uint8_t tx_zlp;
 static volatile uint32_t resets, setups, control_stalls;
 static uint8_t last_setup[8];
@@ -133,7 +131,7 @@ static void begin_usb_control_transfer(const uint8_t *data, uint16_t size, uint1
 static void arm_usb_receive(void)
 {
     /* Reserve room for the entire transfer, including its unpublished tail. */
-    if (configuration && !faulted && !rx_armed && RX_SIZE - (rx_wr - rx_rd) >= RX_TRANSFER_BYTES) {
+    if (transport.configured && !transport.faulted && !rx_armed && transport.rx.free() >= RX_TRANSFER_BYTES) {
         rx_published = 0;
         rx_armed = 1;
         if (HAL_PCD_EP_Receive(PCD, BULK_OUT, out_packet, RX_TRANSFER_BYTES) != HAL_OK)
@@ -148,19 +146,13 @@ static void arm_usb_receive(void)
 static void publish_usb_received_bytes(uint32_t received)
 {
     if (received < rx_published || received > RX_TRANSFER_BYTES ||
-        received - rx_published > RX_SIZE - (rx_wr - rx_rd)) {
-        faulted = 1;
-        ++epoch;
+        received - rx_published > transport.rx.free()) {
+        transport.fault(true);
         return;
     }
     uint32_t n = received - rx_published;
     if (!n) return;
-    uint32_t wr = rx_wr, at = wr % RX_SIZE, first = n;
-    if (first > RX_SIZE - at) first = RX_SIZE - at;
-    memcpy(rx + at, out_packet + rx_published, first);
-    memcpy(rx, out_packet + rx_published + first, n - first);
-    __DMB();
-    rx_wr = wr + n;
+    (void)transport.rx.write(out_packet + rx_published, n);
     rx_published = received;
 }
 
@@ -168,17 +160,14 @@ static void publish_usb_received_bytes(uint32_t received)
 
 static void transmit_queued_usb_bytes(void)
 {
-    if (!configuration || suspended || tx_busy) return;
-    uint32_t n = tx_wr - tx_rd;
+    if (!transport.configured || transport.suspended || tx_busy) return;
+    uint32_t n = transport.tx.size();
     if (n > 64) n = 64;
     if (!n && !tx_zlp) return;
-    uint32_t at = tx_rd % TX_SIZE, first = n;
-    if (first > TX_SIZE - at) first = TX_SIZE - at;
-    memcpy(in_packet, tx + at, first);
-    memcpy(in_packet + first, tx, n - first);
+    (void)transport.tx.peek(in_packet, n);
     tx_busy = 1;
     if (HAL_PCD_EP_Transmit(PCD, BULK_IN, in_packet, n) == HAL_OK) {
-        tx_rd += n;
+        transport.tx.consume(n);
         tx_zlp = (uint8_t)(n == 64);
     } else
         tx_busy = 0;
@@ -188,11 +177,9 @@ static void transmit_queued_usb_bytes(void)
 
 static void reset_usb_queues(void)
 {
-    rx_wr = rx_rd = tx_wr = tx_rd = 0;
+    transport.reset();
     rx_published = 0;
     rx_armed = tx_busy = tx_zlp = 0;
-    faulted = 0;
-    ++epoch;
 }
 
 static void reset_usb_connection(void)
@@ -237,7 +224,7 @@ void HAL_PCD_ResetCallback(PCD_HandleTypeDef *pcd)
 {
     (void)pcd;
     ++resets;
-    configuration = dtr = suspended = ctrl_stage = 0;
+    transport.configured = transport.attached = transport.suspended = ctrl_stage = 0;
     reset_usb_queues();
     (void)HAL_PCD_EP_Open(PCD, 0, 64, EP_TYPE_CTRL);
     (void)HAL_PCD_EP_Open(PCD, 0x80, 64, EP_TYPE_CTRL);
@@ -259,22 +246,22 @@ void HAL_PCD_SetupStageCallback(PCD_HandleTypeDef *pcd)
             begin_usb_control_transfer(desc, size, length);
             return;
         }
-    } else if (bm == 0 && request == 5 && value < 128 && !index && !length && !configuration) {
+    } else if (bm == 0 && request == 5 && value < 128 && !index && !length && !transport.configured) {
         /* DWC2 latches the address for the status handshake: program it before
          * submitting the ZLP, matching the controller's working device driver. */
         (void)HAL_PCD_SetAddress(PCD, (uint8_t)value);
         send_usb_control_status();
         return;
     } else if (bm == 0 && request == 9 && value <= 1 && !index && !length) {
-        if (configuration) close_usb_data_endpoints();
-        configuration = (uint8_t)value;
-        dtr = 0;
+        if (transport.configured) close_usb_data_endpoints();
+        transport.configured = (uint8_t)value;
+        transport.attached = 0;
         reset_usb_queues();
-        if (configuration) open_usb_data_endpoints();
+        if (transport.configured) open_usb_data_endpoints();
         send_usb_control_status();
         return;
     } else if (bm == 0x80 && request == 8 && !value && !index && length == 1) {
-        ctrl[0] = configuration;
+        ctrl[0] = transport.configured;
         begin_usb_control_transfer(ctrl, 1, length);
         return;
     } else if ((bm == 0x80 || bm == 0x81 || bm == 0x82) && request == 0 && !value && length == 2) {
@@ -283,13 +270,13 @@ void HAL_PCD_SetupStageCallback(PCD_HandleTypeDef *pcd)
             stall_usb_control_endpoint();
             return;
         }
-        if (bm == 0x81 && (!configuration || index > 1)) {
+        if (bm == 0x81 && (!transport.configured || index > 1)) {
             stall_usb_control_endpoint();
             return;
         }
         if (bm == 0x82) {
             if (index != 0 && index != 0x80 &&
-                (!configuration || (index != BULK_OUT && index != BULK_IN && index != NOTIFY_IN))) {
+                (!transport.configured || (index != BULK_OUT && index != BULK_IN && index != NOTIFY_IN))) {
                 stall_usb_control_endpoint();
                 return;
             }
@@ -298,7 +285,7 @@ void HAL_PCD_SetupStageCallback(PCD_HandleTypeDef *pcd)
         }
         begin_usb_control_transfer(ctrl, 2, length);
         return;
-    } else if (bm == 2 && (request == 1 || request == 3) && !value && !length && configuration &&
+    } else if (bm == 2 && (request == 1 || request == 3) && !value && !length && transport.configured &&
                (index == BULK_OUT || index == BULK_IN || index == NOTIFY_IN)) {
         if (request == 3)
             (void)HAL_PCD_EP_SetStall(PCD, (uint8_t)index);
@@ -315,25 +302,25 @@ void HAL_PCD_SetupStageCallback(PCD_HandleTypeDef *pcd)
         }
         send_usb_control_status();
         return;
-    } else if (bm == 0x81 && request == 10 && !value && index < 2 && length == 1 && configuration) {
+    } else if (bm == 0x81 && request == 10 && !value && index < 2 && length == 1 && transport.configured) {
         ctrl[0] = 0;
         begin_usb_control_transfer(ctrl, 1, length);
         return;
-    } else if (bm == 1 && request == 11 && !value && index < 2 && !length && configuration) {
+    } else if (bm == 1 && request == 11 && !value && index < 2 && !length && transport.configured) {
         send_usb_control_status();
         return;
-    } else if (bm == 0xA1 && request == 0x21 && !value && !index && length == 7 && configuration) {
+    } else if (bm == 0xA1 && request == 0x21 && !value && !index && length == 7 && transport.configured) {
         begin_usb_control_transfer(line_coding, 7, length);
         return;
-    } else if (bm == 0x21 && request == 0x20 && !value && !index && length == 7 && configuration) {
+    } else if (bm == 0x21 && request == 0x20 && !value && !index && length == 7 && transport.configured) {
         ctrl_out = 1;
         ctrl_stage = 2;
         (void)HAL_PCD_EP_Receive(PCD, 0, ctrl, 7);
         return;
-    } else if (bm == 0x21 && request == 0x22 && !index && !length && configuration && value <= 3) {
+    } else if (bm == 0x21 && request == 0x22 && !index && !length && transport.configured && value <= 3) {
         uint8_t next = (uint8_t)(value & 1);
-        if (next != dtr) {
-            dtr = next;
+        if (next != transport.attached) {
+            transport.attached = next;
             reset_usb_connection();
         }
         send_usb_control_status();
@@ -386,7 +373,7 @@ void HAL_PCD_DataOutStageCallback(PCD_HandleTypeDef *pcd, uint8_t ep)
     }
     if (ep != 1) return;
     rx_armed = 0;
-    if (!dtr || faulted) {
+    if (!transport.attached || transport.faulted) {
         arm_usb_receive();
         return;
     }
@@ -399,13 +386,13 @@ void HAL_PCD_DataOutStageCallback(PCD_HandleTypeDef *pcd, uint8_t ep)
 void HAL_PCD_SuspendCallback(PCD_HandleTypeDef *pcd)
 {
     (void)pcd;
-    suspended = 1;
+    transport.suspended = 1;
 }
 
 void HAL_PCD_ResumeCallback(PCD_HandleTypeDef *pcd)
 {
     (void)pcd;
-    suspended = 0;
+    transport.suspended = 0;
     transmit_queued_usb_bytes();
     arm_usb_receive();
 }
@@ -413,7 +400,7 @@ void HAL_PCD_ResumeCallback(PCD_HandleTypeDef *pcd)
 void HAL_PCD_DisconnectCallback(PCD_HandleTypeDef *pcd)
 {
     (void)pcd;
-    configuration = dtr = 0;
+    transport.configured = transport.attached = 0;
     reset_usb_queues();
 }
 
@@ -448,20 +435,14 @@ void init_usb_device(void)
 uint32_t read_usb_bytes(uint8_t *dst, uint32_t size)
 {
     uint32_t saved = lock_usb_queues();
-    if (dtr && !faulted && rx_armed)
+    if (transport.attached && !transport.faulted && rx_armed)
         publish_usb_received_bytes(HAL_PCD_EP_GetRxCount(PCD, BULK_OUT));
-    if (faulted) {
+    if (transport.faulted) {
         unlock_usb_queues(saved);
         return 0;
     }
-    uint32_t n = rx_wr - rx_rd;
-    if (n > size) n = size;
-    if (n > 64) n = 64; /* Keep the interrupt-masked copy bounded. */
-    uint32_t rd = rx_rd, at = rd % RX_SIZE, first = n;
-    if (first > RX_SIZE - at) first = RX_SIZE - at;
-    memcpy(dst, rx + at, first);
-    memcpy(dst + first, rx, n - first);
-    rx_rd = rd + n;
+    if (size > 64) size = 64; /* Keep the interrupt-masked copy bounded. */
+    uint32_t n = transport.read(dst, size);
     arm_usb_receive();
     unlock_usb_queues(saved);
     return n;
@@ -470,15 +451,8 @@ uint32_t read_usb_bytes(uint8_t *dst, uint32_t size)
 uint8_t write_usb_bytes(const uint8_t *src, uint32_t size)
 {
     uint32_t saved = lock_usb_queues();
-    uint8_t ok = (uint8_t)(configuration && dtr && size <= TX_SIZE - (tx_wr - tx_rd));
-    if (ok) {
-        uint32_t wr = tx_wr, at = wr % TX_SIZE, first = size;
-        if (first > TX_SIZE - at) first = TX_SIZE - at;
-        memcpy(tx + at, src, first);
-        memcpy(tx, src + first, size - first);
-        tx_wr = wr + size;
-        transmit_queued_usb_bytes();
-    }
+    uint8_t ok = transport.write(src, size);
+    if (ok) transmit_queued_usb_bytes();
     unlock_usb_queues(saved);
     return ok;
 }
@@ -487,17 +461,17 @@ uint8_t write_usb_bytes(const uint8_t *src, uint32_t size)
 
 uint32_t get_usb_transmit_free_bytes(void)
 {
-    return TX_SIZE - (tx_wr - tx_rd);
+    return transport.tx.free();
 }
 
 uint32_t get_usb_connection_generation(void)
 {
-    return epoch;
+    return transport.generation;
 }
 
 uint8_t is_usb_connected(void)
 {
-    return (uint8_t)(configuration && dtr && !faulted && !suspended);
+    return transport.ready();
 }
 
 void fault_usb_connection(void)
@@ -505,7 +479,7 @@ void fault_usb_connection(void)
     uint32_t saved = lock_usb_queues();
     /* Let any already armed packet finish and then leave OUT NAKed. STALL/clear
      * would reset endpoint PID on only one side during DTR recovery. */
-    faulted = 1;
+    transport.fault();
     unlock_usb_queues(saved);
 }
 
@@ -528,7 +502,7 @@ void format_usb_device_status(char *text, uint32_t size)
         "last %02x%02x%02x%02x%02x%02x%02x%02x "
         "regs %08lx %08lx %08lx %08lx %08lx %08lx %08lx\r\n",
         (unsigned long)resets, (unsigned long)setups, (unsigned long)control_stalls, ctrl_stage,
-        configuration, dtr, suspended, faulted, last_setup[0], last_setup[1], last_setup[2],
+        transport.configured, transport.attached, transport.suspended, transport.faulted, last_setup[0], last_setup[1], last_setup[2],
         last_setup[3], last_setup[4], last_setup[5], last_setup[6], last_setup[7],
         (unsigned long)gint, (unsigned long)mask, (unsigned long)ahb, (unsigned long)cfg,
         (unsigned long)ctl, (unsigned long)otg, (unsigned long)phy);

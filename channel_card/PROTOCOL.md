@@ -142,14 +142,15 @@ Payload byte zero is status (`0` success, `1` error); errors may append a
 diagnostic string without a NUL terminator. Successful upload replies contain
 only the status byte. No request ID is transmitted: exactly one request/reply
 exchange may be outstanding, even while BODY is streaming. The host verifies
-reply type, target, status and successful payload length. A timeout, disconnect
+reply type, target, status and successful payload length. An explicitly configured timeout, disconnect
 or unexpected reply faults the host connection; it must reopen before sending
 another request. It never retries an ambiguously completed request on that link.
 BODY does not get a per-block success reply: RS485 `vq` acknowledges progress.
 A BODY error generates an error REPLY identifying BODY and faults the link.
 
-A malformed header, invalid BODY fields or partial frame stalled for over one
-second faults reception. The host must close/reopen, toggle DTR, negotiate HELLO
+A malformed header or invalid BODY fields faults reception. Partial frames do
+not expire by default; an explicitly configured partial-frame deadline also
+faults reception when exceeded. The host must close/reopen, toggle DTR, negotiate HELLO
 and obtain current `vq` status before arming new notes. No scanning inside binary
 samples attempts to guess framing. USB reset and DTR transitions discard receive,
 transmit and parser state and abort uploads. Uncommitted BODY is never published.
@@ -175,13 +176,15 @@ upload messages. PROBE timings do not measure key-to-DAC latency.
 ### BODY and flow control
 
 BODY payload contains 1..1024 signed-int8 samples for one voice. RS485 note-on
-arms a pending session; its first matching BODY establishes note start while
-that pending ring is empty. Later blocks append, including across promotion
+prepares a session which audio publishes at its next 48-sample boundary. Note
+events remain silent. The host waits for that session in `vq` before sending its
+BODY; its first matching BODY establishes note start while the pending ring is
+empty. Later blocks append, including across promotion
 to the playing note. There is no START flag or per-note sequence on USB.
-An idle voice waits for 998 pending BODY samples before dispatching note-on.
-For an already playing voice, note-on starts its script immediately;
-`start_note()` promotes the pending queue when the script finishes its steal
-fade. Current-session BODY remains accepted until that switch. Current and
+Both idle and already playing voices wait for 998 pending BODY samples before
+dispatching note-on. The old note continues during replacement preparation.
+`start_note()` promotes the prepared queue at the point selected by the script,
+including immediately or after a steal fade. Current-session BODY remains accepted until that switch. Current and
 pending queues share the 4080-byte pool, allocated in 16-byte blocks.
 Samples and the DAC are still 48 kHz source format/output; scripts control the
 playback increment.
@@ -259,7 +262,8 @@ total_bytes:u32`; target is the sample, logical wavetable or voice:
 `UPLOAD_DATA` payload is `offset:u32` followed by 1..1020 bytes. Target must match
 BEGIN, offset must equal the bytes already received, and data cannot exceed the
 declared total. Commit occurs on the final data chunk, and its success REPLY confirms commit.
-`UPLOAD_ABORT` has no payload. Idle upload transactions time out after 5 seconds.
+`UPLOAD_ABORT` has no payload. Idle uploads do not expire by default. Firmware
+can explicitly configure an idle-upload deadline through `TransportTimeouts`.
 No raw upload bytes bypass the block parser. The old ASCII `al`, `wl` and
 `vmload` wire transactions have been replaced by these blocks.
 

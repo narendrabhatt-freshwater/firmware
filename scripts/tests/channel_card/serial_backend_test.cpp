@@ -59,7 +59,7 @@ static void pair_for(Port &p,int &peer)
     p.fd=fds[0]; peer=fds[1];
     assert(fcntl(p.fd,F_SETFL,O_NONBLOCK)==0);
     assert(fcntl(peer,F_SETFL,O_NONBLOCK)==0);
-    p.connected=true;
+    reset_serial_port(p, true);
 }
 int main()
 {
@@ -67,20 +67,22 @@ int main()
     uint8_t data[]={1,2,3,4}, received[8]={};
     assert(start_rs485_transmit(data,4)==0);
     assert(start_rs485_transmit(data,4)==-1);
-    assert(poll_rs485_transmit()==0 && rs485.sent==3);
-    write_error=EAGAIN; assert(poll_rs485_transmit()==0 && rs485.sent==3);
-    write_error=EINTR; assert(poll_rs485_transmit()==0 && rs485.sent==3);
+    assert(poll_rs485_transmit()==0 && rs485.buffers.tx.size()==3);
+    write_error=EAGAIN; assert(poll_rs485_transmit()==0 && rs485.buffers.tx.size()==3);
+    write_error=EINTR; assert(poll_rs485_transmit()==0 && rs485.buffers.tx.size()==3);
     write_error=0;
     assert(poll_rs485_transmit()==0); assert(poll_rs485_transmit()==0);
     assert(poll_rs485_transmit()==1);
     assert(read(rs_peer,received,8)==4 && memcmp(received,data,4)==0);
     assert(start_rs485_transmit(data,4)==0); write_error=EAGAIN;
-    assert(poll_rs485_transmit()==0); abort_rs485_transmit(); assert(rs485.sent==0);
+    assert(poll_rs485_transmit()==0); abort_rs485_transmit(); assert(rs485.buffers.tx.size()==0);
     write_error=0;
     // USB application writes stay all-or-nothing despite partial OS writes.
-    assert(write_usb_bytes(data,4)); usb.sent=sizeof usb.tx-1;
-    assert(!write_usb_bytes(data,4) && usb.sent==sizeof usb.tx-1);
-    usb.sent=4;
+    uint8_t full[2047] = {};
+    assert(write_usb_bytes(full, sizeof full));
+    assert(!write_usb_bytes(data,4) && usb.buffers.tx.size()==sizeof full);
+    usb.buffers.tx.discard();
+    assert(write_usb_bytes(data,4));
     for(unsigned i=0;i<4;++i) assert(transmit_serial_bytes(usb));
     assert(read(usb_peer,received,8)==4 && memcmp(received,data,4)==0);
     // Packet-mode payloads may be consumed in arbitrary prefixes.

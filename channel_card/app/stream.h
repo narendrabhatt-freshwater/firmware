@@ -46,14 +46,12 @@ extern "C" {
 /* ---- producer reservation ----------------------------------------------- */
 
 typedef struct {
-    uint32_t start_wr;
     uint32_t nsamp;
     uint32_t written;
     uint32_t generation;
     uint8_t voice;
     uint8_t session;
     uint8_t sof;
-    uint8_t pending;
     uint8_t bank, offset;
     uint16_t head, tail, cursor;
     uint8_t active;
@@ -61,7 +59,6 @@ typedef struct {
 
 #define STREAM_RING_WRITE_OK 0
 #define STREAM_RING_WRITE_STALE 1
-#define STREAM_RING_WRITE_FUTURE 3
 #define STREAM_RING_WRITE_ERROR (-1)
 
 /* ---- ring lifecycle ----------------------------------------------------- */
@@ -70,13 +67,12 @@ void init_voice_streams(void);
 void reset_voice_stream(uint8_t voice);
 void reset_all_voice_streams(void);
 
-/**
- * @brief Arm consumption of the current ring session.
- */
-void mark_voice_stream_consuming(uint8_t voice);
-
-/** Create an empty pending generation. Superseding only drops old pending. */
-void prepare_pending_voice_stream(uint8_t voice, uint16_t wave_id, uint8_t session);
+/** Transport reserves an unpublished queue; returns its index (255 on invalid
+ * voice). Keep ownership until audio consumes the note-command handoff. Only
+ * one unpublished reservation per voice is allowed. */
+uint8_t reserve_voice_stream(uint8_t voice, uint16_t wave_id, uint8_t session);
+/** Audio publishes a reserved queue and retires the previous pending queue. */
+void publish_pending_voice_stream(uint8_t voice, uint8_t queue);
 
 /** Atomically discard current remainder and promote the pending origin. */
 int activate_pending_voice_stream(uint8_t voice);
@@ -109,7 +105,6 @@ uint8_t get_stream_body_age_ms(void);
 /** Reserve a complete BODY burst without publishing it to the consumer.
  * @retval STREAM_RING_WRITE_OK reservation active
  * @retval STREAM_RING_WRITE_STALE prior note/session is no longer active
- * @retval STREAM_RING_WRITE_FUTURE SOF arrived before its tagged nX
  * @retval STREAM_RING_WRITE_ERROR invalid request or insufficient credit */
 /* ---- reserve and commit body blocks ------------------------------------- */
 
@@ -153,11 +148,12 @@ uint32_t get_stream_buffered_samples(uint8_t voice);
 
 uint32_t get_stream_free_samples(uint8_t voice);
 
+/* Read both session roles from one atomic ring-state publication. */
+void get_stream_sessions(uint8_t voice, uint8_t *current, uint8_t *target, uint8_t *pending);
 uint8_t get_current_stream_session(uint8_t voice);
 uint32_t get_current_stream_free_samples(uint8_t voice);
 uint8_t has_pending_voice_stream(uint8_t voice);
 uint8_t get_target_stream_session(uint8_t voice);
-uint32_t get_target_stream_buffered_samples(uint8_t voice);
 
 /** Highest fill among all voices (feedback / console). */
 uint32_t get_max_stream_buffered_samples(void);
@@ -171,9 +167,6 @@ void record_stream_buffered_samples(uint8_t voice);
 /** Whole BODY bursts dropped because the FIFO was full. */
 uint32_t get_stream_dropped_block_count(void);
 
-/** BODY bursts accepted into a ring. */
-uint32_t get_stream_received_block_count(void);
-
 /** Accepted armed session starts (SOF + new session). */
 uint32_t get_stream_start_block_count(void);
 
@@ -185,8 +178,6 @@ uint32_t get_stream_full_buffer_count(void);
 uint32_t get_stream_superseded_block_count(void);
 
 void clear_stream_statistics(void);
-
-void reset_stream_statistics(void);
 
 #ifdef __cplusplus
 }

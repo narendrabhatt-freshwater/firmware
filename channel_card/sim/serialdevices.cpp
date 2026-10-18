@@ -23,6 +23,7 @@
 
 #include "serialdevices.h"
 #include "transport.h"
+#include "transport_buffer.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -44,13 +45,13 @@ struct Port {
     const char *path = nullptr;
     std::string slave;
     bool connected = false, linked = false;
-    uint8_t rx[8192], tx[2048];
-    size_t received = 0, sent = 0;
+    TransportBuffers &buffers;
+    explicit Port(TransportBuffers &storage) : buffers(storage) {}
 };
 
-static Port usb, rs485;
-static uint32_t usbEpoch;
-static bool usbFault;
+static UsbTransport usbTransport;
+static TransportBuffers rs485Buffers;
+static Port usb{usbTransport}, rs485{rs485Buffers};
 static bool readProgress;
 static bool rsTxPending, rsTxFailed, serialIoFailed;
 
@@ -60,11 +61,10 @@ static void reset_serial_port(Port &port, bool connected)
 {
     if (&port == &rs485 && rsTxPending) rsTxFailed = true;
     port.connected = connected;
-    port.received = port.sent = 0;
     if (&port == &usb) {
-        ++usbEpoch;
-        usbFault = false;
-    }
+        usbTransport.configured = usbTransport.attached = connected;
+        usbTransport.reset();
+    } else port.buffers.clear();
 }
 
 static bool open_serial_port(Port &port, const char *path)
@@ -141,9 +141,9 @@ static bool receive_serial_bytes(Port &port)
         if (port.connected) reset_serial_port(port, false);
         return true;
     }
-    uint8_t packet[sizeof port.rx + 1];
-    size_t space = sizeof port.rx - port.received;
-    if (&port == &usb && usbFault) space = 0;
+    uint8_t packet[8192 + 1];
+    size_t space = port.buffers.rx.free();
+    if (&port == &usb && usbTransport.faulted) space = 0;
     /* Read the packet header even when full: a host flush resets the session. */
     ssize_t n = read(port.fd, packet, space + 1);
     if (n < 0 && is_temporary_io_error()) return true;
@@ -158,17 +158,17 @@ static bool receive_serial_bytes(Port &port)
     if (packet[0] & (TIOCPKT_FLUSHREAD | TIOCPKT_FLUSHWRITE)) reset_serial_port(port, false);
     if (!port.connected) reset_serial_port(port, true);
     if (packet[0] == TIOCPKT_DATA && n > 1) {
-        memcpy(port.rx + port.received, packet + 1, (size_t)n - 1);
-        port.received += (size_t)n - 1;
-        fprintf(stderr, "sim: received %zu bytes from %s\n", n - 1, port.path);
+        (void)port.buffers.rx.write(packet + 1, (uint32_t)n - 1);
     }
     return true;
 }
 
 static bool transmit_serial_bytes(Port &port)
 {
-    if (!port.connected || !port.sent) return true;
-    ssize_t n = write(port.fd, port.tx, port.sent);
+    if (!port.connected || !port.buffers.tx.size()) return true;
+    uint32_t count;
+    const uint8_t *data = port.buffers.tx.front(count);
+    ssize_t n = write(port.fd, data, count);
     if (n < 0 && is_temporary_io_error()) return true;
     if (n < 0 && errno == EIO) {
         reset_serial_port(port, false);
@@ -178,8 +178,7 @@ static bool transmit_serial_bytes(Port &port)
         perror("sim: writing PTY");
         return false;
     }
-    port.sent -= (size_t)n;
-    memmove(port.tx, port.tx + n, port.sent);
+    port.buffers.tx.consume((uint32_t)n);
     return true;
 }
 
@@ -197,10 +196,10 @@ bool process_serial_io(uint64_t deadlineNs)
     for (Port *port : {&usb, &rs485}) {
         /* Closed PTYs stay readable at EOF; check them on the serial service tick. */
         if (!port->connected) continue;
-        bool canRead = port != &usb || !usbFault;
-        if (canRead && port->received < sizeof port->rx) FD_SET(port->fd, &readable);
-        if (port->sent) FD_SET(port->fd, &writable);
-        if (canRead && port->received && readProgress) delay = 0;
+        bool canRead = port != &usb || !usbTransport.faulted;
+        if (canRead && port->buffers.rx.free()) FD_SET(port->fd, &readable);
+        if (port->buffers.tx.size()) FD_SET(port->fd, &writable);
+        if (canRead && port->buffers.rx.size() && readProgress) delay = 0;
         if (port->fd > top) top = port->fd;
     }
     readProgress = false;
@@ -223,20 +222,14 @@ bool process_serial_io(uint64_t deadlineNs)
 
 static uint32_t read_port_buffer(Port &port, uint8_t *out, uint32_t size)
 {
-    if (size > port.received) size = (uint32_t)port.received;
-    if (size) readProgress = true;
-    memcpy(out, port.rx, size);
-    port.received -= size;
-    memmove(port.rx, port.rx + size, port.received);
-    return size;
+    uint32_t count = port.buffers.rx.read(out, size);
+    if (count) readProgress = true;
+    return count;
 }
 
 static bool write_port_buffer(Port &port, const uint8_t *data, uint32_t size)
 {
-    if (!port.connected || size > sizeof port.tx - port.sent) return false;
-    memcpy(port.tx + port.sent, data, size);
-    port.sent += size;
-    return true;
+    return port.connected && port.buffers.tx.write(data, size);
 }
 
 /* ---- usb device interface ----------------------------------------------- */
@@ -248,50 +241,52 @@ void init_usb_device(void)
 
 uint32_t read_usb_bytes(uint8_t *out, uint32_t size)
 {
-    return usbFault ? 0 : read_port_buffer(usb, out, size);
+    uint32_t count = usbTransport.read(out, size);
+    if (count) readProgress = true;
+    return count;
 }
 
 uint8_t write_usb_bytes(const uint8_t *data, uint32_t size)
 {
-    return write_port_buffer(usb, data, size);
+    return usbTransport.write(data, size);
 }
 
 uint32_t get_usb_transmit_free_bytes(void)
 {
-    return (uint32_t)(sizeof usb.tx - usb.sent);
+    return usbTransport.tx.free();
 }
 
 uint32_t get_usb_connection_generation(void)
 {
-    return usbEpoch;
+    return usbTransport.generation;
 }
 
 uint8_t is_usb_connected(void)
 {
-    return usb.connected && !usbFault;
+    return usbTransport.ready();
 }
 
 void fault_usb_connection(void)
 {
-    usbFault = true;
+    usbTransport.fault();
 }
 
 void format_usb_device_status(char *text, uint32_t size)
 {
     snprintf(text, size, "ok: usbdev PTY attached %u fault %u epoch %lu\r\n",
-             usb.connected, usbFault, (unsigned long)usbEpoch);
+             usb.connected, usbTransport.faulted, (unsigned long)usbTransport.generation);
 }
 
 /* ---- rs485 device interface --------------------------------------------- */
 
 void init_rs485_receiver(void)
 {
-    rs485.received = 0;
+    rs485.buffers.rx.discard();
 }
 
 void clear_rs485_receive_state(void)
 {
-    rs485.received = 0;
+    rs485.buffers.rx.discard();
 }
 
 uint8_t read_rs485_byte(uint8_t *out)
@@ -321,13 +316,13 @@ int poll_rs485_transmit(void)
     if (!rsTxPending) return 1;
     /* Nonblocking device service only; shared code owns protocol dispatch. */
     if (!process_serial_io(get_simulator_time_ns()) || rsTxFailed) return -1;
-    if (rs485.sent) return 0;
+    if (rs485.buffers.tx.size()) return 0;
     rsTxPending = false;
     return 1;
 }
 
 void abort_rs485_transmit(void)
 {
-    rs485.sent = 0;
+    rs485.buffers.tx.discard();
     rsTxPending = rsTxFailed = false;
 }

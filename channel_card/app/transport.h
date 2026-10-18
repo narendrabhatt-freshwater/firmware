@@ -48,6 +48,17 @@ static inline uint32_t calculate_rs485_transmit_timeout_ms(uint32_t nbytes, uint
     return 2u + (uint32_t)(((uint64_t)nbytes * 10000u + baud - 1u) / baud);
 }
 
+/* Timeout policy is opt-in. Zero disables expiration. Configure before
+ * servicing traffic; durations use wrap-safe unsigned millisecond elapsed time. */
+typedef struct {
+    uint32_t usb_partial_frame_ms;
+    uint32_t usb_upload_idle_ms;
+    uint32_t rs485_bus_ms;
+    uint32_t rs485_transmit_ms;
+} TransportTimeouts;
+void set_transport_timeouts(const TransportTimeouts *timeouts);
+const TransportTimeouts *get_transport_timeouts(void);
+
 /* ---- transfer console bytes --------------------------------------------- */
 
 /* Replaceable byte transport for the RS485 console. */
@@ -93,8 +104,9 @@ int poll_rs485_transmit(void);
 void abort_rs485_transmit(void);
 
 /* Shared application service: acquire the configured bus, transmit with a
- * bounded wait and USB protocol servicing, then release on every exit path.
- * Returns 0 on completion, -1 on start/failure/timeout (milliseconds). */
+ * optional deadline and USB protocol servicing, then release on every exit path.
+ * Returns 0 on completion, -1 on start/failure/timeout. Zero timeout waits
+ * without expiration; nonzero is an explicit duration in milliseconds. */
 int write_rs485_bytes(const uint8_t *data, uint16_t size, uint32_t timeout_ms);
 
 /* USB reads return 0..size bytes, never block, and never imply frame alignment.

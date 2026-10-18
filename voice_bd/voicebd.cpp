@@ -73,6 +73,13 @@
 
 namespace voice_board_detail {
 
+// Host flow:
+//   note_on -> rs485.send_event               (command, no reply)
+//   query_status -> stream.apply_status       (vq grants sample credit)
+//   usb.run -> prepare_output -> make_block   (fill the existing output buffer)
+//   usb.run -> write_nonblocking              (resume partial writes in place)
+// Audio rendering runs on the card/simulator, never in either host I/O worker.
+
 // Give the USB and RS485 workers priority so refills are handled promptly.
 /* ---- set streaming priority --------------------------------------------- */
 
@@ -133,9 +140,6 @@ constexpr unsigned kUsbHeaderBytes=5u;
 constexpr uint8_t kUsbProtocolVersion=2u;
 constexpr unsigned kUsbPayloadMax=1024u;
 constexpr unsigned kPrimeSamples=998u;
-constexpr unsigned kStatusPollIntervalMs = 5u;
-constexpr unsigned kReplyTimeoutMs = 5u;
-constexpr unsigned kRefillCoverageUs = (kStatusPollIntervalMs + kReplyTimeoutMs) * 1000u;
 enum : uint8_t { kHello=1, kBody, kUploadBegin, kUploadData, kUploadAbort, kReply };
 constexpr uint8_t kSessionIdWrap = 255u;
 constexpr size_t kBecHeaderBytes = 20u;
@@ -190,12 +194,19 @@ void write_usb_header(uint8_t* out, uint8_t type, uint8_t target,
     write16(out + 3, payload_size);
 }
 
-/* poll uses -1 for an unlimited wait; both request and write deadlines bound it. */
+static std::chrono::steady_clock::time_point deadline_after(uint32_t milliseconds)
+{
+    return milliseconds ? std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds)
+                        : std::chrono::steady_clock::time_point::max();
+}
+
+/* poll uses -1 for no scheduled wake. Round up to avoid spinning below 1 ms. */
 int limit_poll_timeout(int timeout, std::chrono::steady_clock::time_point deadline)
 {
-    auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+    if (deadline == std::chrono::steady_clock::time_point::max()) return timeout;
+    auto left = std::chrono::ceil<std::chrono::milliseconds>(
         deadline - std::chrono::steady_clock::now()).count();
-    int ms = static_cast<int>(std::max<int64_t>(0, left));
+    int ms = static_cast<int>(std::min<int64_t>(INT_MAX, std::max<int64_t>(0, left)));
     return timeout < 0 ? ms : std::min(timeout, ms);
 }
 
@@ -288,6 +299,7 @@ private:
     struct sp_port* port_ = nullptr;
     bool opened_ = false;
     int pty_ = -1;
+    unsigned write_timeout_ms_ = 0;
 
     bool wait_pty(short events, std::chrono::steady_clock::time_point deadline)
     {
@@ -420,77 +432,97 @@ public:
         opened_ = false;
     }
 
-    bool write(void const* data, size_t size, std::string& error)
+    // Completes a command write; may wait for space, cancellation, or explicit expiry.
+    bool write_all(void const* data, size_t size, std::string& error, int cancel_fd = -1)
     {
         if (!opened_) {
             error = "serial port is not open";
             return false;
         }
-        if (pty_ >= 0) {
-            auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
-            size_t sent = 0;
-            while (sent < size) {
-                if (!wait_pty(POLLOUT, deadline)) break;
-                int n = write_nonblocking(static_cast<char const*>(data) + sent, size - sent);
-                if (n < 0) break;
-                sent += static_cast<size_t>(n);
-                if (sent < size && std::chrono::steady_clock::now() >= deadline) {
-                    errno = ETIMEDOUT;
-                    break;
-                }
+        auto deadline = deadline_after(write_timeout_ms_);
+        size_t sent = 0;
+        while (sent < size) {
+            pollfd cancelled{cancel_fd, POLLIN, 0};
+            if (cancel_fd >= 0 && ::poll(&cancelled, 1, 0) > 0) {
+                error = "serial write cancelled";
+                return false;
             }
+            int n = write_nonblocking(static_cast<char const*>(data) + sent, size - sent);
+            if (n < 0) {
+                error = pty_ >= 0
+                    ? "PTY write failed: " + std::error_code(errno, std::generic_category()).message()
+                    : serial_error("serial write", static_cast<sp_return>(n));
+                return false;
+            }
+            sent += static_cast<size_t>(n);
             if (sent == size) return true;
-            error = "PTY write failed: " + std::error_code(errno, std::generic_category()).message();
-            return false;
-        }
-        enum sp_return const result = sp_blocking_write(
-            port_, data, size, 3000u);
-        if (result < 0 || static_cast<size_t>(result) != size) {
-            error = serial_error("serial write", result);
-            return false;
+            if (std::chrono::steady_clock::now() >= deadline) {
+                error = "serial write timed out";
+                return false;
+            }
+            if (n != 0) continue;
+            pollfd fds[2] = {{fd(), POLLOUT, 0}, {cancel_fd, POLLIN, 0}};
+            int ready = ::poll(fds, 2, limit_poll_timeout(-1, deadline));
+            if (ready == 0) {
+                error = "serial write timed out";
+                return false;
+            }
+            if (ready < 0 && errno != EINTR) {
+                error = "serial write poll failed: " + std::error_code(errno, std::generic_category()).message();
+                return false;
+            }
+            if (fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+                error = "serial write disconnected";
+                return false;
+            }
         }
         return true;
     }
 
-    size_t read(void* data, size_t capacity, unsigned timeout_ms)
+    // Transaction reads may wait. Streaming uses read_nonblocking() below.
+    int read_with_wait(void* data, size_t capacity, unsigned timeout_ms)
     {
-        if (!opened_ || capacity == 0u) return 0u;
+        if (!opened_) return -1;
+        if (capacity == 0u) return 0;
         if (pty_ >= 0) {
             auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms == 0u ? 1u : timeout_ms);
-            while (wait_pty(POLLIN, deadline)) {
+            for (;;) {
+                if (!wait_pty(POLLIN, deadline)) return errno == ETIMEDOUT ? 0 : -1;
                 int n = read_nonblocking(data, capacity);
-                if (n != 0) return n > 0 ? static_cast<size_t>(n) : 0u;
-                if (std::chrono::steady_clock::now() >= deadline) break;
+                if (n != 0) return n;
+                if (std::chrono::steady_clock::now() >= deadline) return 0;
             }
-            return 0u;
         }
         enum sp_return const result = sp_blocking_read_next(
             port_, data, capacity, timeout_ms == 0u ? 1u : timeout_ms);
-        return result > 0 ? static_cast<size_t>(result) : 0u;
+        return result < 0 ? -1 : static_cast<int>(result);
     }
 
     int fd() const {
         if (pty_ >= 0) return pty_;
-        int handle=-1; if (port_) (void)sp_get_port_handle(port_,&handle); return handle;
+        int handle = -1;
+        if (port_) (void)sp_get_port_handle(port_, &handle);
+        return handle;
     }
-    int read_nonblocking(void* data,size_t n) {
-        if (pty_ >= 0) {
-            if (!n) return 0;
-            ssize_t got = ::read(pty_, data, n);
-            if (got > 0) return static_cast<int>(got);
-            if (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return 0;
-            return -1; // EOF is a disconnect, not an empty receive queue.
-        }
-        return sp_nonblocking_read(port_,data,n);
+
+    // Return bytes transferred, zero for no progress, or negative for failure.
+    // These calls never wait; the owning worker decides when to poll again.
+    int read_nonblocking(void* data, size_t capacity) {
+        if (pty_ < 0) return sp_nonblocking_read(port_, data, capacity);
+        if (!capacity) return 0;
+        ssize_t count = ::read(pty_, data, capacity);
+        if (count > 0) return static_cast<int>(count);
+        if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return 0;
+        return -1; // EOF is a disconnect, not an empty receive buffer.
     }
-    int write_nonblocking(void const* data,size_t n) {
-        if (pty_ >= 0) {
-            ssize_t sent = ::write(pty_, data, n);
-            if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return 0;
-            return static_cast<int>(sent);
-        }
-        return sp_nonblocking_write(port_,data,n);
+
+    int write_nonblocking(void const* data, size_t size) {
+        if (pty_ < 0) return sp_nonblocking_write(port_, data, size);
+        ssize_t count = ::write(pty_, data, size);
+        if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return 0;
+        return static_cast<int>(count);
     }
+    void set_write_timeout(unsigned timeout_ms) { write_timeout_ms_ = timeout_ms; }
     bool is_open() const { return opened_; }
 
 };
@@ -580,13 +612,15 @@ class rs485_link
 private:
     serial_port port_;
     std::mutex mutex_;
-    uint32_t baud_ = 0u;
+    uint32_t baud_ = 0u, reply_timeout_ms_ = 0;
+    std::atomic<bool> cancelled_{false};
+    int cancel_pipe_[2] = {-1, -1};
     std::chrono::steady_clock::time_point transmitted_at_{};
 
-    voice_board_result_t write(std::string const& wire)
+    voice_board_result_t write_command(std::string const& wire)
     {
         std::string error;
-        if (!port_.write(wire.data(), wire.size(), error))
+        if (!port_.write_all(wire.data(), wire.size(), error, cancel_pipe_[0]))
             return fail(voice_board_error_t::io_error, error);
         transmitted_at_ = std::max(transmitted_at_, std::chrono::steady_clock::now()) +
             std::chrono::microseconds((wire.size() * 10000000ull + baud_ - 1u) / baud_);
@@ -594,39 +628,86 @@ private:
     }
 
 public:
-    voice_board_result_t open(std::string const& path, uint32_t baud)
+    voice_board_result_t open(std::string const& path, uint32_t baud,
+        uint32_t reply_timeout_ms = 0, uint32_t write_timeout_ms = 0)
     {
+        close();
         std::string error;
         if (!port_.open(path, baud, false, error))
             return fail(voice_board_error_t::io_error, error);
+        if (::pipe(cancel_pipe_) < 0) {
+            close();
+            return fail(voice_board_error_t::io_error, "RS485 cancellation pipe failed");
+        }
+        for (int fd : cancel_pipe_) {
+            if (::fcntl(fd, F_SETFL, O_NONBLOCK) < 0 || ::fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
+                close();
+                return fail(voice_board_error_t::io_error, "RS485 cancellation pipe setup failed");
+            }
+        }
         baud_ = baud;
+        reply_timeout_ms_ = reply_timeout_ms;
+        port_.set_write_timeout(write_timeout_ms);
+        cancelled_ = false;
         transmitted_at_ = std::chrono::steady_clock::now();
         return ok();
     }
 
-    void close() { port_.close(); }
+    ~rs485_link() { close(); }
+    // Descriptors live until the owner has joined its I/O users.
+    void cancel() {
+        cancelled_ = true;
+        if (cancel_pipe_[1] >= 0) {
+            char byte = 1;
+            ssize_t result;
+            do { result = ::write(cancel_pipe_[1], &byte, 1); } while (result < 0 && errno == EINTR);
+        }
+    }
+    void close() {
+        cancel(); port_.close();
+        for (int &fd : cancel_pipe_) { if (fd >= 0) ::close(fd); fd = -1; }
+    }
     bool is_open() const { return port_.is_open(); }
 
     voice_board_result_t send_event(std::string const& body)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        return write("c:" + body + "\r");
+        return write_command("c:" + body + "\r");
+    }
+
+    // After I/O users have stopped, closing may send one best-effort clear.
+    // Never re-enter a cancellable wait after cancellation has been latched.
+    void clear_on_close() {
+        static constexpr char wire[] = "c:clear\r";
+        (void)port_.write_nonblocking(wire, sizeof wire - 1);
     }
 
     voice_board_result_t command(std::string const& body,
         std::vector<uint8_t>* binary = nullptr)
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (cancelled_) return fail(voice_board_error_t::io_error, "RS485 request cancelled");
         std::string const wire = (body.size() > 1u && body[1] == ':')
             ? body + "\r" : "c:" + body + "\r";
-        auto sent = write(wire);
+        auto sent = write_command(wire);
         if (!sent) return sent;
+        return read_reply(body, binary);
+    }
+
+private:
+    // Caller holds mutex_: one command owns the port until its reply completes.
+    voice_board_result_t read_reply(std::string const& body, std::vector<uint8_t>* binary)
+    {
         std::vector<uint8_t> reply;
-        auto const stop_waiting_at = transmitted_at_ + std::chrono::milliseconds(kReplyTimeoutMs);
+        auto const stop_waiting_at = reply_timeout_ms_
+            ? transmitted_at_ + std::chrono::milliseconds(reply_timeout_ms_)
+            : std::chrono::steady_clock::time_point::max();
         std::array<uint8_t, 256> bytes{};
-        while (std::chrono::steady_clock::now() < stop_waiting_at) {
-            size_t const count = port_.read(
+        while (!cancelled_ && std::chrono::steady_clock::now() < stop_waiting_at) {
+            // The 1 ms read slice services explicit cancellation, not expiration.
+            int const count = port_.read_with_wait(
                 bytes.data(), bytes.size(), 1u);
+            if (count < 0) return fail(voice_board_error_t::io_error, "RS485 disconnected/read failed");
             reply.insert(reply.end(), bytes.begin(), bytes.begin() + count);
             if (body == "vq") {
                 std::string const text(reply.begin(), reply.end());
@@ -662,6 +743,7 @@ public:
                 }
             }
         }
+        if (cancelled_) return fail(voice_board_error_t::io_error, "RS485 request cancelled");
         return fail(voice_board_error_t::timeout,
             "RS485 timeout waiting for Channel Card reply to: " + body);
     }
@@ -675,7 +757,6 @@ struct sample_data
     // Retain the prefix too: a replacement may move BODY origin past a live cursor.
     std::unique_ptr<int16_t[]> pcm;
     size_t pcm_size = 0u;
-    bool loaded = false;
 };
 
 struct voice_data
@@ -686,12 +767,9 @@ struct voice_data
     uint8_t session_id = 0u;
     uint16_t sample_id = 0u;
     size_t source_position = 0u;
-    size_t stream_origin = 0u;
     unsigned available_sample_slots = 0u;
     bool pending = true;
     unsigned refill_samples_5ms = 0u;
-    double refill_balance = 0;
-    std::chrono::steady_clock::time_point refill_at{}, forecast_until{};
     std::chrono::steady_clock::time_point deadline{};
 };
 
@@ -717,6 +795,8 @@ struct stream_state {
             return nullptr;
         return sid == voices[v].session_id ? &voices[v] : &history[v][sid];
     }
+    // Records of BODY packets already prepared/sent, not another payload queue.
+    // Subtract them from vq credit until the card confirms their USB sequence.
     std::array<pending_packet, kPendingPacketCapacity> pending_packets{};
     size_t first_pending_packet=0, pending_packet_count=0;
     uint16_t next_sequence=0;
@@ -776,14 +856,6 @@ struct stream_state {
                         target.active = false;
                 }
             }
-            if (target_pending && (status.active_voice_mask & (1u << v))) {
-                unsigned head = unsigned(target.stream_origin);
-                unsigned cycle_samples = (kRefillCoverageUs * 96u + 999u) / 1000u;
-                unsigned required = cycle_samples > head ? cycle_samples - head + 2u : 2u;
-                size_t prepared = target.source_position - target.stream_origin;
-                target.initial_samples_left =
-                    prepared < required ? required - unsigned(prepared) : 0;
-            }
             if (target_current)
                 target.initial_samples_left = 0;
             auto *playing = current_voice(v);
@@ -819,14 +891,6 @@ struct stream_state {
         return demand ? std::clamp(buffer_capacity*5u/(4u*demand),1u,5u) : 5u;
     }
 
-    int refill_wake_ms() {
-        std::lock_guard<std::mutex> lock(mutex);
-        auto now=std::chrono::steady_clock::now();
-        for (auto const& v:voices)
-            if(v.active && v.refill_samples_5ms && now<v.forecast_until) return 1;
-        return -1;
-    }
-
     bool urgent() {
         std::lock_guard<std::mutex> lock(mutex);
         auto now=std::chrono::steady_clock::now();
@@ -836,20 +900,13 @@ struct stream_state {
         return false;
     }
 
-    /* Called only by the USB worker. No allocation, waits or serial I/O under
-     * this lock. Credits include the partially written block immediately. */
-    size_t make_block(uint8_t *out,
-                      std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now(),
-                      size_t capacity = kUsbHeaderBytes + kUsbPayloadMax) {
-        std::lock_guard<std::mutex> lock(mutex);
-        if (!sequence_ready || pending_packet_count >= kPendingPacketCapacity ||
-            capacity <= kUsbHeaderBytes)
-            return 0;
+    // Caller holds mutex. Choose the most urgent eligible session; scanning
+    // starts at next_voice so equal deadlines keep the existing round-robin order.
+    voice_data *choose_stream_voice(unsigned& chosen_voice) {
         voice_data *chosen = nullptr;
-        unsigned chosen_voice = 0;
         for (unsigned offset = 0; offset < 8; offset++) {
             unsigned v = (next_voice + offset) % 8;
-            if (!pool_credit[v])
+            if (pool_credit[v] < 16u)
                 continue;
             voice_data *playing = current_voice(v);
             voice_data *options[] = {&voices[v], playing == &voices[v] ? nullptr : playing};
@@ -857,10 +914,8 @@ struct stream_state {
                 if (!candidate || !candidate->active || !candidate->note_seen_in_status ||
                     !samples[candidate->sample_id].pcm_size)
                     continue;
-                if (candidate->pending && !candidate->initial_samples_left)
-                    continue;
-                if (!(candidate->pending && !(active_voice_mask & (1u << v))) &&
-                    candidate->deadline >= now + std::chrono::microseconds(kRefillCoverageUs))
+                if (candidate->pending && !candidate->initial_samples_left &&
+                    (active_voice_mask & (1u << v)))
                     continue;
                 if (!chosen || candidate->deadline < chosen->deadline) {
                     chosen = candidate;
@@ -868,6 +923,19 @@ struct stream_state {
                 }
             }
         }
+        return chosen;
+    }
+
+    /* Called only by the USB worker. No allocation, waits or serial I/O under
+     * this lock. Credits include the partially written block immediately. */
+    size_t make_block(uint8_t *out,
+                      size_t capacity = kUsbHeaderBytes + kUsbPayloadMax) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!sequence_ready || pending_packet_count >= kPendingPacketCapacity ||
+            capacity <= kUsbHeaderBytes)
+            return 0;
+        unsigned chosen_voice = 0;
+        voice_data *chosen = choose_stream_voice(chosen_voice);
         if (!chosen)
             return 0;
         auto &v = *chosen;
@@ -880,10 +948,12 @@ struct stream_state {
         if (!count || charge > pool_credit[chosen_voice])
             return 0;
         write_usb_header(out, kBody, chosen_voice, v.session_id, uint16_t(count));
-        for (unsigned i = 0; i < count; i++)
-            out[kUsbHeaderBytes + i] = v.source_position < sample.pcm_size
-                                           ? uint8_t(sample.pcm[v.source_position++] >> 8)
-                                           : 0;
+        size_t available = v.source_position < sample.pcm_size
+            ? std::min<size_t>(count, sample.pcm_size - v.source_position) : 0;
+        for (size_t i = 0; i < available; ++i)
+            out[kUsbHeaderBytes + i] = uint8_t(sample.pcm[v.source_position + i] >> 8);
+        std::fill_n(out + kUsbHeaderBytes + available, count - available, uint8_t(0));
+        v.source_position += available;
         pending_packets[(first_pending_packet + pending_packet_count) % kPendingPacketCapacity] = {
             next_sequence, uint8_t(chosen_voice), v.session_id, uint16_t(count)};
         ++next_sequence;
@@ -901,12 +971,13 @@ struct stream_state {
 };
 
 // One worker handles all USB reads and writes. MIDI, status and uploads wake it
-// when there is work; otherwise it waits for the port or the next refill.
+// when there is work; otherwise it waits for port readiness or newly granted credit.
 /* ---- stream BODY blocks and uploads ------------------------------------- */
 
 class usb_link {
     serial_port port_;
     stream_state *stream_=nullptr;
+    uint32_t reply_timeout_ms_=0, write_timeout_ms_=0;
     std::thread worker_;
     std::atomic<bool> running_{false}, streaming_{false};
     int wake_[2]={-1,-1};
@@ -914,7 +985,7 @@ class usb_link {
     std::condition_variable done_;
     std::vector<uint8_t> request_, response_;
     uint8_t request_type_=0;
-    bool request_pending_=false, request_sent_=false, request_done_=false;
+    bool request_pending_=false, request_sent_=false;
     std::string error_;
     std::chrono::steady_clock::time_point request_deadline_;
 
@@ -922,86 +993,136 @@ class usb_link {
         std::lock_guard<std::mutex> lock(mutex_);
         error_=std::move(message); running_=false; done_.notify_all();
     }
-    size_t prepare_output(std::array<uint8_t,kPendingWireBytes>& output) {
-        size_t size=0;
+    size_t prepare_output(std::array<uint8_t, kPendingWireBytes>& output) {
         bool have_request;
-        { std::lock_guard<std::mutex> lock(mutex_); have_request=request_pending_ && !request_sent_; }
-        if (streaming_ && (!have_request || stream_->urgent())) {
-            size =
-                stream_->make_block(output.data(), std::chrono::steady_clock::now(), output.size());
-        }
-        if (!size && have_request) {
+        {
             std::lock_guard<std::mutex> lock(mutex_);
-            std::copy(request_.begin(),request_.end(),output.begin());
-            size=request_.size(); request_sent_=true;
+            have_request = request_pending_ && !request_sent_;
         }
-        if (!size && streaming_) size=stream_->make_block(output.data());
-        return size;
+
+        // Refill first when urgent; otherwise let the pending control request go.
+        if (streaming_ && (!have_request || stream_->urgent())) {
+            size_t size = stream_->make_block(output.data(), output.size());
+            if (size) return size;
+        }
+        if (!have_request) return 0;
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::copy(request_.begin(), request_.end(), output.begin());
+        request_sent_ = true;
+        return request_.size();
     }
 
-    bool receive_reply(std::array<uint8_t,kUsbHeaderBytes+kUsbPayloadMax>& input,
-        size_t& received, size_t& needed) {
-        int n=port_.read_nonblocking(input.data()+received,needed-received);
-        if (n<0) { set_error("CDC read failed"); return false; }
-        received+=static_cast<size_t>(n);
-        if (received==kUsbHeaderBytes && needed==kUsbHeaderBytes) {
-            unsigned payload=read16(input.data()+3);
-            if (input[0]!=kReply || !payload || payload>kUsbPayloadMax) { set_error("invalid CDC reply framing"); return false; }
-            needed=kUsbHeaderBytes+payload;
+    bool receive_reply(std::array<uint8_t, kUsbHeaderBytes + kUsbPayloadMax>& input,
+                       size_t& received, size_t& needed) {
+        // Read only the missing header/payload bytes. Keep partial replies here.
+        int count = port_.read_nonblocking(input.data() + received, needed - received);
+        if (count < 0) {
+            set_error("CDC read failed");
+            return false;
         }
-        if (received==needed) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (!request_pending_ || !request_sent_ || input[2]!=request_type_ ||
-                input[1]!=request_[1] || input[kUsbHeaderBytes]>1 ||
-                (input[kUsbHeaderBytes]==0 && needed!=kUsbHeaderBytes+(request_type_==kHello ? 14u : 1u))) {
-                error_="unexpected CDC reply; BODY rejected or protocol lost"; running_=false; done_.notify_all(); return false;
+        received += static_cast<size_t>(count);
+        if (received == kUsbHeaderBytes && needed == kUsbHeaderBytes) {
+            unsigned payload = read16(input.data() + 3);
+            if (input[0] != kReply || !payload || payload > kUsbPayloadMax) {
+                set_error("invalid CDC reply framing");
+                return false;
             }
-            response_.assign(input.begin()+kUsbHeaderBytes,input.begin()+needed);
-            request_done_=true; request_pending_=false; done_.notify_all();
-            received=0; needed=kUsbHeaderBytes;
+            needed = kUsbHeaderBytes + payload;
         }
+        if (received != needed) return true;
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        size_t success_size = kUsbHeaderBytes + (request_type_ == kHello ? 14u : 1u);
+        if (!request_pending_ || !request_sent_ || input[2] != request_type_ ||
+            input[1] != request_[1] || input[kUsbHeaderBytes] > 1 ||
+            (input[kUsbHeaderBytes] == 0 && needed != success_size)) {
+            error_ = "unexpected CDC reply; BODY rejected or protocol lost";
+            running_ = false;
+            done_.notify_all();
+            return false;
+        }
+        response_.assign(input.begin() + kUsbHeaderBytes, input.begin() + needed);
+        request_pending_ = false;
+        done_.notify_all();
+        received = 0;
+        needed = kUsbHeaderBytes;
         return true;
     }
 
     void run() {
-        std::array<uint8_t,kPendingWireBytes> output{};
-        std::array<uint8_t,kUsbHeaderBytes+kUsbPayloadMax> input{};
-        size_t size=0, sent=0, received=0, needed=kUsbHeaderBytes;
-        auto write_deadline=std::chrono::steady_clock::now();
+        // This worker owns both wire buffers. Never replace output until every
+        // byte has been sent; never discard input until its reply is complete.
+        std::array<uint8_t, kPendingWireBytes> output{};
+        std::array<uint8_t, kUsbHeaderBytes + kUsbPayloadMax> input{};
+        size_t output_size = 0, sent = 0;
+        size_t received = 0, needed = kUsbHeaderBytes;
+        auto write_deadline = std::chrono::steady_clock::now();
+
         while (running_) {
-            if (sent==size) {
-                sent=0;
-                size=prepare_output(output);
-                write_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);
+            if (sent == output_size) {
+                sent = 0;
+                output_size = prepare_output(output);
+                write_deadline = deadline_after(write_timeout_ms_);
             }
-            int timeout=streaming_ ? stream_->refill_wake_ms() : -1;
+
+            // Sleep only this I/O worker until data, a wakeup, or configured expiry.
+            int timeout = -1;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (request_pending_)
-                    timeout=limit_poll_timeout(timeout, request_deadline_);
+                    timeout = limit_poll_timeout(timeout, request_deadline_);
             }
-            if (size>sent) timeout=limit_poll_timeout(timeout, write_deadline);
-            pollfd fds[2]={{port_.fd(),static_cast<short>(POLLIN|(size>sent ? POLLOUT : 0)),0},{wake_[0],POLLIN,0}};
-            int ready=::poll(fds,2,timeout);
-            if (ready<0) { if (errno==EINTR) continue; set_error("CDC poll failed"); break; }
+            bool have_output = sent < output_size;
+            if (have_output) timeout = limit_poll_timeout(timeout, write_deadline);
+            short events = POLLIN | (have_output ? POLLOUT : 0);
+            pollfd fds[2] = {{port_.fd(), events, 0}, {wake_[0], POLLIN, 0}};
+            int ready = ::poll(fds, 2, timeout);
+            if (ready < 0) {
+                if (errno == EINTR) continue;
+                set_error("CDC poll failed");
+                break;
+            }
             if (!running_) break;
-            if (fds[1].revents&POLLIN) { uint8_t wake_bytes[64]; while (::read(wake_[0],wake_bytes,sizeof wake_bytes)>0) {} }
-            if (fds[0].revents&(POLLERR|POLLHUP|POLLNVAL)) { set_error("CDC disconnected"); break; }
-            if (fds[0].revents&POLLIN) {
+            if (fds[1].revents & POLLIN) {
+                uint8_t wake_bytes[64];
+                while (::read(wake_[0], wake_bytes, sizeof wake_bytes) > 0) {}
+            }
+            if (fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+                set_error("CDC disconnected");
+                break;
+            }
+
+            if (fds[0].revents & POLLIN) {
                 if (!receive_reply(input, received, needed)) break;
             }
-            if (size>sent && (fds[0].revents&POLLOUT)) {
-                int n=port_.write_nonblocking(output.data()+sent,size-sent);
-                if (n<0) { set_error("CDC write failed"); break; }
-                sent+=static_cast<size_t>(n);
+            if (have_output && (fds[0].revents & POLLOUT)) {
+                int count = port_.write_nonblocking(output.data() + sent, output_size - sent);
+                if (count < 0) {
+                    set_error("CDC write failed");
+                    break;
+                }
+                sent += static_cast<size_t>(count);
             }
-            /* Deadlines also apply when the fd is continuously ready. */
-            if (size>sent && std::chrono::steady_clock::now()>=write_deadline) { set_error("CDC write stalled"); break; }
-            bool expired;
-            { std::lock_guard<std::mutex> lock(mutex_); expired=request_pending_ && std::chrono::steady_clock::now()>=request_deadline_; }
-            if (expired) { set_error("CDC reply timed out; reopen connection"); break; }
+
+            // Explicit deadlines also apply when the port is continuously ready.
+            if (sent < output_size && std::chrono::steady_clock::now() >= write_deadline) {
+                set_error("CDC write stalled");
+                break;
+            }
+            bool reply_expired;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                reply_expired = request_pending_ &&
+                    std::chrono::steady_clock::now() >= request_deadline_;
+            }
+            if (reply_expired) {
+                set_error("CDC reply timed out; reopen connection");
+                break;
+            }
         }
     }
+
 public:
     ~usb_link() { close(); }
     bool good() const { return running_; }
@@ -1010,8 +1131,10 @@ public:
         if (wake_[1]>=0) { auto ignored=::write(wake_[1],&b,1); (void)ignored; }
     }
     void enable_streaming() { streaming_=true; wake(); }
-    voice_board_result_t open(std::string const& path,stream_state& stream) {
+    voice_board_result_t open(std::string const& path,stream_state& stream,
+        uint32_t reply_timeout_ms=0, uint32_t write_timeout_ms=0) {
         close(); std::string error;
+        reply_timeout_ms_=reply_timeout_ms; write_timeout_ms_=write_timeout_ms;
         if (!port_.open(path,115200,true,error)) return fail(voice_board_error_t::io_error,error);
         return start_worker(stream);
     }
@@ -1023,7 +1146,7 @@ private:
                 close(); return fail(voice_board_error_t::io_error,"CDC wake pipe setup failed");
             }
         }
-        stream_=&stream; error_.clear(); request_pending_=request_sent_=request_done_=false;
+        stream_=&stream; error_.clear(); request_pending_=request_sent_=false;
         running_=true;
         auto scheduling_error=start_stream_thread(worker_,[this]{run();});
         if (!scheduling_error.empty()) {
@@ -1046,12 +1169,15 @@ private:
         return result;
     }
 public:
-    void close() {
+    void cancel() {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             running_=false; streaming_=false; done_.notify_all();
         }
         wake();
+    }
+    void close() {
+        cancel();
         if (worker_.joinable()) worker_.join();
         port_.close();
         for (int& fd:wake_) { if (fd>=0) ::close(fd); fd=-1; }
@@ -1066,10 +1192,10 @@ public:
             static_cast<uint16_t>(payload.size()));
         request_type_=type;
         std::copy(payload.begin(),payload.end(),request_.begin()+kUsbHeaderBytes);
-        response_.clear(); request_done_=request_sent_=false; request_pending_=true;
-        request_deadline_=std::chrono::steady_clock::now()+std::chrono::seconds(3);
-        wake(); done_.wait(lock,[this]{return request_done_ || !running_;});
-        if (!request_done_) return fail(voice_board_error_t::io_error,error_.empty() ? "CDC closed during request" : error_);
+        response_.clear(); request_sent_=false; request_pending_=true;
+        request_deadline_=deadline_after(reply_timeout_ms_);
+        wake(); done_.wait(lock,[this]{return !response_.empty() || !running_;});
+        if (response_.empty()) return fail(voice_board_error_t::io_error,error_.empty() ? "CDC closed during request" : error_);
         if (response) *response=response_;
         if (response_[0]) return fail(voice_board_error_t::bad_reply,std::string(response_.begin()+1,response_.end()));
         return ok();
@@ -1094,8 +1220,6 @@ public:
 
 struct device_context
 {
-    voice_board_config_t config;
-    std::string rs485_name;
     rs485_link rs485;
     usb_link usb;
     stream_state stream;
@@ -1137,6 +1261,9 @@ struct device_context
 
     void shutdown()
     {
+        worker_running.store(false);
+        rs485.cancel();
+        usb.cancel(); // Release an upload reply wait before acquiring upload_mutex.
         std::lock_guard<std::mutex> upload_lock(upload_mutex);
         bool was_connected = connected.exchange(false);
         {
@@ -1148,7 +1275,7 @@ struct device_context
             worker.join();
         usb.close();
         if (rs485.is_open()) {
-            if (was_connected) (void)rs485.command("clear");
+            if (was_connected) rs485.clear_on_close();
             rs485.close();
         }
         {
@@ -1229,7 +1356,9 @@ struct device_context
                 continue;
             }
             auto const requested_at = std::chrono::steady_clock::now();
-            record_error(query_status());
+            auto result = query_status();
+            if (!worker_running.load()) break; // Explicit close is not a stream fault.
+            record_error(result);
             advance_poll(requested_at);
         }
     }
@@ -1272,16 +1401,14 @@ voice_board_result_t open_device(device_context* state,
     std::vector<uint8_t> bec;
     auto result = read_bec(config.bec_file, bec);
     if (!result) return result;
-    state->config = config;
-    state->rs485_name = config.rs485_port;
-    result = state->rs485.open(state->rs485_name, config.rs485_baud);
+    result = state->rs485.open(config.rs485_port, config.rs485_baud);
     if (!result) return result;
     result = state->rs485.command("clear");
     if (!result) {
         state->shutdown();
         return result;
     }
-    result=state->usb.open(config.usb_port,state->stream);
+    result=state->usb.open(config.usb_port, state->stream);
     if (!result) { state->shutdown(); return result; }
     // Read fresh buffer space after HELLO establishes the BODY count.
     result = state->query_status();
@@ -1355,7 +1482,6 @@ voice_board_result_t load_sample(device_context* state, uint16_t sample_id,
         attack[i] = static_cast<int8_t>(pcm[i] >> 8);
     sample_data replacement;
     replacement.pcm_size = pcm.size();
-    replacement.loaded = true;
     replacement.pcm.reset(new int16_t[pcm.size()]);
     std::copy(pcm.begin(), pcm.end(), replacement.pcm.get());
 
@@ -1389,7 +1515,7 @@ voice_board_result_t note_on(device_context* state, uint8_t voice,
     uint8_t session;
     {
         std::lock_guard<std::mutex> lock(state->stream.mutex);
-        if (!state->stream.samples[sample].loaded)
+        if (!state->stream.samples[sample].pcm_size)
             return fail(voice_board_error_t::sample_error,
                 "sample " + std::to_string(sample) + " is not loaded");
         auto& slot = state->stream.voices[voice];
@@ -1422,7 +1548,6 @@ voice_board_result_t note_on(device_context* state, uint8_t voice,
         slot.sample_id = sample;
         size_t attack = std::min<size_t>(kAttackSampleCount, state->stream.samples[sample].pcm_size);
         slot.source_position = attack - std::min<size_t>(kCrossfadeSampleCount, attack);
-        slot.stream_origin = slot.source_position;
         slot.deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(5000);
     }
     // Silent note event: write it now, without appending vq or reading an ACK.

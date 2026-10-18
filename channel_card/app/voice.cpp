@@ -33,6 +33,8 @@
 #include "audio.h"
 #include <math.h>
 #include <float.h>
+#include <atomic>
+#include "published_snapshot.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -150,126 +152,27 @@ extern "C" {
 }
 
 static ScriptBerryRuntime s_runtime CHANNEL_VM_STORAGE;
-
-/* ---- initialize the shared script runtime ------------------------------- */
-
-void init_channel_scripts(const ChannelVmNativeOps *ops)
+/* 0 available, 1 audio invocation, 2 upload. Main never waits for audio:
+ * a busy upload request remains in the USB parser until a later service pass. */
+static std::atomic<uint32_t> runtime_owner{0};
+static bool audio_runtime_owned; // owned by the single renderer
+static std::atomic<uint8_t> script_mask{0};
+struct ScriptStatus {
+    FwVmMetrics metrics[NOTE_BANK_VOICES];
+    FwVmFault faults[NOTE_BANK_VOICES];
+    FwVmMemoryMetrics memory;
+};
+static PublishedSnapshot<ScriptStatus> script_status;
+static void publish_script_status()
 {
-    ScriptBerryNativeOps native_ops;
-    memset(&native_ops, 0, sizeof(native_ops));
-    if (ops != NULL) {
-        native_ops.context = ops->context;
-        native_ops.read_input = ops->read_input;
-        native_ops.set_amplitude = ops->set_amplitude;
-        native_ops.ramp = ops->ramp;
-        native_ops.note_end = ops->note_end;
-        native_ops.discard_pending = ops->discard_pending;
-        native_ops.start_note_at = ops->start_note_at;
-        native_ops.osc = ops->osc;
-        native_ops.route = ops->route;
-        native_ops.silence_voice = ops->silence_voice;
-        native_ops.set_led = ops->set_led;
-    }
-    script_berry_init(&s_runtime, &native_ops);
+    ScriptStatus status{};
+    memcpy(status.metrics, s_runtime.voice_metrics, sizeof status.metrics);
+    memcpy(status.faults, s_runtime.voice_fault, sizeof status.faults);
+    status.memory = *script_berry_memory_metrics(&s_runtime);
+    script_status.publish(status);
+    script_mask.store(s_runtime.active_mask, std::memory_order_release);
 }
 
-/* ---- stop and reset voice programs -------------------------------------- */
-
-void stop_channel_script(uint8_t voice)
-{
-    script_berry_stop(&s_runtime, voice);
-}
-
-void stop_all_channel_scripts(void)
-{
-    script_berry_stop_all(&s_runtime);
-}
-
-void reset_all_channel_script_state(void)
-{
-    script_berry_reset_state_all(&s_runtime);
-}
-
-/* ---- query script state and diagnostics --------------------------------- */
-
-uint8_t is_channel_script_active(uint8_t voice)
-{
-    return script_berry_is_active(&s_runtime, voice);
-}
-
-uint8_t get_active_channel_script_mask(void)
-{
-    return script_berry_active_mask(&s_runtime);
-}
-
-FwVmFault get_channel_script_fault(uint8_t voice)
-{
-    return script_berry_fault(&s_runtime, voice);
-}
-
-const FwVmMetrics *get_channel_script_metrics(uint8_t voice)
-{
-    return script_berry_voice_metrics(&s_runtime, voice);
-}
-
-const FwVmMemoryMetrics *get_channel_script_memory_metrics(void)
-{
-    return script_berry_memory_metrics(&s_runtime);
-}
-
-/* ---- account for audio boundary work ------------------------------------ */
-
-void begin_channel_script_audio_block(void)
-{
-    script_berry_boundary_begin(&s_runtime);
-}
-
-void record_channel_script_cycles(uint8_t voice, uint32_t cycles)
-{
-    script_berry_record_cycles(&s_runtime, voice, cycles);
-}
-
-/* ---- dispatch a voice handler ------------------------------------------- */
-
-int dispatch_channel_script_handler(FwVmChannelHandler handler, uint8_t voice)
-{
-    return script_berry_dispatch(&s_runtime, handler, voice);
-}
-
-/* ---- upload a voice program --------------------------------------------- */
-
-int begin_channel_script_upload(uint8_t voice)
-{
-    return script_berry_upload_begin(&s_runtime, voice);
-}
-
-int append_channel_script_upload_bytes(uint8_t voice, const void *data, size_t size)
-{
-    return script_berry_upload_is_active(&s_runtime, voice)
-               ? script_berry_upload_feed(&s_runtime, data, size)
-               : -1;
-}
-
-int commit_channel_script_upload(uint8_t voice)
-{
-    return script_berry_upload_is_active(&s_runtime, voice) ? script_berry_upload_commit(&s_runtime)
-                                                            : -1;
-}
-
-void abort_channel_script_upload(uint8_t voice)
-{
-    if (script_berry_upload_is_active(&s_runtime, voice)) script_berry_upload_abort(&s_runtime);
-}
-
-uint8_t is_channel_script_upload_active(uint8_t voice)
-{
-    return script_berry_upload_is_active(&s_runtime, voice);
-}
-
-uint8_t is_channel_script_upload_busy(void)
-{
-    return s_runtime.upload_active;
-}
 
 /* ---- render sample voices ----------------------------------------------- */
 
@@ -299,9 +202,6 @@ static_assert(STREAM_RING_SAMPLES == 4080u,
 #define NOTE_DEFAULT_SCALE 0.125
 #define BODY_LOOP_SAMPLES 256u
 
-static double note_freq_hz[NOTE_BANK_VOICES];
-static double note_scale[NOTE_BANK_VOICES];
-static int32_t note_amp_q15[NOTE_BANK_VOICES];
 static int32_t note_play_amp_q15[NOTE_BANK_VOICES];
 static uint8_t note_active[NOTE_BANK_VOICES];
 /* Q16.16 attack index. Body phase is relative to the ring read pointer. */
@@ -333,20 +233,47 @@ static uint8_t note_play_key[NOTE_BANK_VOICES];
 static uint8_t note_play_velocity[NOTE_BANK_VOICES];
 static uint8_t note_next_key[NOTE_BANK_VOICES];
 static uint8_t note_next_velocity[NOTE_BANK_VOICES];
-static volatile uint32_t note_hold_miss;
+static std::atomic<uint32_t> note_hold_miss{0};
 
 #define NOTE_CMD_NONE 0u
 #define NOTE_CMD_ON 1u
 #define NOTE_CMD_OFF 2u
 #define NOTE_CMD_REL 3u
+#define NOTE_CMD_RESERVED 0x80u
+#define NOTE_CMD_QUEUE_MASK 0x30u
+#define NOTE_CMD_KIND_MASK 0x0fu
 
-/* Console/USB posts; I2S drain applies. Last command wins. */
-static volatile uint8_t note_cmd[NOTE_BANK_VOICES];
-static volatile uint8_t note_cmd_key[NOTE_BANK_VOICES];
-static volatile uint8_t note_cmd_velocity[NOTE_BANK_VOICES];
-/* An explicit nX off must win over a late BODY session-start. */
-static volatile uint8_t note_gate_requested[NOTE_BANK_VOICES];
-static volatile uint8_t note_all_off_requested;
+/* Transport posts; audio applies. Reserved commands retain their queue until
+ * publication; after that the latest note command supersedes the previous one. */
+/* One packed publication prevents mixed key/velocity/sample commands. */
+static std::atomic<uint32_t> note_command[NOTE_BANK_VOICES];
+static std::atomic<uint8_t> note_gate_requested[NOTE_BANK_VOICES];
+static std::atomic<uint8_t> note_all_off_requested{0};
+static std::atomic<uint32_t> uploaded_voice_stops{0};
+struct VoiceStatus {
+    uint8_t active[NOTE_BANK_VOICES], references[NOTE_BANK_VOICES];
+    uint16_t refill[NOTE_BANK_VOICES];
+    uint32_t remaining[NOTE_BANK_VOICES];
+};
+static PublishedSnapshot<VoiceStatus> voice_status;
+static std::atomic<uint32_t> published_active_mask{0};
+static void publish_voice_status();
+
+uint8_t begin_audio_runtime(void)
+{
+    uint32_t available = 0;
+    audio_runtime_owned = runtime_owner.compare_exchange_strong(available, 1,
+        std::memory_order_acquire, std::memory_order_relaxed);
+    return audio_runtime_owned;
+}
+void end_audio_runtime(void)
+{
+    publish_voice_status();
+    if (audio_runtime_owned) {
+        publish_script_status();
+        runtime_owner.store(0, std::memory_order_release);
+    }
+}
 
 static inline int32_t clamp_voice_mix(int64_t sum);
 static int dispatch_voice_script_handler(FwVmChannelHandler handler, uint8_t note);
@@ -476,8 +403,10 @@ static int32_t render_voice_body_underrun(uint8_t note, uint32_t increment)
     int32_t s0;
     int32_t s1;
     note_hold_miss++;
-    /* Include any remaining tail sample before releasing its ring storage. */
-    while (peek_stream_sample(note, 0u, &sample) == 0) {
+    /* Retain only the tail present at entry. Concurrent arrivals belong to
+     * subsequent playback and must not extend this audio callback's work. */
+    uint32_t tail = get_current_stream_buffered_samples(note);
+    while (tail-- && peek_stream_sample(note, 0u, &sample) == 0) {
         remember_voice_body_sample(note, sample);
         skip_stream_samples(note, 1u);
     }
@@ -610,31 +539,29 @@ static void catch_up_voice_body_playhead(uint8_t note)
 
 /* ---- activate a prepared voice ------------------------------------------ */
 
-static void start_voice_playback(uint8_t note, uint8_t key, uint8_t velocity)
+static void start_voice_playback(uint8_t note, uint8_t key, uint8_t velocity, uint8_t wave)
 {
     /* Pitch is selected only when the script calls start_note([frequency]). */
     note_next_inc[note] = 0u;
     note_next_hz[note] = 0.0f;
     note_next_key[note] = key;
     note_next_velocity[note] = velocity;
-    note_next_amp_q15[note] = note_amp_q15[note];
-    note_next_wid[note] = note_wave_id[note];
+    note_next_amp_q15[note] = voice_amplitude_to_q15(NOTE_DEFAULT_SCALE);
+    note_next_wid[note] = wave;
     note_next_pending[note] = 1u;
     begin_pending_oscillators(note);
 }
 
 /* ---- queue voice events ------------------------------------------------- */
 
-static void post_voice_note_on(uint8_t note, uint8_t key, uint8_t velocity)
+static void post_voice_note_on(uint8_t note, uint8_t key, uint8_t velocity, uint8_t queue)
 {
-    note_cmd_key[note] = key;
-    note_cmd_velocity[note] = velocity;
-    note_cmd[note] = NOTE_CMD_ON;
+    note_command[note].store(NOTE_CMD_ON | NOTE_CMD_RESERVED | ((uint32_t)queue << 4) | ((uint32_t)key << 8) |
+        ((uint32_t)velocity << 16) | ((uint32_t)note_wave_id[note] << 24), std::memory_order_release);
 }
 
-static void stop_voice_immediately(uint8_t note)
+static void stop_voice_immediately(uint8_t note, bool release_stream = true)
 {
-    note_freq_hz[note] = 0.0;
     note_active[note] = 0u;
     note_next_pending[note] = 0u;
     note_play_key[note] = 0u;
@@ -642,8 +569,7 @@ static void stop_voice_immediately(uint8_t note)
     note_next_key[note] = 0u;
     note_next_velocity[note] = 0u;
     clear_voice_playhead(note);
-    release_voice_stream(note);
-    stop_sample_playback(note);
+    if (release_stream) release_voice_stream(note);
     stop_voice_oscillators(note);
     reset_voice_filter(note);
     stop_voice_envelope(note);
@@ -651,13 +577,11 @@ static void stop_voice_immediately(uint8_t note)
 
 static void end_current_voice_note(uint8_t note)
 {
-    note_freq_hz[note] = 0.0;
     note_active[note] = 0u;
     note_play_key[note] = 0u;
     note_play_velocity[note] = 0u;
     clear_voice_playhead(note);
     end_current_voice_stream(note);
-    stop_sample_playback(note);
     stop_active_oscillators(note);
     reset_voice_filter(note);
     stop_voice_envelope(note);
@@ -665,27 +589,49 @@ static void end_current_voice_note(uint8_t note)
 
 /* ---- consume pending voice commands ------------------------------------- */
 
+// Transport cannot overwrite a reserved command. Release its existing handoff
+// only after audio has published the queue and retired the old pending session.
+static void publish_prepared_voice_command(uint8_t note)
+{
+    uint32_t command = note_command[note].load(std::memory_order_acquire);
+    if (!(command & NOTE_CMD_RESERVED)) return;
+    publish_pending_voice_stream(note, (uint8_t)((command & NOTE_CMD_QUEUE_MASK) >> 4));
+    note_command[note].store(command & ~(NOTE_CMD_RESERVED | NOTE_CMD_QUEUE_MASK),
+                             std::memory_order_release);
+}
+
+uint8_t has_prepared_voice_command(uint8_t note)
+{
+    return note < NOTE_BANK_VOICES &&
+        (note_command[note].load(std::memory_order_acquire) & NOTE_CMD_RESERVED) != 0;
+}
+
 static void process_pending_voice_command(uint8_t note)
 {
-    const uint8_t cmd = note_cmd[note];
+    uint32_t command = note_command[note].load(std::memory_order_acquire);
+    if (command & NOTE_CMD_RESERVED) return; // posted after this boundary's handoff
+    const uint8_t cmd = command & NOTE_CMD_KIND_MASK;
     if (cmd == NOTE_CMD_NONE) {
         return;
     }
     if (cmd == NOTE_CMD_ON) {
-        if (is_channel_script_active(note) == 0u) {
-            note_cmd[note] = NOTE_CMD_NONE;
+        if (is_voice_script_active(note) == 0u) {
+            if (!note_command[note].compare_exchange_strong(command, 0)) return;
             stop_voice_immediately(note);
             return;
         }
-        if (note_active[note] == 0u &&
-            get_pending_stream_buffered_samples(note) < USB_STREAM_PRIME_SAMPLES)
+        // Keep the old note running until the replacement has its BODY data.
+        // A script may call start_note immediately, so both idle and active
+        // note-on handlers require the same prepared-stream invariant.
+        if (get_pending_stream_buffered_samples(note) < USB_STREAM_PRIME_SAMPLES)
             return;
-        note_cmd[note] = NOTE_CMD_NONE;
-        start_voice_playback(note, note_cmd_key[note], note_cmd_velocity[note]);
+        if (!note_command[note].compare_exchange_strong(command, 0)) return;
+        start_voice_playback(note, (uint8_t)(command >> 8), (uint8_t)(command >> 16),
+                             (uint8_t)(command >> 24));
         (void)dispatch_voice_script_handler(FW_VM_CHANNEL_HANDLER_NOTE_ON, note);
         return;
     }
-    note_cmd[note] = NOTE_CMD_NONE;
+    if (!note_command[note].compare_exchange_strong(command, 0)) return;
     if (cmd == NOTE_CMD_REL) {
         /* Note-off always cancels a not-yet-started replacement. Pending BODY is
          * transport state, so envelope scripts do not need to manage it. */
@@ -696,7 +642,7 @@ static void process_pending_voice_command(uint8_t note)
         note_next_velocity[note] = 0u;
         /* A late key release after a hard stop must not re-enter Berry and
          * dirty its freshly reset state. Pending startup was cancelled above. */
-        if (note_active[note] == 0u || is_channel_script_active(note) == 0u)
+        if (note_active[note] == 0u || is_voice_script_active(note) == 0u)
             stop_voice_immediately(note);
         else
             (void)dispatch_voice_script_handler(FW_VM_CHANNEL_HANDLER_NOTE_OFF, note);
@@ -922,7 +868,6 @@ static int start_voice_script_note_at_frequency(void *context, uint8_t note, flo
     note_next_hz[note] = frequency_hz;
     note_next_inc[note] = inc;
     activate_pending_voice(note);
-    note_freq_hz[note] = note_play_hz[note];
     return 0;
 }
 
@@ -987,9 +932,10 @@ static int dispatch_voice_script_handler(FwVmChannelHandler handler, uint8_t not
 #if defined(CHANNEL_ENABLE_CYCLE_PROFILING)
     uint32_t start = get_board_cycle_count();
 #endif
-    int result = dispatch_channel_script_handler(handler, note);
+    int result = script_berry_dispatch(&s_runtime, handler, note);
+    script_mask.store(s_runtime.active_mask, std::memory_order_release);
 #if defined(CHANNEL_ENABLE_CYCLE_PROFILING)
-    record_channel_script_cycles(note, get_board_cycle_count() - start);
+    script_berry_record_cycles(&s_runtime, note, get_board_cycle_count() - start);
 #endif
     return result;
 }
@@ -999,13 +945,10 @@ static int dispatch_voice_script_handler(FwVmChannelHandler handler, uint8_t not
 void init_voices(void)
 {
     uint8_t i;
-    ChannelVmNativeOps vm_ops = {};
+    ScriptBerryNativeOps vm_ops = {};
     note_all_off_requested = 0u;
 
     for (i = 0u; i < NOTE_BANK_VOICES; i++) {
-        note_freq_hz[i] = 0.0;
-        note_scale[i] = 0.0;
-        note_amp_q15[i] = 0;
         note_play_amp_q15[i] = 0;
         note_active[i] = 0u;
         note_phase[i] = 0u;
@@ -1032,8 +975,7 @@ void init_voices(void)
         note_play_velocity[i] = 0u;
         note_next_key[i] = 0u;
         note_next_velocity[i] = 0u;
-        note_cmd[i] = NOTE_CMD_NONE;
-        note_cmd_velocity[i] = 0u;
+        note_command[i] = NOTE_CMD_NONE;
         note_gate_requested[i] = 0u;
     }
     vm_ops.context = NULL;
@@ -1050,8 +992,13 @@ void init_voices(void)
 #if defined(CHANNEL_ENABLE_CYCLE_PROFILING)
     init_board_cycle_counter();
 #endif
-    init_channel_scripts(&vm_ops);
+    runtime_owner.store(0, std::memory_order_relaxed);
+    audio_runtime_owned = false;
+    uploaded_voice_stops.store(0, std::memory_order_relaxed);
+    script_berry_init(&s_runtime, &vm_ops);
+    publish_script_status();
     init_wavetable_oscillators();
+    publish_voice_status();
 }
 
 /* ---- release and panic voices ------------------------------------------- */
@@ -1061,71 +1008,30 @@ void request_stop_all_voices(void)
     note_all_off_requested = 1u;
 }
 
-void stop_all_voices_immediately(void)
-{
-    uint8_t i;
-
-    stop_all_sample_playback();
-    stop_all_oscillators();
-    reset_all_voice_streams();
-    for (i = 0u; i < NOTE_BANK_VOICES; i++) {
-        note_freq_hz[i] = 0.0;
-        note_scale[i] = 0.0;
-        note_amp_q15[i] = 0;
-        note_play_amp_q15[i] = 0;
-        note_active[i] = 0u;
-        note_phase[i] = 0u;
-        note_body_frac[i] = 0u;
-        note_hold[i] = 0;
-        note_loop_wr[i] = 0u;
-        note_loop_count[i] = 0u;
-        note_loop_phase[i] = 0u;
-        note_inc[i] = PHASE_ONE;
-        note_inc_tgt[i] = PHASE_ONE;
-        note_body_locked[i] = 0u;
-        note_body_skip[i] = 0u;
-        note_play_alen[i] = 0u;
-        note_body_only[i] = 0u;
-        note_next_pending[i] = 0u;
-        note_cmd[i] = NOTE_CMD_NONE;
-        note_gate_requested[i] = 0u;
-        note_play_key[i] = 0u;
-        note_play_velocity[i] = 0u;
-        note_next_key[i] = 0u;
-        note_next_velocity[i] = 0u;
-        note_cmd_velocity[i] = 0u;
-        reset_voice_filter(i);
-        stop_voice_envelope(i);
-    }
-}
-
 /* ---- queue note-on and note-off commands -------------------------------- */
 
 static int queue_voice_note_with_session(uint8_t note, uint8_t key, uint8_t velocity,
                                          uint8_t session)
 {
-    double scale = NOTE_DEFAULT_SCALE;
-
     if (note >= NOTE_BANK_VOICES || key >= FW_SCRIPT_CHANNEL_KEY_COUNT || velocity == 0u ||
         velocity > 127u) {
         return -1;
     }
-    if (is_channel_script_upload_busy() != 0u || note_all_off_requested != 0u) {
+    if (is_voice_script_upload_busy() != 0u || note_all_off_requested != 0u) {
         return -3;
     }
     if (is_sample_storage_write_locked() != 0u) {
         return -3;
     }
-    if (is_channel_script_active(note) == 0u) {
+    if (is_voice_script_active(note) == 0u) {
         return -2;
     }
 
-    note_scale[note] = scale;
-    note_amp_q15[note] = voice_amplitude_to_q15(scale);
-    /* Queue only key/velocity: pitch is selected at script-controlled activation. */
+    if (note_command[note].load(std::memory_order_acquire) & NOTE_CMD_RESERVED) return -3;
+    // Allocate on transport; audio publishes roles at its next boundary.
+    uint8_t queue = reserve_voice_stream(note, note_wave_id[note], session);
     note_gate_requested[note] = 1u;
-    prepare_pending_voice_stream(note, note_wave_id[note], session);
-    post_voice_note_on(note, key, velocity);
+    post_voice_note_on(note, key, velocity, queue);
     return 0;
 }
 
@@ -1158,46 +1064,10 @@ int queue_streamed_sample_note(uint8_t note, uint16_t sample, uint8_t key, uint8
 int queue_voice_note_off(uint8_t note)
 {
     if (note >= NOTE_BANK_VOICES) return -1;
+    if (note_command[note].load(std::memory_order_acquire) & NOTE_CMD_RESERVED) return -3;
     note_gate_requested[note] = 0u;
-    note_freq_hz[note] = 0.0;
-    note_cmd[note] = NOTE_CMD_REL;
+    note_command[note].store(NOTE_CMD_REL, std::memory_order_release);
     return 0;
-}
-
-/* ---- query voice pitch and sample assignment ---------------------------- */
-
-uint8_t get_voice_key(uint8_t note)
-{
-    if (note >= NOTE_BANK_VOICES) return 0u;
-    return note_next_pending[note] != 0u ? note_next_key[note] : note_play_key[note];
-}
-
-uint8_t get_voice_velocity(uint8_t note)
-{
-    if (note >= NOTE_BANK_VOICES) return 0u;
-    return note_next_pending[note] != 0u ? note_next_velocity[note] : note_play_velocity[note];
-}
-
-double get_voice_frequency_hz(uint8_t note)
-{
-    return note < NOTE_BANK_VOICES ? note_freq_hz[note] : 0.0;
-}
-
-int set_voice_sample_id(uint8_t note, uint16_t wave_id)
-{
-    if (note >= NOTE_BANK_VOICES || wave_id >= ATTACK_BANK_SAMPLE_COUNT) {
-        return -1;
-    }
-    note_wave_id[note] = wave_id;
-    return 0;
-}
-
-uint16_t get_voice_sample_id(uint8_t note)
-{
-    if (note >= NOTE_BANK_VOICES) {
-        return 0u;
-    }
-    return note_wave_id[note];
 }
 
 /* ---- query playback state ----------------------------------------------- */
@@ -1217,29 +1087,15 @@ uint8_t is_voice_active(uint8_t note)
     if (note >= NOTE_BANK_VOICES) {
         return 0u;
     }
-    if (note_active[note] != 0u) {
-        return 1u;
-    }
-    return 0u;
-}
-
-uint8_t has_active_voices(void)
-{
-    uint8_t i;
-    for (i = 0u; i < NOTE_BANK_VOICES; i++) {
-        if (is_voice_active(i) != 0u) {
-            return 1u;
-        }
-    }
-    return 0u;
+    return voice_status.read().active[note];
 }
 
 uint8_t has_voice_sample_references(void)
 {
     uint8_t note;
     for (note = 0u; note < NOTE_BANK_VOICES; note++) {
-        if (note_active[note] != 0u || note_next_pending[note] != 0u ||
-            note_cmd[note] == NOTE_CMD_ON) {
+        if (voice_status.read().references[note] != 0u ||
+            (note_command[note].load(std::memory_order_acquire) & NOTE_CMD_KIND_MASK) == NOTE_CMD_ON) {
             return 1u;
         }
     }
@@ -1248,7 +1104,7 @@ uint8_t has_voice_sample_references(void)
 
 /* ---- estimate body demand and remaining playback ------------------------ */
 
-uint16_t get_voice_refill_samples_5ms(uint8_t note)
+static uint16_t calculate_voice_refill(uint8_t note)
 {
     uint32_t inc;
     uint64_t advance;
@@ -1272,14 +1128,14 @@ uint16_t get_voice_refill_samples_5ms(uint8_t note)
     return (uint16_t)((advance + PHASE_ONE - 1u) >> 16);
 }
 
-uint32_t get_voice_buffered_time_us(uint8_t note)
+static uint32_t calculate_voice_buffered_time(uint8_t note)
 {
     uint32_t inc;
     int64_t body;
     int64_t attack = 0;
     int64_t available;
     uint64_t us;
-    if (note >= NOTE_BANK_VOICES || is_voice_active(note) == 0u) return 0u;
+    if (note >= NOTE_BANK_VOICES || note_active[note] == 0u) return 0u;
     inc = note_observed_inc[note];
     if (inc < note_inc[note]) inc = note_inc[note];
     if (inc < note_inc_tgt[note]) inc = note_inc_tgt[note];
@@ -1302,6 +1158,29 @@ uint32_t get_voice_buffered_time_us(uint8_t note)
     return us > UINT32_MAX ? UINT32_MAX : (uint32_t)us;
 }
 
+static void publish_voice_status()
+{
+    VoiceStatus status{};
+    uint32_t mask = 0;
+    for (unsigned i=0; i<NOTE_BANK_VOICES; ++i) {
+        status.active[i] = note_active[i];
+        status.references[i] = note_active[i] || note_next_pending[i];
+        status.refill[i] = calculate_voice_refill(i);
+        status.remaining[i] = calculate_voice_buffered_time(i);
+        if (status.references[i]) mask |= 1u << i;
+    }
+    voice_status.publish(status);
+    published_active_mask.store(mask, std::memory_order_release);
+}
+uint16_t get_voice_refill_samples_5ms(uint8_t note)
+{
+    return note < NOTE_BANK_VOICES ? voice_status.read().refill[note] : 0;
+}
+uint32_t get_voice_buffered_time_us(uint8_t note)
+{
+    return note < NOTE_BANK_VOICES ? voice_status.read().remaining[note] : 0;
+}
+
 /* ---- mix the next audio sample ------------------------------------------ */
 
 int32_t mix_next_audio_sample(void)
@@ -1322,16 +1201,26 @@ int32_t mix_next_audio_sample(void)
 void begin_voice_audio_block(void)
 {
     uint8_t i;
-    begin_channel_script_audio_block();
+    if (!audio_runtime_owned) return; // upload owns VM; no active/queued voices
+    for (unsigned i = 0; i < NOTE_BANK_VOICES; ++i) publish_prepared_voice_command(i);
+    uint32_t stopped = uploaded_voice_stops.exchange(0, std::memory_order_acquire);
+    for (i=0; i<NOTE_BANK_VOICES; ++i) {
+        if (stopped & (1u << i)) stop_voice_immediately(i, false);
+    }
+    script_mask.store(s_runtime.active_mask, std::memory_order_release);
+    script_berry_boundary_begin(&s_runtime);
     if (note_all_off_requested != 0u) {
         /* Retire every old command/session before rendering any voice. No script
          * callback runs here; stopped ramps must not dispatch completion events. */
         for (i = 0u; i < NOTE_BANK_VOICES; i++) {
-            note_cmd[i] = NOTE_CMD_NONE;
+            // Transport may have posted again after the initial publication
+            // pass, before requesting clear. Retire that reservation too.
+            publish_prepared_voice_command(i);
+            note_command[i] = NOTE_CMD_NONE;
             note_gate_requested[i] = 0u;
             stop_voice_immediately(i);
         }
-        reset_all_channel_script_state();
+        script_berry_reset_state_all(&s_runtime);
         /* LED output is latched in its driver, not in Berry's state slots. The
          * normal ramp-end handler is bypassed, so clear that output here too. */
         (void)set_channel_led_colour(0.0f, 0.0f, 0.0f, 0.0f);
@@ -1345,91 +1234,104 @@ void begin_voice_audio_block(void)
 
 void end_voice_audio_block(void)
 {
+    if (!audio_runtime_owned) return;
     uint8_t i;
     for (i = 0u; i < NOTE_BANK_VOICES; i++) {
         /* Deliver the newest note command before completing its fade. */
-        if (note_cmd[i] == NOTE_CMD_ON) continue;
+        if ((note_command[i].load(std::memory_order_acquire) & NOTE_CMD_KIND_MASK) == NOTE_CMD_ON) continue;
         if (take_voice_ramp_completion(i) != 0u) {
             (void)dispatch_voice_script_handler(FW_VM_CHANNEL_HANDLER_RAMP_END, i);
         }
     }
 }
 
-void stop_voice_script(uint8_t voice)
-{
-    stop_channel_script(voice);
-}
-
-void stop_all_voice_scripts(void)
-{
-    stop_all_channel_scripts();
-}
-
 uint8_t is_voice_script_active(uint8_t voice)
 {
-    return is_channel_script_active(voice);
+    return voice < NOTE_BANK_VOICES && (script_mask.load(std::memory_order_acquire) & (1u << voice));
 }
 
 uint8_t get_active_voice_script_mask(void)
 {
-    return get_active_channel_script_mask();
+    return script_mask.load(std::memory_order_acquire);
 }
 
-/* ---- forward script uploads --------------------------------------------- */
+/* ---- own script uploads --------------------------------------------- */
 
 int begin_voice_script_upload(uint8_t voice)
 {
-    if (has_active_voices() != 0u) return -2;
-    return begin_channel_script_upload(voice);
+    if (voice >= NOTE_BANK_VOICES) return -1;
+    uint32_t available = 0;
+    if (!runtime_owner.compare_exchange_strong(available, 2, std::memory_order_acquire)) return -4;
+    // A pending clear completes on the audio owner before an upload can start.
+    if (note_all_off_requested.load(std::memory_order_acquire)) {
+        runtime_owner.store(0, std::memory_order_release); return -4;
+    }
+    if (published_active_mask.load(std::memory_order_acquire)) {
+        runtime_owner.store(0, std::memory_order_release); return -2;
+    }
+    for (unsigned i = 0; i < NOTE_BANK_VOICES; ++i) {
+        if (note_command[i].load(std::memory_order_acquire)) {
+            runtime_owner.store(0, std::memory_order_release); return -2;
+        }
+    }
+    int result = script_berry_upload_begin(&s_runtime, voice);
+    if (result) runtime_owner.store(0, std::memory_order_release);
+    return result;
 }
 
 int append_voice_script_upload_bytes(uint8_t voice, const void *data, size_t size)
 {
-    return append_channel_script_upload_bytes(voice, data, size);
+    if (runtime_owner.load(std::memory_order_acquire) != 2) return -1;
+    if (!script_berry_upload_is_active(&s_runtime, voice)) return -1;
+    return script_berry_upload_feed(&s_runtime, data, size);
 }
 
 int commit_voice_script_upload(uint8_t voice)
 {
-    int result = commit_channel_script_upload(voice);
-    if (result == 0) stop_voice_immediately(voice);
+    if (runtime_owner.load(std::memory_order_acquire) != 2 ||
+        !script_berry_upload_is_active(&s_runtime, voice)) return -1;
+    int result = script_berry_upload_commit(&s_runtime);
+    if (result == 0) {
+        release_voice_stream(voice); // inactive, before any subsequent note can be queued
+        uploaded_voice_stops.fetch_or(1u << voice, std::memory_order_release);
+    }
+    publish_script_status();
+    runtime_owner.store(0, std::memory_order_release);
     return result;
 }
 
 void abort_voice_script_upload(uint8_t voice)
 {
-    abort_channel_script_upload(voice);
-}
-
-uint8_t is_voice_script_upload_active(uint8_t voice)
-{
-    return is_channel_script_upload_active(voice);
+    if (runtime_owner.load(std::memory_order_acquire) != 2 ||
+        s_runtime.upload_voice != voice) return;
+    script_berry_upload_abort(&s_runtime);
+    publish_script_status();
+    runtime_owner.store(0, std::memory_order_release);
 }
 
 uint8_t is_voice_script_upload_busy(void)
 {
-    return is_channel_script_upload_busy();
+    return runtime_owner.load(std::memory_order_acquire) == 2;
 }
 
 /* ---- query script diagnostics ------------------------------------------- */
 
 const FwVmMemoryMetrics *get_voice_script_memory_metrics(void)
 {
-    return get_channel_script_memory_metrics();
+    return &script_status.read().memory;
 }
 
 FwVmFault get_voice_script_fault(uint8_t voice)
 {
-    return get_channel_script_fault(voice);
+    return voice < NOTE_BANK_VOICES ? script_status.read().faults[voice] : FW_VM_FAULT_BAD_HOST_ARGUMENT;
 }
 
 uint32_t get_voice_script_max_cycles(uint8_t voice)
 {
-    const FwVmMetrics *metrics = get_channel_script_metrics(voice);
-    return metrics != NULL ? metrics->boundary_cycles_max : 0u;
+    return voice < NOTE_BANK_VOICES ? script_status.read().metrics[voice].boundary_cycles_max : 0u;
 }
 
 uint32_t get_voice_script_fault_count(uint8_t voice)
 {
-    const FwVmMetrics *metrics = get_channel_script_metrics(voice);
-    return metrics != NULL ? metrics->faults : 0u;
+    return voice < NOTE_BANK_VOICES ? script_status.read().metrics[voice].faults : 0u;
 }

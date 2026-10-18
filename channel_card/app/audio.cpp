@@ -33,6 +33,8 @@ static uint32_t interval_position;
 
 void render_audio_samples(int32_t *samples, uint32_t sample_count)
 {
+    if (!sample_count) return;
+    (void)begin_audio_runtime();
     while (sample_count) {
         if (interval_position == 0u) begin_voice_audio_block();
         uint32_t count = AUDIO_PROCESSING_INTERVAL_SAMPLES - interval_position;
@@ -45,6 +47,7 @@ void render_audio_samples(int32_t *samples, uint32_t sample_count)
             interval_position = 0u;
         }
     }
+    end_audio_runtime();
 }
 
 /* ---- query audio diagnostics -------------------------------------------- */

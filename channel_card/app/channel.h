@@ -45,8 +45,7 @@ int set_channel_led_colour(float red, float green, float blue, float brightness)
 
 /* ---- initialize and poll the console ------------------------------------ */
 
-/* Channel Card RS485 + USB CDC console.
- * One command parser serves both transports. RS485 uses card address prefixes
+/* Channel Card RS485 console, with card address prefixes
  * (`c:` / `*:` / bare) and tagged replies (`[C]ok` / `[C]err:<token>`).
  * Stable error tokens: syntax, range, unknown, rxdrop.
  * Bring-up: initialize platform devices and RS485 reception before init_channel_card().
@@ -63,20 +62,6 @@ void init_channel_card(void);
  * @note Replies may wait for bus access/transmission within existing deadlines.
  */
 void process_rs485_commands(void);
-
-/**
- * @brief Run one console command line that arrived over USB CDC.
- * @param line NUL-terminated command (mutated by the parser). May be NULL
- *             (no-op). Replies are routed to CDC for the duration of the call.
- */
-void execute_usb_command(char *line);
-
-/* ---- upload compiled voice programs ------------------------------------- */
-
-uint8_t is_script_upload_active(void);
-int begin_script_upload(uint8_t voice, uint32_t nbytes);
-uint32_t append_script_upload_bytes(const uint8_t *data, uint32_t size);
-void abort_script_upload(void);
 
 #ifdef __cplusplus
 }

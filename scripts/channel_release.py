@@ -54,7 +54,7 @@ def selected(path):
         if rel in CARD_ROOT or rel in CARD_DOCS:
             return True
         if tail[0] == "app" and len(tail) == 2:
-            return suffix in {".cpp", ".h"} or tail[-1] == "Makefile"
+            return suffix in {".cpp", ".h"} or tail[-1] in {"Makefile", "sources.mk"}
         if tail[0] == "sim" and len(tail) == 2:
             return suffix in {".cpp", ".h"} or tail[-1] == "Makefile"
         if tail[0] == "core" and len(tail) == 3:
@@ -99,7 +99,7 @@ def validate(stage):
                 "sim/Makefile", "sim/main.cpp", "sim/audio_device.cpp",
                 "sim/audio_device.h", "sim/clock.cpp", "sim/platform_memory.h",
                 "sim/serialdevices.cpp", "sim/serialdevices.h",
-                "app/Makefile",
+                "app/Makefile", "app/sources.mk",
                 "app/cs4304.cpp",
                 "app/audio.cpp",
                 "app/audio_dac.cpp",

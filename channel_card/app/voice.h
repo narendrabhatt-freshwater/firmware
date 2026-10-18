@@ -49,45 +49,6 @@ float get_voice_amplitude(uint8_t voice);
 float render_voice_envelope_sample(uint8_t voice);
 uint8_t take_voice_ramp_completion(uint8_t voice);
 
-/* ---- control voice scripts ---------------------------------------------- */
-
-typedef struct {
-    void *context;
-    int (*read_input)(void *context, uint8_t note, FwVmChannelInput input, float *value);
-    int (*set_amplitude)(void *context, uint8_t note, float amplitude);
-    int (*ramp)(void *context, uint8_t note, float target, float slope);
-    int (*note_end)(void *context, uint8_t note);
-    void (*silence_voice)(void *context, uint8_t voice, FwVmFault fault);
-    int (*set_led)(void *context, uint8_t voice, float red, float green, float blue,
-                   float brightness);
-    int (*discard_pending)(void *context, uint8_t note);
-    int (*start_note_at)(void *context, uint8_t note, float frequency_hz);
-    int (*osc)(void *context, uint8_t note, uint8_t wave, float frequency_hz, uint32_t *handle_out);
-    int (*route)(void *context, uint8_t note, uint32_t source_handle, int32_t target,
-                 uint8_t parameter, float gain);
-} ChannelVmNativeOps;
-
-void init_channel_scripts(const ChannelVmNativeOps *ops);
-void stop_channel_script(uint8_t voice);
-void stop_all_channel_scripts(void);
-void reset_all_channel_script_state(void);
-uint8_t is_channel_script_active(uint8_t voice);
-uint8_t get_active_channel_script_mask(void);
-FwVmFault get_channel_script_fault(uint8_t voice);
-const FwVmMetrics *get_channel_script_metrics(uint8_t voice);
-const FwVmMemoryMetrics *get_channel_script_memory_metrics(void);
-
-void begin_channel_script_audio_block(void);
-void record_channel_script_cycles(uint8_t voice, uint32_t cycles);
-int dispatch_channel_script_handler(FwVmChannelHandler handler, uint8_t voice);
-
-int begin_channel_script_upload(uint8_t voice);
-int append_channel_script_upload_bytes(uint8_t voice, const void *data, size_t size);
-int commit_channel_script_upload(uint8_t voice);
-void abort_channel_script_upload(uint8_t voice);
-uint8_t is_channel_script_upload_active(uint8_t voice);
-uint8_t is_channel_script_upload_busy(void);
-
 /* ---- control sample voices ---------------------------------------------- */
 
 /* SAMPLE voice bank: one playhead over attack RAM + body slots. */
@@ -97,9 +58,11 @@ uint8_t is_channel_script_upload_busy(void);
 
 /* ---- note bank lifecycle ------------------------------------------------ */
 
+/* Initialization requires stopped audio and protocol processing. */
 void init_voices(void);
-
-void stop_all_voices_immediately(void);
+/* Renderer owns the VM unless an inactive-voice upload holds it. Never waits. */
+uint8_t begin_audio_runtime(void);
+void end_audio_runtime(void);
 
 /** Queue a hard stop, Berry state reset and LED-off for the next audio boundary.
  * Loaded programs and settings are preserved. Note-on returns busy until
@@ -109,21 +72,17 @@ void request_stop_all_voices(void);
 /** Raw MIDI-key/velocity note-on. Script selects playback pitch when it starts the pending note. */
 int queue_voice_note(uint8_t note, uint8_t key, uint8_t velocity);
 
-/** Streamed note-on variant. The session is bound to nX before its ACK so
- * only the matching USB SOF can claim the replacement ring. */
+/** Transport must retain another command for this voice while audio has not consumed
+ * the prepared note handoff. This query never waits. */
+uint8_t has_prepared_voice_command(uint8_t voice);
+
+/** Streamed note-on: the session becomes visible in vq after audio consumes
+ * the handoff. Normal nX events are silent; no acknowledgement is added. */
 int queue_streamed_voice_note(uint8_t note, uint8_t key, uint8_t velocity, uint8_t session);
 /** Assign a sample and arm its streamed note in one control operation. */
 int queue_streamed_sample_note(uint8_t note, uint16_t sample, uint8_t key, uint8_t velocity,
                                uint8_t session);
 int queue_voice_note_off(uint8_t note);
-
-uint8_t get_voice_key(uint8_t note);
-uint8_t get_voice_velocity(uint8_t note);
-double get_voice_frequency_hz(uint8_t note);
-
-/** Assign sample attack 0..247 to voice 0..7. Applied on next note-on. */
-int set_voice_sample_id(uint8_t note, uint16_t wave_id);
-uint16_t get_voice_sample_id(uint8_t note);
 
 /** Body FIFO miss counter. Production firmware halts on the first miss. */
 uint32_t get_voice_underrun_count(void);
@@ -131,24 +90,23 @@ void clear_voice_underrun_count(void);
 
 /** True while attack/sustain/release still sounds (incl. env release). */
 uint8_t is_voice_active(uint8_t note);
-uint8_t has_active_voices(void);
 /** True when active, pending, or queued note state may reference the bank. */
 uint8_t has_voice_sample_references(void);
 int32_t mix_next_audio_sample(void);
 
-/** Internal VM hooks bracketing one application processing interval. */
+/** Internal VM hooks bracketing one application processing interval, inside
+ * begin_audio_runtime/end_audio_runtime. Production callers use audio.h. */
 void begin_voice_audio_block(void);
 void end_voice_audio_block(void);
-void stop_voice_script(uint8_t voice);
-void stop_all_voice_scripts(void);
 uint8_t is_voice_script_active(uint8_t voice);
 uint8_t get_active_voice_script_mask(void);
-/** Chunked FWSC upload. Invalid uploads preserve the active program. */
+/** Chunked FWSC upload. Invalid uploads preserve the active program.
+ * Begin returns -4 when the renderer/clear owns the handoff; caller retains the
+ * request for a later service pass. Active/queued voices return busy (-2). */
 int begin_voice_script_upload(uint8_t voice);
 int append_voice_script_upload_bytes(uint8_t voice, const void *data, size_t size);
 int commit_voice_script_upload(uint8_t voice);
 void abort_voice_script_upload(uint8_t voice);
-uint8_t is_voice_script_upload_active(uint8_t voice);
 uint8_t is_voice_script_upload_busy(void);
 const FwVmMemoryMetrics *get_voice_script_memory_metrics(void);
 FwVmFault get_voice_script_fault(uint8_t voice);

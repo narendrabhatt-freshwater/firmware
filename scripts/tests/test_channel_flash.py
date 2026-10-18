@@ -26,6 +26,7 @@ class ChannelFlashTests(unittest.TestCase):
         self.script.parent.mkdir()
         shutil.copy2(ROOT / "scripts/channel_firmware.py", self.script)
         shutil.copy2(ROOT / "channel_card/app/Makefile", self.root / "app/Makefile")
+        shutil.copy2(ROOT / "channel_card/app/sources.mk", self.root / "app/sources.mk")
         self.binary = self.root / "bin/channel_MCU.bin"
         self.binary.write_bytes(b"mock firmware")
         self.log = self.root / "calls.jsonl"

@@ -9,6 +9,10 @@ static std::vector<std::string> queued_writes;
 static std::vector<std::string> received_commands;
 static unsigned purge_count;
 static bool fail_write;
+static std::string partial_write;
+static unsigned delay_reply_ms;
+static bool fail_read;
+static std::atomic<bool> withhold_reply{false}, read_started{false};
 
 static void require(bool condition, char const* message)
 {
@@ -35,16 +39,33 @@ sp_return sp_flush(sp_port*, sp_buffer)
 {
     ++purge_count;
     queued_writes.clear();
+    partial_write.clear();
     return SP_OK;
 }
-sp_return sp_blocking_write(sp_port*, void const* data, size_t size, unsigned)
+sp_return sp_nonblocking_write(sp_port*, void const* data, size_t size)
 {
     if (fail_write) return SP_ERR_ARG;
-    queued_writes.emplace_back(static_cast<char const*>(data), size);
+    size = std::min(size, size_t(3)); // Exercise native partial-write accounting.
+    partial_write.append(static_cast<char const*>(data), size);
+    if (partial_write.back() == '\r') {
+        queued_writes.push_back(partial_write);
+        partial_write.clear();
+    }
     return static_cast<sp_return>(size);
 }
 sp_return sp_blocking_read_next(sp_port*, void* data, size_t capacity, unsigned)
 {
+    if (fail_read) return SP_ERR_FAIL;
+    if (withhold_reply) {
+        read_started = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        return SP_OK;
+    }
+    if (delay_reply_ms) {
+        auto delay = delay_reply_ms; delay_reply_ms = 0;
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+        return SP_OK;
+    }
     require(!queued_writes.empty(), "read without a queued command");
     std::string command = queued_writes.back();
     received_commands.insert(received_commands.end(), queued_writes.begin(), queued_writes.end());
@@ -95,6 +116,30 @@ try {
         received_commands.clear();
     }
     require(purge_count == setup_purges, "purged a live serial connection");
+    delay_reply_ms = 20;
+    require(bool(link.command("vq")), "default policy expired a delayed reply");
+    received_commands.clear();
+    link.close();
+    require(bool(link.open("/dev/null", 921600, 5)), "configured open failed");
+    delay_reply_ms = 20;
+    require(link.command("vq").code == voice_board_error_t::timeout,
+            "explicit reply timeout was not enforced");
+    link.close();
+    require(bool(link.open("/dev/null", 921600)), "reopen failed");
+    fail_read = true;
+    require(link.command("vq").code == voice_board_error_t::io_error,
+            "disconnect was hidden by unlimited wait");
+    fail_read = false; queued_writes.clear();
+    withhold_reply = true;
+    std::thread request([&] {
+        require(link.command("vq").code == voice_board_error_t::io_error,
+                "unlimited request did not cancel");
+    });
+    while (!read_started) std::this_thread::yield();
+    link.cancel(); request.join();
+    withhold_reply = false; queued_writes.clear();
+    link.close();
+    require(bool(link.open("/dev/null", 921600)), "reopen after cancellation failed");
     fail_write = true;
     require(!link.send_event("n0 off"), "write failure was hidden");
     require(queued_writes.empty(), "failed write queued an event");

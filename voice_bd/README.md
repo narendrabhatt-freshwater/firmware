@@ -176,10 +176,12 @@ boundary. No sleep, retry or additional status polling is added. Older firmware
 does not implement `clear`, so update the Channel Card firmware for this recovery
 behavior. USB open separately resets transport queues and partial messages.
 
-Startup reads `vq` before uploading programs. RS485 transactions retain their
-existing 5 ms reply timeout and are not automatically retried. CDC HELLO/upload
-requests have a 3-second reply deadline; stalled partial writes time out after
-one second and require reopening the connection.
+Startup reads `vq` before uploading programs. Host transactions have no default
+expiration and require no additional fields in MAS's existing configuration.
+Protocol errors and disconnects still fail. No request is automatically retried.
+Closing cancels pending status, USB replies and blocked RS485 writes through the
+existing cancellation wakeup. Explicit deadline checks remain available to the
+internal transport tests.
 
 Input: 48 kHz, 16-bit PCM WAV, mono or stereo. Build requires RtMidi, libserialport, CMake and pkg-config; other dependencies come from the repository.
 
@@ -277,7 +279,7 @@ five-byte header; this host sends up to 128 signed-int8 source samples per frame
 The header is type, target, session and a little-endian 16-bit payload length.
 Note start is inferred from the armed session; BODY acknowledgements use an
 implicit cumulative counter initialized by HELLO. Control/upload requests are
-serialized and an ambiguous timeout requires reopening, so no request ID is
+serialized and an explicitly configured timeout requires reopening, so no request ID is
 needed. Version 1 firmware is incompatible; update host and firmware together.
 No blocks are sent when there is nothing to stream or upload. A released note
 still needs data during its script-defined tail; `n off` hard-stops all voices.
@@ -299,23 +301,30 @@ in 16-byte allocation units, including frames from older sessions. The host
 selects one BODY frame at a time so another voice can become eligible between
 frames. The outstanding limit remains 8232 wire bytes.
 
-Prepared coverage is bounded by the existing 5 ms poll interval plus 5 ms reply
-deadline. Replacement prefetch accounts for the cached attack head and maximum
-supported playback increment, without assuming a script fade duration. Pending
-notes trigger another status poll immediately; otherwise polls are at most
-5 ms apart. Idle starts retain the 998-sample gate. An active voice starts its
-scripted steal fade at the next audio boundary without waiting for that gate.
+Refills use all confirmed writable credit instead of imposing a 10 ms
+lookahead cap. This uses the existing ring capacity; it does not enlarge buffers
+or change transaction timeouts. Current and pending streams still share credit,
+and the earliest playback deadline selects which session receives the next frame.
+Pending replacements reserve the same 998-sample preparation as idle starts.
+Both dispatch their note-on handler only when that data is ready; until then,
+the outgoing note continues normally. An idle stream can fill all available
+credit while awaiting the next status reply. Status polls are scheduled at 5 ms
+intervals, with immediate polling while a note is awaiting preparation.
 
 Host and Channel Card must both support the 61-byte **0x0E** status frame, which
 reports current and target sessions. Older 0x0C status firmware is incompatible
 with this host even though USB HELLO still uses protocol version 2.
 
-**Qualification limit:** the isolated 5 ms steal hardware run passed sustain,
+**Previous-build hardware evidence:** the isolated 5 ms steal hardware run passed sustain,
 single-voice steals with seven continuing voices, eight C5 steals and mixed-pitch
 steals without added holds or transport failures. Zero and 50 ms variants still
 underran; this is not a general solution for arbitrary script fades. The fixture
 `channel_card/tests/fixtures/stream_handover.bec` reproduces the tested envelope;
-normal app runs keep the user's own envelope settings.
+normal app runs keep the user's own envelope settings. These measurements predate
+the credit-driven refill and preparation changes; the current build has only
+software qualification so far. The current software integration tests also pass
+immediate replacement and 50 ms fades with zero underruns/drops across the
+single-voice, eight-voice, double-rate and retrigger patterns.
 
 Sample loading keeps the existing signed-16 host PCM and converts only the
 transmitted attack/BODY bytes to signed eight-bit. Failed attack uploads leave
@@ -354,3 +363,8 @@ files, and saves a backup before replacement. It never changes `voicebd.h`
 or commits to SVN. Synchronization does not run during `make`.
 This helper alone is insufficient for migrating an older UAC checkout: update
 the header, device configuration and build dependencies as described above.
+
+RS485 writes use nonblocking I/O and wake immediately on cancellation, including
+when the output queue is full. Cancellation remains in effect until reopen.
+Write expiration is still opt-in. Closing makes one nonblocking attempt to send
+`clear`; use explicit all-notes-off when an acknowledged stop is required.

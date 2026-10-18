@@ -121,10 +121,11 @@ c:n0 off
 c:clear
 ```
 
-End each command with carriage return and wait for its reply. Stream BODY data
-for the selected voice/session according to `vq` credit, including during a
-scripted release. The first pending note requires 998 BODY samples before it is
-ready for its script handler; an oscillator declaration does not bypass this
+End each command with carriage return. Note events are silent; use `vq` to
+observe the requested session and its credit before streaming BODY. Wait for
+replies to queries and other acknowledged commands. Continue BODY during a
+scripted release. Every pending note, including a replacement, requires 998 BODY samples before
+it is ready for its script handler; an oscillator declaration does not bypass this
 gate. A voice without a loaded program returns `err:no-program`.
 
 The script controls pitch, amplitude, and note activation/release. It can add
@@ -214,17 +215,38 @@ Pitch-track smoke with a loaded sample: `f0 300`, `fk0 1`, `n0 on 60` then
 - `channel_MCU.ioc`, startup assembly, and `STM32H725xG_flash.ld`: hardware and
   memory configuration.
 
+The live path is:
+
+```text
+Host note_on -> RS485 note command -> channel.cpp -> existing note_command handoff
+Host vq      <- session/free-space status        <- stream.cpp + voice.cpp
+Host BODY    -> USB bytes -> usb.cpp parser      -> stream.cpp sample storage
+Audio callback -> audio.cpp -> voice.cpp -> Berry handlers and sample rendering
+```
+
+`voice.cpp` owns playback positions and note lifecycle; `samples.cpp` only owns
+stored attack data, lengths and tuning. `stream.cpp` owns the existing BODY
+storage and current/pending session roles. The transport writer reserves and
+fills storage; the audio reader publishes note roles and consumes samples.
+The existing packed command is their handoff. USB does not execute text commands;
+RS485 does not receive sample payloads.
+
+`berry_compiler/berry.c` reads source, lowers named state, validates handlers,
+compiles the existing memory buffer and packages FWSC bytecode. The card only
+loads that bytecode, so its build excludes the source preprocessor. USB alone tracks script-upload target, size and offset. Script upload
+uses the existing VM ownership handoff; the audio callback never waits for it.
+
 The application is split by responsibility:
 
 | Implementation | Contents | Header |
 | --- | --- | --- |
 | `audio.cpp` | Mono audio rendering and sample-clocked script intervals | `audio.h` |
 | `audio_dac.cpp` | Calibrated control voltages and DAC slot packing | `audio_output.h` |
-| `transport.cpp` | Bounded RS485 completion wait with USB service | `transport.h` |
+| `transport.cpp` | RS485 completion wait with USB service and optional explicit timeout | `transport.h` |
 | `audio_i2s.cpp` | I2S/DMA buffers and callbacks, I2S2 underrun guard | `audio_output.h` |
 | `board_stm32.cpp` | UART5, RS485 pins, board outputs, clock, synchronization and profiling | `board.h`, `transport.h`, `board_stm32.h` |
 | `cs4304.cpp` | CS4304 DAC register access, initialization, gain and mute | `cs4304.h` |
-| `channel.cpp` | RS485 commands, script uploads, logical output requests | `channel.h` |
+| `channel.cpp` | RS485 commands and logical output requests | `channel.h` |
 | `platform.cpp` | Execution synchronization, with optional platform operations | `platform.h` |
 | `voice.cpp` | Note playback, envelopes, Berry adapter | `voice.h` |
 | `filter.cpp` | Four-pole kernel and per-voice filter control | `filter.h` |
@@ -234,7 +256,8 @@ The application is split by responsibility:
 | `usb.cpp` | Binary protocol, sample uploads | `usb.h` |
 | `usb_device.cpp` | CDC device on HAL PCD, descriptors, transfer queues | `transport.h`, `usb_device.h` |
 
-The firmware and simulator list application sources in their own Makefiles.
+The firmware and simulator include one application source list,
+`app/sources.mk`. Their Makefiles add only the platform-specific adapters.
 Only `audio_i2s.cpp`, `board_stm32.cpp`, `usb_device.cpp`, and `cs4304.cpp`
 access STM32 registers or HAL. Shared sources use `platform.h` and `transport.h`;
 the host build needs no STM32 headers. Each build supplies `platform_memory.h`
@@ -283,9 +306,21 @@ interrupt preservation and memory-barrier operations before audio starts;
 the simulator follows MAS's direct callback arrangement, with protocol
 processing on the main thread and rendering on PortAudio's callback thread.
 There is no application mutex around either path.
-An isolated ThreadSanitizer check detects unsynchronized access to the voice
-active flag during program upload; passing playback tests do not establish
-that this concurrent application access is safe.
+The renderer owns voice mutation and current/pending session changes. Main
+reserves sample storage and posts its index in the existing packed note command;
+audio publishes that session at the next 48-sample boundary. No additional
+command queue or sample buffer is used. Another command for the same voice stays
+in the existing console line/RX buffer until that handoff is consumed; other
+voices can be prepared in the same interval. USB service continues, and the audio
+callback never waits for transport. Main reads bounded triple-buffered voice
+status snapshots. Script upload acquires the shared
+VM only with no active or queued voice; if an idle callback currently owns it,
+the complete USB request stays pending until a later service pass. The callback
+never waits for upload completion and continues the idle sample clock. Upload
+commit schedules voice cleanup on the renderer. Ring session roles are read from
+one atomic publication, so promotion cannot report a session as neither active
+nor pending while the voice snapshot catches up. Snapshot readers belong to the
+single protocol thread; initialization requires stopped audio.
 `CHANNEL_ENABLE_CYCLE_PROFILING` enables cycle
 measurement in the firmware build. The simulator omits that instrumentation
 and has no cycle-counter backend; its cycle diagnostic fields remain zero.
@@ -307,8 +342,8 @@ it has no dummy board implementations.
 
 On macOS, `sim/clock.cpp` configures the simulator thread with the host streaming
 workers' scheduling policy: interactive QoS and a preemptible 1 ms time constraint
-with a 250 microsecond computation budget. Ordinary macOS waits can wake after
-the host's 5 ms command deadline; QoS alone is insufficient. Scheduling setup
+with a 250 microsecond computation budget. This scheduling policy predates the
+opt-in timeout configuration and is unchanged by the transport refactor. Scheduling setup
 errors stop startup with a diagnostic before serial ports are created. Other
 hosts retain their existing scheduling policy; their streaming timing needs
 separate validation. This is a host scheduling requirement, not a change to
@@ -322,8 +357,8 @@ Public interfaces use C linkage for generated C and the Berry runtime;
 interrupt handlers must also retain C linkage. The interpreter and generated
 STM32 sources keep their existing C implementation.
 
-Keep application source lists in both `app/Makefile` and `sim/Makefile` up to date;
-each Makefile also owns its backend sources, compiler flags and link settings.
+Keep the shared application source list in `app/sources.mk` up to date;
+each Makefile owns its backend sources, compiler flags and link settings.
 Preserve `USER CODE` markers when editing CubeMX-generated sources. All maintained directories use lowercase names, including HAL/CMSIS
 subfolders. If CubeMX regeneration restores names such as `Core`, `Drivers`,
 `Inc`, or `Src`, lowercase those folders and check the paths in `app/Makefile`
@@ -386,3 +421,57 @@ then slews toward those targets from the first DMA buffer. No diagnostic
 tones are generated. Their calibration and slew limits are in
 `app/audio_dac.cpp`; there is no console command to set them. The analog
 switch defaults are in `core/src/gpio.c` and `app/channel.cpp`.
+
+### Shared transport and explicit deadlines
+
+`app/transport_buffer.h` owns the bounded byte queues used by USB, UART and PTY
+adapters, plus USB generation, readiness, fault and queue-invalidation state.
+Queues publish bytes with acquire/release indices; the consumer never compacts
+remaining bytes. Queue reset requires both ends to be quiescent. STM32 adapters
+retain their interrupt critical sections, USB endpoint staging/rearming and UART
+bus control. Physical UART retains 8191 usable RX bytes and drop-new accounting;
+USB and PTY RX retain 8192 bytes, with 2048 TX bytes. PTY backpressure does not
+model physical UART overrun.
+
+Application protocols continue through `transport.h`. No packet boundary becomes
+a protocol message, and the voice sample rings remain separate from byte queues.
+
+All `TransportTimeouts` fields default to zero (disabled). Set an explicit policy
+using `set_transport_timeouts()` before servicing traffic: `usb_partial_frame_ms`,
+`usb_upload_idle_ms`, `rs485_bus_ms`, and `rs485_transmit_ms`. Passing null restores
+the disabled policy. Direct `write_rs485_bytes`/`wait_for_rs485_bus` calls interpret
+zero as no expiration and nonzero as an explicit millisecond duration. Existing
+wire-time calculation remains a utility, not an automatically applied deadline.
+Malformed frames, device failures and physical disconnects still report errors.
+
+Software streaming verification (no Channel Card required):
+
+```sh
+python3 scripts/tests/channel_card/run.py
+python3 scripts/tests/channel_card/streaming.py --work-dir /tmp/channel-stream --seconds 10 --timeout 60
+python3 scripts/tests/channel_card/streaming.py --work-dir /tmp/channel-races --seconds 2 --timeout 60 --tsan
+```
+
+The streaming harness uses the production host credit worker and simulator PTYs
+with a threaded software audio consumer: single voice, eight voices, double-rate
+pitch and repeated note replacement. `--timeout` explicitly enables a test
+watchdog; it does not configure production deadlines. Logs and a bounded callback
+trace (`render.csv`) remain in the selected directory. `--source-root` and
+`--host-root` select source snapshots for comparison. `run.py --audio` additionally
+exercises native PortAudio output. Software timing and race checks do not qualify
+STM32 USB interrupts, DMA timing or the physical RS485 bus.
+
+In the full repository, `docs/reference/channel_streaming_investigation.md`
+records observed failures and remaining verification work.
+
+The STM32 Makefile lists only core and HAL source units that contribute to the
+linked firmware. Unused flash, EXTI, HSEM, MDMA and extension implementations were
+removed after a clean-build binary equivalence check; required HAL headers remain.
+See the investigation document for the retained linker-map evidence.
+
+To diagnose software-clock catch-up separately, the streaming harness accepts
+`--audio-stall-ms 100`. This deliberately pauses only the fake audio callback
+thread once, after roughly one second, then retains its existing catch-up clock.
+It is expected to provoke timing failures and is not a normal pass criterion or
+a USB bandwidth benchmark. The option defaults to zero and never affects the
+production simulator or firmware. Inspect `render.csv` alongside `host.log`.

@@ -29,6 +29,7 @@
 #include <thread>
 #include <stdint.h>
 #include <assert.h>
+#include <stdlib.h>
 
 static PaStreamCallback *callback;
 static void *context;
@@ -54,11 +55,17 @@ PaError Pa_OpenDefaultStream(PaStream **stream, int input, int output,
 PaError Pa_StartStream(PaStream *)
 {
     running = true;
-    worker = std::thread([] {
+    // Explicit fault injection for software-clock diagnostics only.
+    const char *stall_text = getenv("CHANNEL_TEST_AUDIO_STALL_MS");
+    unsigned stall_ms = stall_text ? (unsigned)strtoul(stall_text, nullptr, 10) : 0;
+    worker = std::thread([stall_ms] {
+        unsigned callbacks = 0;
         auto next = std::chrono::steady_clock::now();
         int32_t output[256];
         PaStreamCallbackTimeInfo time{};
         while (running) {
+            if (++callbacks == 375 && stall_ms)
+                std::this_thread::sleep_for(std::chrono::milliseconds(stall_ms));
             if (callback(nullptr, output, 128, &time, 0, context) != paContinue) {
                 running = false;
                 break;

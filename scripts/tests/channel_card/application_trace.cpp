@@ -51,12 +51,14 @@ static void render(unsigned count,unsigned partition) {
         }
 #else
         if(partition==480) { // Test-only oracle: original boundary ordering.
+            (void)begin_audio_runtime();
             assert(n%48==0);
             for(unsigned i=0;i<n;i+=48) {
                 begin_voice_audio_block();
                 for(unsigned j=0;j<48;++j) out[i+j]=mix_next_audio_sample();
                 end_voice_audio_block();
             }
+            end_audio_runtime();
         } else {
             render_audio_samples(nullptr,0);
             render_audio_samples(out,n);
@@ -108,7 +110,6 @@ int main(int argc,char **argv) {
             emit(state,sizeof state);
         }
     }
-    char command[]="c:vm"; execute_usb_command(command);
     emit(model::rs_tx.data(),model::rs_tx.size());
     return 0;
 }

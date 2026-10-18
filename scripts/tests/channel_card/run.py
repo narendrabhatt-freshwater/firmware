@@ -57,16 +57,26 @@ def application_sources(root, build="sim"):
     makefile = (root / build / "Makefile").read_text().replace("\\\n", " ")
     match = re.search(r"^APP_SOURCES\s*:=\s*(.*)$", makefile, re.M)
     assert match, f"Missing application source list in {build}/Makefile"
-    return match[1].split()
+    sources = match[1]
+    if "$(COMMON_APP_SOURCES)" in sources:
+        shared = (root / "app/sources.mk").read_text().replace("\\\n", " ")
+        common = re.search(r"^COMMON_APP_SOURCES\s*:=\s*(.*)$", shared, re.M)
+        assert common, "Missing shared application source list"
+        sources = sources.replace("$(COMMON_APP_SOURCES)", common[1])
+    return sources.split()
 
 
 def build(root, work, main, legacy=False):
+    # Older snapshots used render_audio_block; current snapshots share the renderer.
+    legacy = legacy and "render_audio_samples" not in (root / "app/audio.h").read_text()
     sources = ["app/" + name + ".cpp" for name in
                ("audio", "channel", "filter", "oscillator", "voice", "samples", "stream", "usb")]
     if not legacy:
         sources = application_sources(root)
         sources += ["app/audio_dac.cpp"]
-    sources += ["berry_runtime/vm.c", "berry_runtime/vm_source.c",
+        if main == "protocol_test":
+            sources.remove("app/voice.cpp") # included by the status interleaving test
+    sources += ["berry_runtime/vm.c",
                 "berry_runtime/berry_backend.c", "berry_runtime/berry_runtime_modtab.c"]
     sources += [str(p.relative_to(root)) for p in sorted(
         (root / "berry_runtime/third_party/berry/src").glob("*.c"))]
@@ -107,7 +117,7 @@ def portaudio_flags():
 
 def pty_check(work):
     sources = application_sources(ROOT)
-    sources += ["berry_runtime/vm.c", "berry_runtime/vm_source.c", "berry_runtime/berry_backend.c",
+    sources += ["berry_runtime/vm.c", "berry_runtime/berry_backend.c",
                 "berry_runtime/berry_runtime_modtab.c"]
     sources += [str(p.relative_to(ROOT)) for p in sorted(
         (ROOT / "berry_runtime/third_party/berry/src").glob("*.c"))]
@@ -166,7 +176,7 @@ def pty_check(work):
 def audio_check(work, compiler, envelope=False):
     """Play a quiet tone through the real device; observe its submitted buffers."""
     sources = application_sources(ROOT)
-    sources += ["berry_runtime/vm.c", "berry_runtime/vm_source.c", "berry_runtime/berry_backend.c",
+    sources += ["berry_runtime/vm.c", "berry_runtime/berry_backend.c",
                 "berry_runtime/berry_runtime_modtab.c"]
     sources += [str(p.relative_to(ROOT)) for p in sorted(
         (ROOT / "berry_runtime/third_party/berry/src").glob("*.c"))]
@@ -397,6 +407,11 @@ def main():
             if baseline:
                 assert run([baseline, fixture, 48]) == expected, "Pre-refactor audio/state mismatch"
                 print("PASS pre-refactor baseline:", scenario)
+        queues = work / "transport_buffer_test"
+        run(["c++", "-std=c++17", "-Wall", "-Wextra", "-Werror", "-pthread",
+             "-I" + str(ROOT / "app"), TESTS / "transport_buffer_test.cpp", "-o", queues])
+        run([queues])
+        print("PASS shared transport: wraparound, capacity, lifecycle, concurrent byte ordering")
         serial = work / "serial_backend_test"
         run(["c++", "-std=c++17", "-Wall", "-Wextra", "-Werror", "-I" + str(ROOT / "app"), "-I" + str(ROOT / "sim"),
              TESTS / "serial_backend_test.cpp", "-o", serial])
@@ -426,6 +441,9 @@ def main():
                 old = build(args.baseline.resolve(), work / "baseline", name, True)
                 assert output == run([old, program]), "Pre-refactor " + name + " mismatch"
             print("PASS", name)
+            if name == "protocol_test":
+                run([exe, program, "upload-errors"])
+                print("PASS script upload: busy, abort, disconnect, malformed header, chunked commit")
 
 
 if __name__ == "__main__":

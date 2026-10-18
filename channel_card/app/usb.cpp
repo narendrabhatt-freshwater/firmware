@@ -26,51 +26,51 @@
 #include "audio.h"
 #include "platform.h"
 #include "voice.h"
-#include "channel.h"
 #include "samples.h"
 #include "stream.h"
 #include <stdio.h>
 #include <string.h>
 
+/* Upload validation errors become the payload of the pending binary reply. */
+static char upload_reply[96];
+static void set_upload_result(const char *message)
+{
+    if (message) (void)snprintf(upload_reply, sizeof upload_reply, "%s", message);
+}
+
 /* ---- receive attack and wavetable uploads ------------------------------- */
 
-/* CDC session: al → 1..ATTACK_BANK_BYTES signed int8 → Commit. */
+/* Binary upload writes directly into the existing attack bank, then commits length. */
 
-static uint8_t s_active;
 static uint16_t s_id;
 static uint32_t s_need;
 static uint32_t s_got;
 static int8_t *s_dst;
-static uint8_t s_wavetable_upload;
-static uint8_t s_logical_wave;
 
 /* ---- query and abort an attack upload ----------------------------------- */
 
 uint8_t is_sample_upload_active(void)
 {
-    return s_active;
+    return s_dst != NULL;
 }
 
 void abort_sample_upload(void)
 {
     set_sample_storage_write_lock(0u);
-    s_active = 0u;
     s_dst = NULL;
     s_need = 0u;
     s_got = 0u;
-    s_wavetable_upload = 0u;
-    s_logical_wave = 0u;
 }
 
 /* ---- begin sample and wavetable uploads --------------------------------- */
 
-static int begin_sample_upload_to_bank(uint16_t wave_id, uint32_t nbytes, uint8_t wavetable_upload,
-                                       uint8_t logical_wave)
+static int begin_sample_upload_to_bank(uint16_t wave_id, uint32_t nbytes)
 {
+    bool wavetable_upload = wave_id >= ATTACK_BANK_WAVETABLE_FIRST;
     if (wave_id >= ATTACK_BANK_COUNT || nbytes == 0u || nbytes > ATTACK_BANK_BYTES) {
         return -1;
     }
-    if (s_active != 0u || (wavetable_upload != 0u && has_voice_sample_references() != 0u)) {
+    if (s_dst != NULL || (wavetable_upload != 0u && has_voice_sample_references() != 0u)) {
         return -1;
     }
 
@@ -84,9 +84,6 @@ static int begin_sample_upload_to_bank(uint16_t wave_id, uint32_t nbytes, uint8_
     s_id = wave_id;
     s_need = nbytes;
     s_got = 0u;
-    s_wavetable_upload = wavetable_upload;
-    s_logical_wave = logical_wave;
-    s_active = 1u;
     return 0;
 }
 
@@ -95,7 +92,7 @@ int begin_sample_upload(uint16_t wave_id, uint32_t nbytes)
     if (wave_id >= ATTACK_BANK_SAMPLE_COUNT) {
         return -1;
     }
-    return begin_sample_upload_to_bank(wave_id, nbytes, 0u, 0u);
+    return begin_sample_upload_to_bank(wave_id, nbytes);
 }
 
 int begin_wavetable_upload(uint8_t wave, uint32_t nbytes)
@@ -103,8 +100,7 @@ int begin_wavetable_upload(uint8_t wave, uint32_t nbytes)
     if (wave >= ATTACK_BANK_WAVETABLE_COUNT || nbytes < 2u) {
         return -1;
     }
-    return begin_sample_upload_to_bank((uint16_t)(ATTACK_BANK_WAVETABLE_FIRST + wave), nbytes, 1u,
-                                       wave);
+    return begin_sample_upload_to_bank((uint16_t)(ATTACK_BANK_WAVETABLE_FIRST + wave), nbytes);
 }
 
 /* ---- receive attack upload data ----------------------------------------- */
@@ -112,10 +108,9 @@ int begin_wavetable_upload(uint8_t wave, uint32_t nbytes)
 uint32_t append_sample_upload_bytes(const uint8_t *buf, uint32_t len)
 {
     uint32_t take;
-    uint32_t i;
     char msg[48];
 
-    if (s_active == 0u || buf == NULL || s_dst == NULL) {
+    if (buf == NULL || s_dst == NULL) {
         return 0u;
     }
 
@@ -124,29 +119,23 @@ uint32_t append_sample_upload_bytes(const uint8_t *buf, uint32_t len)
         take = s_need - s_got;
     }
 
-    {
-        uint8_t *dst_bytes = (uint8_t *)s_dst;
-        for (i = 0u; i < take; i++) {
-            dst_bytes[s_got + i] = buf[i];
-        }
-    }
+    memcpy(s_dst + s_got, buf, take);
     s_got += take;
 
     if (s_got >= s_need) {
         /* Keep the old length during transfer. Only the completed upload updates
          * metadata; the payload itself overwrites live storage as bytes arrive. */
-        for (i = s_need; i < ATTACK_BANK_BYTES; i++)
-            s_dst[i] = 0;
+        memset(s_dst + s_need, 0, ATTACK_BANK_BYTES - s_need);
 
         if (commit_sample_data(s_id, s_need) != 0) {
-            write_usb_text("err:range\r\n");
+            set_upload_result("err:range\r\n");
         } else {
-            if (s_wavetable_upload != 0u) {
-                (void)snprintf(msg, sizeof msg, "ok:wavetable %u\r\n", (unsigned)s_logical_wave);
+            if (s_id >= ATTACK_BANK_WAVETABLE_FIRST) {
+                (void)snprintf(msg, sizeof msg, "ok:wavetable %u\r\n", (unsigned)(s_id - ATTACK_BANK_WAVETABLE_FIRST));
             } else {
                 (void)snprintf(msg, sizeof msg, "ok:attack %u\r\n", (unsigned)s_id);
             }
-            write_usb_text(msg);
+            set_upload_result(msg);
         }
         abort_sample_upload();
     }
@@ -163,24 +152,42 @@ static uint32_t rx_messages, rx_bytes, blocks, bad;
 static uint8_t hello, failed, upload_kind, upload_target;
 static uint32_t upload_total, upload_offset;
 static uint32_t probe_bytes, probe_blocks, probe_hash;
-static char upload_reply[96];
 static uint8_t reply[USB_STREAM_HEADER_BYTES + 128];
 static uint16_t reply_size;
-
-/* Existing upload validators report here; strings never enter the raw stream. */
-void write_usb_text(const char *s)
-{
-    if (s) (void)snprintf(upload_reply, sizeof upload_reply, "%s", s);
-}
 
 /* ---- manage binary uploads and replies ---------------------------------- */
 
 static void abort_usb_upload(void)
 {
-    abort_script_upload();
+    if (upload_kind == USB_UPLOAD_SCRIPT)
+        abort_voice_script_upload(upload_target);
     abort_sample_upload();
     upload_kind = 0;
     upload_offset = upload_total = 0;
+}
+
+/* USB has already checked the target, offset and length. Its existing upload
+ * counters own this transaction; the voice runtime only owns bytecode storage. */
+static uint32_t append_script_upload_bytes(const uint8_t *data, uint32_t size)
+{
+    if (append_voice_script_upload_bytes(upload_target, data, size) != 0) {
+        set_upload_result("err:vm-container\r\n");
+        abort_voice_script_upload(upload_target);
+        return size;
+    }
+    if (upload_offset + size == upload_total) {
+        char result[64];
+        if (commit_voice_script_upload(upload_target) != 0) {
+            (void)snprintf(result, sizeof result, "err:vm %u %u\r\n", (unsigned)upload_target,
+                           (unsigned)get_voice_script_fault(upload_target));
+        } else {
+            (void)snprintf(result, sizeof result, "ok:vm %u %lu %u\r\n", (unsigned)upload_target,
+                           (unsigned long)FW_VM_TARGET_CHANNEL,
+                           (unsigned)FW_VM_TARGET_CHANNEL_VERSION);
+        }
+        set_upload_result(result);
+    }
+    return size;
 }
 
 static void prepare_usb_reply(const uint8_t *header, const uint8_t *payload, uint16_t size)
@@ -311,8 +318,11 @@ static uint8_t dispatch_usb_message(const uint8_t *h)
             rc = begin_sample_upload(h[1], size);
         else if (p[0] == USB_UPLOAD_WAVE)
             rc = begin_wavetable_upload(h[1], size);
-        else if (p[0] == USB_UPLOAD_SCRIPT)
-            rc = begin_script_upload(h[1], size);
+        else if (p[0] == USB_UPLOAD_SCRIPT &&
+                 size >= FW_SCRIPT_CONTAINER_HEADER_SIZE &&
+                 size <= FW_SCRIPT_CONTAINER_HEADER_SIZE + FW_SCRIPT_MAX_PAYLOAD)
+            rc = begin_voice_script_upload(h[1]);
+        if (rc == -4) return 0; // Nonblocking VM handoff; retain this complete request.
         if (rc) {
             reply_usb_result(h, 1, "upload rejected (target, size, or active voice)");
             return 1;
@@ -370,6 +380,7 @@ void process_usb_messages(void)
 {
     uint32_t epoch = get_usb_connection_generation();
     if (epoch != link_epoch) {
+        if (!is_usb_connected()) request_stop_all_voices();
         abort_usb_upload();
         reset_usb_parser(&parser);
         hello = failed = 0;
@@ -409,18 +420,16 @@ void process_usb_messages(void)
             if (dispatch_usb_message(parser.bytes)) reset_usb_parser(&parser);
         }
     }
-    if (parser.used && parser.used < parser.need &&
-        (uint32_t)(get_board_time_ms() - last_rx_ms) > 1000)
+    const TransportTimeouts *timeouts = get_transport_timeouts();
+    if (timeouts->usb_partial_frame_ms && parser.used && parser.used < parser.need &&
+        (uint32_t)(get_board_time_ms() - last_rx_ms) > timeouts->usb_partial_frame_ms)
         fail_usb_protocol(NULL, "partial frame timeout");
-    if (upload_kind && (uint32_t)(get_board_time_ms() - upload_ms) > 5000) abort_usb_upload();
+    if (timeouts->usb_upload_idle_ms && upload_kind &&
+        (uint32_t)(get_board_time_ms() - upload_ms) > timeouts->usb_upload_idle_ms)
+        abort_usb_upload();
 }
 
 /* ---- query and clear transport statistics ------------------------------- */
-
-uint16_t get_usb_last_body_sequence(void)
-{
-    return get_last_stream_body_sequence();
-}
 
 uint32_t get_usb_received_body_count(void)
 {

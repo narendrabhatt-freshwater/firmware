@@ -69,6 +69,7 @@ class ChannelReleaseTests(unittest.TestCase):
                          self.fixture_run("git", "rev-parse", "HEAD").decode().strip())
         self.assertTrue((self.package / "app/usb.cpp").is_file())
         self.assertTrue((self.package / "app/Makefile").is_file())
+        self.assertTrue((self.package / "app/sources.mk").is_file())
         self.assertTrue((self.package / "PROTOCOL.md").is_file())
         self.assertFalse((self.package / "docs").exists())
         self.assertFalse((self.package / "cmake").exists())

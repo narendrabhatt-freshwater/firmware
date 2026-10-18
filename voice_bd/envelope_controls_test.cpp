@@ -3,6 +3,9 @@
 #include "samples.h"
 #include "filter.h"
 #include "stream.h"
+#include "usb.h"
+
+#include <algorithm>
 
 #include <array>
 #include <cmath>
@@ -34,24 +37,30 @@ std::array<int8_t, 1024> pcm;
 void supply()
 {
     for (unsigned v = 0; v < NOTE_BANK_VOICES; ++v) {
+        // Feed the replacement from actual free credit instead of always
+        // giving a whole 1024-byte block to the outgoing session first.
+        if (has_pending_voice_stream(v)) {
+            unsigned count = std::min<unsigned>(pcm.size(), get_stream_free_samples(v));
+            if (count) require(write_stream_body_samples(v, get_target_stream_session(v),
+                                                         pcm.data(), count) == 1,
+                               "Pending BODY rejected");
+        }
         auto session = get_current_stream_session(v);
         if (session != 255 && get_current_stream_free_samples(v) >= pcm.size())
             require(write_stream_body_samples(v, session, pcm.data(), pcm.size()) == 1,
                     "Current BODY rejected");
-        if (has_pending_voice_stream(v) && get_stream_free_samples(v) >= pcm.size())
-            require(write_stream_body_samples(v, get_target_stream_session(v),
-                                             pcm.data(), pcm.size()) == 1,
-                    "Pending BODY rejected");
     }
 }
-int32_t render(unsigned milliseconds)
+int32_t render(unsigned milliseconds, bool refill = true)
 {
     int32_t sample = 0;
     while (milliseconds--) {
-        supply();
+        if (refill) supply();
+        (void)begin_audio_runtime();
         begin_voice_audio_block();
         for (unsigned i = 0; i < 48; ++i) sample = mix_next_audio_sample();
         end_voice_audio_block();
+        end_audio_runtime();
     }
     require(get_voice_underrun_count() == 0, "BODY underrun");
     for (unsigned v = 0; v < NOTE_BANK_VOICES; ++v)
@@ -91,6 +100,19 @@ void load(envelope_controls::settings const& settings,
 void on(uint8_t velocity = 127, uint8_t session = 1)
 {
     require(queue_streamed_sample_note(0, 0, 60, velocity, session) == 0, "Note-on failed");
+    // Measure the generated envelope after session publication, independently
+    // of the transport-to-audio handoff tested by the protocol boundary suite.
+    require(begin_audio_runtime(), "Audio ownership failed");
+    begin_voice_audio_block();
+    end_audio_runtime();
+    // Measure envelope timing from BODY readiness, not available transport
+    // credit. The explicit fixture limit detects a stuck preparation path.
+    for (unsigned elapsed_ms = 0; elapsed_ms < 100; ++elapsed_ms) {
+        supply();
+        if (get_pending_stream_buffered_samples(0) >= USB_STREAM_PRIME_SAMPLES) return;
+        render(1, false);
+    }
+    require(false, "Replacement did not acquire priming credit");
 }
 void off()
 {

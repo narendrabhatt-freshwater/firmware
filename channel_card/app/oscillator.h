@@ -31,40 +31,6 @@
 extern "C" {
 #endif
 
-/* ---- interpolate sample tables ------------------------------------------ */
-
-/* 8-tap Hann-windowed sinc (Q16.16 index → Q31).
- * Linear interpolation is 2-tap. This kernel is 8-tap. Coeffs are built
- * once at init (float OK); the sample path is integer only. */
-
-#define INTERP8_TAPS 8u
-#define INTERP8_PHASES 256u
-
-void init_sample_interpolation(void);
-
-/**
- * @brief Read int16 table at Q16.16 phase.
- * @param wrap  non-zero: modulo n (sustain loop). zero: clamp ends.
- */
-int32_t interpolate_int16_sample(const int16_t *tab, uint32_t n, uint32_t phase_q16, uint8_t wrap);
-
-/** Same for a Q31 table (attack heads). */
-int32_t interpolate_q31_sample(const int32_t *tab, uint32_t n, uint32_t phase_q16, uint8_t wrap);
-
-/**
- * @brief 8-tap kernel over prefetched Q31 samples.
- *        taps[t] is source at (i0 + t - 3); phase_q16 supplies the
- *        fractional LUT index only.
- */
-int32_t interpolate_q31_taps(const int32_t taps[INTERP8_TAPS], uint32_t phase_q16);
-
-/**
- * @brief 8-tap kernel over prefetched int16 samples (ring body path).
- *        taps[t] is source at (i0 + t - 3); phase_q16 supplies the
- *        fractional LUT index only.
- */
-int32_t interpolate_int16_taps(const int16_t taps[INTERP8_TAPS], uint32_t phase_q16);
-
 /* ---- configure wavetable oscillators ------------------------------------ */
 
 /* Automatically allocated attack-bank wavetable oscillators. */
@@ -89,9 +55,6 @@ void discard_pending_oscillators(uint8_t voice);
 void stop_active_oscillators(uint8_t voice);
 void stop_voice_oscillators(uint8_t voice);
 void stop_all_oscillators(void);
-
-uint8_t is_oscillator_handle_valid(uint8_t voice, uint32_t handle);
-int64_t mix_next_oscillator_samples(uint8_t voice, uint32_t *count_out);
 
 /** Render all oscillator nodes once and return modulation for SAMPLE. */
 void apply_oscillator_sample_modulation(uint8_t voice, float *sample_frequency_hz,

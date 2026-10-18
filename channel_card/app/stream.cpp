@@ -24,6 +24,7 @@
 #include "stream.h"
 #include "usb.h"
 #include <stddef.h>
+#include <atomic>
 #include <string.h>
 
 /* ---- queue streamed body samples ---------------------------------------- */
@@ -38,7 +39,8 @@ static_assert(__atomic_always_lock_free(4, 0), "32-bit atomic publication requir
 
 typedef struct {
     uint32_t generation, published, position;
-    uint16_t consumed, wave, head, tail, reclaim, completed, reclaimed;
+    std::atomic<uint16_t> consumed;
+    uint16_t wave, head, tail, reclaim, completed, reclaimed;
     uint8_t session, skip, allocated, dummy;
 } Queue;
 
@@ -53,14 +55,17 @@ typedef struct {
 } Ring;
 
 static Ring rings[SAMPLE_VOICES] __attribute__((aligned(32)));
-static volatile uint32_t s_drop_pkts, s_rx_pkts, s_sof_pkts, s_zero_pkts;
+static volatile uint32_t s_drop_pkts, s_sof_pkts, s_zero_pkts;
 static volatile uint32_t s_stale_pkts, s_future_pkts, s_full_pkts, s_superseded_pkts;
 static volatile uint16_t s_last_body_sequence;
-static volatile uint32_t s_audio_frames;
+static std::atomic<uint32_t> s_audio_frames{0};
 static uint32_t s_last_body_frame;
 static uint8_t s_have_body;
-static volatile uint32_t s_min_fill = 0xFFFFFFFFu;
+static std::atomic<uint32_t> s_min_fill{0xFFFFFFFFu};
 
+/* Audio alone publishes current/pending roles. Transport reserves storage and
+ * transfers its queue index through the existing note-command publication.
+ * Cold initialization and inactive upload commits run with audio excluded. */
 /* ---- publish and read ring state ---------------------------------------- */
 
 static uint32_t load_stream_state(const uint32_t *p)
@@ -83,15 +88,9 @@ static unsigned get_pending_queue_index(uint32_t s)
     return (s >> 8) & 255u;
 }
 
-static uint32_t make_next_stream_state(uint32_t s, unsigned c, unsigned p)
+static uint32_t make_stream_state(unsigned c, unsigned p)
 {
-    return ((s + 65536u) & 0xffff0000u) | (p << 8) | c;
-}
-
-static int compare_exchange_stream_state(Ring *r, uint32_t *s, unsigned c, unsigned p)
-{
-    return __atomic_compare_exchange_n(&r->state, s, make_next_stream_state(*s, c, p), 0,
-                                       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    return (p << 8) | c;
 }
 
 static void retire_stream_queue(Ring *r, unsigned q)
@@ -190,10 +189,8 @@ void reset_voice_stream(uint8_t v)
     if (v >= SAMPLE_VOICES) return;
     Ring *r = &rings[v];
     init_stream_storage(r);
-    uint32_t s = load_stream_state(&r->state), old;
-    do {
-        old = s;
-    } while (!compare_exchange_stream_state(r, &s, NONE, NONE));
+    uint32_t old = load_stream_state(&r->state);
+    publish_stream_state(&r->state, make_stream_state(NONE, NONE));
     retire_stream_queue(r, get_current_queue_index(old));
     retire_stream_queue(r, get_pending_queue_index(old));
     r->consuming = 0;
@@ -215,14 +212,9 @@ void init_voice_streams(void)
 
 /* ---- manage current and pending sessions -------------------------------- */
 
-void mark_voice_stream_consuming(uint8_t v)
+uint8_t reserve_voice_stream(uint8_t v, uint16_t wave, uint8_t session)
 {
-    if (v < SAMPLE_VOICES) rings[v].consuming = 1;
-}
-
-void prepare_pending_voice_stream(uint8_t v, uint16_t wave, uint8_t session)
-{
-    if (v >= SAMPLE_VOICES) return;
+    if (v >= SAMPLE_VOICES) return NONE;
     Ring *r = &rings[v];
     init_stream_storage(r);
     reclaim_stream_storage(r);
@@ -241,10 +233,15 @@ void prepare_pending_voice_stream(uint8_t v, uint16_t wave, uint8_t session)
     q->session = session;
     publish_stream_state(&q->published, 0);
     publish_stream_state(&q->position, 512u | q->head);
-    uint32_t s = load_stream_state(&r->state), old;
-    do {
-        old = s;
-    } while (!compare_exchange_stream_state(r, &s, get_current_queue_index(s), n));
+    return n;
+}
+
+void publish_pending_voice_stream(uint8_t v, uint8_t n)
+{
+    Ring *r = &rings[v];
+    uint32_t old = load_stream_state(&r->state);
+    publish_stream_state(&r->state,
+        make_stream_state(get_current_queue_index(old), n));
     retire_stream_queue(r, get_pending_queue_index(old));
 }
 
@@ -252,11 +249,10 @@ int activate_pending_voice_stream(uint8_t v)
 {
     if (v >= SAMPLE_VOICES) return -1;
     Ring *r = &rings[v];
-    uint32_t s = load_stream_state(&r->state), old;
-    do {
-        old = s;
-        if (get_pending_queue_index(s) >= QUEUES) return -1;
-    } while (!compare_exchange_stream_state(r, &s, get_pending_queue_index(s), NONE));
+    uint32_t old = load_stream_state(&r->state);
+    if (get_pending_queue_index(old) >= QUEUES) return -1;
+    publish_stream_state(&r->state,
+        make_stream_state(get_pending_queue_index(old), NONE));
     retire_stream_queue(r, get_current_queue_index(old));
     r->consuming = 1;
     return 0;
@@ -266,10 +262,9 @@ void discard_pending_voice_stream(uint8_t v)
 {
     if (v >= SAMPLE_VOICES) return;
     Ring *r = &rings[v];
-    uint32_t s = load_stream_state(&r->state), old;
-    do {
-        old = s;
-    } while (!compare_exchange_stream_state(r, &s, get_current_queue_index(s), NONE));
+    uint32_t old = load_stream_state(&r->state);
+    publish_stream_state(&r->state,
+        make_stream_state(get_current_queue_index(old), NONE));
     retire_stream_queue(r, get_pending_queue_index(old));
 }
 
@@ -277,10 +272,9 @@ void end_current_voice_stream(uint8_t v)
 {
     if (v >= SAMPLE_VOICES) return;
     Ring *r = &rings[v];
-    uint32_t s = load_stream_state(&r->state), old;
-    do {
-        old = s;
-    } while (!compare_exchange_stream_state(r, &s, NONE, get_pending_queue_index(s)));
+    uint32_t old = load_stream_state(&r->state);
+    publish_stream_state(&r->state,
+        make_stream_state(NONE, get_pending_queue_index(old)));
     retire_stream_queue(r, get_current_queue_index(old));
     r->consuming = 0;
 }
@@ -291,6 +285,19 @@ void release_voice_stream(uint8_t v)
 }
 
 /* ---- query ring sessions and capacity ----------------------------------- */
+
+void get_stream_sessions(uint8_t v, uint8_t *current, uint8_t *target, uint8_t *pending)
+{
+    *current = *target = NONE;
+    *pending = 0;
+    if (v >= SAMPLE_VOICES) return;
+    Ring *r = &rings[v];
+    uint32_t state = load_stream_state(&r->state);
+    unsigned c = get_current_queue_index(state), p = get_pending_queue_index(state);
+    if (c < QUEUES) *current = r->queue[c].session;
+    *pending = p < QUEUES;
+    *target = p < QUEUES ? r->queue[p].session : *current;
+}
 
 uint8_t get_current_stream_session(uint8_t v)
 {
@@ -363,12 +370,6 @@ uint8_t get_target_stream_session(uint8_t v)
     return i < QUEUES ? r->queue[i].session : NONE;
 }
 
-uint32_t get_target_stream_buffered_samples(uint8_t v)
-{
-    return has_pending_voice_stream(v) ? get_pending_stream_buffered_samples(v)
-                                      : get_current_stream_buffered_samples(v);
-}
-
 /* ---- reserve an incoming body block ------------------------------------- */
 
 int begin_stream_write(uint8_t v, uint8_t session, uint8_t sof, uint16_t wave, uint32_t n,
@@ -401,7 +402,6 @@ int begin_stream_write(uint8_t v, uint8_t session, uint8_t sof, uint16_t wave, u
     w->session = session;
     w->bank = (uint8_t)qi;
     w->generation = q->generation;
-    w->pending = qi == get_pending_queue_index(s);
     w->sof = sof;
     w->nsamp = n;
     w->active = 1;
@@ -494,7 +494,6 @@ uint32_t commit_stream_write(StreamRing_Write_t *w)
     wr = (uint16_t)(wr + (w->nsamp + BLOCK - 1) / BLOCK);
     w->active = 0;
     publish_stream_state(&q->published, ((uint32_t)(uint16_t)(total + w->nsamp) << 16) | wr);
-    ++s_rx_pkts;
     if (zero) ++s_zero_pkts;
     if (w->sof) ++s_sof_pkts;
     return w->nsamp;
@@ -666,11 +665,6 @@ uint32_t get_stream_dropped_block_count(void)
     return s_drop_pkts;
 }
 
-uint32_t get_stream_received_block_count(void)
-{
-    return s_rx_pkts;
-}
-
 uint32_t get_stream_start_block_count(void)
 {
     return s_sof_pkts;
@@ -704,7 +698,6 @@ uint32_t get_stream_superseded_block_count(void)
 void clear_stream_statistics(void)
 {
     s_drop_pkts = 0u;
-    s_rx_pkts = 0u;
     s_sof_pkts = 0u;
     s_zero_pkts = 0u;
     s_stale_pkts = 0u;
@@ -712,11 +705,6 @@ void clear_stream_statistics(void)
     s_full_pkts = 0u;
     s_superseded_pkts = 0u;
     s_min_fill = 0xFFFFFFFFu;
-}
-
-void reset_stream_statistics(void)
-{
-    clear_stream_statistics();
 }
 
 void record_stream_audio_sample(void)

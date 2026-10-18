@@ -59,14 +59,7 @@ int set_channel_led_colour(float red, float green, float blue, float brightness)
 
 #define RS485_CARD_ID 'c'
 #define RS485_BROADCAST_ID '*'
-#define RS485_BUS_TIMEOUT_MS 250
 #define RS485_ECHO 0
-
-/* Keep blocking TX close to its wire time so USB audio can be serviced. */
-static uint32_t get_rs485_transmit_timeout_ms(uint32_t nbytes)
-{
-    return calculate_rs485_transmit_timeout_ms(nbytes, get_rs485_baud_rate());
-}
 
 #define RS485_TAG "[C] " /* response prefix tag for Channel Card */
 
@@ -75,28 +68,23 @@ static uint32_t get_rs485_transmit_timeout_ms(uint32_t nbytes)
  * Returns 0 on success, -1 if the bus was busy (timeout). */
 static int __attribute__((unused)) send_rs485_text(const char *s)
 {
-    if (!wait_for_rs485_bus(RS485_BUS_TIMEOUT_MS)) return -1; /* bus occupied — drop this message */
+    if (!wait_for_rs485_bus(get_transport_timeouts()->rs485_bus_ms)) return -1; /* bus occupied — drop this message */
 
     {
         uint32_t n = (uint32_t)strlen(s);
-        write_rs485_bytes((const uint8_t *)s, (uint16_t)n, get_rs485_transmit_timeout_ms(n));
+        write_rs485_bytes((const uint8_t *)s, (uint16_t)n, get_transport_timeouts()->rs485_transmit_ms);
     }
 
     return 0;
 }
 
-/* When a command arrives over the USB CDC console, replies must go back
- * over USB instead of the RS485 bus.  execute_usb_command() sets this
- * for the duration of the command. */
-/* Main-loop parser state; reset is also available from the USB console. */
+/* Main-loop RS485 parser state. USB uses its own binary parser. */
 static uint8_t rs485_line[96];
 static uint8_t rs485_line_len;
 
-static uint8_t console_via_usb = 0;
 static uint8_t console_note_event;
 
 /* RS485 path counters (internal; no console cmd). */
-static uint32_t rs485_cmd_count; /**< commands executed from the bus */
 static uint32_t rs485_tx_fail;   /**< RS485 transmission failed or timed out */
 static uint32_t rs485_tx_trunc;  /**< reply longer than the frame buffer */
 static uint32_t rs485_vq_count;  /**< exact refill-status frames transmitted */
@@ -117,11 +105,6 @@ static void send_rs485_reply(const char *s)
     size_t body_len;
     size_t max_body;
 
-    if (console_via_usb) {
-        write_usb_text(s);
-        return;
-    }
-
     tag_len = strlen(RS485_TAG);
     body_len = strlen(s);
     max_body = sizeof(frame) - tag_len - 1u;
@@ -133,7 +116,7 @@ static void send_rs485_reply(const char *s)
     memcpy(frame + tag_len, s, body_len);
 
     if (write_rs485_bytes((const uint8_t *)frame, (uint16_t)(tag_len + body_len),
-                         get_rs485_transmit_timeout_ms((uint32_t)(tag_len + body_len))) != 0) {
+                         get_transport_timeouts()->rs485_transmit_ms) != 0) {
         rs485_tx_fail++;
     }
 }
@@ -187,7 +170,7 @@ static void send_rs485_voice_status(uint8_t active_mask, uint8_t pending_mask,
     }
     frame[VQ_FRAME_LEN - 1u] = '\n';
 
-    if (write_rs485_bytes(frame, VQ_FRAME_LEN, get_rs485_transmit_timeout_ms(VQ_FRAME_LEN)) != 0) {
+    if (write_rs485_bytes(frame, VQ_FRAME_LEN, get_transport_timeouts()->rs485_transmit_ms) != 0) {
         rs485_tx_fail++;
     } else {
         rs485_vq_count++;
@@ -490,8 +473,6 @@ static void process_pitch_tracking_command(char *line, char *b, size_t bsz)
  */
 static void process_voice_status_command(void)
 {
-    char b[384];
-    int n;
     uint8_t mask = 0u;
     uint16_t free_samples[NOTE_BANK_VOICES];
     uint8_t pending_mask = 0u;
@@ -505,13 +486,16 @@ static void process_voice_status_command(void)
     {
         uint32_t saved = disable_interrupts_and_save_state();
         for (i = 0u; i < NOTE_BANK_VOICES; i++) {
-            if (is_voice_active(i) != 0u) mask |= (uint8_t)(1u << i);
+            uint8_t pending;
+            get_stream_sessions(i, &current_sessions[i], &sessions[i], &pending);
+            /* Streaming activity and session identity must use the same state.
+             * The renderer snapshot can lag both promotion and retirement. */
+            if (current_sessions[i] != 255u)
+                mask |= (uint8_t)(1u << i);
             free_samples[i] = (uint16_t)get_stream_free_samples(i);
-            sessions[i] = get_target_stream_session(i);
-            current_sessions[i] = get_current_stream_session(i);
             remaining_us[i] = get_voice_buffered_time_us(i);
             refill_samples[i] = get_voice_refill_samples_5ms(i);
-            if (has_pending_voice_stream(i) != 0u)
+            if (pending != 0u)
                 pending_mask = (uint8_t)(pending_mask | (uint8_t)(1u << i));
         }
         /* Credit and acknowledgement must describe the same USB state. A newer
@@ -521,33 +505,8 @@ static void process_voice_status_command(void)
         restore_interrupt_state(saved);
     }
 
-    if (!console_via_usb) {
-        send_rs485_voice_status(mask, pending_mask, sessions, current_sessions, remaining_us,
-                               free_samples, body_sequence, body_age_ms, refill_samples);
-        return;
-    }
-
-    n = snprintf(b, sizeof b, "ok:vq12 %02x %02x %u %u %u", (unsigned)mask, (unsigned)pending_mask,
-                 (unsigned)STREAM_RING_SAMPLES, (unsigned)rs485_vq_sequence,
-                 (unsigned)body_sequence);
-    for (i = 0u; i < NOTE_BANK_VOICES; i++) {
-        if (n < 0 || (size_t)n >= sizeof b) {
-            send_rs485_reply("err:buf\r\n");
-            return;
-        }
-        n += snprintf(b + n, sizeof b - (size_t)n, " %u %lu %u", (unsigned)sessions[i],
-                      (unsigned long)remaining_us[i], (unsigned)free_samples[i]);
-        if (n >= 0 && (size_t)n < sizeof b)
-            n += snprintf(b + n, sizeof b - (size_t)n, " %u", (unsigned)refill_samples[i]);
-    }
-    if (n < 0 || (size_t)n >= sizeof b - 2u) {
-        send_rs485_reply("err:buf\r\n");
-        return;
-    }
-    b[n++] = '\r';
-    b[n++] = '\n';
-    b[n] = '\0';
-    send_rs485_reply(b);
+    send_rs485_voice_status(mask, pending_mask, sessions, current_sessions, remaining_us,
+                           free_samples, body_sequence, body_age_ms, refill_samples);
 }
 
 /* ---- handle note commands ----------------------------------------------- */
@@ -674,72 +633,6 @@ static void process_sample_status_command(void)
     send_rs485_reply(b);
 }
 
-/** al <wave_id> <nbytes> — CDC signed-int8 load (1..ATTACK_BANK_BYTES). */
-static void process_sample_upload_command(char *line)
-{
-    unsigned int wid;
-    unsigned long nbytes;
-
-    if (!console_via_usb) {
-        send_rs485_reply("err:usb\r\n");
-        return;
-    }
-    if (sscanf(line, "al %u %lu", &wid, &nbytes) != 2) {
-        send_rs485_reply("err:syntax\r\n");
-        return;
-    }
-    if (begin_sample_upload((uint16_t)wid, (uint32_t)nbytes) != 0) {
-        send_rs485_reply("err:range\r\n");
-        return;
-    }
-    send_rs485_reply("ok:ready\r\n");
-}
-
-/** wl <logical-wave> <nbytes> — card resolves logical 0..7 to bank storage. */
-static void process_wavetable_upload_command(char *line)
-{
-    unsigned int wave;
-    unsigned long nbytes;
-    if (!console_via_usb) {
-        send_rs485_reply("err:usb\r\n");
-        return;
-    }
-    if (sscanf(line, "wl %u %lu", &wave, &nbytes) != 2 || wave >= ATTACK_BANK_WAVETABLE_COUNT) {
-        send_rs485_reply("err:syntax\r\n");
-        return;
-    }
-    if (begin_wavetable_upload((uint8_t)wave, (uint32_t)nbytes) != 0) {
-        send_rs485_reply("err:range\r\n");
-        return;
-    }
-    send_rs485_reply("ok:ready\r\n");
-}
-
-/** vmload <voice> <nbytes> — receive one Channel ABI2 FWSC container over CDC. */
-static void process_script_upload_command(char *line)
-{
-    unsigned int voice;
-    unsigned long nbytes;
-    if (!console_via_usb) {
-        send_rs485_reply("err:usb\r\n");
-        return;
-    }
-    if (sscanf(line, "vmload %u %lu", &voice, &nbytes) != 2 || voice >= FW_VM_CHANNEL_VOICE_COUNT) {
-        send_rs485_reply("err:syntax\r\n");
-        return;
-    }
-    if (has_active_voices() != 0u) {
-        send_rs485_reply("err:vm-busy\r\n");
-        return;
-    }
-    if (is_sample_upload_active() != 0u ||
-        begin_script_upload((uint8_t)voice, (uint32_t)nbytes) != 0) {
-        send_rs485_reply("err:range\r\n");
-        return;
-    }
-    send_rs485_reply("ok:ready\r\n");
-}
-
 /* ---- report script status ----------------------------------------------- */
 
 static void process_script_status_command(char *line)
@@ -830,27 +723,15 @@ static void execute_channel_command(char *line)
         return;
     }
 
-    if (strncmp(line, "vmload ", 7) == 0) {
-        process_script_upload_command(line);
+    // Uploads are binary USB requests. Preserve the RS485 error for old clients.
+    if (strncmp(line, "vmload ", 7) == 0 || strncmp(line, "al ", 3) == 0 ||
+        strncmp(line, "wl ", 3) == 0) {
+        send_rs485_reply("err:usb\r\n");
         return;
     }
 
     if (strcmp(line, "vm") == 0 || strncmp(line, "vm ", 3) == 0) {
         process_script_status_command(line);
-        return;
-    }
-
-    /* ---- al <id> nbytes: cdc attack head upload ------------------------- */
-
-    if (strncmp(line, "al ", 3) == 0) {
-        process_sample_upload_command(line);
-        return;
-    }
-
-    /* ---- wl <logical-wave> nbytes: card-placed oscillator wavetable ----- */
-
-    if (strncmp(line, "wl ", 3) == 0) {
-        process_wavetable_upload_command(line);
         return;
     }
 
@@ -1010,31 +891,27 @@ static uint8_t is_command_for_channel_card(char *line)
     return 1;
 }
 
-/* ---- retain the internal usb command entry point ------------------------ */
-
-/* Legacy internal entry point. The binary USB receiver does not dispatch
- * text through this function. */
-void execute_usb_command(char *line)
-{
-    if (line == NULL) {
-        return;
-    }
-    if (!is_command_for_channel_card(line)) /* accept "c:", "*:" or bare commands */
-        return;
-    console_via_usb = 1;
-    execute_channel_command(line);
-    console_via_usb = 0;
-}
-
 /* ---- receive rs485 command lines ---------------------------------------- */
 
 /** Poll RX, echo typing, run a command on Enter. Non-blocking.
  * Messages addressed to other cards are ignored. */
+static bool rs485_line_ready;
+
 void process_rs485_commands(void)
 {
     uint8_t c;
 
-    while (read_rs485_byte(&c)) {
+    for (;;) {
+        if (rs485_line_ready) {
+            // Reuse the completed line and RX buffer while this voice's handoff
+            // is occupied. Other voices can be posted in the same audio interval.
+            if (rs485_line[0] == 'n' &&
+                has_prepared_voice_command(parse_voice_index(rs485_line[1]))) return;
+            rs485_line_ready = false;
+            execute_channel_command((char *)rs485_line);
+            rs485_line_len = 0;
+        }
+        if (!read_rs485_byte(&c)) return;
         if (c == '\r' || c == '\n') {
 #if RS485_ECHO
             send_rs485_text("\r\n");
@@ -1043,12 +920,10 @@ void process_rs485_commands(void)
 
             /* Execute only commands addressed to this card or broadcast. */
             if (is_command_for_channel_card((char *)rs485_line)) {
-                rs485_cmd_count++;
-                execute_channel_command((char *)rs485_line);
+                rs485_line_ready = true;
+            } else {
+                rs485_line_len = 0; // addressed to another card
             }
-            /* else: message for another card — silently ignore */
-
-            rs485_line_len = 0;
         } else if (c == 0x08 || c == 0x7F) /* backspace */
         {
             if (rs485_line_len > 0) {
@@ -1088,74 +963,4 @@ void init_channel_card(void)
     init_voices();
 
     send_rs485_reply("ok: ready — h for cmds\r\n");
-}
-
-/* ---- receive compiled voice programs ------------------------------------ */
-
-static uint8_t s_active;
-static uint8_t s_voice;
-static uint32_t s_expected;
-static uint32_t s_received;
-
-/* ---- query and abort a script upload ------------------------------------ */
-
-uint8_t is_script_upload_active(void)
-{
-    return s_active;
-}
-
-void abort_script_upload(void)
-{
-    if (s_active != 0u) abort_voice_script_upload(s_voice);
-    s_active = 0u;
-    s_expected = 0u;
-    s_received = 0u;
-}
-
-/* ---- begin a script upload ---------------------------------------------- */
-
-int begin_script_upload(uint8_t voice, uint32_t nbytes)
-{
-    if (voice >= FW_VM_CHANNEL_VOICE_COUNT || s_active != 0u ||
-        nbytes < FW_SCRIPT_CONTAINER_HEADER_SIZE ||
-        nbytes > FW_SCRIPT_CONTAINER_HEADER_SIZE + FW_SCRIPT_MAX_PAYLOAD ||
-        begin_voice_script_upload(voice) != 0)
-        return -1;
-    s_voice = voice;
-    s_expected = nbytes;
-    s_received = 0u;
-    s_active = 1u;
-    return 0;
-}
-
-/* ---- receive and commit a script upload --------------------------------- */
-
-uint32_t append_script_upload_bytes(const uint8_t *data, uint32_t size)
-{
-    uint32_t take;
-    if (s_active == 0u || data == NULL) return 0u;
-    take = size;
-    if (take > s_expected - s_received) take = s_expected - s_received;
-    if (append_voice_script_upload_bytes(s_voice, data, take) != 0) {
-        write_usb_text("err:vm-container\r\n");
-        abort_script_upload();
-        return take;
-    }
-    s_received += take;
-    if (s_received == s_expected) {
-        char reply[64];
-        if (commit_voice_script_upload(s_voice) != 0) {
-            (void)snprintf(reply, sizeof(reply), "err:vm %u %u\r\n", (unsigned)s_voice,
-                           (unsigned)get_voice_script_fault(s_voice));
-        } else {
-            (void)snprintf(reply, sizeof(reply), "ok:vm %u %lu %u\r\n", (unsigned)s_voice,
-                           (unsigned long)FW_VM_TARGET_CHANNEL,
-                           (unsigned)FW_VM_TARGET_CHANNEL_VERSION);
-        }
-        write_usb_text(reply);
-        s_active = 0u;
-        s_expected = 0u;
-        s_received = 0u;
-    }
-    return take;
 }

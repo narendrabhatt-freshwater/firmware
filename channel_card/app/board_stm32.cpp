@@ -28,6 +28,7 @@
 #include "board_stm32.h"
 #include "cs4304.h"
 #include "main.h"
+#include "transport_buffer.h"
 #include "usart.h"
 #include <stddef.h>
 
@@ -184,12 +185,8 @@ void set_dac_channel_trim(char channel, uint8_t trim)
 static_assert(UART5_RX_BUF_SIZE > 128u * 32u, "RX must hold the worst-case note burst");
 static_assert((UART5_RX_BUF_SIZE & UART5_RX_BUF_MASK) == 0u, "RX size must be a power of two");
 
-static volatile uint8_t rx_buf[UART5_RX_BUF_SIZE];
-/** Written only by the ISR. */
-static volatile uint16_t rx_head;
-/** Written only by read_rs485_byte(). Single producer + single consumer, so no
- * critical section is needed around either index. */
-static volatile uint16_t rx_tail;
+/* Preserve the UART ring's existing 8191-byte usable capacity. */
+static TransportByteQueue<UART5_RX_BUF_SIZE, UART5_RX_BUF_SIZE - 1> rs485_rx;
 static volatile uint32_t rx_dropped;
 static volatile uint8_t tx_complete;
 static uint8_t tx_active; /* main-loop owner; ISR publishes tx_complete */
@@ -200,8 +197,7 @@ static volatile uint16_t tx_left;
 
 void init_rs485_receiver(void)
 {
-    rx_head = 0u;
-    rx_tail = 0u;
+    rs485_rx.reset();
     rx_dropped = 0u;
 
     /* CubeMX calls DisableFifoMode(); turn it back on so a late ISR still
@@ -231,12 +227,7 @@ void init_rs485_receiver(void)
 
 uint8_t read_rs485_byte(uint8_t *out)
 {
-    if (out == NULL || rx_tail == rx_head) {
-        return 0u;
-    }
-    *out = rx_buf[rx_tail];
-    rx_tail = (uint16_t)((rx_tail + 1u) & UART5_RX_BUF_MASK);
-    return 1u;
+    return out ? (uint8_t)rs485_rx.read(out, 1) : 0u;
 }
 
 void clear_rs485_receive_state(void)
@@ -245,7 +236,7 @@ void clear_rs485_receive_state(void)
     __disable_irq();
     UART5->RQR = USART_RQR_RXFRQ;
     UART5->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-    rx_tail = rx_head;
+    rs485_rx.discard();
     __set_PRIMASK(primask);
 }
 
@@ -332,14 +323,8 @@ extern "C" void UART5_IRQHandler(void)
             UART5->ICR = USART_ICR_FECF | USART_ICR_NECF;
         }
 
-        const uint16_t next = (uint16_t)((rx_head + 1u) & UART5_RX_BUF_MASK);
-        if (next == rx_tail) {
-            /* Full: drop the new byte rather than overwrite an unread command. */
-            rx_dropped++;
-        } else {
-            rx_buf[rx_head] = c;
-            rx_head = next;
-        }
+        /* Physical UART cannot backpressure: preserve drop-new accounting. */
+        if (!rs485_rx.write(&c, 1)) ++rx_dropped;
         isr = UART5->ISR;
     }
 }

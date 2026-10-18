@@ -69,9 +69,9 @@ CORE_SOURCES := \
     core/src/syscalls.c \
     startup_stm32h725xx.s
 
-APP_SOURCES := app/audio.cpp app/channel.cpp app/filter.cpp \
-               app/oscillator.cpp app/voice.cpp app/samples.cpp \
-               app/stream.cpp app/usb.cpp app/transport.cpp app/platform.cpp \
+include $(ROOT)/app/sources.mk
+
+APP_SOURCES := $(COMMON_APP_SOURCES) \
                app/cs4304.cpp app/audio_dac.cpp \
                app/audio_i2s.cpp app/board_stm32.cpp app/usb_device.cpp
 
@@ -82,21 +82,12 @@ DRIVER_SOURCES := \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_i2c_ex.c \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_rcc.c \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_rcc_ex.c \
-    drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_flash.c \
-    drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_flash_ex.c \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_gpio.c \
-    drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_hsem.c \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_dma.c \
-    drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_dma_ex.c \
-    drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_mdma.c \
-    drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_pwr.c \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_pwr_ex.c \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal.c \
-    drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_exti.c \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_i2s.c \
-    drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_i2s_ex.c \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_sai.c \
-    drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_sai_ex.c \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_tim.c \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_tim_ex.c \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_uart.c \
@@ -105,7 +96,7 @@ DRIVER_SOURCES := \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_pcd_ex.c \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_ll_usb.c
 
-VM_SOURCES := berry_runtime/vm.c berry_runtime/vm_source.c
+VM_SOURCES := berry_runtime/vm.c
 BACKEND_SOURCES := berry_runtime/berry_backend.c
 BERRY_SOURCES := $(patsubst $(ROOT)/%,%,$(sort $(wildcard $(ROOT)/$(BERRY)/src/*.c))) \
                  berry_runtime/berry_runtime_modtab.c
@@ -177,7 +168,7 @@ FORCE:
 
 # ---- compile and link -------------------------------------------------------
 
-$(OBJECTS): $(CONFIG) $(MAKEFILE)
+$(OBJECTS): $(CONFIG) $(MAKEFILE) $(ROOT)/app/sources.mk
 
 $(OBJDIR)/%.c.o: $(ROOT)/%.c
 	@mkdir -p "$(@D)"

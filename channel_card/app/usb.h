@@ -125,16 +125,12 @@ void init_usb_protocol(void);
 
 void process_usb_messages(void);
 
-void write_usb_text(const char *s);
-
 uint32_t get_usb_received_body_count(void);
 uint32_t get_usb_received_byte_count(void);
 uint32_t get_usb_received_frame_count(void);
 uint32_t get_usb_error_count(void);
 /** Transport faults are counted in reason 4. */
 uint32_t get_usb_error_reason_count(uint8_t reason);
-/** Last processed BODY sequence. */
-uint16_t get_usb_last_body_sequence(void);
 void clear_usb_statistics(void);
 
 #ifdef __cplusplus

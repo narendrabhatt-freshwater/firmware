@@ -85,6 +85,12 @@ static void note(unsigned voice, unsigned session)
 {
     assert(pcm.size() % 48 == 0);
     assert(queue_streamed_sample_note(voice, 0, 69, 127, session) == 0);
+    // Envelope timing starts from a published, empty pending session. Run the
+    // audio boundary before the fixture supplies BODY; protocol/integration
+    // tests separately exercise publication latency and retained console bytes.
+    assert(begin_audio_runtime());
+    begin_voice_audio_block();
+    end_audio_runtime();
 }
 
 static void clear()
@@ -115,8 +121,14 @@ int main(int argc, char **argv)
     std::fill(std::begin(source), std::end(source), 16);
     assert(load_sample_data(0, reinterpret_cast<uint8_t *>(source), 512) == 0);
     set_sample_root_frequency_hz(0, 440);
+    assert(begin_audio_runtime());
+    assert(begin_voice_script_upload(0) == -4); // pending, never waits for renderer
+    end_audio_runtime();
     for (unsigned v = 0; v < 8; ++v) {
         assert(begin_voice_script_upload(v) == 0);
+        int32_t idle[48];
+        render_audio_samples(idle, 48); // callback continues during main-owned upload
+        assert(std::all_of(std::begin(idle), std::end(idle), [](int32_t x) { return x == 0; }));
         assert(append_voice_script_upload_bytes(v, program.data(), program.size()) == 0);
         assert(commit_voice_script_upload(v) == 0);
     }
