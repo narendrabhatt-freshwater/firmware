@@ -169,106 +169,34 @@ static int source_line_allowed(const char *line)
            strncmp(p, "end", 3) == 0;
 }
 
-/* ---- compile and package a channel program ------------------------------ */
-
-int main(int argc, char **argv)
+/* Validate the same 1023-byte source spans as the former fgets path. Keep
+ * its treatment of long lines and embedded NULs without temporary source files. */
+static int validate_channel_source(char *source, size_t *size)
 {
-    const char *input = NULL, *output = NULL;
-    char temporary[1024], wrapped[1024], preprocess_error[256];
-    FILE *file, *source, *wrapper;
-    char *source_text = NULL, *lowered = NULL;
-    size_t source_size = 0, lowered_size = 0;
-    uint8_t *payload, header[FW_SCRIPT_CONTAINER_HEADER_SIZE] = {0};
     char line[1024];
-    long length;
-    bvm *vm;
-    int result;
+    size_t read = 0, written = 0;
+    while (read < *size) {
+        size_t count = *size - read;
+        const char *newline;
+        size_t visible;
+        if (count >= sizeof(line)) count = sizeof(line) - 1;
+        newline = (const char *)memchr(source + read, '\n', count);
+        if (newline) count = (size_t)(newline - (source + read)) + 1;
+        memcpy(line, source + read, count);
+        line[count] = '\0';
+        if (!source_line_allowed(line)) return -1;
+        visible = strlen(line);
+        memcpy(source + written, line, visible);
+        written += visible;
+        read += count;
+    }
+    source[written] = '\0';
+    *size = written;
+    return 0;
+}
 
-    if (argc == 1 ||
-        (argc == 2 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0))) {
-        print_help(stdout);
-        return 0;
-    }
-    if (argc == 4 && strcmp(argv[2], "-o") == 0) {
-        input = argv[1];
-        output = argv[3];
-    } else {
-        fputs("berry: error: expected an input script and -o output file.\n"
-              "Usage: berry INPUT.be -o OUTPUT.bec\n"
-              "Run 'berry --help' for an example.\n",
-              stderr);
-        return 2;
-    }
-    if (snprintf(temporary, sizeof(temporary), "%s.berry-bytecode.tmp", output) >=
-        (int)sizeof(temporary))
-        return fail("output path too long", output);
-    if (snprintf(wrapped, sizeof(wrapped), "%s.berry-source.tmp", output) >= (int)sizeof(wrapped))
-        return fail("output path too long", output);
-    source = fopen(input, "rb");
-    if (!source || fseek(source, 0, SEEK_END) || (length = ftell(source)) < 0 ||
-        fseek(source, 0, SEEK_SET)) {
-        if (source) fclose(source);
-        return fail("could not read source", input);
-    }
-    source_size = (size_t)length;
-    source_text = (char *)malloc(source_size + 1u);
-    if (!source_text) {
-        fclose(source);
-        return fail("could not read source", input);
-    }
-    if (fread(source_text, 1, source_size, source) != source_size) {
-        fclose(source);
-        free(source_text);
-        return fail("could not read source", input);
-    }
-    if (fclose(source)) {
-        free(source_text);
-        return fail("could not read source", input);
-    }
-    source_text[source_size] = '\0';
-    if (fw_vm_preprocess_channel_source(source_text, source_size, &lowered, &lowered_size,
-                                        preprocess_error, sizeof(preprocess_error)) != 0) {
-        free(source_text);
-        return fail(preprocess_error[0] ? preprocess_error : "could not preprocess named state",
-                    input);
-    }
-    free(source_text);
-    if (create_output_directories(output)) {
-        free(lowered);
-        return 1;
-    }
-    wrapper = fopen(wrapped, "wb");
-    if (!wrapper) {
-        free(lowered);
-        fprintf(stderr, "berry: error: cannot create output files for '%s': %s\n", output,
-                strerror(errno));
-        return 1;
-    }
-    source = tmpfile();
-    if (!source || fwrite(lowered, 1, lowered_size, source) != lowered_size ||
-        fseek(source, 0, SEEK_SET)) {
-        if (source) fclose(source);
-        fclose(wrapper);
-        free(lowered);
-        remove(wrapped);
-        return fail("could not process source", input);
-    }
-    free(lowered);
-    while (fgets(line, sizeof(line), source)) {
-        if (!source_line_allowed(line)) {
-            fclose(source);
-            fclose(wrapper);
-            remove(wrapped);
-            return fail("only ABI2 Channel handlers are allowed at top level", input);
-        }
-        fputs(line, wrapper);
-    }
-    if (ferror(source) || fclose(source) || fclose(wrapper)) {
-        remove(wrapped);
-        return fail("could not wrap source", input);
-    }
-    vm = be_vm_new();
-    if (!vm) return fail("could not create compiler VM", NULL);
+static void register_channel_api(bvm *vm)
+{
     be_regfunc(vm, "input", compile_only_native);
     be_regfunc(vm, "state_get", compile_only_native);
     be_regfunc(vm, "state_set", compile_only_native);
@@ -303,7 +231,88 @@ int main(int argc, char **argv)
     compiler_nil(vm, "on_note_on");
     compiler_nil(vm, "on_note_off");
     compiler_nil(vm, "on_ramp_end");
-    result = be_loadmode(vm, wrapped, 0);
+}
+
+/* ---- compile and package a channel program ------------------------------ */
+
+int main(int argc, char **argv)
+{
+    const char *input = NULL, *output = NULL;
+    char temporary[1024], source_name[1024], preprocess_error[256];
+    FILE *file, *source;
+    char *source_text = NULL, *lowered = NULL;
+    size_t source_size = 0, lowered_size = 0;
+    uint8_t *payload, header[FW_SCRIPT_CONTAINER_HEADER_SIZE] = {0};
+    long length;
+    bvm *vm;
+    int result;
+
+    if (argc == 1 ||
+        (argc == 2 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0))) {
+        print_help(stdout);
+        return 0;
+    }
+    if (argc == 4 && strcmp(argv[2], "-o") == 0) {
+        input = argv[1];
+        output = argv[3];
+    } else {
+        fputs("berry: error: expected an input script and -o output file.\n"
+              "Usage: berry INPUT.be -o OUTPUT.bec\n"
+              "Run 'berry --help' for an example.\n",
+              stderr);
+        return 2;
+    }
+    if (snprintf(temporary, sizeof(temporary), "%s.berry-bytecode.tmp", output) >=
+        (int)sizeof(temporary))
+        return fail("output path too long", output);
+    /* Preserve diagnostic source names; this path is no longer written. */
+    if (snprintf(source_name, sizeof(source_name), "%s.berry-source.tmp", output) >= (int)sizeof(source_name))
+        return fail("output path too long", output);
+    source = fopen(input, "rb");
+    if (!source || fseek(source, 0, SEEK_END) || (length = ftell(source)) < 0 ||
+        fseek(source, 0, SEEK_SET)) {
+        if (source) fclose(source);
+        return fail("could not read source", input);
+    }
+    source_size = (size_t)length;
+    source_text = (char *)malloc(source_size + 1u);
+    if (!source_text) {
+        fclose(source);
+        return fail("could not read source", input);
+    }
+    if (fread(source_text, 1, source_size, source) != source_size) {
+        fclose(source);
+        free(source_text);
+        return fail("could not read source", input);
+    }
+    if (fclose(source)) {
+        free(source_text);
+        return fail("could not read source", input);
+    }
+    source_text[source_size] = '\0';
+    if (fw_vm_preprocess_channel_source(source_text, source_size, &lowered, &lowered_size,
+                                        preprocess_error, sizeof(preprocess_error)) != 0) {
+        free(source_text);
+        return fail(preprocess_error[0] ? preprocess_error : "could not preprocess named state",
+                    input);
+    }
+    free(source_text);
+    if (create_output_directories(output)) {
+        free(lowered);
+        return 1;
+    }
+    if (validate_channel_source(lowered, &lowered_size) != 0) {
+        free(lowered);
+        return fail("only ABI2 Channel handlers are allowed at top level", input);
+    }
+    vm = be_vm_new();
+    if (!vm) {
+        free(lowered);
+        return fail("could not create compiler VM", NULL);
+    }
+    register_channel_api(vm);
+    result = be_loadbuffer(vm, source_name, lowered, lowered_size);
+    free(lowered);
     if (result == BE_OK) result = be_savecode(vm, temporary);
     if (result == BE_OK) result = be_pcall(vm, 0);
     if (result == BE_OK &&
@@ -315,11 +324,9 @@ int main(int argc, char **argv)
         be_dumpexcept(vm);
         be_vm_delete(vm);
         remove(temporary);
-        remove(wrapped);
         return fail("compilation failed", input);
     }
     be_vm_delete(vm);
-    remove(wrapped);
     file = fopen(temporary, "rb");
     if (!file) return fail(strerror(errno), temporary);
     if (fseek(file, 0, SEEK_END) || (length = ftell(file)) < 0 || length > FW_SCRIPT_MAX_PAYLOAD ||

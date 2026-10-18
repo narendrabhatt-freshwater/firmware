@@ -54,7 +54,8 @@ sources or the firmware ABI change; use the native `make` build on other hosts.
 `berry.c` is the entry point; `vendor/berry/` contains the interpreter snapshot,
 generated tables, license, and provenance. `config/` holds the host configuration;
 `shared/` contains the source transformer and firmware container/ABI definitions.
-The matching firmware copies live in `berry_runtime/`. The configurations differ
+Lowered source is validated and compiled directly from memory; only bytecode
+serialization uses a temporary file. The matching firmware copies live in `berry_runtime/`. The configurations differ
 because the host compiles source while the card only loads bytecode.
 
 ## Limits at a glance
@@ -114,9 +115,9 @@ def on_ramp_end()
 end
 ```
 
-`on_note_on(key, velocity)` runs when a note is pending. An idle voice waits
-for 998 BODY samples; an already active voice dispatches immediately so the
-script can fade the outgoing note while replacement data arrives. `key`
+`on_note_on(key, velocity)` runs when a note is pending. Both idle and active voices wait
+for 998 pending BODY samples before dispatch. An active voice keeps playing
+its outgoing note while replacement data arrives. `key`
 is the physical MIDI key from `0` through `127`; `velocity` is the raw MIDI
 velocity from `1` through `127`. The handler must call `start_note()` or `start_note(frequency)` to promote that pending note, or `discard_pending()` to
 reject it. Velocity zero is handled as note-off before dispatch.
