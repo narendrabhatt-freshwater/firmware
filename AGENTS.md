@@ -2,18 +2,79 @@
 
 ## Code style
 
+- Use the supplied `channel-rewrite/channel.cpp` and `channel-rewrite/main.cpp`
+  as the current style reference for new and edited application code. Match the
+  compact functions and control flow; do not reformat unrelated existing code.
 - Use four spaces per indentation level; configure tabs to insert four spaces.
-- Put opening braces on the next line for functions and control-flow blocks.
+- Put opening braces on the next line for functions. For control-flow blocks,
+  use `if (...) {`, `for (...) {`, and `} else if (...) {` as in the rewrite.
+  A short, clear single-statement condition may stay on one line, for example
+  `if (n < 0) continue;`. A trivial function body may also fit on one line.
+  This replaces the earlier requirement for next-line control-flow braces.
+- Keep related statements together. Do not add blank lines between every
+  declaration, call, or branch, or expand simple statements across excessive
+  lines. Use blank lines to separate logical sections.
 - Put a descriptive banner comment above every function, using the style
   `/* ---- generate a sine wave buffer ---------------------------------------- */`.
   Do not add inline comments for now.
 - Declare one variable per statement, on its own line. Never combine variable
-  declarations with commas. For example:
+  declarations with commas.
+- Prefer parenthesized direct initialization for simple values and loop
+  counters, as requested by the user. For example:
 
   ```cpp
-  int usb_client = -1;
-  int rs485_client = -1;
+  int usb_client(-1);
+  int rs485_client(-1);
+  int n(0);
+  bool echo(false);
+  for (int i(0); i < SPB; ++i) {
+      generate_sample(i);
+  }
   ```
+
+  Keep braces where they serve a purpose, such as `fd_set ready{}` for zero
+  initialization or byte-vector initializer lists. Do not use `int n()` to
+  initialize a variable: that syntax declares a function.
+- Prefer trailing `const` and references attached to the type, for example
+  `int const n(...)`, `string const& command`, and
+  `vector<uint8_t> const& bytes`.
+- In implementation files that already use `using namespace std;`, use the
+  short names consistently where unambiguous (`string`, `vector`, `cerr`).
+  Do not introduce `using namespace std;` in headers.
+- Prefer direct free functions and simple file-local state. Do not use the
+  PImpl (pointer-to-implementation) pattern, hidden `Impl` objects, or extra
+  class/wrapper layers for this application flow.
+- Use a small helper when it removes repeated work, as `rs485_response()` does
+  for response conversion and line endings. Keep command branches short rather
+  than rebuilding the same response machinery in each branch. Keep local
+  protocol defines in the implementation until they need to be shared.
+- Treat the rewrite's protocol, echo, and transport changes as behavior, not
+  formatting rules. Do not copy those changes into other code as part of a
+  style cleanup; the behavior-change and retained-I/O rules below still apply.
+
+## Makefile style and compiler warnings
+
+- Use `../175-mainframe/mas/makefile` and `channel-rewrite/makefile` as the
+  Makefile style references. Preserve the Freshwater header, align variable
+  assignments and continuation lists, and use `# ---- section ...` banners
+  for compiler settings, objects, targets, build rules, cleanup, and dependencies.
+  Recipe commands still require literal tabs; the four-space C++ rule does not
+  apply to Makefile recipe prefixes.
+- Keep the Makefile small and specific to its target. Preserve its language
+  standard, optimization, platform libraries, output paths, dependency tracking,
+  and supported overrides rather than copying unrelated MAS build machinery.
+- In `channel-rewrite/`, use `OBJDIR = object.$(HOST_ARCH)` with the host
+  architecture from `uname -m`, following MAS's architecture-specific object
+  directories. Objects and dependency files go in that directory (for example,
+  `object.arm64/`). Use `BINDIR = bin` for the `bin/simulator` executable;
+  `clean` removes the active object directory and that executable.
+- Leave `WARNING_FLAGS ?=` empty by default, following MAS. Do not add or
+  reintroduce `-Werror`, `-Werror=...`, `-Wall`, `-Wextra`, `-pedantic`, or other
+  warning-policy flags in builds, tests, or validation commands unless the user
+  explicitly requests them. Do not add blanket warning suppression either.
+  Compiler-default warnings may still appear; do not hide diagnostic output or
+  ignore compiler failures. Existing unrelated build files are not an invitation
+  to change their flags during another task.
 
 ## Simulator flow and simplicity
 
