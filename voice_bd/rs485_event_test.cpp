@@ -50,9 +50,15 @@ sp_return sp_blocking_read_next(sp_port*, void* data, size_t capacity, unsigned)
     received_commands.insert(received_commands.end(), queued_writes.begin(), queued_writes.end());
     queued_writes.clear();
     if (command == "c:vq\r") {
-        uint8_t frame[61] = {0xa5, 0x5a, 0x43, 0x0e};
-        frame[6] = 0xf0; frame[7] = 0x0f; 
-        frame[60] = '\n';
+        uint8_t frame[56] = {0xa5, 0x5a, 0x43, 0x0f};
+        for (unsigned voice = 0; voice < 8; ++voice)
+        {
+            frame[7 + voice * 6] = voice;
+            frame[8 + voice * 6] = 255;
+            frame[9 + voice * 6] = 0xf0;
+            frame[10 + voice * 6] = 0x0f;
+        }
+        frame[55] = '\n';
         require(capacity >= sizeof frame, "status buffer too small");
         std::memcpy(data, frame, sizeof frame);
         return static_cast<sp_return>(sizeof frame);

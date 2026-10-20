@@ -38,11 +38,12 @@ Invalid setting replies: [C] err:syntax or [C] err:range
 USB binary messages (Channel)
 
 <BODY 01> <voice> <session> <payload_length> <samples>
-Reply: none on success; binary reply with status 1 and error text on protocol error
+Reply: none
 
 <UPLOAD 02> <attack 01> <sample> <total_bytes> <data>
 <UPLOAD 02> <wavetable 02> <wave> <total_bytes> <data>
 <UPLOAD 02> <program 03> <voice> <total_bytes> <data>
 Reply: binary reply with status 0 on success, or status 1 and error text
 
-Reply: <target=3> <for=UPLOAD 02> <status=success>
+Success reply: <target> <for=UPLOAD 02> <status 00>
+Error reply: <target> <for=UPLOAD 02> <status 01> <error_text> <LF 0A>

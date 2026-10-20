@@ -74,3 +74,15 @@ void service_rs485()
 
 uint32_t get_board_time_ms() { return model::time_ms++; }
 void init_usb_device() { model::reconnect(); }
+
+/* ---- leave RS485 output queued until the model services the transmitter --- */
+
+void write_serial(const std::vector<uint8_t> &)
+{
+}
+
+/* ---- leave USB output queued until the model services the transmitter ----- */
+
+void write_usb(const std::vector<uint8_t> &)
+{
+}

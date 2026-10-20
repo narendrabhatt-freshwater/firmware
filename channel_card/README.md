@@ -98,8 +98,8 @@ port on the host; its OS-assigned path suffix may change.
 ## Prepare playback
 
 Programs, sample attacks, and wavetables are held in RAM and are lost on reset.
-Compile a program with the bundled Berry compiler, negotiate binary USB HELLO,
-and upload it to each voice that will be used. Upload the sample attack and
+Compile a program with the bundled Berry compiler and upload it to each voice
+that will be used using the matching binary USB protocol. Upload the sample attack and
 set its root frequency with `ar`. Then select the sample and start a note:
 
 ```text
@@ -165,11 +165,11 @@ Pitch tracking uses `fc = fbase × (noteHz / 261.625565)^k`.
 | Upload kind 2 | Binary USB | Upload logical oscillator wave 0…7 using 2…512 signed-int8 bytes. Firmware owns its physical bank placement. |
 | `ar <id> <Hz>` | RS485 | Set the positive root frequency for attack ID 0…255. |
 | `a` | RS485 | Query loaded attack count and the 256-bit loaded mask. |
-| Upload kind 3 | Binary USB | Begin an FWSC ABI2 program upload to voice 0…7. Total container size is 20…16404 bytes. Send offset-checked chunks; the final reply confirms validation/commit. |
+| Upload kind 3 | Binary USB | Upload an FWSC ABI2 program to voice 0…7. Send one header and 20…16404 data bytes; one final reply confirms validation/commit. |
 | `vm` | RS485 | Query the active-program voice mask. |
 | `vm <voice>` | RS485 | Query active state, target, ABI version, and fault for voice 0…7. |
 | `vm mem` | RS485 | Return shared VM arena and per-voice fault/cycle diagnostics. |
-| `vq` | RS485 | Query active/pending masks, BODY sessions, target fill, and exact writable credit. RS485 uses the fixed 61-byte `vq` response. |
+| `vq` | RS485 | Query the active mask, processed BODY sequence, playing sessions, free samples and five-ms demand in the fixed 56-byte reply. |
 | `reset` | RS485 | Clear RS485 hardware RX FIFO, queued RX bytes, receive error flags, and partial command line; replies `ok:reset`. Does not reboot or clear audio/voice state. |
 | `usb` | RS485 | Query BODY transport and underrun counters. |
 | `rs485` | RS485 | Report receive drops, transmit failures, and reply truncations. |

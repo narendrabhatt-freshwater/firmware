@@ -39,23 +39,41 @@
 #include <algorithm>
 
 using namespace model;
-static void frame(uint8_t type, std::vector<uint8_t> data={}, uint8_t target=0, uint8_t session=0)
+/* ---- append a BODY frame or one complete upload to test input ------------ */
+
+static void frame(uint8_t type, std::vector<uint8_t> data = {}, uint8_t target = 0, uint8_t session = 0)
 {
-    uint8_t head[]={type,target,session,(uint8_t)data.size(),(uint8_t)(data.size()>>8)};
-    usb_rx.insert(usb_rx.end(),head,head+5);
-    usb_rx.insert(usb_rx.end(),data.begin(),data.end());
+    if (type == USB_MSG_UPLOAD)
+    {
+        assert(data.size() >= 5);
+        usb_rx.insert(usb_rx.end(), {type, data[0], target});
+        usb_rx.insert(usb_rx.end(), data.begin() + 1, data.end());
+        return;
+    }
+    uint8_t header[] = {type, target, session, (uint8_t)data.size(), (uint8_t)(data.size() >> 8)};
+    usb_rx.insert(usb_rx.end(), header, header + 5);
+    usb_rx.insert(usb_rx.end(), data.begin(), data.end());
 }
-static void service(unsigned n=64)
+
+/* ---- run bounded receive and transmit passes ----------------------------- */
+
+static void service(unsigned count = 64)
 {
-    while(n--) service_usb();
+    while (count--)
+    {
+        service_usb();
+    }
 }
-static void hello()
+
+/* ---- start a fresh binary connection without a handshake ----------------- */
+
+static void connect_usb()
 {
-    reconnect(); service();
-    frame(USB_MSG_HELLO,{USB_STREAM_VERSION}); service();
-    assert(usb_tx.size()==19 && usb_tx[0]==USB_MSG_REPLY && usb_tx[5]==0);
-    usb_tx.clear();
+    reconnect();
+    service();
+    assert(usb_tx.empty() && !usb_serial_buffer.faulted);
 }
+
 static void command(const char *text)
 {
     rs_rx.insert(rs_rx.end(),text,text+strlen(text));
@@ -98,6 +116,8 @@ static void optional_services()
 
     static const PlatformSynchronization sync = {enter, leave, barrier};
     set_platform_synchronization(&sync);
+    uint32_t saved = disable_interrupts_and_save_state();
+    restore_interrupt_state(saved);
     command("c:vq\r"); assert(entered == 1 && restored == 1);
     board_memory_barrier(); assert(barriers == 1);
     set_platform_synchronization(nullptr);
@@ -117,74 +137,90 @@ int main()
     init_usb_device(); init_application();
     while (has_pending_rs485_reply()) service_rs485();
     optional_services();
-    // Byte-at-a-time input and combined frames yield the same ordered replies.
-    for(uint32_t limit : {1u,7u,64u,1024u}) {
-        read_limit=limit; hello();
-        frame(USB_MSG_PROBE,{1,2,3}); frame(USB_MSG_PROBE);
-        service(); assert(usb_rx.empty());
-        assert(usb_tx.size()==18 && usb_tx[2]==USB_MSG_PROBE);
-        assert(read_usb_uint32_le(usb_tx.data()+6)==3);
-        assert(read_usb_uint32_le(usb_tx.data()+10)==1);
+    for (uint32_t limit : {1u, 7u, 64u, 1024u})
+    {
+        read_limit = limit;
+        connect_usb();
+        frame(USB_MSG_UPLOAD, {1, 2, 0, 0, 0, 10, 20}, 7);
+        frame(USB_MSG_UPLOAD, {2, 2, 0, 0, 0, 30, 40}, 6);
+        service();
+        assert(usb_rx.empty());
+        assert(usb_tx == std::vector<uint8_t>({7, 2, 0, 6, 2, 0}));
     }
-    // A full application output buffer leaves a reply pending and retains
-    // the next protocol frame. No platform-specific transport API is involved.
-    hello();
-    frame(USB_MSG_PROBE); frame(USB_MSG_PROBE,{9,8});
+    connect_usb();
+    frame(USB_MSG_UPLOAD, {1, 2, 0, 0, 0, 10, 20}, 7);
+    frame(USB_MSG_UPLOAD, {1, 2, 0, 0, 0, 30, 40}, 6);
     std::memcpy(usb_serial_buffer.input, usb_rx.data(), usb_rx.size());
-    usb_serial_buffer.input_size = usb_rx.size(); usb_rx.clear();
+    usb_serial_buffer.input_size = usb_rx.size();
+    usb_rx.clear();
+    size_t pending = usb_serial_buffer.input_size;
     usb_serial_buffer.output_size = sizeof usb_serial_buffer.output;
-    process_usb_messages(); process_usb_messages();
-    assert(usb_serial_buffer.input_size == 7);
+    process_usb_messages();
+    assert(usb_serial_buffer.input_size == pending);
     usb_serial_buffer.output_size = 0;
-    service(); assert(usb_tx.size()==18 && usb_serial_buffer.input_size==0);
+    service();
+    assert(usb_tx == std::vector<uint8_t>({7, 2, 0, 6, 2, 0}));
 
-    // Queued data is copied; a rejected write accepts no prefix.
-    uint8_t bytes[]={1,2,3};
-    assert(queue_serial_output(usb_serial_buffer,bytes,3));
-    bytes[0]=99; assert(usb_serial_buffer.output[0]==1);
+    uint8_t bytes[] = {1, 2, 3};
+    assert(queue_serial_output(usb_serial_buffer, bytes, 3));
+    bytes[0] = 99;
+    assert(usb_serial_buffer.output[0] == 1);
     usb_serial_buffer.output_size = sizeof usb_serial_buffer.output - 2;
-    assert(!queue_serial_output(usb_serial_buffer,bytes,3));
+    assert(!queue_serial_output(usb_serial_buffer, bytes, 3));
     assert(usb_serial_buffer.output_size == sizeof usb_serial_buffer.output - 2);
     usb_serial_buffer.output_size = 0;
 
-    // A new generation invalidates both a partial frame and a pending reply.
-    hello(); usb_rx={USB_MSG_UPLOAD_BEGIN,0}; service();
-    reconnect(); service(); frame(USB_MSG_HELLO,{USB_STREAM_VERSION}); service();
-    assert(usb_tx.size()==19 && !usb_serial_buffer.faulted);
-    usb_tx.clear(); frame(USB_MSG_PROBE);
-    std::memcpy(usb_serial_buffer.input, usb_rx.data(), usb_rx.size());
-    usb_serial_buffer.input_size = usb_rx.size(); usb_rx.clear();
-    usb_serial_buffer.output_size = sizeof usb_serial_buffer.output;
-    process_usb_messages();
-    reconnect(); service(); assert(usb_tx.empty());
-    usb_serial_buffer.connected=false; service(); assert(usb_tx.empty());
-    usb_serial_buffer.connected=true;
-    hello();
-    // Upload interruption and explicit abort do not publish incomplete data.
-    frame(USB_MSG_UPLOAD_BEGIN,{USB_UPLOAD_ATTACK,4,0,0,0},7); service();
-    assert(is_sample_upload_active());
-    frame(USB_MSG_UPLOAD_DATA,{0,0,0,0,12,13},7); service();
-    reconnect(); service(); assert(!is_sample_upload_active());
-    assert(get_sample_length(7)==0);
-    hello(); frame(USB_MSG_UPLOAD_BEGIN,{USB_UPLOAD_ATTACK,4,0,0,0},7); service();
-    frame(USB_MSG_UPLOAD_ABORT); service(); assert(!is_sample_upload_active());
-    // Existing partial-frame timeout and malformed-header fault policies.
-    hello(); usb_rx={USB_MSG_PROBE,0}; service(); time_ms+=1001; service();
-    assert(usb_serial_buffer.faulted);
-    hello(); usb_rx={255,0,0,0,0}; service(); assert(usb_serial_buffer.faulted);
-    // An upload that makes no progress expires by its existing deadline.
-    hello(); frame(USB_MSG_UPLOAD_BEGIN,{USB_UPLOAD_ATTACK,4,0,0,0},7); service();
-    time_ms+=5001; service(); assert(!is_sample_upload_active());
-    // BODY stays pending until the selected stream has capacity.
-    hello(); prepare_pending_voice_stream(0,0,1);
-    std::vector<uint8_t> body(1024,32);
-    for(unsigned i=0;i<3;++i) { frame(USB_MSG_BODY,body,0,1); service(); }
-    uint32_t received=get_usb_received_body_count();
-    frame(USB_MSG_BODY,body,0,1); frame(USB_MSG_PROBE);
-    service(); assert(get_usb_received_body_count()==received && usb_rx.size()+usb_serial_buffer.input_size==5);
-    discard_pending_voice_stream(0); service(); assert(usb_rx.empty() && !usb_serial_buffer.input_size && !usb_serial_buffer.faulted);
+    connect_usb();
+    usb_rx = {USB_MSG_UPLOAD, 1};
+    service();
+    connect_usb();
+    frame(USB_MSG_UPLOAD, {1, 4, 0, 0, 0, 12, 13}, 8);
+    service();
+    assert(is_sample_upload_active() && usb_tx.empty());
+    connect_usb();
+    assert(!is_sample_upload_active() && get_sample_length(8) == 0);
+
+    usb_rx = {USB_MSG_BODY, 0};
+    service();
+    time_ms += 1001;
+    service();
+    assert(usb_serial_buffer.faulted && usb_tx.empty());
+    connect_usb();
+    usb_rx = {255};
+    service();
+    assert(usb_serial_buffer.faulted && usb_tx.empty());
+    connect_usb();
+    frame(USB_MSG_UPLOAD, {1, 4, 0, 0, 0, 12, 13}, 8);
+    service();
+    time_ms += 5001;
+    service();
+    assert(!is_sample_upload_active() && usb_serial_buffer.faulted);
+    assert(usb_tx.size() > 3 && usb_tx[0] == 8 && usb_tx[1] == 2 && usb_tx[2] == 1);
+
+    connect_usb();
+    frame(USB_MSG_BODY, {12}, 8, 1);
+    service();
+    assert(usb_serial_buffer.faulted && usb_tx.empty());
+    connect_usb();
+    prepare_pending_voice_stream(0, 0, 1);
+    std::vector<uint8_t> body(1024, 32);
+    for (unsigned i = 0; i < 3; ++i)
+    {
+        frame(USB_MSG_BODY, body, 0, 1);
+        service();
+    }
+    uint32_t received = get_usb_received_body_count();
+    frame(USB_MSG_BODY, body, 0, 1);
+    frame(USB_MSG_UPLOAD, {1, 2, 0, 0, 0, 12, 13}, 7);
+    service();
+    assert(get_usb_received_body_count() == received && usb_tx.empty());
+    assert(usb_rx.size() + usb_serial_buffer.input_size == 9);
+    discard_pending_voice_stream(0);
+    service();
+    assert(usb_rx.empty() && !usb_serial_buffer.input_size && !usb_serial_buffer.faulted);
+    assert(usb_tx == std::vector<uint8_t>({7, 2, 0}));
     // Replies stay pending until the platform drains the shared output.
-    hello(); rs_tx.clear();
+    connect_usb(); rs_tx.clear();
     uint8_t reply[]={4,3,2,1};
     assert(queue_rs485_reply(reply,4,nullptr)==0);
     reply[0]=99;
@@ -193,7 +229,7 @@ int main()
     assert(rs485_serial_buffer.output[0]==4);
     process_rs485_replies();
     assert(has_pending_rs485_reply());
-    frame(USB_MSG_PROBE); service(); assert(!usb_tx.empty());
+    frame(USB_MSG_UPLOAD, {1, 2, 0, 0, 0, 12, 13}, 7); service(); assert(!usb_tx.empty());
     service_rs485(); service_rs485();
     assert(!has_pending_rs485_reply());
     assert(rs_tx==std::vector<uint8_t>({4,3,2,1}));

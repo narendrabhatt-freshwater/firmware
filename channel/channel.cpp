@@ -128,27 +128,18 @@ static void send_rs485_reply(const char *s)
     }
 }
 
-/*
- * Sequenced vq frame: masks/capacity/status and last processed BODY sequence,
- * plus eight session/free-space/refill-budget/duration records and a terminator; no CRC.
- */
-#define VQ_FRAME_LEN 61u
-static_assert(STREAM_RING_SAMPLES <= 4095u, "vq format uses 12-bit physical free space");
+#define VQ_FRAME_LEN 56u
 #define VQ_SYNC_0 0xA5u
 #define VQ_SYNC_1 0x5Au
 #define VQ_CARD_CHANNEL 0x43u
-#define VQ_TYPE_STATUS 0x0Eu
-static_assert(NOTE_BANK_VOICES == 8u, "vq binary frame packs exactly eight voices");
+#define VQ_TYPE_STATUS 0x0Fu
+static_assert(NOTE_BANK_VOICES == 8u, "vq contains eight voice records");
+static_assert(STREAM_RING_SAMPLES == 4080u, "vq clients use a 4080-sample pool");
 
-static uint16_t rs485_vq_sequence;
+/* ---- send voice sessions, free space and five millisecond demand --------- */
 
-/* ---- send packed voice status ------------------------------------------- */
-
-static void send_rs485_voice_status(uint8_t active_mask, uint8_t pending_mask,
-                                    const uint8_t *sessions, const uint8_t *current_sessions,
-                                    const uint32_t *remaining_us, const uint16_t *free_samples,
-                                    uint16_t body_sequence, uint8_t body_age_ms,
-                                    const uint16_t *refill_samples)
+static void send_rs485_voice_status(uint8_t active_mask, const uint8_t *sessions,
+    const uint16_t *free_samples, uint16_t sequence, const uint16_t *refill_samples)
 {
     uint8_t frame[VQ_FRAME_LEN] = {};
     frame[0] = VQ_SYNC_0;
@@ -156,29 +147,19 @@ static void send_rs485_voice_status(uint8_t active_mask, uint8_t pending_mask,
     frame[2] = VQ_CARD_CHANNEL;
     frame[3] = VQ_TYPE_STATUS;
     frame[4] = active_mask;
-    frame[5] = pending_mask;
-    frame[6] = (uint8_t)STREAM_RING_SAMPLES;
-    frame[7] = (uint8_t)(STREAM_RING_SAMPLES >> 8u);
-    ++rs485_vq_sequence;
-    frame[8] = (uint8_t)rs485_vq_sequence;
-    frame[9] = body_age_ms;
-    frame[10] = (uint8_t)body_sequence;
-    frame[11] = (uint8_t)(body_sequence >> 8u);
-    for (uint8_t i = 0u; i < NOTE_BANK_VOICES; ++i) {
-        uint8_t *record = frame + 12u + 6u * i;
-        uint32_t duration = remaining_us[i] / 100u;
-        if (duration > 2047u) duration = 2047u;
-        record[0] = sessions[i];
-        record[1] = current_sessions[i];
-        record[2] = (uint8_t)free_samples[i];
-        record[3] = (uint8_t)((free_samples[i] >> 8u) | ((refill_samples[i] & 15u) << 4u));
-        record[4] = (uint8_t)((refill_samples[i] >> 4u) | ((duration & 7u) << 5u));
-        record[5] = (uint8_t)(duration >> 3u);
+    write_usb_uint16_le(frame + 5, sequence);
+    for (uint8_t voice = 0; voice < NOTE_BANK_VOICES; ++voice)
+    {
+        uint8_t *record = frame + 7 + 6 * voice;
+        record[0] = voice;
+        record[1] = sessions[voice];
+        write_usb_uint16_le(record + 2, free_samples[voice]);
+        write_usb_uint16_le(record + 4, refill_samples[voice]);
     }
-    frame[VQ_FRAME_LEN - 1u] = '\n';
-
-    if (queue_rs485_reply(frame, VQ_FRAME_LEN, voice_status_completed) != 0) {
-        rs485_tx_fail++;
+    frame[VQ_FRAME_LEN - 1] = '\n';
+    if (queue_rs485_reply(frame, sizeof frame, voice_status_completed) != 0)
+    {
+        ++rs485_tx_fail;
     }
 }
 
@@ -228,10 +209,13 @@ static void queue_console_note(uint8_t note, uint8_t key, uint8_t velocity, uint
                                : "err:range\r\n");
 }
 
-/** Hard-stop every voice and reset Berry state without unloading programs. */
-static void request_console_voice_stop(void)
+/* ---- stop voices and reset Berry before replying to clear --------------- */
+
+static void stop_console_voices(void)
 {
-    request_stop_all_voices();
+    stop_all_voices_immediately();
+    reset_all_channel_script_state();
+    set_channel_led_colour(0.0f, 0.0f, 0.0f, 0.0f);
 }
 
 /* ---- describe console commands ------------------------------------------ */
@@ -258,16 +242,10 @@ static void send_voice_filter_settings(uint8_t voice)
     double fc = get_voice_filter_cutoff_hz(voice);
     double k = get_voice_filter_pitch_tracking(voice);
 
-    if (fc >= NOTE_FILTER_CUTOFF_MAX_HZ) {
-        snprintf(b, sizeof b, "ok: f%u %.1f Hz (bypass) k %.2f q %.2f\r\n", (unsigned)voice, base,
-                 k, get_voice_filter_resonance(voice));
-    } else if (k > 0.0) {
-        snprintf(b, sizeof b, "ok: f%u base %.1f → %.1f Hz k %.2f q %.2f\r\n", (unsigned)voice,
-                 base, fc, k, get_voice_filter_resonance(voice));
-    } else {
-        snprintf(b, sizeof b, "ok: f%u %.1f Hz k %.2f q %.2f\r\n", (unsigned)voice, fc, k,
-                 get_voice_filter_resonance(voice));
-    }
+    snprintf(b, sizeof b,
+        "ok: f%u base %.1f effective %.1f bypass %u k %.2f q %.2f\r\n",
+        (unsigned)voice, base, fc, fc >= NOTE_FILTER_CUTOFF_MAX_HZ ? 1u : 0u,
+        k, get_voice_filter_resonance(voice));
     send_rs485_reply(b);
 }
 
@@ -473,81 +451,36 @@ static void process_pitch_tracking_command(char *line, char *b, size_t bsz)
 
 /* ---- handle voice status queries ---------------------------------------- */
 
-/**
- * vq — per-voice playback duration and exact total writable credit.
- */
 static void process_voice_status_command(void)
 {
-    char b[384];
-    int n;
-    uint8_t mask = 0u;
+    uint8_t mask = 0;
+    uint8_t sessions[NOTE_BANK_VOICES];
     uint16_t free_samples[NOTE_BANK_VOICES];
-    uint8_t pending_mask = 0u;
-    uint8_t sessions[NOTE_BANK_VOICES], current_sessions[NOTE_BANK_VOICES];
-    uint32_t remaining_us[NOTE_BANK_VOICES];
     uint16_t refill_samples[NOTE_BANK_VOICES];
-    uint16_t body_sequence;
-    uint8_t body_age_ms;
-    uint8_t i;
-
+    for (uint8_t voice = 0; voice < NOTE_BANK_VOICES; ++voice)
     {
-        uint32_t saved = disable_interrupts_and_save_state();
-        for (i = 0u; i < NOTE_BANK_VOICES; i++) {
-            if (is_voice_active(i) != 0u) mask |= (uint8_t)(1u << i);
-            free_samples[i] = (uint16_t)get_stream_free_samples(i);
-            sessions[i] = get_target_stream_session(i);
-            current_sessions[i] = get_current_stream_session(i);
-            remaining_us[i] = get_voice_buffered_time_us(i);
-            refill_samples[i] = get_voice_refill_samples_5ms(i);
-            if (has_pending_voice_stream(i) != 0u)
-                pending_mask = (uint8_t)(pending_mask | (uint8_t)(1u << i));
+        if (is_voice_active(voice))
+        {
+            mask |= (uint8_t)(1u << voice);
         }
-        /* Credit and acknowledgement must describe the same USB state. A newer
-         * acknowledgement with older free space grants already-used space again. */
-        body_sequence = get_last_stream_body_sequence();
-        body_age_ms = get_stream_body_age_ms();
-        restore_interrupt_state(saved);
+        sessions[voice] = get_current_stream_session(voice);
+        free_samples[voice] = (uint16_t)get_stream_free_samples(voice);
+        refill_samples[voice] = get_voice_refill_samples_5ms(voice);
     }
-
-    if (!console_via_usb) {
-        send_rs485_voice_status(mask, pending_mask, sessions, current_sessions, remaining_us,
-                               free_samples, body_sequence, body_age_ms, refill_samples);
-        return;
-    }
-
-    n = snprintf(b, sizeof b, "ok:vq12 %02x %02x %u %u %u", (unsigned)mask, (unsigned)pending_mask,
-                 (unsigned)STREAM_RING_SAMPLES, (unsigned)rs485_vq_sequence,
-                 (unsigned)body_sequence);
-    for (i = 0u; i < NOTE_BANK_VOICES; i++) {
-        if (n < 0 || (size_t)n >= sizeof b) {
-            send_rs485_reply("err:buf\r\n");
-            return;
-        }
-        n += snprintf(b + n, sizeof b - (size_t)n, " %u %lu %u", (unsigned)sessions[i],
-                      (unsigned long)remaining_us[i], (unsigned)free_samples[i]);
-        if (n >= 0 && (size_t)n < sizeof b)
-            n += snprintf(b + n, sizeof b - (size_t)n, " %u", (unsigned)refill_samples[i]);
-    }
-    if (n < 0 || (size_t)n >= sizeof b - 2u) {
-        send_rs485_reply("err:buf\r\n");
-        return;
-    }
-    b[n++] = '\r';
-    b[n++] = '\n';
-    b[n] = '\0';
-    send_rs485_reply(b);
+    send_rs485_voice_status(mask, sessions, free_samples,
+        get_last_stream_body_sequence(), refill_samples);
 }
 
 /* ---- handle note commands ----------------------------------------------- */
 
-/** clear / n off: hard-stop all voices and reset Berry state at the next boundary. */
+/* ---- clear application playback before acknowledging the command -------- */
 static void process_all_voices_command(char *line)
 {
     if (strcmp(line, "n off") != 0 && strcmp(line, "clear") != 0) {
         send_rs485_reply("err:syntax\r\n");
         return;
     }
-    request_console_voice_stop();
+    stop_console_voices();
     send_rs485_reply(strcmp(line, "clear") == 0 ? "ok:clear rt=1\r\n" : "ok\r\n");
 }
 

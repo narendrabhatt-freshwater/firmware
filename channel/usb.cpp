@@ -35,8 +35,6 @@
 
 /* ---- receive attack and wavetable uploads ------------------------------- */
 
-/* CDC session: al → 1..ATTACK_BANK_BYTES signed int8 → Commit. */
-
 static uint8_t s_active;
 static uint16_t s_id;
 static uint32_t s_need;
@@ -155,208 +153,170 @@ uint32_t append_sample_upload_bytes(const uint8_t *buf, uint32_t len)
     return take;
 }
 
-/* ---- dispatch binary usb messages --------------------------------------- */
+/* ---- retain USB parser and upload progress ------------------------------ */
 
-/* Binary-only CDC: BODY + chunked uploads, with controls/status on RS485. */
-static USB_Parser parser = {{}, 0, USB_STREAM_HEADER_BYTES};
-static uint32_t link_epoch, last_rx_ms, upload_ms;
-static uint32_t rx_messages, rx_bytes, blocks, bad;
-static uint8_t hello, failed, upload_kind, upload_target;
-static uint32_t upload_total, upload_offset;
-static uint32_t probe_bytes, probe_blocks, probe_hash;
+static USB_Parser parser = {{}, 0, 1};
+static uint32_t link_epoch;
+static uint32_t last_rx_ms;
+static uint32_t upload_ms;
+static uint32_t rx_messages;
+static uint32_t rx_bytes;
+static uint32_t blocks;
+static uint32_t bad;
+static uint8_t upload_kind;
+static uint8_t upload_target;
+static uint8_t upload_rejected;
+static uint32_t upload_remaining;
 static char upload_reply[96];
-static uint8_t reply[USB_STREAM_HEADER_BYTES + 128];
+static uint8_t reply[USB_REPLY_HEADER_BYTES + sizeof upload_reply];
 static uint16_t reply_size;
 
-/* Existing upload validators report here; strings never enter the raw stream. */
+/* ---- retain validation text for the upload reply ------------------------- */
+
 void write_usb_text(const char *s)
 {
-    if (s) (void)snprintf(upload_reply, sizeof upload_reply, "%s", s);
+    if (s)
+    {
+        snprintf(upload_reply, sizeof upload_reply, "%s", s);
+    }
 }
 
-/* ---- manage binary uploads and replies ---------------------------------- */
+/* ---- release an unfinished upload --------------------------------------- */
 
 static void abort_usb_upload(void)
 {
     abort_script_upload();
     abort_sample_upload();
     upload_kind = 0;
-    upload_offset = upload_total = 0;
+    upload_remaining = 0;
+    upload_rejected = 0;
 }
 
-static void prepare_usb_reply(const uint8_t *header, const uint8_t *payload, uint16_t size)
+/* ---- reply once with target, upload command and result ------------------- */
+
+static void reply_usb_upload(uint8_t target, uint8_t error, const char *message)
 {
-    memcpy(reply, header, USB_STREAM_HEADER_BYTES);
-    reply[0] = USB_MSG_REPLY;
-    /* Request type occupies the reply's session byte; no request IDs are needed
-     * because exactly one request/reply exchange may be outstanding. */
-    reply[2] = header[0];
-    write_usb_uint16_le(reply + 3, size);
-    memcpy(reply + USB_STREAM_HEADER_BYTES, payload, size);
-    reply_size = (uint16_t)(USB_STREAM_HEADER_BYTES + size);
+    reply[0] = target;
+    reply[1] = USB_MSG_UPLOAD;
+    reply[2] = error;
+    reply_size = USB_REPLY_HEADER_BYTES;
+    if (error)
+    {
+        size_t size = message ? strcspn(message, "\r\n") : 0;
+        if (size > sizeof reply - USB_REPLY_HEADER_BYTES - 1)
+        {
+            size = sizeof reply - USB_REPLY_HEADER_BYTES - 1;
+        }
+        if (size)
+        {
+            memcpy(reply + reply_size, message, size);
+            reply_size += (uint16_t)size;
+        }
+        reply[reply_size++] = '\n';
+    }
 }
 
-static void reply_usb_result(const uint8_t *h, uint8_t error, const char *message)
-{
-    uint8_t data[96];
-    data[0] = error;
-    size_t n = message ? strlen(message) : 0;
-    if (n > sizeof(data) - 1) n = sizeof(data) - 1;
-    if (n) memcpy(data + 1, message, n);
-    prepare_usb_reply(h, data, (uint16_t)(n + 1));
-}
+/* ---- stop a malformed or incomplete stream without replying to BODY ------ */
 
-static void fail_usb_protocol(const uint8_t *h, const char *message)
+static void fail_usb_protocol(void)
 {
     ++bad;
-    failed = 1;
-    hello = 0;
     abort_usb_upload();
-    if (h) reply_usb_result(h, 1, message);
     usb_serial_buffer.faulted = true;
 }
 
-/* ---- dispatch a binary usb message -------------------------------------- */
+/* ---- accept a BODY frame or prepare the following upload data ------------ */
 
-static uint8_t dispatch_usb_message(const uint8_t *h)
+static uint8_t dispatch_usb_message(const uint8_t *header)
 {
-    uint16_t n = read_usb_uint16_le(h + 3);
-    const uint8_t *p = h + USB_STREAM_HEADER_BYTES;
-    if (h[0] == USB_MSG_HELLO) {
-        if (hello || n != 1 || p[0] != USB_STREAM_VERSION || h[1] || h[2]) {
-            fail_usb_protocol(h, "incompatible HELLO");
+    if (header[0] == USB_MSG_BODY)
+    {
+        uint16_t count = read_usb_uint16_le(header + 3);
+        uint8_t voice = header[1];
+        uint8_t session = header[2];
+        if (!count || voice >= 8 || session >= USB_STREAM_SESSION_MOD)
+        {
+            fail_usb_protocol();
             return 1;
         }
-        abort_usb_upload();
-        uint16_t processed = get_last_stream_body_sequence();
-        hello = 1;
-        probe_bytes = probe_blocks = 0;
-        probe_hash = 2166136261u;
-        const uint8_t caps[] = {0,
-                                USB_STREAM_VERSION,
-                                8,
-                                1,
-                                (uint8_t)AUDIO_SAMPLE_RATE_HZ,
-                                (uint8_t)(AUDIO_SAMPLE_RATE_HZ >> 8),
-                                (uint8_t)(AUDIO_SAMPLE_RATE_HZ >> 16),
-                                (uint8_t)(AUDIO_SAMPLE_RATE_HZ >> 24),
-                                USB_STREAM_PAYLOAD_MAX & 255,
-                                USB_STREAM_PAYLOAD_MAX >> 8,
-                                USB_STREAM_PRIME_SAMPLES & 255,
-                                USB_STREAM_PRIME_SAMPLES >> 8,
-                                (uint8_t)(processed & 255),
-                                (uint8_t)(processed >> 8)};
-        prepare_usb_reply(h, caps, sizeof caps);
-        return 1;
-    }
-    if (!hello) {
-        fail_usb_protocol(h, "HELLO required");
-        return 1;
-    }
-    /* Diagnostic sink: no voice, upload, or credit state is changed. An empty
-     * probe is an ordered barrier returning totals for this connection. */
-    if (h[0] == USB_MSG_PROBE) {
-        if (h[1] || h[2]) {
-            fail_usb_protocol(h, "invalid PROBE");
-            return 1;
-        }
-        if (n) {
-            probe_bytes += n;
-            ++probe_blocks;
-            for (uint16_t i = 0; i < n; ++i)
-                probe_hash = (probe_hash ^ p[i]) * 16777619u;
-        } else {
-            uint8_t stats[13] = {};
-            uint32_t values[] = {probe_bytes, probe_blocks, probe_hash};
-            for (unsigned i = 0; i < 3; ++i) {
-                write_usb_uint16_le(stats + 1 + i * 4, (uint16_t)values[i]);
-                write_usb_uint16_le(stats + 3 + i * 4, (uint16_t)(values[i] >> 16));
-            }
-            prepare_usb_reply(h, stats, sizeof stats);
-        }
-        return 1;
-    }
-    if (h[0] == USB_MSG_BODY) {
-        if (!n || h[1] >= 8 || h[2] >= USB_STREAM_SESSION_MOD) {
-            fail_usb_protocol(h, "invalid BODY");
-            return 1;
-        }
-        /* Prediction may temporarily run ahead of consumption. Retain this whole
-         * block and apply USB backpressure; never overwrite or drop ring samples. */
-        if ((get_target_stream_session(h[1]) == h[2] || get_current_stream_session(h[1]) == h[2]) &&
-            get_stream_free_samples(h[1]) < ((n + 15u) / 16u) * 16u)
+        if ((get_target_stream_session(voice) == session || get_current_stream_session(voice) == session) &&
+            get_stream_free_samples(voice) < ((count + 15u) / 16u) * 16u)
+        {
             return 0;
-        /* Stale notes are acknowledged/ignored by the ring; no stale data becomes
-         * audible. Capacity errors are explicit, never silently dropped. */
-        int accepted = write_stream_body_samples(h[1], h[2], (const int8_t *)p, n);
-        if (accepted < 0) {
-            fail_usb_protocol(h, "BODY ring capacity");
+        }
+        int accepted = write_stream_body_samples(voice, session,
+            (const int8_t *)(header + USB_STREAM_HEADER_BYTES), count);
+        if (accepted < 0)
+        {
+            fail_usb_protocol();
             return 1;
         }
         rx_messages += (uint32_t)(accepted > 0);
         return 1;
     }
-    if (h[2]) {
-        fail_usb_protocol(h, "invalid upload header");
+    uint32_t total = read_usb_uint32_le(header + 3);
+    if (!total || total > USB_UPLOAD_BYTES_MAX)
+    {
+        reply_usb_upload(header[2], 1, "invalid upload size");
+        fail_usb_protocol();
         return 1;
     }
+    upload_kind = header[1];
+    upload_target = header[2];
+    upload_remaining = total;
     upload_reply[0] = 0;
-    if (h[0] == USB_MSG_UPLOAD_BEGIN) {
-        if (n != 5 || upload_kind) {
-            reply_usb_result(h, 1, "upload busy/invalid");
-            return 1;
-        }
-        uint32_t size = read_usb_uint32_le(p + 1);
-        int rc = -1;
-        if (p[0] == USB_UPLOAD_ATTACK)
-            rc = begin_sample_upload(h[1], size);
-        else if (p[0] == USB_UPLOAD_WAVE)
-            rc = begin_wavetable_upload(h[1], size);
-        else if (p[0] == USB_UPLOAD_SCRIPT)
-            rc = begin_script_upload(h[1], size);
-        if (rc) {
-            reply_usb_result(h, 1, "upload rejected (target, size, or active voice)");
-            return 1;
-        }
-        upload_kind = p[0];
-        upload_target = h[1];
-        upload_total = size;
-        upload_offset = 0;
-        upload_ms = get_board_time_ms();
-        reply_usb_result(h, 0, NULL);
-        return 1;
+    int result = -1;
+    if (upload_kind == USB_UPLOAD_ATTACK)
+    {
+        result = begin_sample_upload(upload_target, total);
     }
-    if (h[0] == USB_MSG_UPLOAD_DATA) {
-        if (!upload_kind || h[1] != upload_target || n <= 4 ||
-            read_usb_uint32_le(p) != upload_offset ||
-            (uint32_t)(n - 4) > upload_total - upload_offset) {
-            abort_usb_upload();
-            reply_usb_result(h, 1, "upload offset/length");
-            return 1;
-        }
-        uint32_t take = upload_kind == USB_UPLOAD_SCRIPT ? append_script_upload_bytes(p + 4, n - 4)
-                                                         : append_sample_upload_bytes(p + 4, n - 4);
-        if (take != (uint32_t)(n - 4) || strncmp(upload_reply, "err:", 4) == 0) {
-            reply_usb_result(h, 1, upload_reply[0] ? upload_reply : "upload failed");
-            abort_usb_upload();
-            return 1;
-        }
-        upload_offset += take;
-        upload_ms = get_board_time_ms();
-        reply_usb_result(h, 0, NULL);
-        if (upload_offset == upload_total) abort_usb_upload();
-        return 1;
+    else if (upload_kind == USB_UPLOAD_WAVE)
+    {
+        result = begin_wavetable_upload(upload_target, total);
     }
-    if (h[0] == USB_MSG_UPLOAD_ABORT && n == 0) {
-        abort_usb_upload();
-        reply_usb_result(h, 0, NULL);
-        return 1;
+    else if (upload_kind == USB_UPLOAD_SCRIPT)
+    {
+        result = begin_script_upload(upload_target, total);
     }
-    fail_usb_protocol(h, "unknown request");
+    upload_rejected = result != 0;
+    if (upload_rejected)
+    {
+        write_usb_text("upload rejected (kind, target, size, or active voice)");
+    }
+    upload_ms = get_board_time_ms();
     return 1;
 }
 
-/* ---- receive and process usb messages ----------------------------------- */
+/* ---- append consecutive upload bytes and reply only on completion -------- */
+
+static void receive_upload_bytes(const uint8_t *data, uint32_t count)
+{
+    if (!upload_rejected)
+    {
+        uint32_t taken = upload_kind == USB_UPLOAD_SCRIPT
+            ? append_script_upload_bytes(data, count)
+            : append_sample_upload_bytes(data, count);
+        if (taken != count || strncmp(upload_reply, "err:", 4) == 0)
+        {
+            upload_rejected = 1;
+            if (!upload_reply[0])
+            {
+                write_usb_text("upload failed");
+            }
+            abort_script_upload();
+            abort_sample_upload();
+        }
+    }
+    upload_remaining -= count;
+    upload_ms = get_board_time_ms();
+    if (!upload_remaining)
+    {
+        reply_usb_upload(upload_target, upload_rejected, upload_reply);
+        abort_usb_upload();
+    }
+}
+
+/* ---- receive fragmented frames and uploads without blocking audio -------- */
 
 void process_usb_messages(void)
 {
@@ -365,7 +325,6 @@ void process_usb_messages(void)
     {
         abort_usb_upload();
         reset_usb_parser(&parser);
-        hello = failed = 0;
         reply_size = 0;
         link_epoch = epoch;
     }
@@ -374,8 +333,7 @@ void process_usb_messages(void)
         while (usb_serial_buffer.output_size)
         {
             size_t before = usb_serial_buffer.output_size;
-            write_usb({usb_serial_buffer.output,
-                usb_serial_buffer.output + before});
+            write_usb({usb_serial_buffer.output, usb_serial_buffer.output + before});
             if (usb_serial_buffer.output_size == before)
             {
                 return;
@@ -387,9 +345,22 @@ void process_usb_messages(void)
             reply_size = 0;
             continue;
         }
-        if (usb_serial_buffer.faulted || failed)
+        if (usb_serial_buffer.faulted)
         {
             return;
+        }
+        if (upload_remaining)
+        {
+            uint32_t want = upload_remaining < USB_STREAM_PAYLOAD_MAX
+                ? upload_remaining : USB_STREAM_PAYLOAD_MAX;
+            uint32_t count = read_serial_input(usb_serial_buffer, parser.bytes, want);
+            if (!count)
+            {
+                break;
+            }
+            rx_bytes += count;
+            receive_upload_bytes(parser.bytes, count);
+            continue;
         }
         if (parser.used == parser.need)
         {
@@ -400,29 +371,35 @@ void process_usb_messages(void)
             reset_usb_parser(&parser);
             continue;
         }
-        uint32_t want = parser.need - parser.used;
-        uint32_t n = read_serial_input(usb_serial_buffer, parser.bytes + parser.used, want);
-        if (!n)
+        uint32_t count = read_serial_input(usb_serial_buffer, parser.bytes + parser.used,
+            parser.need - parser.used);
+        if (!count)
         {
             break;
         }
-        rx_bytes += n;
+        rx_bytes += count;
         last_rx_ms = get_board_time_ms();
-        int rc = commit_usb_parser_bytes(&parser, (uint16_t)n);
-        if (rc < 0)
+        int result = commit_usb_parser_bytes(&parser, (uint16_t)count);
+        if (result < 0)
         {
-            fail_usb_protocol(NULL, "bad header");
+            fail_usb_protocol();
             return;
         }
-        if (rc > 0)
+        if (result > 0)
         {
             ++blocks;
         }
     }
     if (parser.used && parser.used < parser.need &&
         (uint32_t)(get_board_time_ms() - last_rx_ms) > 1000)
-        fail_usb_protocol(NULL, "partial frame timeout");
-    if (upload_kind && (uint32_t)(get_board_time_ms() - upload_ms) > 5000) abort_usb_upload();
+    {
+        fail_usb_protocol();
+    }
+    if (upload_remaining && (uint32_t)(get_board_time_ms() - upload_ms) > 5000)
+    {
+        reply_usb_upload(upload_target, 1, "incomplete upload");
+        fail_usb_protocol();
+    }
 }
 
 /* ---- query and clear transport statistics ------------------------------- */

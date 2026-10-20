@@ -61,9 +61,9 @@ include(CTest)
 if(BUILD_TESTING)
     # Run generated terminal-control programs through the production Channel VM
     # and renderer on the host; this does not build or flash MCU firmware.
-    set(CONTROL_TEST_CARD "${CMAKE_CURRENT_SOURCE_DIR}/../channel_card")
+    set(CONTROL_TEST_CARD "${CMAKE_CURRENT_SOURCE_DIR}/../channel")
     # voice_bd can also be distributed by itself, without the firmware tree.
-    if(EXISTS "${CONTROL_TEST_CARD}/app/voice.cpp")
+    if(EXISTS "${CONTROL_TEST_CARD}/voice.cpp")
         set(CONTROL_TEST_RUNTIME "${CONTROL_TEST_CARD}/berry_runtime")
         file(GLOB CONTROL_TEST_BERRY_SOURCES CONFIGURE_DEPENDS
             "${CONTROL_TEST_RUNTIME}/third_party/berry/src/*.c")
@@ -76,17 +76,16 @@ if(BUILD_TESTING)
         target_include_directories(voicebd_envelope_runtime PUBLIC
             "${CONTROL_TEST_RUNTIME}" "${CONTROL_TEST_RUNTIME}/third_party/berry/src")
         add_executable(voicebd_envelope_test envelope_controls_test.cpp envelope_controls.cpp
-            "${CONTROL_TEST_CARD}/app/voice.cpp"
-            "${CONTROL_TEST_CARD}/app/stream.cpp"
-            "${CONTROL_TEST_CARD}/app/samples.cpp"
-            "${CONTROL_TEST_CARD}/app/oscillator.cpp"
-            "${CONTROL_TEST_CARD}/app/filter.cpp"
-            "${CONTROL_TEST_CARD}/app/platform.cpp")
+            "${CONTROL_TEST_CARD}/voice.cpp"
+            "${CONTROL_TEST_CARD}/stream.cpp"
+            "${CONTROL_TEST_CARD}/samples.cpp"
+            "${CONTROL_TEST_CARD}/oscillator.cpp"
+            "${CONTROL_TEST_CARD}/filter.cpp"
+            "${CONTROL_TEST_CARD}/platform.cpp")
         target_compile_features(voicebd_envelope_test PRIVATE cxx_std_17)
         target_compile_options(voicebd_envelope_test PRIVATE -Wall -Wextra -Werror)
         target_include_directories(voicebd_envelope_test PRIVATE
-            "${CONTROL_TEST_CARD}/app"
-            "${CONTROL_TEST_CARD}/sim")
+            "${CONTROL_TEST_CARD}")
         target_link_libraries(voicebd_envelope_test PRIVATE voicebd_envelope_runtime m)
         add_test(NAME voicebd_envelope COMMAND voicebd_envelope_test "${BERRY_EXECUTABLE}"
             "${CMAKE_CURRENT_BINARY_DIR}/envelope control fixtures")

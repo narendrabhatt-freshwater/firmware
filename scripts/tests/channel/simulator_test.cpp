@@ -16,6 +16,7 @@ static ssize_t test_write(int port, const void *data, size_t size);
 #undef main
 #undef write
 #include "usb.h"
+#include "samples.h"
 #include "voice.h"
 #include "stream.h"
 #include "transport.h"
@@ -206,11 +207,18 @@ static void send_bytes(int client, const std::vector<uint8_t> &bytes, size_t fra
     }
 }
 
-/* ---- encode the unchanged USB wire format ------------------------------- */
+/* ---- encode the USB message header ------------------------------- */
 
 static std::vector<uint8_t> frame(uint8_t type, const std::vector<uint8_t> &payload,
     uint8_t target = 0, uint8_t session = 0)
 {
+    if (type == USB_MSG_UPLOAD)
+    {
+        assert(payload.size() >= 5);
+        std::vector<uint8_t> bytes{type, payload[0], target};
+        bytes.insert(bytes.end(), payload.begin() + 1, payload.end());
+        return bytes;
+    }
     std::vector<uint8_t> bytes{type, target, session, uint8_t(payload.size()),
         uint8_t(payload.size() >> 8)};
     bytes.insert(bytes.end(), payload.begin(), payload.end());
@@ -219,11 +227,10 @@ static std::vector<uint8_t> frame(uint8_t type, const std::vector<uint8_t> &payl
 
 /* ---- verify a complete successful protocol reply ------------------------ */
 
-static void expect_reply(uint8_t type, size_t size = 6)
+static void expect_reply(uint8_t type, size_t size = 3)
 {
     assert(usb_reply.size() == size);
-    assert(usb_reply[0] == USB_MSG_REPLY && usb_reply[2] == type && usb_reply[5] == 0);
-    assert(read_usb_uint16_le(usb_reply.data() + 3) + 5u == size);
+    assert(type == USB_MSG_UPLOAD && usb_reply[1] == type && usb_reply[2] == 0);
     usb_reply.clear();
 }
 
@@ -236,16 +243,14 @@ static void check_serial()
     serial_reply.clear();
     unsigned before = write_index;
     blocked_writes = 5;
-    send_bytes(usb_client, frame(USB_MSG_HELLO, {USB_STREAM_VERSION}), 1);
-    expect_reply(USB_MSG_HELLO, 19);
+    send_bytes(usb_client, frame(USB_MSG_UPLOAD, {1, 2, 0, 0, 0, 16, 32}, 7), 1);
+    expect_reply(USB_MSG_UPLOAD);
     assert(serial_reply.empty());
-    auto first = frame(USB_MSG_PROBE, {1, 2, 3});
-    auto second = frame(USB_MSG_PROBE, {});
+    auto first = frame(USB_MSG_UPLOAD, {1, 2, 0, 0, 0, 16, 32}, 7);
+    auto second = frame(USB_MSG_UPLOAD, {2, 2, 0, 0, 0, 32, 16}, 7);
     first.insert(first.end(), second.begin(), second.end());
     send_bytes(usb_client, first, first.size());
-    assert(usb_reply.size() == 18 && usb_reply[2] == USB_MSG_PROBE);
-    assert(read_usb_uint32_le(usb_reply.data() + 6) == 3);
-    assert(read_usb_uint32_le(usb_reply.data() + 10) == 1);
+    assert(usb_reply == std::vector<uint8_t>({7, 2, 0, 7, 2, 0}));
     usb_reply.clear();
     const std::string commands = "c:g 1 12\rc:g 1 13\r";
     for (size_t fragment : {size_t(1), commands.size()})
@@ -258,6 +263,31 @@ static void check_serial()
     }
     assert(write_index == before);
     assert(partial_writes && failed_writes == 9);
+}
+
+/* ---- report filter fields consistently for normal, tracked and bypassed voices */
+
+static void check_filter_replies()
+{
+    const std::string commands = "c:fk0 0\rc:f0 1000 0.7\r";
+    send_bytes(rs485_client, {commands.begin(), commands.end()}, 1);
+    assert(std::string(serial_reply.begin(), serial_reply.end()) ==
+        "[C] ok: fk0 0.00\r\n"
+        "[C] ok: f0 base 1000.0 effective 1000.0 bypass 0 k 0.00 q 0.70\r\n");
+    serial_reply.clear();
+    const std::string bypass = "c:f0 0\r";
+    send_bytes(rs485_client, {bypass.begin(), bypass.end()}, bypass.size());
+    assert(std::string(serial_reply.begin(), serial_reply.end()).find("bypass 1 k 0.00 q 0.70") != std::string::npos);
+    serial_reply.clear();
+    const std::string tracked = "c:fk0 1\rc:f0 2000\r";
+    send_bytes(rs485_client, {tracked.begin(), tracked.end()}, tracked.size());
+    const std::string reply(serial_reply.begin(), serial_reply.end());
+    assert(reply.find("base 2000.0 effective ") != std::string::npos);
+    assert(reply.find("bypass 0 k 1.00 q 0.70") != std::string::npos);
+    serial_reply.clear();
+    const std::string reset = "c:fk0 0\rc:f0 0\r";
+    send_bytes(rs485_client, {reset.begin(), reset.end()}, reset.size());
+    serial_reply.clear();
 }
 
 /* ---- reply to complete requests without waiting for audio generation ----- */
@@ -281,9 +311,9 @@ static void check_pending_commands()
     assert(std::string(serial_reply.begin(), serial_reply.end()) == "[C] ok\r\n");
     serial_reply.clear();
 
-    received_usb(frame(USB_MSG_PROBE, {}));
+    received_usb(frame(USB_MSG_UPLOAD, {1, 2, 0, 0, 0, 16, 32}, 7));
     collect(usb_client, usb_reply);
-    expect_reply(USB_MSG_PROBE, 18);
+    expect_reply(USB_MSG_UPLOAD);
 }
 
 /* ---- retain messages larger than the parser buffers without losing bytes - */
@@ -306,18 +336,90 @@ static void check_input_capacity()
     input.clear();
     for (unsigned i = 0; i < 1500; ++i)
     {
-        auto bytes = frame(USB_MSG_PROBE, {uint8_t(i)});
+        auto bytes = frame(USB_MSG_UPLOAD, {1, 2, 0, 0, 0, uint8_t(i), uint8_t(i + 1)}, 7);
         input.insert(input.end(), bytes.begin(), bytes.end());
     }
-    auto query = frame(USB_MSG_PROBE, {});
+    auto query = frame(USB_MSG_UPLOAD, {1, 2, 0, 0, 0, 16, 32}, 7);
     input.insert(input.end(), query.begin(), query.end());
     assert(input.size() > sizeof usb_serial_buffer.input);
     received_usb(input);
     settle();
-    assert(usb_reply.size() == 18);
-    assert(read_usb_uint32_le(usb_reply.data() + 6) == 1503);
-    assert(read_usb_uint32_le(usb_reply.data() + 10) == 1501);
+    assert(usb_reply.size() == 1501 * 3);
+    for (size_t offset = 0; offset < usb_reply.size(); offset += 3)
+    {
+        assert(usb_reply[offset] == 7 && usb_reply[offset + 1] == 2 && usb_reply[offset + 2] == 0);
+    }
     usb_reply.clear();
+}
+
+/* ---- accept upload fragments and send exactly one final reply ------------ */
+
+static void check_uploads()
+{
+    const auto first = frame(USB_MSG_UPLOAD, {1, 4, 0, 0, 0, 10, 20}, 6);
+    assert(first == std::vector<uint8_t>({2, 1, 6, 4, 0, 0, 0, 10, 20}));
+    send_bytes(usb_client, first, 1);
+    assert(usb_reply.empty() && is_sample_upload_active());
+    send_bytes(usb_client, {30, 40}, 1);
+    assert(usb_reply == std::vector<uint8_t>({6, 2, 0}));
+    expect_reply(USB_MSG_UPLOAD);
+    assert(!is_sample_upload_active() && get_sample_length(6) == 4);
+    const int8_t expected[] = {10, 20, 30, 40};
+    assert(std::memcmp(get_sample_data(6), expected, 4) == 0);
+    std::vector<uint8_t> oversized{1, 1, 2, 0, 0};
+    oversized.resize(5 + 513, 16);
+    const std::vector<std::vector<uint8_t>> invalid = {
+        oversized,
+        {9, 2, 0, 0, 0, 10, 20},
+        std::vector<uint8_t>(5 + 20, 0)
+    };
+    for (auto payload : invalid)
+    {
+        if (payload[0] == 0)
+        {
+            payload[0] = USB_UPLOAD_SCRIPT;
+            payload[1] = 20;
+        }
+        send_bytes(usb_client, frame(USB_MSG_UPLOAD, payload, 6), 7);
+        assert(usb_reply.size() > 3 && usb_reply[0] == 6 && usb_reply[1] == 2 &&
+            usb_reply[2] == 1 && usb_reply.back() == '\n');
+        usb_reply.clear();
+        assert(!is_sample_upload_active() && !usb_serial_buffer.faulted);
+    }
+    std::vector<uint8_t> maximum{USB_UPLOAD_SCRIPT, 0x14, 0x40, 0, 0};
+    maximum.resize(5 + USB_UPLOAD_BYTES_MAX, 0);
+    auto large = frame(USB_MSG_UPLOAD, maximum, 6);
+    send_bytes(usb_client, {large.begin(), large.end() - 1}, 257);
+    assert(usb_reply.empty());
+    send_bytes(usb_client, {large.back()}, 1);
+    assert(usb_reply.size() > 3 && usb_reply[2] == 1 && usb_reply.back() == '\n');
+    usb_reply.clear();
+    assert(!usb_serial_buffer.faulted);
+    send_bytes(usb_client, frame(USB_MSG_UPLOAD, {1, 2, 0, 0, 0, 30, 40}, 6), 2);
+    expect_reply(USB_MSG_UPLOAD);
+    assert(get_sample_length(6) == 2 && get_sample_data(6)[0] == 30);
+}
+
+/* ---- never reply to BODY, including malformed and obsolete sessions ------ */
+
+static void check_silent_body()
+{
+    const auto stale = frame(USB_MSG_BODY, {1, 2, 3}, 0, 120);
+    assert(stale == std::vector<uint8_t>({1, 0, 120, 3, 0, 1, 2, 3}));
+    send_bytes(usb_client, stale, 1);
+    assert(usb_reply.empty() && !usb_serial_buffer.faulted);
+    const std::vector<std::vector<uint8_t>> invalid = {
+        frame(USB_MSG_BODY, {12}, 8, 0),
+        frame(USB_MSG_BODY, {12}, 0, 255),
+        frame(USB_MSG_BODY, {}, 0, 1),
+        {1, 0, 1, 1, 4}
+    };
+    for (const auto &bytes : invalid)
+    {
+        send_bytes(usb_client, bytes, 1);
+        assert(usb_reply.empty() && usb_serial_buffer.faulted);
+        reset_usb_connection();
+    }
 }
 
 /* ---- retain a full BODY message until playback frees queue space --------- */
@@ -331,7 +433,7 @@ static void check_body_backpressure()
     {
         input.insert(input.end(), body.begin(), body.end());
     }
-    auto query = frame(USB_MSG_PROBE, {});
+    auto query = frame(USB_MSG_UPLOAD, {1, 2, 0, 0, 0, 16, 32}, 7);
     input.insert(input.end(), query.begin(), query.end());
     uint32_t before = get_usb_received_body_count();
     received_usb(input);
@@ -347,7 +449,7 @@ static void check_body_backpressure()
     assert(get_current_stream_buffered_samples(0) == 3072);
     assert(!usb_serial_buffer.input_size);
     collect(usb_client, usb_reply);
-    expect_reply(USB_MSG_PROBE, 18);
+    expect_reply(USB_MSG_UPLOAD);
     reset_voice_stream(0);
 }
 
@@ -407,19 +509,11 @@ static void check_ring()
 static void upload(uint8_t kind, const std::vector<uint8_t> &data)
 {
     uint32_t size = data.size();
-    send_bytes(usb_client, frame(USB_MSG_UPLOAD_BEGIN,
-        {kind, uint8_t(size), uint8_t(size >> 8), uint8_t(size >> 16), uint8_t(size >> 24)}), 2);
-    expect_reply(USB_MSG_UPLOAD_BEGIN);
-    for (size_t offset = 0; offset < data.size();)
-    {
-        size_t count = std::min(size_t(1020), data.size() - offset);
-        std::vector<uint8_t> payload{uint8_t(offset), uint8_t(offset >> 8),
-            uint8_t(offset >> 16), uint8_t(offset >> 24)};
-        payload.insert(payload.end(), data.begin() + offset, data.begin() + offset + count);
-        send_bytes(usb_client, frame(USB_MSG_UPLOAD_DATA, payload), 7);
-        expect_reply(USB_MSG_UPLOAD_DATA);
-        offset += count;
-    }
+    std::vector<uint8_t> payload{kind, uint8_t(size), uint8_t(size >> 8),
+        uint8_t(size >> 16), uint8_t(size >> 24)};
+    payload.insert(payload.end(), data.begin(), data.end());
+    send_bytes(usb_client, frame(USB_MSG_UPLOAD, payload), 7);
+    expect_reply(USB_MSG_UPLOAD);
 }
 
 /* ---- send a note command using RS485 ------------------------------------ */
@@ -477,6 +571,15 @@ static void check_program(const char *path)
     assert(!is_voice_active(0) && get_voice_script_fault_count(0) == 0);
     auto silent = play(480);
     assert(std::all_of(silent.begin(), silent.end(), [](int32_t n) { return n == 0; }));
+    const std::string restart = "c:clear\rc:n0 on 0 69 127 @22\r";
+    received_serial({restart.begin(), restart.end()});
+    collect(rs485_client, serial_reply);
+    assert(std::string(serial_reply.begin(), serial_reply.end()) == "[C] ok:clear rt=1\r\n");
+    serial_reply.clear();
+    assert(get_target_stream_session(0) == 22);
+    send_bytes(usb_client, frame(USB_MSG_BODY, std::vector<uint8_t>(1024, 16), 0, 22), 1029);
+    assert(is_voice_active(0) && get_current_stream_session(0) == 22);
+
 }
 
 /* ---- exercise the actual simulator adapter with deterministic device I/O - */
@@ -495,8 +598,11 @@ int main(int argc, char **argv)
     init_application();
     open_audio();
     check_serial();
+    check_filter_replies();
     check_pending_commands();
     check_input_capacity();
+    check_uploads();
+    check_silent_body();
     check_body_backpressure();
     check_ring();
     check_program(argv[1]);

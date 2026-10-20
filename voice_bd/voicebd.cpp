@@ -126,23 +126,29 @@ std::string start_stream_thread(std::thread& thread, Work work)
 
 constexpr unsigned kVoiceCount = voice_board_t::voice_count;
 constexpr unsigned kSampleSlotCount = 248u;
-constexpr unsigned kSampleRate = 48000u;
 constexpr unsigned kAttackSampleCount = 512u;
 constexpr unsigned kCrossfadeSampleCount = 32u;
 constexpr unsigned kUsbHeaderBytes=5u;
-constexpr uint8_t kUsbProtocolVersion=2u;
+constexpr unsigned kBufferCapacity = 4080u;
 constexpr unsigned kUsbPayloadMax=1024u;
 constexpr unsigned kPrimeSamples=998u;
 constexpr unsigned kStatusPollIntervalMs = 5u;
 constexpr unsigned kReplyTimeoutMs = 5u;
 constexpr unsigned kRefillCoverageUs = (kStatusPollIntervalMs + kReplyTimeoutMs) * 1000u;
-enum : uint8_t { kHello=1, kBody, kUploadBegin, kUploadData, kUploadAbort, kReply };
+constexpr unsigned kUploadHeaderBytes = 7;
+constexpr unsigned kReplyHeaderBytes = 3;
+constexpr unsigned kReplyBytesMax = kReplyHeaderBytes + 96;
+enum : uint8_t
+{
+    kBody = 1,
+    kUpload = 2
+};
 constexpr uint8_t kSessionIdWrap = 255u;
 constexpr size_t kBecHeaderBytes = 20u;
 constexpr size_t kBecMaxPayload = 16384u;
 /* Enough history to cover packets sent between status replies. */
 constexpr size_t kPendingPacketCapacity = 8u * (4080u / 16u);
-constexpr unsigned kPendingWireBytes = 8u * (kUsbHeaderBytes + kUsbPayloadMax);
+constexpr unsigned kPendingWireBytes = kUploadHeaderBytes + kBecHeaderBytes + kBecMaxPayload;
 constexpr std::array<uint8_t, 4> kBecMagic{{0x46u, 0x57u, 0x53u, 0x43u}};
 
 /* ---- return a successful result ----------------------------------------- */
@@ -178,8 +184,7 @@ uint32_t read32(uint8_t const* p)
 void write16(uint8_t* p,uint16_t n) { p[0]=static_cast<uint8_t>(n); p[1]=static_cast<uint8_t>(n>>8); }
 void write32(uint8_t* p,uint32_t n) { write16(p,static_cast<uint16_t>(n)); write16(p+2,static_cast<uint16_t>(n>>16)); }
 
-/* Shared by BODY streaming and upload/control requests. */
-/* ---- frame a USB message ------------------------------------------------ */
+/* ---- frame a BODY message ------------------------------------------------ */
 
 void write_usb_header(uint8_t* out, uint8_t type, uint8_t target,
     uint8_t session, uint16_t payload_size)
@@ -526,47 +531,38 @@ voice_board_result_t read_bec(std::string const& path,
 
 struct card_status
 {
-    uint8_t active_voice_mask = 0u;
-    uint8_t pending_voice_mask = 0u;
-    uint16_t buffer_capacity = 0u;
-    uint16_t status_sequence = 0u;
-    uint16_t last_usb_sequence = 0u;
-    uint8_t usb_age_ms = 255u;
-    std::array<uint8_t, kVoiceCount> session_id{}, current_session_id{};
-    std::array<uint32_t, kVoiceCount> remaining_us{};
+    uint8_t active_voice_mask = 0;
+    uint16_t sequence = 0;
+    std::array<uint8_t, kVoiceCount> session_id{};
     std::array<uint16_t, kVoiceCount> free_samples{};
     std::array<uint16_t, kVoiceCount> refill_samples_5ms{};
 };
 
-bool parse_voice_queue_status(std::vector<uint8_t> const& raw,
-    card_status& status)
+/* ---- decode the compact voice status reply ------------------------------ */
+
+bool parse_voice_queue_status(std::vector<uint8_t> const &raw, card_status &status)
 {
-    for (size_t start = 0; start + 61u <= raw.size(); ++start) {
-        uint8_t const* p = raw.data() + start;
-        if (p[0] != 0xA5u || p[1] != 0x5Au || p[2] != 0x43u || p[3] != 0x0Eu || p[60] != '\n')
+    for (size_t start = 0; start + 56 <= raw.size(); ++start)
+    {
+        const uint8_t *p = raw.data() + start;
+        if (p[0] != 0xA5 || p[1] != 0x5A || p[2] != 0x43 || p[3] != 0x0F ||
+            p[55] != '\n')
+        {
             continue;
+        }
         status.active_voice_mask = p[4];
-        status.pending_voice_mask = p[5];
-        status.buffer_capacity = read16(p + 6u);
-        status.status_sequence = p[8];
-        status.usb_age_ms = p[9];
-        status.last_usb_sequence = read16(p + 10u);
-        if (status.buffer_capacity == 0u || status.buffer_capacity > 8191u) return false;
-        for (size_t i = 0; i < kVoiceCount; ++i) {
-            size_t const at = 12u + i * 6u;
-            status.session_id[i] = p[at];
-            status.current_session_id[i] = p[at + 1];
-            status.free_samples[i] = uint16_t(p[at + 2]) | (uint16_t(p[at + 3] & 15u) << 8u);
-            status.refill_samples_5ms[i] =
-                uint16_t(p[at + 3] >> 4u) | (uint16_t(p[at + 4] & 31u) << 4u);
-            if (status.refill_samples_5ms[i] > 480u)
+        status.sequence = read16(p + 5);
+        for (unsigned voice = 0; voice < kVoiceCount; ++voice)
+        {
+            const uint8_t *record = p + 7 + voice * 6;
+            status.session_id[voice] = record[1];
+            status.free_samples[voice] = read16(record + 2);
+            status.refill_samples_5ms[voice] = read16(record + 4);
+            if (record[0] != voice || status.free_samples[voice] > kBufferCapacity ||
+                status.refill_samples_5ms[voice] > 480)
+            {
                 return false;
-            uint16_t duration = uint16_t(p[at + 4] >> 5u) | (uint16_t(p[at + 5]) << 3u);
-            status.remaining_us[i] = uint32_t(duration) * 100u;
-            if (status.free_samples[i] > status.buffer_capacity ||
-                (((status.active_voice_mask | status.pending_voice_mask) &
-                  (1u << i)) != 0u && status.session_id[i] == 0xFFu))
-                return false;
+            }
         }
         return true;
     }
@@ -633,11 +629,11 @@ public:
                 if (text.find("err:syntax") != std::string::npos)
                     return fail(
                         voice_board_error_t::bad_reply,
-                        "Channel Card firmware must support the 61-byte dual-session vq reply");
+                        "Channel Card firmware must support the 56-byte voice status reply");
                 for (size_t i = 0; i + 4u <= reply.size(); ++i) {
                     if (reply[i] != 0xA5u || reply[i + 1u] != 0x5Au ||
                         reply[i + 2u] != 0x43u) continue;
-                    if (reply[i + 3u] != 0x0Eu)
+                    if (reply[i + 3u] != 0x0Fu)
                         return fail(voice_board_error_t::bad_reply,
                             "invalid voice status reply header");
                     break;
@@ -688,6 +684,7 @@ struct voice_data
     size_t source_position = 0u;
     size_t stream_origin = 0u;
     unsigned available_sample_slots = 0u;
+    unsigned acknowledged_samples = 0u;
     bool pending = true;
     unsigned refill_samples_5ms = 0u;
     double refill_balance = 0;
@@ -720,88 +717,108 @@ struct stream_state {
     std::array<pending_packet, kPendingPacketCapacity> pending_packets{};
     size_t first_pending_packet=0, pending_packet_count=0;
     uint16_t next_sequence=0;
-    uint8_t next_voice=0, last_status_sequence=0;
+    uint8_t next_voice = 0;
     bool sequence_ready=false, status_ready=false;
     unsigned buffer_capacity=0;
     std::chrono::steady_clock::time_point last_status_at{};
 
     uint8_t active_voice_mask = 0;
 
-    void apply_status(card_status const &status,
-                      std::chrono::steady_clock::time_point requested_at) {
+    /* ---- apply ordered status and account for BODY blocks still in transit -- */
+
+    void apply_status(const card_status &status,
+        std::chrono::steady_clock::time_point requested_at)
+    {
         std::lock_guard<std::mutex> lock(mutex);
-        if (status_ready && requested_at - last_status_at < std::chrono::milliseconds(500)) {
-            uint8_t distance=static_cast<uint8_t>(status.status_sequence-last_status_sequence);
-            if (!distance || distance >= 0x80u)
-                return;
+        if (status_ready && requested_at <= last_status_at)
+        {
+            return;
         }
         active_voice_mask = status.active_voice_mask;
-        last_status_sequence = status.status_sequence;
         status_ready = true;
         last_status_at = requested_at;
-        buffer_capacity = status.buffer_capacity;
-        if (!sequence_ready) {
-            next_sequence = uint16_t(status.last_usb_sequence + 1);
+        buffer_capacity = kBufferCapacity;
+        if (!sequence_ready)
+        {
+            next_sequence = uint16_t(status.sequence + 1);
             sequence_ready = true;
         }
-        while (pending_packet_count) {
-            auto const &p = pending_packets[first_pending_packet];
-            if (uint16_t(status.last_usb_sequence - p.sequence) >= 0x8000u)
+        while (pending_packet_count)
+        {
+            const auto &packet = pending_packets[first_pending_packet];
+            if (uint16_t(status.sequence - packet.sequence) >= 0x8000)
+            {
                 break;
+            }
+            auto &target = voices[packet.voice];
+            auto &voice = target.session_id == packet.session
+                ? target : history[packet.voice][packet.session];
+            voice.acknowledged_samples += packet.samples;
             first_pending_packet = (first_pending_packet + 1) % kPendingPacketCapacity;
             --pending_packet_count;
         }
-        std::array<unsigned, 8> in_flight{};
-        for (size_t i = 0; i < pending_packet_count; i++) {
-            auto const &p = pending_packets[(first_pending_packet + i) % kPendingPacketCapacity];
-            in_flight[p.voice] += (p.samples + 15u) / 16u * 16u;
+        std::array<unsigned, kVoiceCount> in_flight{};
+        for (size_t i = 0; i < pending_packet_count; ++i)
+        {
+            const auto &packet = pending_packets[(first_pending_packet + i) % kPendingPacketCapacity];
+            in_flight[packet.voice] += packet.samples;
         }
-        for (unsigned v = 0; v < 8; v++) {
-            pool_credit[v] =
-                status.free_samples[v] > in_flight[v] ? status.free_samples[v] - in_flight[v] : 0;
-            current_sessions[v] = status.current_session_id[v];
+        for (unsigned v = 0; v < kVoiceCount; ++v)
+        {
+            pool_credit[v] = status.free_samples[v] > in_flight[v]
+                ? status.free_samples[v] - in_flight[v] : 0;
+            current_sessions[v] = status.session_id[v];
             auto &target = voices[v];
-            bool target_current =
-                (status.active_voice_mask & (1u << v)) && current_sessions[v] == target.session_id;
-            bool target_pending = (status.pending_voice_mask & (1u << v)) &&
-                                  status.session_id[v] == target.session_id;
-            if (target.active) {
-                if (target_current || target_pending) {
-                    target.note_seen_in_status = true;
-                    target.pending = target_pending;
-                    target.available_sample_slots = pool_credit[v];
-                } else {
-                    target.available_sample_slots = 0;
-                    if (target.note_seen_in_status)
-                        target.active = false;
+            bool target_current = (status.active_voice_mask & (1u << v)) &&
+                current_sessions[v] == target.session_id;
+            if (target.active)
+            {
+                if (target_current)
+                {
+                    target.pending = false;
+                    target.initial_samples_left = 0;
                 }
+                else if (!target.pending)
+                {
+                    target.active = false;
+                }
+                target.note_seen_in_status = true;
+                target.available_sample_slots = pool_credit[v];
             }
-            if (target_pending && (status.active_voice_mask & (1u << v))) {
+            if (target.active && target.pending && (status.active_voice_mask & (1u << v)))
+            {
                 unsigned head = unsigned(target.stream_origin);
                 unsigned cycle_samples = (kRefillCoverageUs * 96u + 999u) / 1000u;
                 unsigned required = cycle_samples > head ? cycle_samples - head + 2u : 2u;
+                required = (required + 15u) / 16u * 16u;
                 size_t prepared = target.source_position - target.stream_origin;
-                target.initial_samples_left =
-                    prepared < required ? required - unsigned(prepared) : 0;
+                target.initial_samples_left = prepared < required ? required - unsigned(prepared) : 0;
             }
-            if (target_current)
-                target.initial_samples_left = 0;
             auto *playing = current_voice(v);
-            if (playing && playing->active && (status.active_voice_mask & (1u << v))) {
+            if (playing && playing->active && (status.active_voice_mask & (1u << v)))
+            {
                 playing->pending = false;
                 playing->note_seen_in_status = true;
                 playing->available_sample_slots = pool_credit[v];
-                playing->deadline =
-                    requested_at + std::chrono::microseconds(status.remaining_us[v]);
                 playing->refill_samples_5ms = status.refill_samples_5ms[v];
-                if (playing->refill_samples_5ms)
-                    for (size_t i = 0; i < pending_packet_count; i++) {
-                        auto const &p =
-                            pending_packets[(first_pending_packet + i) % kPendingPacketCapacity];
-                        if (p.voice == v && p.session == playing->session_id)
-                            playing->deadline += std::chrono::microseconds(
-                                p.samples * 5000u / playing->refill_samples_5ms);
+                unsigned buffered = kBufferCapacity - status.free_samples[v];
+                unsigned reserved = 17u;
+                if (target.active && target.pending)
+                {
+                    reserved += target.acknowledged_samples;
+                }
+                buffered = buffered > reserved ? buffered - reserved : 0;
+                for (size_t i = 0; i < pending_packet_count; ++i)
+                {
+                    const auto &packet = pending_packets[(first_pending_packet + i) % kPendingPacketCapacity];
+                    if (packet.voice == v && packet.session == playing->session_id)
+                    {
+                        buffered += packet.samples;
                     }
+                }
+                unsigned rate = playing->refill_samples_5ms;
+                playing->deadline = requested_at + std::chrono::microseconds(
+                    rate ? buffered * 5000u / rate : kRefillCoverageUs);
             }
         }
     }
@@ -809,7 +826,8 @@ struct stream_state {
     unsigned poll_interval_ms() {
         std::lock_guard<std::mutex> lock(mutex);
         for (auto const &voice : voices)
-            if (voice.active && (!voice.note_seen_in_status || voice.pending))
+            if (voice.active && (!voice.note_seen_in_status ||
+                (voice.pending && voice.initial_samples_left)))
                 return 0;
         unsigned demand=0;
         for (auto const& voice:voices)
@@ -875,7 +893,10 @@ struct stream_state {
         unsigned count = std::min(
             {pool_credit[chosen_voice], 128u, static_cast<unsigned>(capacity - kUsbHeaderBytes)});
         if (v.initial_samples_left)
-            count = std::min(count, v.initial_samples_left);
+        {
+            count = std::min(count, (v.initial_samples_left + 15u) / 16u * 16u);
+        }
+        count = count / 16u * 16u;
         unsigned charge = (count + 15u) / 16u * 16u;
         if (!count || charge > pool_credit[chosen_voice])
             return 0;
@@ -913,7 +934,6 @@ class usb_link {
     std::mutex mutex_, request_mutex_;
     std::condition_variable done_;
     std::vector<uint8_t> request_, response_;
-    uint8_t request_type_=0;
     bool request_pending_=false, request_sent_=false, request_done_=false;
     std::string error_;
     std::chrono::steady_clock::time_point request_deadline_;
@@ -939,34 +959,57 @@ class usb_link {
         return size;
     }
 
-    bool receive_reply(std::array<uint8_t,kUsbHeaderBytes+kUsbPayloadMax>& input,
-        size_t& received, size_t& needed) {
-        int n=port_.read_nonblocking(input.data()+received,needed-received);
-        if (n<0) { set_error("CDC read failed"); return false; }
-        received+=static_cast<size_t>(n);
-        if (received==kUsbHeaderBytes && needed==kUsbHeaderBytes) {
-            unsigned payload=read16(input.data()+3);
-            if (input[0]!=kReply || !payload || payload>kUsbPayloadMax) { set_error("invalid CDC reply framing"); return false; }
-            needed=kUsbHeaderBytes+payload;
+    /* ---- receive one upload result and its optional error line --------------- */
+
+    bool receive_reply(std::array<uint8_t, kReplyBytesMax> &input,
+        size_t &received, size_t &needed)
+    {
+        int count = port_.read_nonblocking(input.data() + received, needed - received);
+        if (count < 0)
+        {
+            set_error("CDC read failed");
+            return false;
         }
-        if (received==needed) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (!request_pending_ || !request_sent_ || input[2]!=request_type_ ||
-                input[1]!=request_[1] || input[kUsbHeaderBytes]>1 ||
-                (input[kUsbHeaderBytes]==0 && needed!=kUsbHeaderBytes+(request_type_==kHello ? 14u : 1u))) {
-                error_="unexpected CDC reply; BODY rejected or protocol lost"; running_=false; done_.notify_all(); return false;
+        received += static_cast<size_t>(count);
+        if (received != needed)
+        {
+            return true;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!request_pending_ || !request_sent_ || input[1] != kUpload ||
+            input[0] != request_[2] || input[2] > 1)
+        {
+            error_ = "unexpected upload reply";
+            running_ = false;
+            done_.notify_all();
+            return false;
+        }
+        if (input[2] == 1 && (received == kReplyHeaderBytes || input[received - 1] != '\n'))
+        {
+            if (needed == input.size())
+            {
+                error_ = "unterminated upload error reply";
+                running_ = false;
+                done_.notify_all();
+                return false;
             }
-            response_.assign(input.begin()+kUsbHeaderBytes,input.begin()+needed);
-            request_done_=true; request_pending_=false; done_.notify_all();
-            received=0; needed=kUsbHeaderBytes;
+            ++needed;
+            return true;
         }
+        size_t end = received - (input[2] == 1 ? 1 : 0);
+        response_.assign(input.begin() + 2, input.begin() + end);
+        request_done_ = true;
+        request_pending_ = false;
+        done_.notify_all();
+        received = 0;
+        needed = kReplyHeaderBytes;
         return true;
     }
 
     void run() {
         std::array<uint8_t,kPendingWireBytes> output{};
-        std::array<uint8_t,kUsbHeaderBytes+kUsbPayloadMax> input{};
-        size_t size=0, sent=0, received=0, needed=kUsbHeaderBytes;
+        std::array<uint8_t, kReplyBytesMax> input{};
+        size_t size=0, sent=0, received=0, needed=kReplyHeaderBytes;
         auto write_deadline=std::chrono::steady_clock::now();
         while (running_) {
             if (sent==size) {
@@ -1030,20 +1073,7 @@ private:
             close();
             return fail(voice_board_error_t::io_error,scheduling_error);
         }
-        std::vector<uint8_t> caps;
-        auto result=request(kHello,0,{kUsbProtocolVersion},&caps);
-        if (result && (caps.size()!=14 || caps[1]!=kUsbProtocolVersion || caps[2]!=kVoiceCount || caps[3]!=1 ||
-            read32(caps.data()+4)!=kSampleRate || read16(caps.data()+8)!=kUsbPayloadMax ||
-            read16(caps.data()+10)!=kPrimeSamples)) result=fail(voice_board_error_t::bad_reply,"incompatible CDC firmware capabilities");
-        if (result) {
-            // HELLO reports the count after the old connection was cleared. The
-            // last RS485 reply may predate some completed BODY blocks.
-            std::lock_guard<std::mutex> lock(stream.mutex);
-            stream.first_pending_packet=stream.pending_packet_count=0;
-            stream.next_sequence=static_cast<uint16_t>(read16(caps.data()+12)+1u);
-            stream.sequence_ready=true;
-        } else close();
-        return result;
+        return ok();
     }
 public:
     void close() {
@@ -1056,38 +1086,41 @@ public:
         port_.close();
         for (int& fd:wake_) { if (fd>=0) ::close(fd); fd=-1; }
     }
-    voice_board_result_t request(uint8_t type,uint8_t target,std::vector<uint8_t> const& payload,
-                                 std::vector<uint8_t>* response=nullptr) {
+    /* ---- send one complete upload and await its final result ----------------- */
+
+    voice_board_result_t upload(uint8_t kind, uint8_t target, const uint8_t *data, size_t size)
+    {
         std::lock_guard<std::mutex> serial(request_mutex_);
         std::unique_lock<std::mutex> lock(mutex_);
-        if (!running_) return fail(voice_board_error_t::io_error,error_.empty() ? "CDC is closed" : error_);
-        request_.assign(kUsbHeaderBytes+payload.size(),0);
-        write_usb_header(request_.data(), type, target, 0,
-            static_cast<uint16_t>(payload.size()));
-        request_type_=type;
-        std::copy(payload.begin(),payload.end(),request_.begin()+kUsbHeaderBytes);
-        response_.clear(); request_done_=request_sent_=false; request_pending_=true;
-        request_deadline_=std::chrono::steady_clock::now()+std::chrono::seconds(3);
-        wake(); done_.wait(lock,[this]{return request_done_ || !running_;});
-        if (!request_done_) return fail(voice_board_error_t::io_error,error_.empty() ? "CDC closed during request" : error_);
-        if (response) *response=response_;
-        if (response_[0]) return fail(voice_board_error_t::bad_reply,std::string(response_.begin()+1,response_.end()));
-        return ok();
-    }
-    voice_board_result_t upload(uint8_t kind,uint8_t target,uint8_t const* data,size_t size) {
-        std::vector<uint8_t> begin(5); begin[0]=kind; write32(begin.data()+1,static_cast<uint32_t>(size));
-        auto result=request(kUploadBegin,target,begin);
-        if (!result) return result;
-        for (size_t offset=0;offset<size;) {
-            size_t n=std::min<size_t>(512,size-offset);
-            std::vector<uint8_t> part(4+n); write32(part.data(),static_cast<uint32_t>(offset));
-            std::copy_n(data+offset,n,part.data()+4);
-            result=request(kUploadData,target,part);
-            if (!result) { if (running_) (void)request(kUploadAbort,target,{}); return result; }
-            offset+=n;
+        if (!running_)
+        {
+            return fail(voice_board_error_t::io_error, error_.empty() ? "CDC is closed" : error_);
+        }
+        request_.resize(kUploadHeaderBytes + size);
+        request_[0] = kUpload;
+        request_[1] = kind;
+        request_[2] = target;
+        write32(request_.data() + 3, static_cast<uint32_t>(size));
+        std::copy_n(data, size, request_.data() + kUploadHeaderBytes);
+        response_.clear();
+        request_done_ = false;
+        request_sent_ = false;
+        request_pending_ = true;
+        request_deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        wake();
+        done_.wait(lock, [this] { return request_done_ || !running_; });
+        if (!request_done_)
+        {
+            return fail(voice_board_error_t::io_error,
+                error_.empty() ? "CDC closed during upload" : error_);
+        }
+        if (response_[0])
+        {
+            return fail(voice_board_error_t::bad_reply, std::string(response_.begin() + 1, response_.end()));
         }
         return ok();
     }
+
 };
 
 /* ---- manage the sound-board connection ---------------------------------- */
@@ -1283,15 +1316,18 @@ voice_board_result_t open_device(device_context* state,
     }
     result=state->usb.open(config.usb_port,state->stream);
     if (!result) { state->shutdown(); return result; }
-    // Read fresh buffer space after HELLO establishes the BODY count.
-    result = state->query_status();
-    if (!result) { state->shutdown(); return result; }
     for (uint8_t voice = 0u; voice < kVoiceCount; ++voice) {
         result = upload_script(state, voice, bec);
         if (!result) {
             state->shutdown();
             return result;
         }
+    }
+    result = state->query_status();
+    if (!result)
+    {
+        state->shutdown();
+        return result;
     }
     result = state->rs485.command(
         "g 1 " + std::to_string(config.initial_attenuation_db));

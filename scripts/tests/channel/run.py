@@ -57,11 +57,10 @@ with tempfile.TemporaryDirectory(prefix="channel-simulator-tests-") as directory
         while not ready.endswith(b"\r\n"):
             ready.extend(receive(serial, 1))
         assert b"ready" in ready
-        hello = bytes([1, 0, 0, 1, 0, 2])
-        for byte in hello:
+        upload = bytes([2, 1, 7, 2, 0, 0, 0, 16, 32])
+        for byte in upload:
             os.write(usb, bytes([byte]))
-        reply = receive(usb, 19)
-        assert len(reply) == 19 and reply[0] == 6 and reply[2] == 1 and reply[5] == 0
+        assert receive(usb, 3) == bytes([7, 2, 0])
         os.write(serial, b"c:g 1 12\rc:g 1 13\r")
         assert receive(serial, 16) == b"[C] ok\r\n[C] ok\r\n"
         assert not select.select([usb, serial], [], [], 0.05)[0]
@@ -75,9 +74,9 @@ with tempfile.TemporaryDirectory(prefix="channel-simulator-tests-") as directory
             fd = os.open(paths[0], os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
             clients.append(fd)
             termios.tcflush(fd, termios.TCIOFLUSH)
-            os.write(fd, hello)
-            reply = receive(fd, 19)
-            assert len(reply) == 19 and reply[:6] == bytes([6, 0, 1, 14, 0, 0]), reply
+            os.write(fd, upload)
+            reply = receive(fd, 3)
+            assert reply == bytes([7, 2, 0]), reply
             return fd
 
         # ---- finish the current I/O pass before checking a connection boundary --
@@ -91,24 +90,20 @@ with tempfile.TemporaryDirectory(prefix="channel-simulator-tests-") as directory
             serial_barrier()
             usb = reopen_usb(usb)
 
-        os.write(usb, hello)
-        expected = bytes([6, 0, 1, 19, 0, 1]) + b"incompatible HELLO"
-        assert receive(usb, len(expected)) == expected
+        os.write(usb, bytes([1, 8, 0, 1, 0, 12]))
+        assert not select.select([usb], [], [], 0.05)[0]
         usb = reopen_usb(usb)
 
-        os.write(usb, bytes([7, 0]))
+        os.write(usb, bytes([2, 1]))
         serial_barrier()
         usb = reopen_usb(usb)
 
-        begin_upload = bytes([3, 7, 0, 5, 0, 1, 4, 0, 0, 0])
-        os.write(usb, begin_upload)
-        assert receive(usb, 6) == bytes([6, 7, 3, 1, 0, 0])
-        usb = reopen_usb(usb)
-        os.write(usb, begin_upload)
-        assert receive(usb, 6) == bytes([6, 7, 3, 1, 0, 0])
+        partial_upload = bytes([2, 1, 7, 4, 0, 0, 0, 10, 20])
+        os.write(usb, partial_upload)
+        assert not select.select([usb], [], [], 0.05)[0]
         usb = reopen_usb(usb)
 
-        os.write(usb, bytes([7, 0, 0, 0, 0]))
+        os.write(usb, upload)
         serial_barrier()
         usb = reopen_usb(usb)
         assert not select.select([usb], [], [], 0.05)[0]

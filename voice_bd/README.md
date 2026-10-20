@@ -171,13 +171,12 @@ modulation above 2×. Custom firmware programs can change the actual demand.
 
 Startup sends one `clear` command before opening USB and uploading programs.
 With matching firmware, `clear` is an alias for `n off`: it hard-stops all voices,
-discards their queued playback data and resets Berry state at the next audio
-boundary. No sleep, retry or additional status polling is added. Older firmware
+discards their queued playback data and resets Berry state before replying. No sleep, retry or additional status polling is added. Older firmware
 does not implement `clear`, so update the Channel Card firmware for this recovery
 behavior. USB open separately resets transport queues and partial messages.
 
-Startup reads `vq` before uploading programs. RS485 transactions retain their
-existing 5 ms reply timeout and are not automatically retried. CDC HELLO/upload
+Startup reads `vq` after uploading programs, establishing the processed BODY count before streaming. RS485 transactions retain their
+existing 5 ms reply timeout and are not automatically retried. USB upload
 requests have a 3-second reply deadline; stalled partial writes time out after
 one second and require reopening the connection.
 
@@ -253,69 +252,42 @@ identify partial completion; they do not imply rollback or close the device.
 
 ## Streaming protocol
 
-One `voice_board_config_t::usb_port` selects the binary CDC port for all eight
-voices, attacks and scripts. The old audio-device name and separate upload port
-are removed. RS485 continues to carry controls and the existing 61-byte `vq`
-reply. Linux/macOS use native CDC drivers and libserialport; RtAudio is not used.
-Note-on/off calls write one silent RS485 command directly and return after the
-write, without waiting for an acknowledgement or appending `vq`. The separate
-status worker continues polling `vq` for BODY credit. The shared bus lock can
-delay a note while an existing status/control exchange finishes.
-The port is flushed only during connection setup, never before individual
-status/control requests. On the macOS FTDI path, purging input while note writes
-are still queued can discard those events, causing missed starts or stuck notes.
-Use this host with protocol-v2 firmware (`cafe:4032`); HELLO rejects incompatible
-firmware. Re-enumeration can change the OS port suffix/path, so update the port
-configuration for the board's unchanged `CHCARD-<UID>` identity.
+Use the simulator and client from this branch together. RS485 carries
+controls and the 56-byte type-0x0F `vq` reply. Each reply contains an active mask,
+a 16-bit processed BODY sequence, and eight records: voice, playing session,
+free samples and samples needed over 5 ms. Session 255 means no current stream.
+The shared buffer capacity is fixed at 4080 samples per voice.
 
-The USB worker uses nonblocking I/O, a readiness wait and explicit MIDI/status
-wakeups. The worker selects each BODY frame using current and pending session credit
-and card-reported deadlines. There are no audio
-callbacks, timed idle packets or `sp_drain()` calls per USB block. Each BODY block carries a
-five-byte header; this host sends up to 128 signed-int8 source samples per frame
-(the wire protocol permits 1024).
-The header is type, target, session and a little-endian 16-bit payload length.
-Note start is inferred from the armed session; BODY acknowledgements use an
-implicit cumulative counter initialized by HELLO. Control/upload requests are
-serialized and an ambiguous timeout requires reopening, so no request ID is
-needed. Version 1 firmware is incompatible; update host and firmware together.
-No blocks are sent when there is nothing to stream or upload. A released note
-still needs data during its script-defined tail; `n off` hard-stops all voices.
+BODY (type 1) has a five-byte header: type, voice, session and little-endian
+16-bit payload length, followed by signed 8-bit PCM. It never receives a USB
+reply, including on error. Malformed BODY still faults reception.
 
-On macOS the USB and status workers request interactive QoS and a preemptible
-real-time policy (1 ms period, up to 250 microseconds of CPU per period). This
-replaces the scheduling previously provided by the audio callback. The workers
-still sleep when idle; scheduling policy does not send USB data. On Linux,
-both workers use `SCHED_RR` priority 20. Startup fails with a setup message if
-the OS denies that policy; it does not silently use normal scheduling.
-This is a priority policy, not a 1 ms CPU reservation. Both platforms still
-need hardware timing qualification.
-Note-off and all-notes-off remain available over RS485 after USB failure.
+UPLOAD (type 2) has one seven-byte header: type, kind, target and little-endian
+32-bit total size. Exactly that many data bytes follow, with no chunk headers.
+Kind 1 uploads an attack, 2 a wavetable and 3 a Berry program. The receiver
+processes arriving data incrementally and replies once after the full upload.
+Success is three bytes: target, upload command (2), status (0). An error uses
+status 1 followed by text ending in LF. Invalid framing faults the connection;
+a rejected upload with valid framing is consumed through its declared end.
+There are no begin, offset, abort, HELLO or probe messages. BODY frames cannot
+be inserted between an upload header and its last data byte.
 
-`vq` supplies exact writable credit for a shared 4080-byte pool per voice.
-Current and pending sessions share that pool; outgoing audio continues receiving
-BODY data until the script switches notes. Unacknowledged frames remain charged
-in 16-byte allocation units, including frames from older sessions. The host
-selects one BODY frame at a time so another voice can become eligible between
-frames. The outstanding limit remains 8232 wire bytes.
+The status sequence counts processed BODY frames, including obsolete sessions,
+and wraps at 65536. It lets the client subtract samples still in transit from
+reported free space. Status requests are serialized on RS485, so no separate
+status sequence is needed. The client reads the initial sequence after program
+uploads have completed on the freshly opened USB connection.
 
-Prepared coverage is bounded by the existing 5 ms poll interval plus 5 ms reply
-deadline. Replacement prefetch accounts for the cached attack head and maximum
-supported playback increment, without assuming a script fade duration. Pending
-notes trigger another status poll immediately; otherwise polls are at most
-5 ms apart. Idle starts retain the 998-sample gate. An active voice starts its
-scripted steal fade at the next audio boundary without waiting for that gate.
+The client tracks the replacement notes it sends. The reported playing session
+identifies when the script switches notes. Current and replacement notes share
+the pool; acknowledged replacement data is subtracted when estimating the old
+note's coverage. BODY chunks are aligned to the allocator's 16-sample blocks.
+Coverage reserves the partially consumed block and interpolation samples. It
+is an estimate; no remaining-time value is sent by the simulator.
 
-Host and Channel Card must both support the 61-byte **0x0E** status frame, which
-reports current and target sessions. Older 0x0C status firmware is incompatible
-with this host even though USB HELLO still uses protocol version 2.
-
-**Qualification limit:** the isolated 5 ms steal hardware run passed sustain,
-single-voice steals with seven continuing voices, eight C5 steals and mixed-pitch
-steals without added holds or transport failures. Zero and 50 ms variants still
-underran; this is not a general solution for arbitrary script fades. The fixture
-`channel_card/tests/fixtures/stream_handover.bec` reproduces the tested envelope;
-normal app runs keep the user's own envelope settings.
+The existing 5 ms status interval and 5 ms RS485 reply timeout remain unchanged.
+USB/status worker scheduling remains unchanged. Linux and STM32 have not been
+qualified with this experimental protocol.
 
 Sample loading keeps the existing signed-16 host PCM and converts only the
 transmitted attack/BODY bytes to signed eight-bit. Failed attack uploads leave

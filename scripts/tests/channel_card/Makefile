@@ -41,6 +41,8 @@ CXXFLAGS := -std=c++17 -fno-rtti -fno-exceptions -fno-threadsafe-statics
 LDLIBS ?= -lm
 $(addprefix $(OBJDIR)/,$(addsuffix .o,$(BERRY_SOURCES))): CFLAGS := -std=c11 -w
 
+$(OBJDIR)/channel/platform.cpp.o: CXXFLAGS += -Dget_board_time_ms=host_board_time_ms
+
 # ---- build and clean --------------------------------------------------------
 
 .DEFAULT_GOAL := all
