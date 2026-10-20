@@ -54,7 +54,7 @@ sources or the firmware ABI change; use the native `make` build on other hosts.
 `berry.c` is the entry point; `vendor/berry/` contains the interpreter snapshot,
 generated tables, license, and provenance. `config/` holds the host configuration;
 `shared/` contains the source transformer and firmware container/ABI definitions.
-The matching firmware copies live in `berry_runtime/`. The configurations differ
+The matching firmware copies live in `channel/berry_runtime/`. The configurations differ
 because the host compiles source while the card only loads bytecode.
 
 ## Limits at a glance

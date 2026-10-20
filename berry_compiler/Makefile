@@ -35,21 +35,27 @@ SOURCES := \
 OBJECTS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SOURCES))
 DEPS    := $(OBJECTS:.o=.d)
 
-.PHONY: all linux clean
+.PHONY: all linux clean building-berry
 
 all: $(OUTPUT)
 
+$(OBJECTS): | building-berry
+building-berry:
+	@printf 'Building Berry compiler\n'
+
+
 linux:
-	$(MAKE) TARGET=linux-arm64 all
+	@$(MAKE) TARGET=linux-arm64 all
 
 $(OUTPUT): $(OBJECTS)
-	$(BUILD_CC) $(LDFLAGS) $(TARGET_LDFLAGS) -o $@ $(OBJECTS) $(LDLIBS)
+	@printf 'Linking Berry compiler\n'
+	@$(BUILD_CC) $(LDFLAGS) $(TARGET_LDFLAGS) -o $@ $(OBJECTS) $(LDLIBS)
 
 $(BUILD_DIR)/%.o: %.c Makefile
 	@mkdir -p $(dir $@)
-	$(BUILD_CC) $(CPPFLAGS) $(CFLAGS) -std=c11 -MMD -MP -c $< -o $@
+	@$(BUILD_CC) $(CPPFLAGS) $(CFLAGS) -std=c11 -MMD -MP -c $< -o $@
 
 clean:
-	$(RM) -r build/make berry berry.exe berry.linux-arm64
+	@$(RM) -r build/make berry berry.exe berry.linux-arm64
 
 -include $(DEPS)

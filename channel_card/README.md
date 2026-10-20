@@ -12,29 +12,15 @@ specifies framing, uploads, and flow control.
 
 ## Build
 
-From `channel_card/app/`, plain `make` builds the host simulator at `bin/sim`
-using a host C/C++ compiler. `make sim` is an explicit alias.
+From `channel_card/app/`, plain `make` builds the STM32 firmware at
+`bin/channel_MCU.bin`; `make board` is an explicit alias.
 
-On macOS, run `channel_card/bin/sim` from the repository root to play through
-the Mac's default sound output (selected in System Settings → Sound). The
-simulator exposes `/tmp/sim-usb` and `/tmp/sim-rs485` for the host application's
-normal program/sample uploads, note commands and streaming. Load and play a
-note through that host to hear it; startup itself is silent. Ctrl+C stops audio
-and removes both simulator port links.
-
-Playback uses PortAudio's default output stream and render callback, as MAS
-does. PortAudio supplies an output buffer and frame count; the callback calls
-the shared 48 kHz mono renderer for that count and copies each signed 32-bit
-sample to both output channels. PortAudio handles conversion to the device
-format. The stream requests 128 frames per callback, matching MAS; rendering
-accepts the actual frame count supplied by PortAudio. Startup reports the
-stream's output latency, which does not measure command-to-speaker latency.
-
-Install PortAudio before building. The Makefile finds MacPorts (`/opt/local`)
-and Homebrew installations; use `make PORTAUDIO_PREFIX=/path/to/prefix` for a
-custom installation. Audio starts with the simulator, without a command-line
-switch. Automated transport tests link a test-only PortAudio implementation;
-the simulator itself always opens the sound device.
+The shared application is in [`channel/`](../channel/). Run plain `make` there
+using its lowercase `makefile`, then `./bin/simulator`. PortAudio is required;
+MacPorts/Homebrew installations are detected, or set `PORTAUDIO_PREFIX`.
+The simulator runs the same Berry, voices and protocols as STM32. It prints
+USB/RS485 PTY paths and starts silent. Compile programs using the separate Berry
+compiler, upload them over binary USB, and send note commands over RS485.
 
 To build the STM32 firmware, install GNU Make, a POSIX shell with standard tools
 (`awk`, `cmp`, `shasum`), and the GNU Arm
@@ -54,11 +40,12 @@ The standalone `app/Makefile` compiles and links directly, keeping intermediate
 files under `build/release/`. CMake and Ninja are not required.
 Use `make board -j4` to build with up to four parallel jobs.
 Use `make clean` to remove the board build and its output binary;
-`make -C ../sim clean` removes the simulator build.
+the simulator uses `make -C channel clean` from the repository root.
 
-Every board build prints the firmware size, built baud rate, toolchain, report timestamp,
-checksum, and Flash/RAM allocation by memory region and section. To view the
-last successful build without compiling or changing settings:
+Builds print short stage messages plus compiler warnings and errors. Run
+`make report` for firmware size, baud rate, toolchain, checksum, and Flash/RAM
+allocation by region and section. To read the last successful report without
+compiling or changing settings:
 
 ```sh
 cat ../build/release/channel_MCU.info
@@ -71,10 +58,11 @@ The report includes used/free bytes and percentages for Flash, DTCM, AXI SRAM
 (`RAM_D1`), `RAM_D2`, `RAM_D3`, and ITCM. Section sizes show sample storage,
 the Berry arena, DMA buffers, and the heap/stack reservation. These are linker
 allocations, including alignment, rather than measured runtime memory peaks.
-The saved report stays under `build/release/`; `bin/` contains the firmware binary
-(and `sim`, the host simulator, if `make` has been run).
-The SVN package includes the simulator sources: use `make` for the host
-simulator or `make board` for STM32 firmware, both from `app/`.
+The saved report stays under `build/release/`; `bin/` contains the firmware binary.
+The SVN package contains the STM32 firmware sources: use `make` or `make board`
+from `app/`. The package also includes `channel/` with the shared application,
+Berry runtime and desktop simulator. Its board Makefile points at that packaged
+location; the development build points at the sibling `channel/` directory.
 
 The RS485 rate is set by `BAUDRATE ?= 921600` at the top of
 [`app/Makefile`](app/Makefile). Edit that value for the normal build rate,
@@ -134,7 +122,7 @@ with the analog bypass route enabled. There is no USB volume control.
 ## Console command reference
 
 This table matches the parser in
-`app/channel.cpp`. Commands are case-insensitive because
+`channel/channel.cpp`. Commands are case-insensitive because
 console input is converted to lowercase. End a command with carriage return.
 
 On shared RS485, prefix commands with `c:`. Replies are tagged `[C]`.
@@ -207,24 +195,28 @@ Pitch-track smoke with a loaded sample: `f0 300`, `fk0 1`, `n0 on 60` then
 
 ## Source layout and maintenance
 
-- `app/`: shared application, replaceable device backends, and build configuration.
-- `berry_runtime/`: first-party script runtime and shared ABI declarations;
-  `third_party/berry/` retains the vendored interpreter.
+- `channel/` (a sibling of `channel_card/` in development): flat shared application
+  `.cpp`/`.h` files, desktop `main.cpp`, `hardware.h` and lowercase `makefile`.
+- `channel/berry_runtime/`: runtime and ABI declarations, with the vendored
+  interpreter under `third_party/berry/`.
+- `app/`: STM32 audio rings, DMA, RS485, USB hardware, DAC drivers and build rules.
 - `core/` and `drivers/`: STM32 initialization, interrupt glue, HAL, and CMSIS.
 - `channel_MCU.ioc`, startup assembly, and `STM32H725xG_flash.ld`: hardware and
   memory configuration.
+- `berry_compiler/`: separate host compiler, never linked into the simulator.
 
 The application is split by responsibility:
 
 | Implementation | Contents | Header |
 | --- | --- | --- |
-| `audio.cpp` | Mono audio rendering and sample-clocked script intervals | `audio.h` |
-| `audio_dac.cpp` | Calibrated control voltages and DAC slot packing | `audio_output.h` |
-| `transport.cpp` | Bounded RS485 completion wait with USB service | `transport.h` |
+| `channel/audio.cpp` | Audio diagnostics | `audio.h` |
+| `app/audio.cpp` | STM32 output rings, shared rendering and CV packing | `audio_buffers.h` |
+| `app/audio_dac.cpp` | Calibrated control voltages and DAC slot packing | `audio_output.h` |
+| `transport.cpp` | Nonblocking RS485 reply queue | `transport.h` |
 | `audio_i2s.cpp` | I2S/DMA buffers and callbacks, I2S2 underrun guard | `audio_output.h` |
-| `board_stm32.cpp` | UART5, RS485 pins, board outputs, clock, synchronization and profiling | `board.h`, `transport.h`, `board_stm32.h` |
+| `board_stm32.cpp` | UART5, RS485 pins, board outputs, clock, synchronization and profiling | `board.h`, `serial_buffer.h`, `board_stm32.h` |
 | `cs4304.cpp` | CS4304 DAC register access, initialization, gain and mute | `cs4304.h` |
-| `channel.cpp` | RS485 commands, script uploads, logical output requests | `channel.h` |
+| `channel/channel.cpp` | Application initialization, mono rendering, commands and uploads | `channel.h` |
 | `platform.cpp` | Execution synchronization, with optional platform operations | `platform.h` |
 | `voice.cpp` | Note playback, envelopes, Berry adapter | `voice.h` |
 | `filter.cpp` | Four-pole kernel and per-voice filter control | `filter.h` |
@@ -232,98 +224,100 @@ The application is split by responsibility:
 | `samples.cpp` | Sample attack storage and playheads | `samples.h` |
 | `stream.cpp` | Per-voice BODY rings | `stream.h` |
 | `usb.cpp` | Binary protocol, sample uploads | `usb.h` |
-| `usb_device.cpp` | CDC device on HAL PCD, descriptors, transfer queues | `transport.h`, `usb_device.h` |
+| `usb_device.cpp` | CDC device on HAL PCD, descriptors, transfer queues | `serial_buffer.h`, `usb_device.h` |
 
-The firmware and simulator list application sources in their own Makefiles.
+The board Makefile lists portable sources in `SHARED_APP_SOURCES` and adds
+hardware sources in `APP_SOURCES`. Development host tests reuse the shared list.
 Only `audio_i2s.cpp`, `board_stm32.cpp`, `usb_device.cpp`, and `cs4304.cpp`
 access STM32 registers or HAL. Shared sources use `platform.h` and `transport.h`;
-the host build needs no STM32 headers. Each build supplies `platform_memory.h`
-through its include path: `core/inc/` defines STM32 RAM sections, and `sim/`
-defines host alignment. Application sources use the same storage declarations
-without platform-selection conditionals.
+the host build needs no STM32 headers. Each build supplies `hardware.h`
+through its include path to define buffer counts and storage attributes:
+`core/inc/` defines STM32 RAM sections, while development
+test support defines host alignment. Application sources use the
+same storage declarations without platform-selection conditionals.
 
-`render_audio_samples(buffer, sample_count)` fills contiguous mono signed
-32-bit samples at 48 kHz. The caller owns valid storage and calls from one
-execution context. Zero samples does nothing. Scripts retain their existing
-48-sample processing intervals across calls, so one 96-sample request and two
-48-sample requests have identical results with the same inputs available at
-the same sample positions. The renderer allocates no memory and does not render
-ahead. Voice clear and transport reset do not reset its sample clock.
+`init_application()` initializes filters, envelopes, sample storage, streams,
+voices and Berry in the existing order. `generate_samples(int32_t *buffer)` begins
+one voice block, mixes exactly 48 mono samples, and finishes the block. It owns
+no output storage or scheduling state. Startup remains silent until a program
+and notes are supplied.
 
-The output backend owns DAC packing and control-voltage calibration/slew.
-`AUDIO_I2S_HALF_FRAMES` in `audio_i2s.cpp` selects DMA size (default 48), without
-changing the application interval. Larger output buffers can change real-time
-command latency and require hardware timing measurements. They do not change
-the supported sample rate.
+STM32's `app/audio.cpp` owns the two output rings in DMA-accessible AXI SRAM.
+Its `generate_audio_samples()` wrapper calls the shared renderer, interleaves
+mono audio and calibrated control voltage, and publishes complete slots. Read
+and write positions wrap at twice `BUF_COUNT`; the default is two 48-frame slots
+per output. DMA consumes them directly and wakes main on completion. Its control
+voltage handling and underrun policy are unchanged.
 
-`transport.h` defines replaceable RS485 and USB byte interfaces. RS485 start
-borrows the caller's buffer until completion or abort; completion means the
-backend finished transmission, not that a receiver acknowledged it. Shared
-`transport.cpp` preserves the bounded wait and USB servicing while UART
-interrupts transmit. The device driver does not dispatch application protocols.
-USB reads may return any prefix; writes copy the entire buffer or reject it
-without accepting a prefix. A successful write means queued. Protocol framing,
-uploads, session credits and pending replies remain shared application state.
+The desktop platform owns a separate 30-slot mono ring. It initializes the
+application and prefills 29 slots before starting PortAudio with an unspecified
+callback size. Each callback copies available samples, keeps the offset of a
+partially consumed block, and posts a zero-byte token for each completed block.
+It never waits for rendering. If the ring runs empty, the existing callback
+fills the remaining output with silence.
 
-USB connection generations invalidate old transport bytes and protocol state.
-STM32 reset, configuration changes, DTR transitions and disconnect use the
-existing reset paths; suspend/resume change readiness without starting a new
-generation. Faulted receive remains blocked until an existing lifecycle reset,
-while queued replies may drain. The simulator maps PTY connection/flush events
-to generations; it does not emulate USB endpoints or electrical timing.
+The simulator main loop waits in `select()` for the request pipe and both PTYs.
+An audio token renders one replacement block. The pipe carries only audio
+requests. The core services pending parsers and replies on receipt of bytes and
+before rendering each block; there are no additional scheduling helpers in main.
+`channel.h` retains its original const-vector, `void` receive/write functions,
+with only `write_usb()` added. The platform passes each received chunk once and
+reports the written byte count through `sent_serial()` or `sent_usb()`.
+`channel.cpp` owns pending input, feeds the existing bounded parser buffers,
+and retains unsent output. Partial writes retry on later application passes.
+Berry, parsers and mixing run on main. Protocol deadlines use monotonic platform
+milliseconds, while audio advances its own sample clock. DAC calibration and
+DMA stay in `app/`.
 
-Each platform owns its main loop. Firmware calls `process_usb_messages()`,
-`process_rs485_commands()`, `update_channel_leds()`, then `process_usb_messages()`
-again to service USB after a console reply. The simulator calls the same USB
-and RS485 functions and renders audio when PortAudio requests a buffer;
-it does not call the LED update.
-Both use the same application and protocol implementations.
-Generic synchronization defaults to single-threaded execution. STM32 binds
-interrupt preservation and memory-barrier operations before audio starts;
-the simulator follows MAS's direct callback arrangement, with protocol
-processing on the main thread and rendering on PortAudio's callback thread.
-There is no application mutex around either path.
-An isolated ThreadSanitizer check detects unsynchronized access to the voice
-active flag during program upload; passing playback tests do not establish
-that this concurrent application access is safe.
-`CHANNEL_ENABLE_CYCLE_PROFILING` enables cycle
-measurement in the firmware build. The simulator omits that instrumentation
-and has no cycle-counter backend; its cycle diagnostic fields remain zero.
+USB protocol framing, uploads, BODY credits and replies are shared. RS485 uses
+the existing bounded reply queue and pauses parsing while replies are pending.
+STM32 drivers still own interrupt queues, USB lifecycle events, and RS485 bus
+access/deadlines. Simulator PTYs stay open for the process lifetime; opening or
+closing a client does not emulate USB connection-generation changes. A protocol
+fault retains the existing policy of waiting for a lifecycle reset.
 
-`init_board_platform()` binds STM32 synchronization, electrical RS485 bus
-services and physical colour/gain handlers. `init_channel_board()` initializes
+The firmware main loop remains:
+
+```cpp
+wait_interrupt();
+process_rs485();
+process_usb();
+generate_audio_samples();
+```
+
+Firmware's counting wakeup is signaled by DMA, UART, USB and SysTick; the tick
+also lets main check protocol deadlines. Generic synchronization defaults to
+single-threaded execution; STM32 binds its existing interrupt preservation and
+memory barriers. `CHANNEL_ENABLE_CYCLE_PROFILING` enables firmware measurements.
+The gain command's existing blocking DAC I2C writes and actual STM32 timing need
+separate board measurements; host tests do not validate physical deadlines.
+
+`init_board_platform()` binds STM32 synchronization and physical colour/gain
+handlers. `init_channel_board()` initializes
 physical outputs and RS485 reception in their existing order, before
-`init_channel_card()` initializes shared application state and emits ready.
-The simulator initializes its byte receiver and the shared application directly.
+`init_application()` initializes shared application state and queues ready. DMA starts after this
+initialization so startup work cannot consume its first refill interval.
+Firmware main calls `init_usb_device()` directly for the custom CDC device setup.
+The USB parser starts initialized and follows connection-generation changes in
+`process_usb_messages()`; the platform calls this through the buffer handler.
 
 `board_stm32.cpp` owns LED patterns, GPIO mapping, RGB quantization and PWM.
 Shared scripts and commands make logical colour/gain requests through optional
 `ChannelOutputs` handlers. Without handlers these requests retain their existing
 headless acceptance behavior. The I2S driver supplies optional output diagnostics;
-without a driver, overlap counts are zero. Point-to-point transports need no
-electrical bus hooks. The simulator supplies its clock in `sim/clock.cpp` and
-byte ports in `sim/serialdevices.cpp`, and native output in `sim/audio_device.cpp`;
-it has no dummy board implementations.
+without a driver, overlap counts are zero. RS485 bus control is private to STM32.
 
-On macOS, `sim/clock.cpp` configures the simulator thread with the host streaming
-workers' scheduling policy: interactive QoS and a preemptible 1 ms time constraint
-with a 250 microsecond computation budget. Ordinary macOS waits can wake after
-the host's 5 ms command deadline; QoS alone is insufficient. Scheduling setup
-errors stop startup with a diagnostic before serial ports are created. Other
-hosts retain their existing scheduling policy; their streaming timing needs
-separate validation. This is a host scheduling requirement, not a change to
-application timing or protocol deadlines, and does not guarantee deadlines
-through system suspension or arbitrary system load.
-
-Use simple C++17 with plain functions and structs. Exceptions, RTTI, and
+Use simple C++17 with plain functions and structs in the shared application and
+firmware. Simulator `main.cpp` also uses C++17.
+Exceptions, RTTI, and
 thread-safe local-static initialization are disabled. Do not add virtual
 functions, STL containers, or dynamic initialization to this application.
 Public interfaces use C linkage for generated C and the Berry runtime;
 interrupt handlers must also retain C linkage. The interpreter and generated
 STM32 sources keep their existing C implementation.
 
-Keep application source lists in both `app/Makefile` and `sim/Makefile` up to date;
-each Makefile also owns its backend sources, compiler flags and link settings.
+Keep shared and hardware application source lists in `app/Makefile` up to date;
+it also owns compiler flags and link settings.
 Preserve `USER CODE` markers when editing CubeMX-generated sources. All maintained directories use lowercase names, including HAL/CMSIS
 subfolders. If CubeMX regeneration restores names such as `Core`, `Drivers`,
 `Inc`, or `Src`, lowercase those folders and check the paths in `app/Makefile`
@@ -341,17 +335,17 @@ braces on the opening line. Use 79-column section comments as in the MAS
 
 ```
 
-A section can group related small helpers. Start every application and simulator
+Put a descriptive banner above every function. Start every application and simulator
 source, header, test, and build file with the standard Freshwater ASCII/copyright
-header from `sim/main.cpp`. Use `#` comments for headers and section dividers in
+header from `channel/audio.cpp`. Use `#` comments for headers and section dividers in
 scripts and Makefiles, keeping script shebangs first. Comments explain contracts
 and hardware constraints that the code cannot express. Preserve Freshwater file
 headers, copyright notices, and vendor formatting. Local tests and development
 tools are maintained separately from the SVN package.
 
 Function names follow MAS: lowercase words separated by underscores, describing
-the operation and its object. Use `process_rs485_commands()`, `render_audio_samples()`,
-and `read_rs485_byte()` rather than implementation-specific names in shared code.
+the operation and its object. Use `process_rs485_commands()`, `generate_audio_samples()`,
+and `read_serial_input()` in shared code.
 Use `read` for consuming input, `peek` for inspecting buffered input, `get` for
 state queries, and `render` or `mix` for producing samples. Predicates use `is`,
 `has`, or `can`; include units such as `_ms`, `_hz`, or `_bytes` where needed.
@@ -369,7 +363,7 @@ same firmware release.
 
 ## Hardware constraints
 
-Audio DMA defaults to 48 frames per half-buffer at 48 kHz. USB traffic does not
+Audio DMA defaults to 48 frames per block at 48 kHz. USB traffic does not
 clock the DAC. I2S DMA buffers use AXI SRAM because DMA1 cannot access DTCM.
 The I2S1 master must start before the I2S2 slave. I2S2 requires its existing
 underrun handling and IOSWP wiring configuration. Keep these constraints when
@@ -385,4 +379,4 @@ respectively. Startup sets their calibrated 0 V targets before playback,
 then slews toward those targets from the first DMA buffer. No diagnostic
 tones are generated. Their calibration and slew limits are in
 `app/audio_dac.cpp`; there is no console command to set them. The analog
-switch defaults are in `core/src/gpio.c` and `app/channel.cpp`.
+switch defaults are in `core/src/gpio.c` and `channel/channel.cpp`.

@@ -25,16 +25,16 @@ HOST_CC ?= cc
 HOST_CXX ?= c++
 MAKEFILE := $(abspath $(lastword $(MAKEFILE_LIST)))
 TEST_ROOT := $(abspath $(dir $(MAKEFILE)))
-ROOT ?= $(abspath $(TEST_ROOT)/../../../channel_card)
+ROOT ?= $(abspath $(TEST_ROOT)/../../..)
 OBJDIR ?= /tmp/channel-host-tests
 OUTPUT ?= $(OBJDIR)/test
-BERRY := berry_runtime/third_party/berry
+BERRY := channel/berry_runtime/third_party/berry
 # run.py supplies the application/backend/harness source selection.
 BERRY_SOURCES := $(patsubst $(ROOT)/%,%,$(sort $(wildcard $(ROOT)/$(BERRY)/src/*.c))) \
-                 berry_runtime/berry_runtime_modtab.c
+                 channel/berry_runtime/berry_runtime_modtab.c
 OBJECTS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(SOURCES)))
 
-INCLUDES := -I$(ROOT)/app -I$(ROOT)/berry_runtime -I$(ROOT)/$(BERRY)/src -I$(ROOT)/sim $(EXTRA_INCLUDES)
+INCLUDES := -I$(TEST_ROOT) $(EXTRA_INCLUDES) -I$(ROOT)/channel_card/core/inc -I$(ROOT)/channel_card/app -I$(ROOT)/channel -I$(ROOT)/channel/berry_runtime -I$(ROOT)/$(BERRY)/src
 COMMON_FLAGS := -O2 -g -Wall -MMD -MP
 CFLAGS := -std=c11 -Wextra -Werror
 CXXFLAGS := -std=c++17 -fno-rtti -fno-exceptions -fno-threadsafe-statics
@@ -52,19 +52,19 @@ $(OBJECTS): $(MAKEFILE)
 
 $(OBJDIR)/%.c.o: $(ROOT)/%.c
 	@mkdir -p "$(@D)"
-	$(HOST_CC) $(INCLUDES) $(COMMON_FLAGS) $(CFLAGS) -c "$<" -o "$@"
+	@$(HOST_CC) $(INCLUDES) $(COMMON_FLAGS) $(CFLAGS) -c "$<" -o "$@"
 
 $(OBJDIR)/tests/%.cpp.o: $(TEST_ROOT)/%.cpp
 	@mkdir -p "$(@D)"
-	$(HOST_CXX) $(INCLUDES) $(COMMON_FLAGS) $(CXXFLAGS) -c "$<" -o "$@"
+	@$(HOST_CXX) $(INCLUDES) $(COMMON_FLAGS) $(CXXFLAGS) -c "$<" -o "$@"
 
 $(OBJDIR)/%.cpp.o: $(ROOT)/%.cpp
 	@mkdir -p "$(@D)"
-	$(HOST_CXX) $(INCLUDES) $(COMMON_FLAGS) $(CXXFLAGS) -c "$<" -o "$@"
+	@$(HOST_CXX) $(INCLUDES) $(COMMON_FLAGS) $(CXXFLAGS) -c "$<" -o "$@"
 
 $(OUTPUT): $(OBJECTS)
 	@mkdir -p "$(@D)"
-	$(HOST_CXX) $^ -o "$@" $(LDLIBS)
+	@$(HOST_CXX) $^ -o "$@" $(LDLIBS)
 
 clean:
 	@rm -rf "$(OBJDIR)"

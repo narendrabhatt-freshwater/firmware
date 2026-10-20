@@ -21,10 +21,11 @@
             (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
 */
 
-#include "transport.h"
+#include "serial_buffer.h"
 #include "board.h"
 #include "platform.h"
-#include "channel.h"
+#include <interrupt.h>
+#include "application.h"
 #include "board_stm32.h"
 #include "cs4304.h"
 #include "main.h"
@@ -198,7 +199,7 @@ static volatile uint16_t tx_left;
 
 /* ---- initialize rs485 reception ----------------------------------------- */
 
-void init_rs485_receiver(void)
+static void init_rs485_receiver(void)
 {
     rx_head = 0u;
     rx_tail = 0u;
@@ -229,7 +230,7 @@ void init_rs485_receiver(void)
 
 /* ---- read and clear received bytes -------------------------------------- */
 
-uint8_t read_rs485_byte(uint8_t *out)
+static uint8_t read_rs485_byte(uint8_t *out)
 {
     if (out == NULL || rx_tail == rx_head) {
         return 0u;
@@ -239,7 +240,7 @@ uint8_t read_rs485_byte(uint8_t *out)
     return 1u;
 }
 
-void clear_rs485_receive_state(void)
+static void clear_rs485_receive_state(void)
 {
     const uint32_t primask = __get_PRIMASK();
     __disable_irq();
@@ -249,14 +250,9 @@ void clear_rs485_receive_state(void)
     __set_PRIMASK(primask);
 }
 
-uint32_t get_rs485_dropped_byte_count(void)
-{
-    return rx_dropped;
-}
-
 /* ---- transmit an rs485 reply -------------------------------------------- */
 
-int start_rs485_transmit(const uint8_t *data, uint16_t size)
+static int start_rs485_transmit(const uint8_t *data, uint16_t size)
 {
     if (data == NULL || size == 0u || tx_active) return -1;
     uint32_t const primask = __get_PRIMASK();
@@ -272,13 +268,13 @@ int start_rs485_transmit(const uint8_t *data, uint16_t size)
     return 0;
 }
 
-int poll_rs485_transmit(void)
+static int poll_rs485_transmit(void)
 {
     if (tx_complete) tx_active = 0u;
     return tx_active ? 0 : 1;
 }
 
-void abort_rs485_transmit(void)
+static void abort_rs485_transmit(void)
 {
     uint32_t saved = __get_PRIMASK();
     __disable_irq();
@@ -342,6 +338,7 @@ extern "C" void UART5_IRQHandler(void)
         }
         isr = UART5->ISR;
     }
+    signal_interrupt();
 }
 
 /* ---- release and acquire the shared rs485 bus --------------------------- */
@@ -441,12 +438,9 @@ void init_board_platform(void)
         save_board_interrupt_state, restore_board_interrupt_state, publish_board_memory
     };
     static const ChannelOutputs outputs = {set_board_rgb_colour, apply_channel_gain};
-    static const Rs485BusServices bus = {
-        acquire_rs485_bus, release_rs485_bus, is_rs485_bus_free, get_uart_baud_rate
-    };
     set_platform_synchronization(&synchronization);
+    set_main_loop_wakeup(signal_interrupt);
     set_channel_outputs(&outputs);
-    set_rs485_bus_services(&bus);
 }
 
 /* Called at the original application-startup point, preserving output and
@@ -486,4 +480,69 @@ void update_channel_leds(void)
         step = (step + 1) % 2;
         write_board_led(leds[step], 1u);
     }
+}
+
+// The hardware owns bus acquisition, wire completion and deadlines.
+static bool waiting_for_bus;
+static uint32_t transmit_started, transmit_deadline;
+
+static void service_rs485_transmit(void)
+{
+    SerialBuffer &buffer = rs485_serial_buffer;
+    if (!buffer.output_size) return;
+    const uint32_t now = get_board_time_ms();
+    if (tx_active) {
+        const int state = poll_rs485_transmit();
+        if (!state && (uint32_t)(now - transmit_started) < transmit_deadline) return;
+        if (state <= 0) abort_rs485_transmit();
+        release_rs485_bus();
+        buffer.transmit_failed = state <= 0;
+        buffer.output_size = 0;
+        request_main_loop();
+        return;
+    }
+    if (!waiting_for_bus) {
+        transmit_started = now;
+        waiting_for_bus = true;
+    }
+    if (!is_rs485_bus_free()) {
+        if ((uint32_t)(now - transmit_started) >= 250u) {
+            waiting_for_bus = false;
+            buffer.transmit_failed = true;
+            buffer.output_size = 0;
+            request_main_loop();
+        }
+        return;
+    }
+    waiting_for_bus = false;
+    acquire_rs485_bus();
+    if (start_rs485_transmit(buffer.output, buffer.output_size) != 0) {
+        release_rs485_bus();
+        buffer.transmit_failed = true;
+        buffer.output_size = 0;
+        request_main_loop();
+        return;
+    }
+    transmit_started = now;
+    const uint32_t baud = get_uart_baud_rate();
+    // 8N1 wire time plus the existing two milliseconds for tick granularity.
+    transmit_deadline = 2u + (uint32_t)(((uint64_t)buffer.output_size * 10000u + baud - 1u) / baud);
+}
+
+void process_rs485(void)
+{
+    SerialBuffer &buffer = rs485_serial_buffer;
+    while (buffer.input_size < sizeof buffer.input &&
+           read_rs485_byte(buffer.input + buffer.input_size))
+        ++buffer.input_size;
+    buffer.dropped = rx_dropped;
+    service_rs485_transmit();
+    if (buffer.process) buffer.process();
+    if (buffer.clear_input) {
+        clear_rs485_receive_state();
+        buffer.input_size = 0;
+        buffer.clear_input = false;
+    }
+    service_rs485_transmit();
+    update_channel_leds();
 }

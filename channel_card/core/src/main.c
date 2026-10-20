@@ -30,9 +30,13 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "audio_output.h"
+#include "audio.h"
+#include "audio_buffers.h"
+#include "application.h"
+#include "usb_device.h"
+#include "interrupt.h"
 #include "board_stm32.h"
 #include "cs4304.h"
-#include "channel.h"
 #include "usb.h"
 /* USER CODE END Includes */
 
@@ -127,7 +131,7 @@ int main(void)
   init_board_platform();
 
   /* Custom CDC device uses the generated HAL PCD and embedded Full-Speed PHY. */
-  init_usb_protocol();
+  init_usb_device();
 
   /* --- Power-on status sequence: flash fixed red/yellow LEDs only.
    * The RGB package is reserved for VM scripts and stays off at boot. --- */
@@ -172,9 +176,6 @@ int main(void)
   set_control_voltage_target(3, 0);
   set_control_voltage_target(4, 0);
 
-  /* DAC timing runs independently of USB traffic and enumeration. */
-  start_audio_playback();
-
   /* MX_TIM12_Init() reconfigured PB15 as TIM12_CH2 AF — override it back
    * to plain GPIO output so hp_ctl stays a GPIO. */
   {
@@ -192,7 +193,8 @@ int main(void)
 
   /* RS485 idle Hi-Z, switch defaults, boot bypass/gain, ready banner. */
   init_channel_board();
-  init_channel_card();
+  init_application();
+  start_audio_playback();
 
   /* USER CODE END 2 */
 
@@ -204,10 +206,10 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-    process_usb_messages();
-    process_rs485_commands();
-    update_channel_leds();
-    process_usb_messages(); /* Drain USB after a console reply. */
+    wait_interrupt();
+    process_rs485();
+    process_usb();
+    generate_audio_samples();
   }
   /* USER CODE END 3 */
 }

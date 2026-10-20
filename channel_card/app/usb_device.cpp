@@ -21,9 +21,9 @@
             (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
 */
 
-#include "transport.h"
+#include "serial_buffer.h"
+#include "platform.h"
 #include "usb_device.h"
-#include "usb.h"
 #include "usb_otg.h"
 #include "main.h"
 #include <stdio.h>
@@ -419,8 +419,12 @@ void HAL_PCD_DisconnectCallback(PCD_HandleTypeDef *pcd)
 
 /* ---- initialize the usb peripheral -------------------------------------- */
 
+static void format_usb_device_status(char *text, uint32_t size);
+
 void init_usb_device(void)
 {
+    usb_serial_buffer.connected = false;
+    usb_serial_buffer.format_status = format_usb_device_status;
     /* Preserve the previously working PLL3 USB clock. Generated PCD init has
      * already configured the embedded PHY and the interrupt. No USB DMA. */
     RCC_PeriphCLKInitTypeDef clock = {};
@@ -445,7 +449,7 @@ void init_usb_device(void)
 
 /* ---- read and write transport queues ------------------------------------ */
 
-uint32_t read_usb_bytes(uint8_t *dst, uint32_t size)
+static uint32_t read_usb_bytes(uint8_t *dst, uint32_t size)
 {
     uint32_t saved = lock_usb_queues();
     if (dtr && !faulted && rx_armed)
@@ -467,7 +471,7 @@ uint32_t read_usb_bytes(uint8_t *dst, uint32_t size)
     return n;
 }
 
-uint8_t write_usb_bytes(const uint8_t *src, uint32_t size)
+static uint8_t write_usb_bytes(const uint8_t *src, uint32_t size)
 {
     uint32_t saved = lock_usb_queues();
     uint8_t ok = (uint8_t)(configuration && dtr && size <= TX_SIZE - (tx_wr - tx_rd));
@@ -485,31 +489,57 @@ uint8_t write_usb_bytes(const uint8_t *src, uint32_t size)
 
 /* ---- query transport state ---------------------------------------------- */
 
-uint32_t get_usb_transmit_free_bytes(void)
+// Only this driver interprets USB configuration, DTR and endpoint epochs.
+void process_usb(void)
 {
-    return TX_SIZE - (tx_wr - tx_rd);
-}
-
-uint32_t get_usb_connection_generation(void)
-{
-    return epoch;
-}
-
-uint8_t is_usb_connected(void)
-{
-    return (uint8_t)(configuration && dtr && !faulted && !suspended);
-}
-
-void fault_usb_connection(void)
-{
+    SerialBuffer &buffer = usb_serial_buffer;
     uint32_t saved = lock_usb_queues();
-    /* Let any already armed packet finish and then leave OUT NAKed. STALL/clear
-     * would reset endpoint PID on only one side during DTR recovery. */
-    faulted = 1;
+    if (buffer.generation != epoch) {
+        buffer.input_size = buffer.output_size = 0;
+        buffer.generation = epoch;
+        buffer.faulted = faulted;
+    }
+    if (buffer.faulted) faulted = 1;
+    buffer.faulted = faulted;
+    buffer.connected = configuration && dtr && !suspended;
+    unlock_usb_queues(saved);
+
+    if (buffer.connected && !buffer.faulted) {
+        while (buffer.input_size < sizeof buffer.input) {
+            saved = lock_usb_queues();
+            if (buffer.generation != epoch) {
+                unlock_usb_queues(saved);
+                request_main_loop();
+                return;
+            }
+            uint32_t n = read_usb_bytes(buffer.input + buffer.input_size,
+                                       sizeof buffer.input - buffer.input_size);
+            buffer.input_size += n;
+            if (buffer.generation != epoch) {
+                unlock_usb_queues(saved);
+                request_main_loop();
+                return;
+            }
+            unlock_usb_queues(saved);
+            if (!n) break;
+        }
+    }
+    if (buffer.process) buffer.process();
+
+    saved = lock_usb_queues();
+    if (buffer.generation == epoch) {
+        // A protocol fault leaves queued replies drainable and OUT NAKed.
+        if (buffer.faulted) faulted = 1;
+        if (buffer.output_size && write_usb_bytes(buffer.output, buffer.output_size))
+            buffer.output_size = 0;
+    } else {
+        // A USB reset invalidates any work queued during this pass.
+        request_main_loop();
+    }
     unlock_usb_queues(saved);
 }
 
-void format_usb_device_status(char *text, uint32_t size)
+static void format_usb_device_status(char *text, uint32_t size)
 {
     uint32_t gint = 0, mask = 0, ahb = 0, cfg = 0, ctl = 0, otg = 0, phy = 0;
 #if defined(__arm__) || defined(__thumb__)

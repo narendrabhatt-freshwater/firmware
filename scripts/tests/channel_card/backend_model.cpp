@@ -22,92 +22,55 @@
 */
 
 #include "backend_model.h"
-#include "audio.h"
-#ifdef LEGACY_API
-#include "board.h"
-#else
+#include "serial_buffer.h"
 #include "platform.h"
-#endif
-#include "channel.h"
+#include "application.h"
 #include "usb.h"
-#ifndef LEGACY_API
-#include "transport.h"
-#include "audio_output.h"
-#endif
 #include <algorithm>
-#include <assert.h>
-#include <stdio.h>
-#include <string.h>
+#include <cstring>
+
 namespace model {
-uint32_t time_ms, epoch, read_limit=64, tx_capacity=2048, drops, tx_polls;
-bool connected=true, faulted, tx_stalled, bus_owned;
-unsigned usb_services, aborts;
+uint32_t time_ms, read_limit = 64;
 std::vector<uint8_t> usb_rx, usb_tx, rs_rx, rs_tx;
-static std::vector<uint8_t> pending;
-void reconnect() { ++epoch; connected=true; faulted=false; usb_rx.clear(); usb_tx.clear(); }
+
+void reconnect()
+{
+    ++usb_serial_buffer.generation;
+    usb_serial_buffer.connected = true;
+    usb_serial_buffer.faulted = false;
+    usb_serial_buffer.input_size = usb_serial_buffer.output_size = 0;
+    usb_rx.clear(); usb_tx.clear();
 }
-using namespace model;
-uint32_t get_board_time_ms() { return time_ms++; }
-#ifdef LEGACY_API
-uint32_t disable_interrupts_and_save_state() { return 0; }
-void restore_interrupt_state(uint32_t) {}
-void write_board_led(uint8_t, uint8_t) {}
-void write_board_switch(uint8_t, uint8_t) {}
-void release_rs485_bus() { bus_owned=false; }
-void acquire_rs485_bus() { assert(!bus_owned); bus_owned=true; }
-uint8_t is_rs485_bus_free() { return !bus_owned; }
-uint32_t get_rs485_baud_rate() { return 921600; }
-uint8_t is_dac_ready() { return 1; }
-void set_dac_channel_trim(char, uint8_t) {}
-#else
-static void release_bus() { bus_owned=false; }
-static void acquire_bus() { assert(!bus_owned); bus_owned=true; }
-static uint8_t bus_free() { return !bus_owned; }
-static uint32_t baud_rate() { return 921600; }
-#endif
-void init_rs485_receiver() { rs_rx.clear(); drops=0; }
-void clear_rs485_receive_state() { rs_rx.clear(); }
-uint8_t read_rs485_byte(uint8_t *out) {
-    if (rs_rx.empty()) return 0;
-    *out=rs_rx.front(); rs_rx.erase(rs_rx.begin()); return 1;
+
+void service_usb()
+{
+    SerialBuffer &buffer = usb_serial_buffer;
+    if (buffer.connected && !buffer.faulted) {
+        size_t n = std::min(usb_rx.size(), std::min(size_t(read_limit), sizeof buffer.input - buffer.input_size));
+        if (n) std::memcpy(buffer.input + buffer.input_size, usb_rx.data(), n);
+        buffer.input_size += n;
+        usb_rx.erase(usb_rx.begin(), usb_rx.begin() + n);
+    }
+    process_usb_messages();
+    usb_tx.insert(usb_tx.end(), buffer.output, buffer.output + buffer.output_size);
+    buffer.output_size = 0;
 }
-uint32_t get_rs485_dropped_byte_count() { return drops; }
-#ifdef LEGACY_API
-int write_rs485_bytes(const uint8_t *p, uint16_t n, uint32_t) {
-    rs_tx.insert(rs_tx.end(),p,p+n); return 0;
+
+void service_rs485()
+{
+    SerialBuffer &buffer = rs485_serial_buffer;
+    size_t n = std::min(rs_rx.size(), sizeof buffer.input - buffer.input_size);
+    if (n) std::memcpy(buffer.input + buffer.input_size, rs_rx.data(), n);
+    buffer.input_size += n;
+    rs_rx.erase(rs_rx.begin(), rs_rx.begin() + n);
+    process_rs485_commands();
+    if (buffer.clear_input) {
+        rs_rx.clear(); buffer.input_size = 0; buffer.clear_input = false;
+    }
+    rs_tx.insert(rs_tx.end(), buffer.output, buffer.output + buffer.output_size);
+    buffer.output_size = 0;
 }
-#else
-int start_rs485_transmit(const uint8_t *p, uint16_t n) {
-    if (!p || !n || !pending.empty()) return -1;
-    pending.assign(p,p+n); return 0;
 }
-int poll_rs485_transmit() {
-    if (tx_stalled) return 0;
-    if (tx_polls) { --tx_polls; return 0; }
-    rs_tx.insert(rs_tx.end(),pending.begin(),pending.end()); pending.clear(); return 1;
-}
-void abort_rs485_transmit() { ++aborts; pending.clear(); }
-#endif
-void init_usb_device() {
-#ifndef LEGACY_API
-    static const Rs485BusServices bus = {acquire_bus, release_bus, bus_free, baud_rate};
-    set_rs485_bus_services(&bus);
-#endif
-    reconnect();
-}
-uint32_t read_usb_bytes(uint8_t *out,uint32_t n) {
-    ++usb_services;
-    if (faulted || !connected) return 0;
-    n=std::min(n,std::min(read_limit,(uint32_t)usb_rx.size()));
-    if(n) memcpy(out,usb_rx.data(),n);
-    usb_rx.erase(usb_rx.begin(),usb_rx.begin()+n); return n;
-}
-uint8_t write_usb_bytes(const uint8_t *p,uint32_t n) {
-    if(!connected || n>tx_capacity-usb_tx.size()) return 0;
-    usb_tx.insert(usb_tx.end(),p,p+n); return 1;
-}
-uint32_t get_usb_transmit_free_bytes() { return tx_capacity-usb_tx.size(); }
-uint32_t get_usb_connection_generation() { return epoch; }
-uint8_t is_usb_connected() { return connected && !faulted; }
-void fault_usb_connection() { faulted=true; }
-void format_usb_device_status(char *p,uint32_t n) { snprintf(p,n,"ok: model\r\n"); }
+
+uint32_t get_board_time_ms() { return model::time_ms++; }
+void init_usb_device() { model::reconnect(); }

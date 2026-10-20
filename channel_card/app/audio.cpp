@@ -21,59 +21,41 @@
             (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
 */
 
-#include "audio.h"
-#include "voice.h"
-#include "stream.h"
+#include "audio_buffers.h"
+#include "channel.h"
+#include "audio_output.h"
 
-/* ---- render sample-clocked application intervals ------------------------- */
+AudioBuffers audio_output CHANNEL_AUDIO_STORAGE;
+AudioBuffers control_voltage_output CHANNEL_AUDIO_STORAGE;
 
-/* Cold-start state, independent of transport resets and voice clear commands.
- * Only the single audio consumer owns this cursor. */
-static uint32_t interval_position;
+static_assert(AUDIO_BUFFER_FRAMES == AUDIO_PROCESSING_INTERVAL_SAMPLES,
+              "Application buffers hold exactly 48 samples");
 
-void render_audio_samples(int32_t *samples, uint32_t sample_count)
+/* ---- render shared audio into the STM32 output rings -------------------- */
+
+void generate_audio_samples(void)
 {
-    while (sample_count) {
-        if (interval_position == 0u) begin_voice_audio_block();
-        uint32_t count = AUDIO_PROCESSING_INTERVAL_SAMPLES - interval_position;
-        if (count > sample_count) count = sample_count;
-        for (uint32_t i = 0; i < count; ++i) *samples++ = mix_next_audio_sample();
-        interval_position += count;
-        sample_count -= count;
-        if (interval_position == AUDIO_PROCESSING_INTERVAL_SAMPLES) {
-            end_voice_audio_block();
-            interval_position = 0u;
+    if (audio_output.write_index !=
+        (__atomic_load_n(&audio_output.read_index, __ATOMIC_ACQUIRE) + BUF_COUNT) % (2u * BUF_COUNT))
+    {
+        int32_t *samples = audio_output.samples[audio_output.write_index % BUF_COUNT];
+        int32_t mono[AUDIO_PROCESSING_INTERVAL_SAMPLES];
+        generate_samples(mono);
+        for (uint32_t i = 0; i < AUDIO_BUFFER_FRAMES; ++i)
+        {
+            samples[i * AUDIO_BUFFER_CHANNELS] = mono[i];
         }
+        render_control_voltage_slot(samples, AUDIO_BUFFER_FRAMES, 1, 1);
+        __atomic_store_n(&audio_output.write_index,
+                         (audio_output.write_index + 1u) % (2u * BUF_COUNT), __ATOMIC_RELEASE);
     }
-}
-
-/* ---- query audio diagnostics -------------------------------------------- */
-
-static const AudioOutputDiagnostics *s_output_diagnostics;
-
-void set_audio_output_diagnostics(const AudioOutputDiagnostics *diagnostics)
-{
-    s_output_diagnostics = diagnostics;
-}
-
-uint32_t get_audio_refill_overlap_count(void)
-{
-    return s_output_diagnostics ? s_output_diagnostics->refill_overlap_count() : 0u;
-}
-
-uint32_t get_audio_stream_drop_count(void)
-{
-    return get_stream_dropped_block_count();
-}
-
-void clear_audio_stream_statistics(void)
-{
-    clear_stream_statistics();
-    clear_voice_underrun_count();
-    if (s_output_diagnostics) s_output_diagnostics->clear_statistics();
-}
-
-uint32_t get_audio_stream_max_buffered_samples(void)
-{
-    return get_max_stream_buffered_samples();
+    if (control_voltage_output.write_index !=
+        (__atomic_load_n(&control_voltage_output.read_index, __ATOMIC_ACQUIRE) + BUF_COUNT) % (2u * BUF_COUNT))
+    {
+        render_control_voltage_channels(
+            control_voltage_output.samples[control_voltage_output.write_index % BUF_COUNT], AUDIO_BUFFER_FRAMES,
+            2, 3);
+        __atomic_store_n(&control_voltage_output.write_index,
+                         (control_voltage_output.write_index + 1u) % (2u * BUF_COUNT), __ATOMIC_RELEASE);
+    }
 }

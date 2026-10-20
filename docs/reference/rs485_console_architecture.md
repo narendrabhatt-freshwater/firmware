@@ -107,7 +107,7 @@ block forever. Session bootstrap aborts if required steps fail.
 
 ## On-MCU (Channel)
 
-[`channel.cpp`](../../channel_card/app/channel.cpp): UART5
+[`channel.cpp`](../../channel/channel.cpp): UART5
 IRQ RX, DE/RE turnaround, `process_rs485_commands` / `execute_channel_command`, compact replies.
 Same command set over USB CDC (no `[C]` tag on CDC).
 

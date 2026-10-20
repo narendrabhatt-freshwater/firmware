@@ -22,7 +22,10 @@
 */
 
 #include "audio.h"
-#include "channel.h"
+#include "backend_model.h"
+#include "audio_consumer.h"
+#include "application.h"
+#include "transport.h"
 #include "voice.h"
 #include "samples.h"
 #include "stream.h"
@@ -35,28 +38,29 @@
 int main(int argc,char **argv)
 {
     assert(argc==2);
-    init_usb_protocol(); init_channel_card();
+    init_usb_device(); init_application();
     std::ifstream in(argv[1],std::ios::binary);
     std::vector<char> program{std::istreambuf_iterator<char>(in),{}};
     assert(begin_voice_script_upload(0)==0);
     assert(append_voice_script_upload_bytes(0,program.data(),program.size())==0);
     assert(commit_voice_script_upload(0)==0);
     uint8_t pcm[1024]={}; assert(load_sample_data(0,pcm,512)==0);
-    int32_t out[256];
-    // Command at sample 47 waits until sample 48 begins the next interval.
-    render_audio_samples(out,47);
+    int32_t out[50];
+    for (auto &sample : out) sample = 0x12345678;
+    next_mono_samples(out + 1);
+    assert(out[0] == 0x12345678 && out[49] == 0x12345678);
+    assert(!is_voice_active(0));
+
+    // Commands take effect on the next fixed 48-sample application call.
     assert(queue_streamed_sample_note(0,0,60,127,1)==0);
     assert(write_stream_body_samples(0,1,(int8_t*)pcm,1024)==1);
-    render_audio_samples(nullptr,0); assert(!is_voice_active(0));
-    render_audio_samples(out,1); assert(!is_voice_active(0));
-    render_audio_samples(out,1); assert(is_voice_active(0));
-    // Clear after sample 48 doesn't run at an arbitrary caller boundary.
-    request_stop_all_voices(); render_audio_samples(out,46); assert(is_voice_active(0));
-    render_audio_samples(out,1); assert(is_voice_active(0));
-    render_audio_samples(out,1); assert(!is_voice_active(0));
-    // No output beyond the caller's buffer, including a cross-interval call.
-    for(auto &sample:out) sample=0x12345678;
-    render_audio_samples(out+1,250);
-    assert(out[0]==0x12345678 && out[251]==0x12345678);
+    assert(!is_voice_active(0));
+    next_mono_samples(out + 1);
+    assert(is_voice_active(0));
+    request_stop_all_voices();
+    assert(is_voice_active(0));
+    next_mono_samples(out + 1);
+    assert(!is_voice_active(0));
+    assert(out[0] == 0x12345678 && out[49] == 0x12345678);
     return 0;
 }

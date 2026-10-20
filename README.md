@@ -50,12 +50,49 @@ conversion failed.
 
 ## 2. Building
 
-For Channel Card, run `make` inside `channel_card/app/` to build the host simulator
-at `channel_card/bin/sim`. Run `make board` to build the STM32 firmware at
-`channel_card/bin/channel_MCU.bin`. Set `BAUDRATE` in its Makefile or run
+For Channel Card, run `make` (or `make board`) inside `channel_card/app/` to
+build the STM32 firmware at `channel_card/bin/channel_MCU.bin`. Set `BAUDRATE`
+in its Makefile or run
 `make board BAUDRATE=3000000`. The board build requires GNU Make, standard POSIX command-line tools,
 and the GNU Arm toolchain; it does not use CMake or Ninja. See the
 [Channel guide](channel_card/README.md).
+
+The shared Channel application lives in `channel/`. Run plain `make` there,
+then `./bin/simulator`. Its lowercase `makefile` builds the application and Berry
+runtime with PortAudio (MacPorts/Homebrew are autodetected, or set
+`PORTAUDIO_PREFIX`). The separate `berry_compiler/` compiles programs for upload.
+The simulator prints raw USB and RS485 PTY paths. Use the existing binary USB
+protocol for programs, samples and BODY data, and RS485 for commands. Startup is
+silent until a program and note commands arrive.
+
+`init_application()` runs once before audio prefill. `generate_samples(buffer)`
+renders 48 mono signed 32-bit samples at 48 kHz using the existing voice-block
+functions. It owns no playback ring. The desktop platform prefills 29 slots in
+its 30-slot ring before starting PortAudio. Callbacks consume whatever frame
+count the device requests, retaining partial-buffer offsets across calls. They
+copy ready audio, post one refill byte per completed buffer to a nonblocking
+pipe, and return. The existing empty-ring behavior outputs silence.
+
+Main waits in `select()` for that pipe and independent USB/RS485 PTYs. Audio
+refill bytes generate one block. The core services pending parsers and replies
+when receiving input and before rendering a block. Berry, parsing and mixing
+run on main. Protocol deadlines use monotonic platform milliseconds, independently
+of audio sample time. `channel.cpp` owns pending input and output; the platform
+only hands over received chunks and reports how many output bytes were written.
+Client open/close does not emulate USB connection-generation changes. Ctrl+C
+terminates the process and the OS releases its PTYs. The former `simulator/`
+sine-wave scaffold is retained as legacy development material.
+
+The live STM32 DMA driver uses
+a ring of `BUF_COUNT` buffers per I2S output (default 2) and a four-call
+main loop. Main calls the shared mono renderer and packs audio and calibrated control voltages
+into empty ring slots in AXI SRAM. DMA reads
+48 frames from each block, switches to the next block, and its completion
+interrupt frees the finished slot and wakes main. There are no staging buffers
+or audio copies in the DMA path. RS485 replies progress without blocking.
+The gain command still uses blocking DAC I2C writes; its conversion is deferred
+and remains a risk to the 1 ms refill deadline.
+It is separate from the Channel Card firmware release package.
 
 For Effect Card, run from `effect_card/`:
 
@@ -138,8 +175,7 @@ in both projects already lives inside them.
 
 ### 4.2 Keep source lists outside generated build files
 
-Channel Card maintains build rules in `app/Makefile` and shared source lists
-in `app/sources.mk`;
+Channel Card maintains build rules and shared source lists in `channel_card/app/Makefile`;
 any CMake files produced by CubeMX are unused.
 
 On Effect Card, `cmake/stm32cubemx/CMakeLists.txt` is regenerated from the
@@ -162,7 +198,7 @@ In CubeMX:
 - Middleware → **USB_DEVICE class: Disable**
 
 Do not enable a second USB middleware stack. Channel Card uses the generated
-`MX_USB_OTG_HS_PCD_Init()`, custom CDC setup in `init_usb_protocol()`, and
+`MX_USB_OTG_HS_PCD_Init()`, custom CDC setup in `init_usb_device()`, and
 `HAL_PCD_IRQHandler()` directly. Effect Card continues using TinyUSB and its
 `tud_int_handler()` IRQ routing. Keep hand-written code in USER CODE sections.
 
@@ -171,7 +207,7 @@ Do not enable a second USB middleware stack. Channel Card uses the generated
 After every regeneration, verify these survived (they are all in USER
 CODE blocks, but check anyway):
 
-- [ ] `init_usb_protocol()` (Channel) / `USB_App_Init()` (Effect) called in `main()`
+- [ ] `init_usb_device()` (Channel) / `USB_App_Init()` (Effect) called in `main()`
 - [ ] Channel main loop services USB, RS485 and LEDs; Effect main loop calls `USB_App_Task()`
 - [ ] HAL PCD IRQ handler on Channel; `tud_int_handler(0)` on Effect
 - [ ] Source lists preserved in Channel `app/Makefile` or Effect top-level `CMakeLists.txt`
@@ -181,10 +217,10 @@ CODE blocks, but check anyway):
 
 ## 5. Repository layout
 
-The firmware projects live at the repo root. Channel custom sources are paired
-in `channel_card/app/`; its current layout is documented in the Channel README.
-The tree below describes the Effect Card layout. Channel Card's interpreter and VM
-support live in `channel_card/berry_runtime/`. `berry_compiler/` builds the standalone
+The firmware projects live at the repo root. Shared Channel application files are
+flat in `channel/`; STM32 backends remain in `channel_card/app/`. The tree below
+describes the Effect Card layout. Channel's interpreter and VM support live in
+`channel/berry_runtime/`. `berry_compiler/` builds the standalone
 host compiler; `voice_bd/` is the standalone playback application. `docs/`
 contains references and `scripts/` contains firmware utilities and explicit
 mainframe synchronization.
@@ -308,27 +344,27 @@ and SVN package. If needed, run:
 
 ```sh
 python3 scripts/tests/channel_card/run.py
-python3 scripts/tests/channel_card/run.py --audio  # macOS: plays a quiet test tone
+python3 scripts/tests/channel/run.py    # Shared simulator, PTYs, Berry upload and callbacks
+python3 scripts/tests/simulator/run.py  # Legacy scaffold and STM32 driver models
 python3 -m unittest discover -s scripts/tests -p 'test_channel_*.py'
 ```
 
 The host harness builds the matching Berry compiler and test executables in
 temporary directories. It checks audio/state equivalence across buffer sizes,
-script boundaries, DAC control voltages, transport backpressure and errors,
-and isolated simulator ports. Envelope checks exercise the bundled program's
+script boundaries, DAC control voltages, and transport backpressure and errors
+using an isolated transport model. Envelope checks exercise the bundled program's
 attack, sustain, full and interrupted release, retrigger fades, pending-note
 cancellation, hard clear, and eight independently releasing voices. They verify
-identical PCM across render request sizes from 1 to 1024 samples.
-`--baseline /path/to/old/channel_card` compares
-against a captured pre-refactor source tree. Hardware timing and throughput
-still require board measurements.
+identical PCM when fixed 48-sample calls are grouped into different output batches.
+Hardware timing and throughput still require board measurements.
 
-The optional `--audio` check uploads a Berry program and wavetable over USB,
-starts/releases a note over RS485, streams BODY using reported credit, and
-verifies the real Mac sound device requests samples through PortAudio. It checks submitted stereo PCM
-for the expected oscillator/sample tones, the bundled envelope's 50 ms attack
-and 250 ms release, and final silence. It reports callback timing and stream latency;
-it does not record the speakers or measure physical output latency.
+The shared simulator checks exercise silent prefill, variable callback sizes,
+partial blocks, ring wraparound, independent USB/RS485 routing, fragmented and
+combined messages, input capacity, blocked/partial writes, and Berry upload with
+note-on/note-off audio. A test-only PortAudio adapter avoids requiring a sound
+device. The legacy scaffold tests also exercise STM32 DMA playback with 2/3/10
+blocks, sleep/IRQ handoff, and serial-driver error and backpressure paths.
+Real playback timing is measured separately, with diagnostics outside production.
 
 `channel_card/` has no test harnesses or Python/shell-script files. Its Makefiles
 build standalone. `scripts/channel_release.py` also rejects development scripts

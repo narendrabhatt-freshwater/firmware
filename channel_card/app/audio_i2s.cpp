@@ -22,6 +22,9 @@
 */
 
 #include "audio.h"
+#include "audio_buffers.h"
+#include <hardware.h>
+#include <interrupt.h>
 #include "audio_output.h"
 #include "board.h"
 #include "main.h"
@@ -32,62 +35,21 @@
 /* ---- feed the audio dma buffers ----------------------------------------- */
 
 /* Note-bank → I2S bridge for the CS4304 4-channel DAC.
- * Owns I2S DMA ring buffers, CH1 note-bank refill,
- * the TIM7 I2S2 underrun pump, and the LED_Y DMA-load scope probe. */
+ * Owns the DMA buffer rings and the TIM7 I2S2 underrun guard. */
 
-/*
- * I2S DMA buffer sizing:
- * I2S is configured for 32-bit data, stereo (L+R), at AUDIO_SAMPLE_RATE_HZ.
- * Each I2S frame = 2 × 32-bit words (L + R) = 8 bytes
- * DMA buffer is double-buffered: half/full IRQs each refill one half.
- *
- * Default to 48 frames per half. This device setting is independent of
- * the application script interval; e.g. 96 needs no application change.
- */
-#ifndef AUDIO_I2S_HALF_FRAMES
-#define AUDIO_I2S_HALF_FRAMES 48u
-#endif
-#define AUDIO_I2S_BUF_FRAMES (AUDIO_I2S_HALF_FRAMES * 2u)
-#define AUDIO_I2S_BUF_SIZE (AUDIO_I2S_BUF_FRAMES * 2u) /* × 2 for L+R, 32-bit words */
-static_assert(AUDIO_I2S_HALF_FRAMES > 0u && AUDIO_I2S_BUF_SIZE <= 65535u,
-              "DMA transfer must fit the HAL uint16 size");
-
-static_assert(AUDIO_SAMPLE_RATE_HZ == 48000u,
-              "This board clock and DAC configuration require 48 kHz");
-
-/* I2S2 (CH3/CH4) enabled. Slave TX on SPI2 requires two workarounds:
- *  1. UDR wedge — the H7 slave halts on underrun until the flag is
- *     cleared; the TIM7 pump clears it every tick.
- *  2. IOSWP — the H7 slave transmits on MISO, but the board wires PC1
- *     (MOSI) to the DAC's SDIN2; CFG2.IOSWP swaps them internally. */
-#define AUDIO_USE_I2S2 1
-
-/* 0 = DMA feed (preferred): guaranteed sample ordering → stable CH3/CH4
- *     left/right assignment and no pump-parity slips (which caused spikes
- *     and CH3/CH4 swapping in pump mode). TIM7 stays on as a UDR guard.
- * 1 = TIM7 FIFO pump (fallback if DMA misbehaves). */
-#define AUDIO_I2S2_IT 0
-
-/*
- * IMPORTANT: DMA1 (D2 domain) cannot access DTCM RAM where .bss lives.
- * Both buffers are placed in AXI SRAM (RAM_D1) via the .dma_buffer section
- * (see STM32H725xG_flash.ld). Section is NOLOAD: buffers are cleared
- * explicitly in start_audio_playback() before DMA starts.
- */
-/* I2S1 DMA buffer for channels 1+2 */
-static int32_t i2s1_tx_buf[AUDIO_I2S_BUF_SIZE] __attribute__((aligned(4), section(".dma_buffer")));
-
-/* I2S2 DMA buffer for control voltage channels 3+4. */
-static int32_t i2s2_tx_buf[AUDIO_I2S_BUF_SIZE] __attribute__((aligned(4), section(".dma_buffer")));
+// Each DMA transfer is one 48-frame stereo block. The two hardware memory
+// addresses advance through the BUF_COUNT blocks without copying samples.
+static_assert(BUF_COUNT >= 2, "DMA needs a playing block and a following block");
+static_assert(AUDIO_BUFFER_FRAMES == AUDIO_PROCESSING_INTERVAL_SAMPLES,
+              "DMA buffers hold exactly one application call");
+static_assert(AUDIO_BUFFER_CHANNELS == 2 && AUDIO_BUFFER_WORDS <= 65535u,
+              "I2S needs stereo blocks fitting the DMA transfer count");
+static_assert(AUDIO_SAMPLE_RATE_HZ == 48000u, "The board clock requires 48 kHz");
 
 static volatile uint8_t i2s_started = 0;
 
-/* I2S1 sample fill runs in the DMA half/full ISR. Deferring refill to the
- * main loop can miss the 1 ms deadline when USB or RS485 work runs first,
- * causing DMA to replay the previous half. Eight voices at 48 kHz fit the
- * callback budget. */
-static volatile uint8_t i2s1_fill_busy = 0;
 volatile uint32_t g_i2s1_fill_late = 0;
+volatile uint32_t g_i2s2_fill_late = 0;
 
 static HAL_StatusTypeDef start_i2s2_playback(void);
 static uint32_t read_audio_refill_overlap_count(void);
@@ -95,6 +57,37 @@ static void clear_audio_output_statistics(void);
 static const AudioOutputDiagnostics output_diagnostics = {
     read_audio_refill_overlap_count, clear_audio_output_statistics
 };
+
+static void dma_block_completed(DMA_HandleTypeDef *dma);
+static void audio_dma_error(DMA_HandleTypeDef *dma);
+
+static HAL_StatusTypeDef start_audio_dma(I2S_HandleTypeDef &i2s, AudioBuffers &buffers)
+{
+    DMA_HandleTypeDef *dma = i2s.hdmatx;
+    auto *stream = static_cast<DMA_Stream_TypeDef *>(dma->Instance);
+    const unsigned first = buffers.read_index % BUF_COUNT;
+    if ((__atomic_load_n(&buffers.write_index, __ATOMIC_ACQUIRE) + 2u * BUF_COUNT -
+         buffers.read_index) % (2u * BUF_COUNT) < 2u) return HAL_ERROR;
+    dma->XferCpltCallback = dma_block_completed;
+    dma->XferM1CpltCallback = dma_block_completed;
+    dma->XferHalfCpltCallback = nullptr;
+    dma->XferM1HalfCpltCallback = nullptr;
+    dma->XferErrorCallback = audio_dma_error;
+    CLEAR_BIT(stream->CR, DMA_SxCR_CT);
+    __DMB();
+    const HAL_StatusTypeDef status = HAL_DMAEx_MultiBufferStart_IT(
+        dma, (uintptr_t)buffers.samples[first], (uintptr_t)&i2s.Instance->TXDR,
+        (uintptr_t)buffers.samples[(first + 1u) % BUF_COUNT], AUDIO_BUFFER_WORDS);
+    if (status != HAL_OK) return status;
+    i2s.pTxBuffPtr = (uint16_t *)buffers.samples[first];
+    i2s.TxXferSize = i2s.TxXferCount = AUDIO_BUFFER_WORDS;
+    i2s.ErrorCode = HAL_I2S_ERROR_NONE;
+    i2s.State = HAL_I2S_STATE_BUSY_TX;
+    SET_BIT(i2s.Instance->CFG1, SPI_CFG1_TXDMAEN);
+    __HAL_I2S_ENABLE(&i2s);
+    SET_BIT(i2s.Instance->CR1, SPI_CR1_CSTART);
+    return HAL_OK;
+}
 
 /* ---- start playback transfers ------------------------------------------- */
 
@@ -105,26 +98,24 @@ void start_audio_playback(void)
 {
     set_audio_output_diagnostics(&output_diagnostics);
     if (!i2s_started) {
-        memset(i2s1_tx_buf, 0, sizeof(i2s1_tx_buf));
-        memset(i2s2_tx_buf, 0, sizeof(i2s2_tx_buf));
-        render_control_voltage_slot(i2s1_tx_buf, AUDIO_I2S_BUF_FRAMES, 1, 1);
-        HAL_I2S_Transmit_DMA(&hi2s1, (uint16_t *)i2s1_tx_buf, AUDIO_I2S_BUF_SIZE);
-#if AUDIO_USE_I2S2
-        HAL_Delay(2);
-        start_i2s2_playback();
-#endif
+        audio_output = {};
+        control_voltage_output = {};
+        for (unsigned i = 0; i < BUF_COUNT; ++i) {
+            render_control_voltage_slot(audio_output.samples[i], AUDIO_BUFFER_FRAMES, 1, 1);
+            render_control_voltage_channels(control_voltage_output.samples[i], AUDIO_BUFFER_FRAMES, 2, 3);
+        }
+        audio_output.write_index = control_voltage_output.write_index = BUF_COUNT;
         i2s_started = 1;
+        // Both outputs are primed before the clock starts. Preserve master-first
+        // startup, then enter main without sleeping through a refill deadline.
+        if (start_audio_dma(hi2s1, audio_output) != HAL_OK ||
+            start_i2s2_playback() != HAL_OK) Error_Handler();
     }
 }
 
-/* TIM7 guards I2S2 against underrun in DMA mode. The optional interrupt
- * mode also feeds the FIFO from this timer. */
-volatile uint32_t g_pump_words = 0;      /* debugger: must keep rising */
+/* TIM7 guards I2S2 against hardware underrun. */
 volatile uint32_t g_i2s2_udr_clears = 0; /* UDR wedge recoveries */
 static volatile uint8_t i2s2_pump_on = 0;
-#if AUDIO_I2S2_IT
-static uint8_t pump_slot = 0; /* 0 = CH3 (L), 1 = CH4 (R) */
-#endif
 
 /* ---- service the secondary i2s output ----------------------------------- */
 
@@ -144,22 +135,7 @@ void service_i2s2_underrun(void)
         SPI2->IFCR = SPI_IFCR_TIFREC;
     }
 
-#if AUDIO_I2S2_IT
-    /* Feed CH3/CH4 directly from the timer in interrupt mode. */
-    if (i2s2_pump_on && ((SPI2->SR & SPI_SR_TXP) != 0u)) {
-        int32_t s;
-        if (pump_slot == 0) {
-            s = render_next_control_voltage_sample(2); /* CH3 on I2S2 left slot */
-        } else {
-            s = render_next_control_voltage_sample(3); /* CH4 on I2S2 right slot */
-        }
-        SPI2->TXDR = (uint32_t)s;
-        pump_slot ^= 1u;
-        g_pump_words++;
-    }
-#endif
-    /* DMA mode: feeding is done by DMA + half/complete callbacks; this tick
-     * is only the UDR guard above. */
+    /* This timer only services hardware flags; main generates audio. */
 }
 
 /* ---- configure the secondary i2s timer ---------------------------------- */
@@ -175,8 +151,8 @@ static void init_i2s2_underrun_timer(void)
     TIM7->PSC = 274; /* 275 MHz / 275 = 1 MHz            */
     TIM7->ARR = 9;   /* 1 MHz / 10 = 100 kHz tick        */
     TIM7->DIER = TIM_DIER_UIE;
-    /* USB OTG (priority 0) preempts this tick. This tick preempts the I2S1 DMA
-     * fill (priority 2) so a long mix cannot wedge the I2S2 slave. */
+    /* USB OTG (priority 0) preempts this tick. This tick preempts both the
+     * I2S1 completion interrupt (priority 2) and main-loop rendering. */
     HAL_NVIC_SetPriority(TIM7_IRQn, 1, 0);
     HAL_NVIC_EnableIRQ(TIM7_IRQn);
     TIM7->CR1 = TIM_CR1_CEN;
@@ -184,37 +160,9 @@ static void init_i2s2_underrun_timer(void)
 
 /* ---- start the secondary i2s peripheral --------------------------------- */
 
-/* Prefill CH3/CH4 with slewed DC samples before starting the transfer. */
+/* Start the already primed CH3/CH4 transfer. */
 static HAL_StatusTypeDef start_i2s2_playback(void)
 {
-    render_control_voltage_channels(&i2s2_tx_buf[0], AUDIO_I2S_BUF_FRAMES, 2, 3);
-#if AUDIO_I2S2_IT
-    {
-        /* H7 SPI: a SLAVE transmits on MISO, but the board wires PC1 = MOSI to
-         * the DAC's SDIN2 (the master-mode SDO pin). IOSWP swaps MISO/MOSI
-         * inside the peripheral so the slave's data comes out on PC1.
-         * CFG2 is only writable while SPE = 0. */
-        CLEAR_BIT(SPI2->CR1, SPI_CR1_SPE);
-        SET_BIT(SPI2->CFG2, SPI_CFG2_IOSWP);
-
-        HAL_StatusTypeDef st =
-            HAL_I2S_Transmit_IT(&hi2s2, (uint16_t *)i2s2_tx_buf, AUDIO_I2S_BUF_SIZE);
-        /* ROOT CAUSE of the CH3/CH4 silence: a transient UDR (slave underrun)
-         * at stream start makes the stock HAL abort the whole transfer.
-         * UDR is benign here (one repeated sample) — clear it and mask the
-         * interrupt so HAL never sees it.
-         * FRE must be masked too: HAL enables it for slaves but its IRQ handler
-         * never services/clears it in TX state → interrupt storm if it sets. */
-        __HAL_I2S_CLEAR_UDRFLAG(&hi2s2);
-        __HAL_I2S_CLEAR_TIFREFLAG(&hi2s2);
-        /* Keep HAL fully dormant (TXP too): the TIM7 pump owns the FIFO. */
-        __HAL_I2S_DISABLE_IT(&hi2s2, (I2S_IT_TXP | I2S_IT_UDR | I2S_IT_FRE));
-        pump_slot = 0;
-        init_i2s2_underrun_timer();
-        i2s2_pump_on = 1;
-        return st;
-    }
-#else
     {
         /* IOSWP: H7 slave transmits on MISO; board wires PC1 = MOSI to SDIN2.
          * Swap internally. CFG2 writable only while SPE = 0. */
@@ -222,7 +170,7 @@ static HAL_StatusTypeDef start_i2s2_playback(void)
         SET_BIT(SPI2->CFG2, SPI_CFG2_IOSWP);
 
         HAL_StatusTypeDef st =
-            HAL_I2S_Transmit_DMA(&hi2s2, (uint16_t *)i2s2_tx_buf, AUDIO_I2S_BUF_SIZE);
+            start_audio_dma(hi2s2, control_voltage_output);
 
         /* Clear the inevitable start-up underrun and mask error interrupts so
          * HAL can never abort the transfer. TIM7 keeps running as a fast UDR
@@ -234,69 +182,51 @@ static HAL_StatusTypeDef start_i2s2_playback(void)
         i2s2_pump_on = 1;
         return st;
     }
-#endif
 }
 
-/* ---- refill one audio dma half ------------------------------------------ */
+/* ---- publish completion interrupts and refill from main ---------------- */
 
-/**
- * Fill one free half of i2s1_tx_buf (CH2 right + CH1 left).
- * Called from the I2S1 DMA half/full ISR.
- */
-static void refill_i2s1_buffer_half(uint8_t half)
+static void refill_deadline_missed(unsigned port)
 {
-    int32_t *buf = (half == 0u) ? &i2s1_tx_buf[0] : &i2s1_tx_buf[AUDIO_I2S_BUF_FRAMES];
-    const uint32_t frames = AUDIO_I2S_BUF_FRAMES / 2u;
-
-    if (i2s1_fill_busy != 0u) {
-        g_i2s1_fill_late++;
-        /* Re-entering a DMA half refill means output timing is already corrupt. */
-        Error_Handler();
-    }
-    i2s1_fill_busy = 1u;
-    render_dac_audio_frames(buf, frames);
-    i2s1_fill_busy = 0u;
+    if (port == 0) ++g_i2s1_fill_late;
+    else ++g_i2s2_fill_late;
+    Error_Handler();
 }
 
-/* ---- service i2s dma callbacks ------------------------------------------ */
-
-/**
- * @brief  I2S1 DMA half transfer complete callback.
- *         DMA now plays the second half → refill the first.
- */
-void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s)
+static void dma_block_completed(DMA_HandleTypeDef *dma)
 {
-    if (hi2s->Instance == SPI1) {
-        refill_i2s1_buffer_half(0u);
-    } else if (hi2s->Instance == SPI2) {
-        render_control_voltage_channels(&i2s2_tx_buf[0], AUDIO_I2S_BUF_FRAMES / 2, 2, 3);
+    auto *i2s = static_cast<I2S_HandleTypeDef *>(dma->Parent);
+    const unsigned port = i2s->Instance == SPI1 ? 0u : 1u;
+    AudioBuffers &buffers = port == 0 ? audio_output : control_voltage_output;
+    auto *stream = static_cast<DMA_Stream_TypeDef *>(dma->Instance);
+    const bool playing_memory1 = (stream->CR & DMA_SxCR_CT) != 0;
+    const unsigned next = (buffers.read_index + 1u) % (2u * BUF_COUNT);
+    // Hardware has already switched to the next block. Check its address before
+    // freeing the old one, so a missed interrupt cannot free the playing block.
+    if ((playing_memory1 ? stream->M1AR : stream->M0AR) != (uintptr_t)buffers.samples[next % BUF_COUNT]) {
+        refill_deadline_missed(port);
+        return;
     }
+    __atomic_store_n(&buffers.read_index, next, __ATOMIC_RELEASE);
+    if (__atomic_load_n(&buffers.write_index, __ATOMIC_ACQUIRE) == next) {
+        refill_deadline_missed(port);
+        return;
+    }
+    // Only update the inactive address. Main refills freed slots before DMA
+    // reaches them again; the current block continues without a transfer restart.
+    HAL_DMAEx_ChangeMemory(dma, (uintptr_t)buffers.samples[(next + 1u) % BUF_COUNT],
+                          playing_memory1 ? MEMORY0 : MEMORY1);
+    signal_interrupt();
 }
 
-/**
- * @brief  I2S DMA full transfer complete callback.
- *         SPI1: DMA wrapped → refill the second half.
- */
-void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s)
+static void audio_dma_error(DMA_HandleTypeDef *dma)
 {
-    if (hi2s->Instance == SPI1) {
-        refill_i2s1_buffer_half(1u);
-    } else if (hi2s->Instance == SPI2) {
-#if AUDIO_I2S2_IT
-        /* IT mode: no half-complete events — refill the WHOLE buffer here,
-         * then re-arm the interrupt transfer (self-sustaining chain). */
-        render_control_voltage_channels(&i2s2_tx_buf[0], AUDIO_I2S_BUF_FRAMES, 2, 3);
-#else
-        render_control_voltage_channels(&i2s2_tx_buf[AUDIO_I2S_BUF_FRAMES],
-                                        AUDIO_I2S_BUF_FRAMES / 2, 2, 3);
-#endif
-#if AUDIO_I2S2_IT
-        HAL_I2S_Transmit_IT(&hi2s2, (uint16_t *)i2s2_tx_buf, AUDIO_I2S_BUF_SIZE);
-        __HAL_I2S_CLEAR_UDRFLAG(&hi2s2);
-        __HAL_I2S_CLEAR_TIFREFLAG(&hi2s2);
-        __HAL_I2S_DISABLE_IT(&hi2s2, (I2S_IT_UDR | I2S_IT_FRE));
-#endif
-    }
+    auto *i2s = static_cast<I2S_HandleTypeDef *>(dma->Parent);
+    CLEAR_BIT(i2s->Instance->CFG1, SPI_CFG1_RXDMAEN | SPI_CFG1_TXDMAEN);
+    i2s->TxXferCount = i2s->RxXferCount = 0;
+    i2s->State = HAL_I2S_STATE_READY;
+    i2s->ErrorCode |= HAL_I2S_ERROR_DMA;
+    HAL_I2S_ErrorCallback(i2s);
 }
 
 /* Count of self-healing restarts after an I2S error (debugger-visible) */
@@ -312,11 +242,7 @@ void HAL_I2S_ErrorCallback(I2S_HandleTypeDef *hi2s)
         g_i2s2_err_restarts++;
         __HAL_I2S_CLEAR_UDRFLAG(hi2s);
         __HAL_I2S_CLEAR_TIFREFLAG(hi2s);
-#if AUDIO_I2S2_IT
-        HAL_I2S_Transmit_IT(hi2s, (uint16_t *)i2s2_tx_buf, AUDIO_I2S_BUF_SIZE);
-#else
-        HAL_I2S_Transmit_DMA(hi2s, (uint16_t *)i2s2_tx_buf, AUDIO_I2S_BUF_SIZE);
-#endif
+        if (start_audio_dma(*hi2s, control_voltage_output) != HAL_OK) Error_Handler();
         __HAL_I2S_DISABLE_IT(hi2s, (I2S_IT_UDR | I2S_IT_FRE));
     }
 }
@@ -325,10 +251,10 @@ void HAL_I2S_ErrorCallback(I2S_HandleTypeDef *hi2s)
 
 static uint32_t read_audio_refill_overlap_count(void)
 {
-    return g_i2s1_fill_late;
+    return g_i2s1_fill_late + g_i2s2_fill_late;
 }
 
 static void clear_audio_output_statistics(void)
 {
-    g_i2s1_fill_late = 0u;
+    g_i2s1_fill_late = g_i2s2_fill_late = 0u;
 }

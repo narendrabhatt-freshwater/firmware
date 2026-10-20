@@ -22,18 +22,19 @@
 */
 
 #include "audio.h"
-#include "channel.h"
+#include "audio_buffers.h"
+#include "backend_model.h"
+#include "application.h"
+#include "transport.h"
 #include "usb.h"
-#ifndef LEGACY_API
 #include "audio_output.h"
-#endif
 #include <assert.h>
 #include <stdio.h>
 #include <initializer_list>
 static void emit(int32_t *data,unsigned count) { assert(fwrite(data,4,count,stdout)==count); }
 int main()
 {
-    init_usb_protocol(); init_channel_card();
+    init_usb_device(); init_application();
     int32_t data[192]={};
     for(unsigned ch=2;ch<=4;++ch) set_control_voltage_target(ch,0);
     render_control_voltage_slot(data,96,1,1); emit(data,192);
@@ -41,13 +42,15 @@ int main()
     for(int target : {100,-100,0}) {
         for(unsigned ch=2;ch<=4;++ch) set_control_voltage_target(ch,(int8_t)target);
         for(unsigned n=0;n<100;++n) {
-#ifdef LEGACY_API
-            render_audio_block(data,48);
-#else
-            render_dac_audio_frames(data,48);
-#endif
+            generate_audio_samples();
+            for (unsigned i = 0; i < 96; ++i)
+                data[i] = audio_output.samples[audio_output.read_index % BUF_COUNT][i];
+            audio_output.read_index = (audio_output.read_index + 1) % (2u * BUF_COUNT);
             emit(data,96);
-            render_control_voltage_channels(data,48,2,3); emit(data,96);
+            for (unsigned i = 0; i < 96; ++i)
+                data[i] = control_voltage_output.samples[control_voltage_output.read_index % BUF_COUNT][i];
+            control_voltage_output.read_index = (control_voltage_output.read_index + 1) % (2u * BUF_COUNT);
+            emit(data,96);
         }
     }
     return 0;

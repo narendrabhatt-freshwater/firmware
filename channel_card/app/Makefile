@@ -35,6 +35,7 @@ OBJDUMP := $(CROSS_COMPILE)objdump
 
 MAKEFILE := $(abspath $(lastword $(MAKEFILE_LIST)))
 ROOT := $(abspath $(dir $(MAKEFILE))/..)
+CHANNEL_ROOT ?= $(abspath $(ROOT)/../channel)
 OBJDIR := $(ROOT)/build/release
 BINDIR := $(ROOT)/bin
 NAME := channel_MCU
@@ -45,11 +46,11 @@ BINARY := $(BINDIR)/$(NAME).bin
 INFO := $(OBJDIR)/$(NAME).info
 CONFIG := $(OBJDIR)/build.config
 LINKER_SCRIPT := $(ROOT)/STM32H725xG_flash.ld
-BERRY := berry_runtime/third_party/berry
+BERRY := channel/berry_runtime/third_party/berry
 
 .DEFAULT_GOAL := all
 .DELETE_ON_ERROR:
-.PHONY: all sim board clean FORCE
+.PHONY: all board clean FORCE report building-application building-berry building-drivers
 
 # ---- source lists (keep link order stable) ----------------------------------
 
@@ -69,11 +70,12 @@ CORE_SOURCES := \
     core/src/syscalls.c \
     startup_stm32h725xx.s
 
-APP_SOURCES := app/audio.cpp app/channel.cpp app/filter.cpp \
-               app/oscillator.cpp app/voice.cpp app/samples.cpp \
-               app/stream.cpp app/usb.cpp app/transport.cpp app/platform.cpp \
-               app/cs4304.cpp app/audio_dac.cpp \
-               app/audio_i2s.cpp app/board_stm32.cpp app/usb_device.cpp
+SHARED_APP_SOURCES := channel/audio.cpp channel/channel.cpp channel/filter.cpp \
+               channel/oscillator.cpp channel/voice.cpp channel/samples.cpp \
+               channel/stream.cpp channel/usb.cpp channel/transport.cpp channel/platform.cpp \
+               channel/serial_buffer.cpp
+APP_SOURCES := $(SHARED_APP_SOURCES) app/cs4304.cpp app/audio.cpp app/audio_dac.cpp \
+               app/audio_i2s.cpp app/board_stm32.cpp app/usb_device.cpp app/interrupt_stm32.cpp
 
 DRIVER_SOURCES := \
     core/src/system_stm32h7xx.c \
@@ -105,10 +107,10 @@ DRIVER_SOURCES := \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_hal_pcd_ex.c \
     drivers/stm32h7xx_hal_driver/src/stm32h7xx_ll_usb.c
 
-VM_SOURCES := berry_runtime/vm.c berry_runtime/vm_source.c
-BACKEND_SOURCES := berry_runtime/berry_backend.c
-BERRY_SOURCES := $(patsubst $(ROOT)/%,%,$(sort $(wildcard $(ROOT)/$(BERRY)/src/*.c))) \
-                 berry_runtime/berry_runtime_modtab.c
+VM_SOURCES := channel/berry_runtime/vm.c channel/berry_runtime/vm_source.c
+BACKEND_SOURCES := channel/berry_runtime/berry_backend.c
+BERRY_SOURCES := $(patsubst $(CHANNEL_ROOT)/%,channel/%,$(sort $(wildcard $(CHANNEL_ROOT)/berry_runtime/third_party/berry/src/*.c))) \
+                 channel/berry_runtime/berry_runtime_modtab.c
 
 # Include the extension in object names so C, C++ and assembly cannot collide.
 CORE_OBJECTS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(CORE_SOURCES)))
@@ -139,21 +141,21 @@ MCU_INCLUDES := -I$(ROOT)/core/inc \
                 -I$(ROOT)/drivers/stm32h7xx_hal_driver/inc/legacy \
                 -I$(ROOT)/drivers/cmsis/device/st/stm32h7xx/include \
                 -I$(ROOT)/drivers/cmsis/include
-APP_INCLUDES := -I$(ROOT)/app -I$(ROOT)/berry_runtime $(MCU_INCLUDES) \
-                -I$(ROOT)/$(BERRY)/src
+APP_INCLUDES := $(MCU_INCLUDES) -I$(ROOT)/app -I$(CHANNEL_ROOT) \
+                -I$(CHANNEL_ROOT)/berry_runtime -I$(CHANNEL_ROOT)/berry_runtime/third_party/berry/src
 LDFLAGS := $(CPU_FLAGS) -T$(LINKER_SCRIPT) --specs=nano.specs \
-           -Wl,-Map=$(MAP) -Wl,--gc-sections -Wl,--print-memory-usage \
+           -Wl,-Map=$(MAP) -Wl,--gc-sections \
            -Wl,-u,_scanf_float -Wl,-u,_printf_float
 
 $(CORE_OBJECTS) $(APP_OBJECTS): PRIVATE_CPPFLAGS := $(MCU_DEFINES) $(APP_INCLUDES) -DFW_RS485_BAUD=$(BAUDRATE)u
 $(CORE_OBJECTS): PRIVATE_CFLAGS := -std=gnu11
 $(DRIVER_OBJECTS): PRIVATE_CPPFLAGS := $(MCU_DEFINES) $(MCU_INCLUDES)
 $(DRIVER_OBJECTS): PRIVATE_CFLAGS := -std=gnu11
-$(VM_OBJECTS): PRIVATE_CPPFLAGS := -I$(ROOT)/berry_runtime
+$(VM_OBJECTS): PRIVATE_CPPFLAGS := -I$(CHANNEL_ROOT)/berry_runtime
 $(VM_OBJECTS): PRIVATE_CFLAGS := -std=c11 -Wextra -Werror
-$(BACKEND_OBJECTS): PRIVATE_CPPFLAGS := -I$(ROOT)/berry_runtime -I$(ROOT)/$(BERRY)/src
+$(BACKEND_OBJECTS): PRIVATE_CPPFLAGS := -I$(CHANNEL_ROOT)/berry_runtime -I$(CHANNEL_ROOT)/berry_runtime/third_party/berry/src
 $(BACKEND_OBJECTS): PRIVATE_CFLAGS := -std=c11 -Wextra -Werror -pedantic
-$(BERRY_OBJECTS): PRIVATE_CPPFLAGS := -I$(ROOT)/$(BERRY)/src -I$(ROOT)/berry_runtime
+$(BERRY_OBJECTS): PRIVATE_CPPFLAGS := -I$(CHANNEL_ROOT)/berry_runtime/third_party/berry/src -I$(CHANNEL_ROOT)/berry_runtime
 $(BERRY_OBJECTS): PRIVATE_CFLAGS := -std=c11 -w
 
 # Check settings on every build, but only change the stamp when settings change.
@@ -179,42 +181,62 @@ FORCE:
 
 $(OBJECTS): $(CONFIG) $(MAKEFILE)
 
+$(APP_OBJECTS) $(CORE_OBJECTS): | building-application
+$(BERRY_OBJECTS) $(VM_OBJECTS) $(BACKEND_OBJECTS): | building-berry
+$(DRIVER_OBJECTS): | building-drivers
+building-application:
+	@printf 'Building application\n'
+building-berry:
+	@printf 'Building Berry\n'
+building-drivers:
+	@printf 'Building STM32 drivers\n'
+
+
+$(OBJDIR)/channel/%.c.o: $(CHANNEL_ROOT)/%.c
+	@mkdir -p "$(@D)"
+	@$(CC) $(CPPFLAGS) $(PRIVATE_CPPFLAGS) $(CFLAGS) $(PRIVATE_CFLAGS) -MMD -MP -MF "$(@:.o=.d)" -c "$<" -o "$@"
+
+$(OBJDIR)/channel/%.cpp.o: $(CHANNEL_ROOT)/%.cpp
+	@mkdir -p "$(@D)"
+	@$(CXX) $(CPPFLAGS) $(PRIVATE_CPPFLAGS) $(CXXFLAGS) -MMD -MP -MF "$(@:.o=.d)" -c "$<" -o "$@"
+
 $(OBJDIR)/%.c.o: $(ROOT)/%.c
 	@mkdir -p "$(@D)"
-	$(CC) $(CPPFLAGS) $(PRIVATE_CPPFLAGS) $(CFLAGS) $(PRIVATE_CFLAGS) -MMD -MP -MF "$(@:.o=.d)" -c "$<" -o "$@"
+	@$(CC) $(CPPFLAGS) $(PRIVATE_CPPFLAGS) $(CFLAGS) $(PRIVATE_CFLAGS) -MMD -MP -MF "$(@:.o=.d)" -c "$<" -o "$@"
 
 $(OBJDIR)/%.cpp.o: $(ROOT)/%.cpp
 	@mkdir -p "$(@D)"
-	$(CXX) $(CPPFLAGS) $(PRIVATE_CPPFLAGS) $(CXXFLAGS) -MMD -MP -MF "$(@:.o=.d)" -c "$<" -o "$@"
+	@$(CXX) $(CPPFLAGS) $(PRIVATE_CPPFLAGS) $(CXXFLAGS) -MMD -MP -MF "$(@:.o=.d)" -c "$<" -o "$@"
 
 $(OBJDIR)/%.s.o: $(ROOT)/%.s
 	@mkdir -p "$(@D)"
-	$(CC) $(CPPFLAGS) $(PRIVATE_CPPFLAGS) $(ASFLAGS) -MMD -MP -MF "$(@:.o=.d)" -c "$<" -o "$@"
+	@$(CC) $(CPPFLAGS) $(PRIVATE_CPPFLAGS) $(ASFLAGS) -MMD -MP -MF "$(@:.o=.d)" -c "$<" -o "$@"
 
 $(VM_LIB): $(VM_OBJECTS) $(MAKEFILE)
 	@rm -f "$@"
-	$(AR) qc "$@" $(VM_OBJECTS)
-	$(AR) s "$@"
+	@$(AR) qc "$@" $(VM_OBJECTS)
+	@$(AR) s "$@"
 
 $(BACKEND_LIB): $(BACKEND_OBJECTS) $(MAKEFILE)
 	@rm -f "$@"
-	$(AR) qc "$@" $(BACKEND_OBJECTS)
-	$(AR) s "$@"
+	@$(AR) qc "$@" $(BACKEND_OBJECTS)
+	@$(AR) s "$@"
 
 $(BERRY_LIB): $(BERRY_OBJECTS) $(MAKEFILE)
 	@rm -f "$@"
-	$(AR) qc "$@" $(BERRY_OBJECTS)
-	$(AR) s "$@"
+	@$(AR) qc "$@" $(BERRY_OBJECTS)
+	@$(AR) s "$@"
 
 $(ELF): $(CORE_OBJECTS) $(APP_OBJECTS) $(DRIVER_OBJECTS) $(BACKEND_LIB) $(BERRY_LIB) $(VM_LIB) $(LINKER_SCRIPT) $(MAKEFILE)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(CORE_OBJECTS) $(APP_OBJECTS) $(DRIVER_OBJECTS) -o "$@" -lm $(BACKEND_LIB) $(BERRY_LIB) -lm $(VM_LIB) -lm
+	@printf 'Linking firmware\n'
+	@$(CXX) $(CXXFLAGS) $(LDFLAGS) $(CORE_OBJECTS) $(APP_OBJECTS) $(DRIVER_OBJECTS) -o "$@" -lm $(BACKEND_LIB) $(BERRY_LIB) -lm $(VM_LIB) -lm
 
 $(BUILD_BINARY): $(ELF)
-	$(OBJCOPY) -O binary "$<" "$@"
+	@$(OBJCOPY) -O binary "$<" "$@"
 
 # Optional compatibility output for scripts/fw's CubeProgrammer path.
 $(OBJDIR)/$(NAME).hex: $(ELF)
-	$(OBJCOPY) -O ihex "$<" "$@"
+	@$(OBJCOPY) -O ihex "$<" "$@"
 
 # Publish only after binary conversion and report generation succeed.
 $(BINARY): $(BUILD_BINARY) $(INFO)
@@ -222,9 +244,11 @@ $(BINARY): $(BUILD_BINARY) $(INFO)
 	@cp "$(BUILD_BINARY)" "$@.tmp"
 	@mv "$@.tmp" "$@"
 
-all: sim
+all: board
 
 board: $(BINARY) $(OBJDIR)/$(NAME).hex
+
+report: $(INFO)
 	@cat "$(INFO)"
 
 # ---- firmware report --------------------------------------------------------
@@ -286,13 +310,6 @@ $(INFO): $(BUILD_BINARY) $(MAKEFILE)
 	  }' "$(MAP)" "$@.sections"; \
 	} > "$@.tmp"; \
 	mv "$@.tmp" "$@"
-
-# Host simulator: the same application sources behind virtual ports. Built
-# with the host compiler by sim/Makefile; it does not use the Arm toolchain.
-sim:
-	@test -f "$(ROOT)/sim/Makefile" || \
-	    { echo "The simulator sources (sim/) are not part of this package."; exit 1; }
-	@$(MAKE) -C "$(ROOT)/sim"
 
 clean:
 	@rm -rf "$(OBJDIR)"

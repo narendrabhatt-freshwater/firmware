@@ -33,6 +33,7 @@ void init_board_platform(void);
 /* Physical startup and periodic outputs belong to the firmware entry point. */
 void init_channel_board(void);
 void update_channel_leds(void);
+void process_rs485(void);
 #ifdef __cplusplus
 }
 #endif

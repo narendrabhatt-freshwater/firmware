@@ -35,7 +35,6 @@ void set_control_voltage_target(uint8_t channel, int8_t percent);
 int32_t render_next_control_voltage_sample(uint8_t ch);
 void render_control_voltage_channels(int32_t *buf, uint32_t frames, uint8_t left, uint8_t right);
 void render_control_voltage_slot(int32_t *buf, uint32_t frames, uint8_t ch, uint8_t slot);
-void render_dac_audio_frames(int32_t *buf, uint32_t frames);
 #ifdef __cplusplus
 }
 #endif

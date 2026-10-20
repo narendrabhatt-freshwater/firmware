@@ -2,7 +2,7 @@
 
 Sources: [`filter.cpp`](../../channel_card/app/filter.cpp) contains the filter kernel and per-voice
 filter control; [`filter.h`](../../channel_card/app/filter.h) declares the API.
-[`voice.cpp`](../../channel_card/app/voice.cpp) calls the filter during note rendering.
+[`voice.cpp`](../../channel/voice.cpp) calls the filter during note rendering.
 
 This document explains **why** the filter is built this way, the **structure**
 used in firmware, and how to **verify** it on a scope against theory.

@@ -24,6 +24,9 @@ class ChannelMakeTests(unittest.TestCase):
         shutil.copytree(ROOT / "channel_card", cls.card,
                         ignore=shutil.ignore_patterns("build", "bin", ".build",
                                                       ".git", "__pycache__"))
+        cls.channel = cls.card.parent / "channel"
+        shutil.copytree(ROOT / "channel", cls.channel,
+                        ignore=shutil.ignore_patterns("build", "bin", ".git", "__pycache__"))
         cls.binary = cls.card / "bin/channel_MCU.bin"
         cls.build = cls.card / "build/release"
         cls.report = cls.build / "channel_MCU.info"
@@ -31,6 +34,7 @@ class ChannelMakeTests(unittest.TestCase):
         if result.returncode:
             raise RuntimeError(result.stdout)
         cls.baseline = cls.binary.read_bytes()
+        cls.initial_output = result.stdout
 
     @classmethod
     def make(cls, *args):
@@ -55,6 +59,38 @@ class ChannelMakeTests(unittest.TestCase):
         return {p.relative_to(self.card): p.stat().st_mtime_ns
                 for p in self.build.rglob("*") if p.is_file()} | {
                     Path("bin/channel_MCU.bin"): self.binary.stat().st_mtime_ns}
+
+    def test_concise_build_output_and_explicit_report(self):
+        self.assertIn("Building application", self.initial_output)
+        self.assertIn("Building Berry", self.initial_output)
+        self.assertIn("Linking firmware", self.initial_output)
+        self.assertNotIn("-mcpu=", self.initial_output)
+        self.assertNotIn("Memory region", self.initial_output)
+        result = self.successful_make("report")
+        self.assertIn("Memory region", result.stdout)
+
+    def backdate_channel_object(self):
+        # System Make 3.81 compares whole seconds. Force each injected source
+        # diagnostic to be newer than its object, even in a fast local run.
+        obj = self.build / "channel/channel.cpp.o"
+        older = obj.stat().st_mtime_ns - 2_000_000_000
+        os.utime(obj, ns=(older, older))
+
+    def test_compiler_warnings_remain_visible(self):
+        source = self.channel / "channel.cpp"
+        original = source.read_bytes()
+        try:
+            self.backdate_channel_object()
+            source.write_bytes(original + b"\n#warning deliberate_build_test_warning\n")
+            result = self.successful_make()
+            self.assertIn("warning:", result.stdout)
+            self.assertIn("deliberate_build_test_warning", result.stdout)
+            self.assertNotIn("-mcpu=", result.stdout)
+        finally:
+            source.write_bytes(original)
+            if (self.build / "channel/channel.cpp.o").exists():
+                self.backdate_channel_object()
+            self.successful_make()
 
     def test_noop_and_status_do_not_rebuild_or_change_baud(self):
         before = self.artifact_times()
@@ -84,22 +120,23 @@ class ChannelMakeTests(unittest.TestCase):
                 self.assertEqual(before, self.artifact_times())
 
     def test_header_dependencies_recompile_affected_source(self):
-        obj = self.build / "app/channel.cpp.o"
+        obj = self.build / "channel/channel.cpp.o"
         # macOS system Make 3.81 compares timestamps at whole-second precision.
         # Backdate this temporary object so the header is unambiguously newer.
         older = obj.stat().st_mtime_ns - 2_000_000_000
         os.utime(obj, ns=(older, older))
         before = obj.stat().st_mtime_ns
-        os.utime(self.card / "app/channel.h", None)
+        os.utime(self.channel / "channel.h", None)
         self.successful_make()
         self.assertGreater(obj.stat().st_mtime_ns, before)
         self.assertEqual(self.baseline, self.binary.read_bytes())
 
     def test_failed_compile_preserves_delivered_binary_and_report(self):
-        source = self.card / "app/channel.cpp"
+        source = self.channel / "channel.cpp"
         original = source.read_bytes()
         report = self.report.read_bytes()
         try:
+            self.backdate_channel_object()
             source.write_bytes(original + b"\n#error deliberate_build_test_failure\n")
             result = self.make()
             self.assertNotEqual(result.returncode, 0)
@@ -108,6 +145,8 @@ class ChannelMakeTests(unittest.TestCase):
             self.assertEqual(report, self.report.read_bytes())
         finally:
             source.write_bytes(original)
+            if (self.build / "channel/channel.cpp.o").exists():
+                self.backdate_channel_object()
             self.successful_make()
 
     def test_clean_and_rebuild(self):

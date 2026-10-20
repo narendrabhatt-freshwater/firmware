@@ -22,7 +22,9 @@
 */
 
 #include "audio.h"
-#include "channel.h"
+#include "audio_consumer.h"
+#include "application.h"
+#include "transport.h"
 #include "voice.h"
 #include "samples.h"
 #include "stream.h"
@@ -43,13 +45,6 @@ static void render(unsigned count,unsigned partition) {
     int32_t out[512];
     while(count) {
         unsigned n=std::min(count,partition);
-#ifdef LEGACY_API
-        assert(n%48==0);
-        for(unsigned i=0;i<n;i+=48) {
-            int32_t stereo[96]; render_audio_block(stereo,48);
-            for(unsigned j=0;j<48;++j) out[i+j]=stereo[j*2];
-        }
-#else
         if(partition==480) { // Test-only oracle: original boundary ordering.
             assert(n%48==0);
             for(unsigned i=0;i<n;i+=48) {
@@ -58,10 +53,9 @@ static void render(unsigned count,unsigned partition) {
                 end_voice_audio_block();
             }
         } else {
-            render_audio_samples(nullptr,0);
-            render_audio_samples(out,n);
+            assert(n % 48 == 0);
+            for (unsigned i=0; i<n; i+=48) next_mono_samples(out+i);
         }
-#endif
         emit(out,n*sizeof(*out)); count-=n;
     }
 }
@@ -78,7 +72,7 @@ static void supply() {
 int main(int argc,char **argv) {
     assert(argc==3);
     unsigned partition=(unsigned)atoi(argv[2]); assert(partition && partition<=512);
-    init_usb_protocol(); init_channel_card();
+    init_usb_device(); init_application();
     std::ifstream input(argv[1],std::ios::binary);
     std::vector<char> program{std::istreambuf_iterator<char>(input),{}}; assert(!program.empty());
     uint8_t attack[512]; for(unsigned i=0;i<512;++i) attack[i]=(uint8_t)(i%127-63);

@@ -7,5 +7,5 @@
 
 This is a pruned source snapshot. Upstream tests, examples, CI metadata, and the
 nested Git repository are omitted. Runtime behaviour is selected by the
-project-owned configuration and port files under `channel_card/berry_runtime/`
+project-owned configuration and port files under `channel/berry_runtime/`
 and the host-compiler configuration under `berry_compiler/config`.

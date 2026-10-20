@@ -25,9 +25,10 @@
 #include <stdint.h>
 #include <vector>
 namespace model {
-extern uint32_t time_ms, epoch, read_limit, tx_capacity, drops, tx_polls;
-extern bool connected, faulted, tx_stalled, bus_owned;
-extern unsigned usb_services, aborts;
+extern uint32_t time_ms, read_limit;
 extern std::vector<uint8_t> usb_rx, usb_tx, rs_rx, rs_tx;
 void reconnect();
+void service_usb();
+void service_rs485();
 }
+void init_usb_device(); // Test fixture setup, not an application transport API.

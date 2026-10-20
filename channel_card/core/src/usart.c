@@ -21,7 +21,7 @@
 #include "usart.h"
 
 /* USER CODE BEGIN 0 */
-#include "channel.h"
+#include "hardware.h"
 
 /* USER CODE END 0 */
 

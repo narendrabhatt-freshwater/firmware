@@ -24,7 +24,10 @@
 /* Measure the bundled envelope program using sample-clocked rendering.
  * Constant source PCM exposes the gain envelope directly in the output. */
 #include "audio.h"
-#include "channel.h"
+#include "backend_model.h"
+#include "audio_consumer.h"
+#include "application.h"
+#include "transport.h"
 #include "voice.h"
 #include "samples.h"
 #include "stream.h"
@@ -64,7 +67,8 @@ static void advance(unsigned count, bool refill = true)
     while (count) {
         if (refill) supply();
         unsigned n = std::min(count, partition);
-        render_audio_samples(block, n);
+        assert(n % 48 == 0);
+        for (unsigned i = 0; i < n; i += 48) next_mono_samples(block + i);
         pcm.insert(pcm.end(), block, block + n);
         count -= n;
     }
@@ -106,9 +110,9 @@ int main(int argc, char **argv)
 {
     assert(argc == 3);
     partition = (unsigned)atoi(argv[2]);
-    assert(partition > 0 && partition <= 1024);
-    init_usb_protocol();
-    init_channel_card();
+    assert(partition > 0 && partition <= 1024 && partition % 48 == 0);
+    init_usb_device();
+    init_application();
     std::ifstream input(argv[1], std::ios::binary);
     std::vector<char> program{std::istreambuf_iterator<char>(input), {}};
     assert(!program.empty());

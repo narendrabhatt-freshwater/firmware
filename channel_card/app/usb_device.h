@@ -27,6 +27,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+void init_usb_device(void);
+void process_usb(void);
 #define USB_STREAM_VID 0xCAFEu
 #define USB_STREAM_PID 0x4032u
 const uint8_t *get_usb_descriptor(uint8_t type, uint8_t index, uint16_t *size);

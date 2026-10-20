@@ -28,7 +28,7 @@ class ChannelReleaseTests(unittest.TestCase):
         cls.repo.mkdir()
         paths = subprocess.check_output([
             "git", "ls-files", "-z", "--cached", "--others", "--exclude-standard",
-            "--", "channel_card", "berry_compiler"], cwd=ROOT)
+            "--", "channel", "channel_card", "berry_compiler"], cwd=ROOT)
         for raw in set(paths.split(b"\0")) - {b""}:
             rel = os.fsdecode(raw)
             src = ROOT / rel
@@ -67,21 +67,21 @@ class ChannelReleaseTests(unittest.TestCase):
         self.assertEqual(self.manifest["snapshot"], "committed")
         self.assertEqual(self.manifest["git_revision"],
                          self.fixture_run("git", "rev-parse", "HEAD").decode().strip())
-        self.assertTrue((self.package / "app/usb.cpp").is_file())
+        self.assertTrue((self.package / "channel/usb.cpp").is_file())
         self.assertTrue((self.package / "app/Makefile").is_file())
         self.assertTrue((self.package / "PROTOCOL.md").is_file())
         self.assertFalse((self.package / "docs").exists())
         self.assertFalse((self.package / "cmake").exists())
         self.assertFalse((self.package / "CMakeLists.txt").exists())
         self.assertFalse((self.package / "CMakePresets.json").exists())
-        self.assertFalse((self.package / "berry_runtime/CMakeLists.txt").exists())
+        self.assertFalse((self.package / "channel/berry_runtime/CMakeLists.txt").exists())
         self.assertFalse((self.package / "software").exists())
         self.assertFalse(list(self.package.rglob("*.py")))
         self.assertTrue((self.package / "berry_compiler/berry.linux-arm64").stat().st_mode & 0o111)
         for p in self.package.rglob("*"):
             if p.is_file():
                 rel = p.relative_to(self.package).as_posix()
-                original = rel if rel.startswith("berry_compiler/") else "channel_card/" + rel
+                original = rel if rel.startswith(("berry_compiler/", "channel/")) else "channel_card/" + rel
                 self.assertTrue(release.selected(original), rel)
 
     def test_excluded_categories(self):
@@ -95,7 +95,7 @@ class ChannelReleaseTests(unittest.TestCase):
             self.assertFalse(release.selected(path), path)
 
     def test_dirty_source_rejected_but_preview_allowed(self):
-        src = self.repo / "channel_card/app/usb.cpp"
+        src = self.repo / "channel/usb.cpp"
         before = src.read_bytes()
         try:
             src.write_bytes(before + b"\n/* local edit */\n")
@@ -106,7 +106,7 @@ class ChannelReleaseTests(unittest.TestCase):
                     with contextlib.redirect_stdout(io.StringIO()):
                         manifest = release.assemble(Path(tmp), working_tree=True)
                     self.assertIn("working-tree preview", manifest["snapshot"])
-                    self.assertEqual((Path(tmp) / "app/usb.cpp").read_bytes(), src.read_bytes())
+                    self.assertEqual((Path(tmp) / "channel/usb.cpp").read_bytes(), src.read_bytes())
         finally:
             src.write_bytes(before)
 
@@ -125,7 +125,7 @@ class ChannelReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=self.base) as tmp:
             stage = Path(tmp) / "package"
             shutil.copytree(self.package, stage)
-            header = stage / "berry_runtime/vm.h"
+            header = stage / "channel/berry_runtime/vm.h"
             header.write_text(header.read_text() + "\n/* divergent ABI copy */\n")
             with self.assertRaisesRegex(ValueError, "snapshot differs"):
                 release.validate(stage)

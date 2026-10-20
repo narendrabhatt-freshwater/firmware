@@ -21,7 +21,7 @@ import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
-INPUTS = ("channel_card", "berry_compiler", "scripts/channel_release.py",
+INPUTS = ("channel", "channel_card", "berry_compiler", "scripts/channel_release.py",
           "scripts/svn_publish.sh")
 CARD_ROOT = {"README.md",
              "channel_MCU.ioc", "startup_stm32h725xx.s", "STM32H725xG_flash.ld"}
@@ -40,7 +40,7 @@ def selected(path):
     parts = PurePosixPath(path).parts
     if len(parts) < 2 or any(p.startswith(".") for p in parts):
         return False
-    if any(p in {"tests", "test", "fixtures", "build", "scripts", "__pycache__"}
+    if any(p in {"tests", "test", "fixtures", "build", "bin", "scripts", "__pycache__"}
            for p in parts):
         return False
     if parts[-1].startswith("test_") or PurePosixPath(path).stem.endswith("_test"):
@@ -55,13 +55,14 @@ def selected(path):
             return True
         if tail[0] == "app" and len(tail) == 2:
             return suffix in {".cpp", ".h"} or tail[-1] == "Makefile"
-        if tail[0] == "sim" and len(tail) == 2:
-            return suffix in {".cpp", ".h"} or tail[-1] == "Makefile"
         if tail[0] == "core" and len(tail) == 3:
             return (tail[1] == "src" and suffix == ".c" or
                     tail[1] == "inc" and suffix == ".h")
         if tail[0] == "drivers":
             return suffix in {".c", ".h"} or tail[-1] in NOTICES
+    if product == "channel":
+        if len(tail) == 1:
+            return suffix in {".cpp", ".h"} or rel == "makefile"
         if tail[0] == "berry_runtime":
             if len(tail) == 2:
                 return suffix in {".c", ".h"}
@@ -96,44 +97,51 @@ def validate(stage):
                                       for part in path.relative_to(stage).parts)):
             raise ValueError(f"development tool in firmware package: {path.relative_to(stage)}")
     required = [*CARD_ROOT, *CARD_DOCS,
-                "sim/Makefile", "sim/main.cpp", "sim/audio_device.cpp",
-                "sim/audio_device.h", "sim/clock.cpp", "sim/platform_memory.h",
-                "sim/serialdevices.cpp", "sim/serialdevices.h",
                 "app/Makefile",
                 "app/cs4304.cpp",
                 "app/audio.cpp",
+                "app/audio_buffers.h",
+                "channel/audio.cpp",
+                "channel/main.cpp",
+                "channel/makefile",
+                "channel/hardware.h",
+                "channel/application.h",
+                "app/interrupt_stm32.cpp",
+                "core/inc/interrupt.h",
+                "core/inc/hardware.h",
+                "channel/serial_buffer.cpp",
+                "channel/serial_buffer.h",
                 "app/audio_dac.cpp",
-                "app/transport.cpp",
-                "app/platform.cpp",
+                "channel/transport.cpp",
+                "channel/platform.cpp",
                 "app/audio_i2s.cpp",
                 "app/board_stm32.cpp",
-                "app/channel.cpp",
-                "app/filter.cpp",
-                "app/oscillator.cpp",
-                "app/voice.cpp",
-                "app/samples.cpp",
-                "app/stream.cpp",
-                "app/usb.cpp",
+                "channel/channel.cpp",
+                "channel/filter.cpp",
+                "channel/oscillator.cpp",
+                "channel/voice.cpp",
+                "channel/samples.cpp",
+                "channel/stream.cpp",
+                "channel/usb.cpp",
                 "app/usb_device.cpp",
                 "app/cs4304.h",
-                "app/audio.h",
+                "channel/audio.h",
                 "app/audio_output.h",
-                "app/transport.h",
-                "core/inc/platform_memory.h",
-                "app/platform.h",
+                "channel/transport.h",
+                "channel/platform.h",
                 "app/board_stm32.h",
                 "app/usb_device.h",
                 "app/board.h",
-                "app/channel.h",
-                "app/filter.h",
-                "app/oscillator.h",
-                "app/voice.h",
-                "app/samples.h",
-                "app/stream.h",
-                "app/usb.h",
-                "berry_runtime/berry_backend.c",
-                "berry_runtime/third_party/berry/LICENSE",
-                "berry_runtime/third_party/berry/generate/be_const_strtab.h",
+                "channel/channel.h",
+                "channel/filter.h",
+                "channel/oscillator.h",
+                "channel/voice.h",
+                "channel/samples.h",
+                "channel/stream.h",
+                "channel/usb.h",
+                "channel/berry_runtime/berry_backend.c",
+                "channel/berry_runtime/third_party/berry/LICENSE",
+                "channel/berry_runtime/third_party/berry/generate/be_const_strtab.h",
                 "berry_compiler/vendor/berry/LICENSE",
                 "berry_compiler/vendor/berry/generate/be_const_strtab.h",
                 "berry_compiler/examples/channel_envelope.be"]
@@ -158,10 +166,10 @@ def validate(stage):
         "script_runtime.h": "shared/include/script/script_runtime.h",
     }
     for device, host in shared.items():
-        if ((stage / "berry_runtime" / device).read_bytes() !=
+        if ((stage / "channel/berry_runtime" / device).read_bytes() !=
                 (stage / "berry_compiler" / host).read_bytes()):
             raise ValueError(f"compiler/runtime snapshot differs: {device}")
-    device_vendor = stage / "berry_runtime/third_party/berry"
+    device_vendor = stage / "channel/berry_runtime/third_party/berry"
     host_vendor = stage / "berry_compiler/vendor/berry"
     for vendor, other in [(device_vendor, host_vendor), (host_vendor, device_vendor)]:
         for p in vendor.rglob("*"):
@@ -187,7 +195,7 @@ def assemble(stage, working_tree=False):
     revision = run("git", "rev-parse", "HEAD").decode().strip()
     if working_tree:
         paths = run("git", "ls-files", "-z", "--cached", "--others",
-                    "--exclude-standard", "--", "channel_card", "berry_compiler")
+                    "--exclude-standard", "--", "channel", "channel_card", "berry_compiler")
         for raw in sorted(set(paths.split(b"\0")) - {b""}):
             rel = os.fsdecode(raw)
             src = ROOT / rel
@@ -204,7 +212,7 @@ def assemble(stage, working_tree=False):
         status = run("git", "status", "--porcelain", "--untracked-files=all", "--", *INPUTS)
         if status:
             raise ValueError("release inputs are uncommitted; use --working-tree only for a local preview")
-        archive = run("git", "archive", revision, "channel_card", "berry_compiler")
+        archive = run("git", "archive", revision, "channel", "channel_card", "berry_compiler")
         with tarfile.open(fileobj=io.BytesIO(archive)) as source:
             for member in source:
                 if member.isdir() or not selected(member.name):
@@ -218,7 +226,12 @@ def assemble(stage, working_tree=False):
     # Only this link changes between the monorepo and the nested SVN package.
     readme = stage / "README.md"
     readme.write_text(readme.read_text().replace(
-        "(../berry_compiler/README.md)", "(berry_compiler/README.md)"))
+        "(../berry_compiler/README.md)", "(berry_compiler/README.md)").replace(
+        "(../channel/", "(channel/"))
+    makefile = stage / "app/Makefile"
+    makefile.write_text(makefile.read_text().replace(
+        "CHANNEL_ROOT ?= $(abspath $(ROOT)/../channel)",
+        "CHANNEL_ROOT ?= $(abspath $(ROOT)/channel)"))
     validate(stage)
     files = sorted(p for p in stage.rglob("*") if p.is_file())
     manifest = {

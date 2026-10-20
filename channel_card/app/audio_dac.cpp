@@ -134,19 +134,3 @@ void render_control_voltage_slot(int32_t *buf, uint32_t num_frames, uint8_t ch, 
         buf[i * 2 + slot] = render_next_control_voltage_sample(ch);
     }
 }
-
-/* ---- adapt mono audio to the two primary dac slots ----------------------- */
-
-void render_dac_audio_frames(int32_t *buf, uint32_t frames)
-{
-    /* Bounded storage independent of DMA sizing; no application read-ahead. */
-    int32_t mono[48];
-    render_control_voltage_slot(buf, frames, 1, 1);
-    while (frames) {
-        uint32_t count = frames < 48u ? frames : 48u;
-        render_audio_samples(mono, count);
-        for (uint32_t i = 0; i < count; ++i) buf[i * 2] = mono[i];
-        buf += count * 2;
-        frames -= count;
-    }
-}
