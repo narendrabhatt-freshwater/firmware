@@ -40,12 +40,12 @@ voice_board_t::voice_board_t() : port(-1)
 voice_board_t::~voice_board_t()
 { close(); }
 
-/* ---- open the simulator RS485 port --------------------------------------- */
+/* ---- open the voice board serial port ------------------------------------ */
 
-bool voice_board_t::open(string const& path)
+bool voice_board_t::open(char const* path)
 {
     close();
-    port = ::open(path.c_str(), O_RDWR | O_NOCTTY);
+    port = ::open(path, O_RDWR | O_NOCTTY);
     if (port < 0) return false;
     termios mode;
     if (tcgetattr(port, &mode) < 0) {
@@ -61,7 +61,7 @@ bool voice_board_t::open(string const& path)
     return true;
 }
 
-/* ---- close the simulator RS485 port -------------------------------------- */
+/* ---- close the voice board serial port ----------------------------------- */
 
 void voice_board_t::close()
 {
@@ -71,7 +71,7 @@ void voice_board_t::close()
 
 /* ---- send a complete command without waiting for a reply ----------------- */
 
-bool voice_board_t::rs485_command(string const& command)
+bool voice_board_t::rs485_command(char const* command)
 {
     string request(command);
     request.push_back('\r');

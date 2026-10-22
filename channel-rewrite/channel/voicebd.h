@@ -26,11 +26,12 @@
 
 #include <cstdint>
 #include <string>
+#include <stdio.h>
 
 class voice_board_t
 {
     int port;
-    bool rs485_command(std::string const& command);
+    bool rs485_command(char const* command);
 
 public:
     voice_board_t();
@@ -38,7 +39,7 @@ public:
     voice_board_t(voice_board_t const&) = delete;
     voice_board_t& operator=(voice_board_t const&) = delete;
 
-    bool open(std::string const& path);
+    bool open(char const* path);
     void close();
     bool note_on(uint8_t channel, uint16_t sample,
         uint8_t key, uint8_t velocity = 127);
