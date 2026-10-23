@@ -23,6 +23,7 @@
 
 #include "channel.h"
 #include "hardware.h"
+#include "oscillator.h"
 
 #include <cmath>
 #include <cstdint>
@@ -33,6 +34,7 @@
 #include <assert.h>
 
 #define FIRMWARE_VERSION "0001"
+#define CHANNEL_COUNT 8
 
 using namespace std;
 
@@ -41,24 +43,63 @@ using namespace std;
 static uint32_t milliseconds;
 static bool echo(false);
 
+struct oscillator_t
+{
+    double position;
+    double step;
+    double level;
+};
+
+static oscillator_t oscillators[CHANNEL_COUNT]{};
+
+/* ---- start the oscillator ------------------------------------------------*/
+
+static void note_on(uint8_t channel, uint8_t key)
+{
+    oscillator_t& oscillator(oscillators[channel]);
+    oscillator.position = 0;
+    oscillator.step =
+        440.0 * pow(2.0, (key - 69.0) / 12.0) * 512 / AUDIO_SAMPLE_RATE_HZ;
+    oscillator.level = 0.25;
+}
+
+/* ---- stop the oscillator ------------------------------------------------ */
+static void note_off(uint8_t channel)
+{
+    oscillators[channel].level = 0;
+}
+
+/* ---- generate one oscillator sample ------------------------------------- */
+
+static int32_t oscillator_sample(oscillator_t& oscillator)
+{
+    if (oscillator.level == 0) return 0;
+    int32_t const sample(wavetable[int(oscillator.position)]);
+    oscillator.position += oscillator.step;
+    if (oscillator.position >= 512) oscillator.position -= 512;
+    return static_cast<int32_t>(sample * oscillator.level);
+}
+
+/* ---- mix one sample from all oscillators -------------------------------- */
+
+static int32_t mix_oscillators()
+{
+    double sample(0);
+    for (oscillator_t& oscillator : oscillators)
+        sample += oscillator_sample(oscillator);
+    if (sample < INT32_MIN || sample > INT32_MAX) 
+        cerr << "SAMPLE: " << sample << "\n";
+    return static_cast<int32_t>(clamp(sample,
+                                      double(INT32_MIN),
+                                      double(INT32_MAX)));
+}
+
 /* ---- generate the next 48 samples for DAC -------------------------------- */
 
 void generate_samples(int32_t* buffer)
 {
     milliseconds++;
-    constexpr double tau = 6.28318530717958647692;
-    constexpr double step = tau * 440.0 / AUDIO_SAMPLE_RATE_HZ;
-    constexpr double amplitude = INT32_MAX / 4.0;
-    static double s = 0;
-    static double c = 1;
-    static double const ds = std::sin(step);
-    static double const dc = std::cos(step);
-    for (int i(0); i < SPB; ++i) {
-        buffer[i] = static_cast<int32_t>(s * amplitude);
-        double const next_s = s * dc + c * ds;
-        c = c * dc - s * ds;
-        s = next_s;
-    }
+    for (int i(0); i < SPB; ++i) buffer[i] = mix_oscillators();
 }
 
 /* ---- write a response to RS485 ------------------------------------------- */
@@ -87,17 +128,23 @@ static void process_command(string const& command)
         rs485_response(FIRMWARE_VERSION);
         cerr << "version: " FIRMWARE_VERSION "\n";
     } else if (command == "n") {
+        for (uint8_t channel(0); channel < CHANNEL_COUNT; ++channel) 
+            note_off(channel);
         std::cerr << "all notes off\n";
     }
     else if (command.size() == 2 &&
-        std::sscanf(command.c_str(), "n%1x", &channel) == 1)
+        std::sscanf(command.c_str(), "n%1x", &channel) == 1 &&
+        channel < CHANNEL_COUNT)
     {
+        note_off(channel);
         std::cerr << "note off: " << channel << '\n';
     }
     else if (command.size() == 10 &&
         std::sscanf(command.c_str(), "n%1x%2x%2x%2x%2x",
-            &channel, &sample, &key, &velocity, &session) == 5)
+            &channel, &sample, &key, &velocity, &session) == 5 &&
+        channel < CHANNEL_COUNT && key < 128)
     {
+        note_on(channel, key);
         std::cerr << "note on: " << command << '\n';
     }
     else if (command.size() == 5 &&
@@ -122,7 +169,7 @@ void received_serial(vector<uint8_t> const& bytes)
     static string cmd_buffer;
     for (uint8_t byte : bytes) {
         if (byte == '\r') {
-            cerr << "command " << cmd_buffer << endl;
+            // cerr << "command " << cmd_buffer << endl;
             if (echo) rs485_response(string());
             if (!cmd_buffer.empty()) {
                 process_command(cmd_buffer);

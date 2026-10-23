@@ -48,10 +48,6 @@ static int rs485_port = -1;
 static PaStream *stream;
 static uint8_t write_index = 0;
 static uint8_t read_index = 0;
-static std::vector<uint8_t> usb_input;
-static std::vector<uint8_t> rs485_input;
-static std::vector<uint8_t> usb_output;
-static std::vector<uint8_t> rs485_output;
 static int32_t audio_buffers[BUF_COUNT][SPB];
 
 /* ---- set up the audio request pipe -------------------------------------- */
@@ -86,7 +82,9 @@ static void process_serial(int port, std::vector<uint8_t> &input)
 {
     unsigned char bytes[256];
     ssize_t count = read(port, bytes, sizeof bytes);
-    if (count > 0) input.insert(input.end(), bytes, bytes + count);
+    if (count > 0) input.insert(input.end(),
+                                   bytes,
+                                    bytes + count);
 }
 
 
@@ -143,6 +141,8 @@ int main()
 {
     int usb_client = -1;
     int rs485_client = -1;
+    std::vector<uint8_t> usb_input;
+    std::vector<uint8_t> rs485_input;
     open_serial_port(usb_port, usb_client, "USB");
     open_serial_port(rs485_port, rs485_client, "RS485");
     setup_select();
@@ -158,7 +158,7 @@ int main()
         if (FD_ISSET(rs485_port, &ready)) {
             process_serial(rs485_port, rs485_input);
             received_serial(rs485_input);
-            std::cerr << rs485_input.size() << endl;
+            // std::cerr << rs485_input.size() << endl;
             rs485_input.clear();
         }
         if (FD_ISSET(audio_requests[0], &ready)) {
@@ -174,5 +174,7 @@ int main()
 /* ---- write to serial (RS485) port ---------------------------------------- */
 
 void write_serial(vector<uint8_t> const& bytes)
-{ ssize_t const count = write(rs485_port, bytes.data(), bytes.size()); }
+{ ssize_t const count = write(rs485_port,
+                             bytes.data(),
+                           bytes.size()); }
 

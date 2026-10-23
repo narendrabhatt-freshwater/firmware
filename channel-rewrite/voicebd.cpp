@@ -22,11 +22,15 @@
 */
 
 #include "voicebd.h"
+#include "devices.h"
 
 #include <cstdio>
 #include <fcntl.h>
+#include <iostream>
+#include <sys/select.h>
 #include <termios.h>
 #include <unistd.h>
+#include <vector>
 
 using namespace std;
 
@@ -40,12 +44,12 @@ voice_board_t::voice_board_t() : port(-1)
 voice_board_t::~voice_board_t()
 { close(); }
 
-/* ---- open the voice board serial port ------------------------------------ */
+/* --- open the voice board serial port and check for the version reply ---- */
 
-bool voice_board_t::open(char const* path)
+bool voice_board_t::open()
 {
     close();
-    port = ::open(path, O_RDWR | O_NOCTTY);
+    port = ::open(RS485_DEV, O_RDWR | O_NOCTTY);
     if (port < 0) return false;
     termios mode;
     if (tcgetattr(port, &mode) < 0) {
@@ -58,10 +62,29 @@ bool voice_board_t::open(char const* path)
         close();
         return false;
     }
+
+    if (!rs485_command("v")) {
+        close();
+        return false;
+    }
+    timeval timeout{0, 500};
+    fd_set ready{};
+    FD_SET(port, &ready);
+    if (select(port + 1, &ready, nullptr, nullptr, &timeout) <= 0) {
+        close();
+        return false;
+    }
+    char version[6];
+    ssize_t const count(read(port, version, sizeof version));
+    if (count < 2 || version[count - 1] != '\n') {
+        close();
+        return false;
+    }
+    cerr << "version: " << version;
     return true;
 }
 
-/* ---- close the voice board serial port ----------------------------------- */
+/* ---- close the voice board serial port ---------------------------------- */
 
 void voice_board_t::close()
 {
@@ -69,7 +92,7 @@ void voice_board_t::close()
     port = -1;
 }
 
-/* ---- send a complete command without waiting for a reply ----------------- */
+/* ---- send a complete command without waiting for a reply ---------------- */
 
 bool voice_board_t::rs485_command(char const* command)
 {
@@ -77,7 +100,8 @@ bool voice_board_t::rs485_command(char const* command)
     request.push_back('\r');
     size_t sent(0);
     while (sent < request.size()) {
-        ssize_t const count(write(port, request.data() + sent, request.size() - sent));
+        ssize_t const count(write(port, request.data() + sent,
+                            request.size() - sent));
         if (count <= 0) return false;
         sent += size_t(count);
     }
@@ -86,14 +110,14 @@ bool voice_board_t::rs485_command(char const* command)
 
 /* ---- send a note with fixed-width hexadecimal fields --------------------- */
 
-bool voice_board_t::note_on(uint8_t channel, uint16_t sample,
+bool voice_board_t::note_on(uint8_t channel, uint16_t sample_id,
     uint8_t key, uint8_t velocity)
 {
-    if (sample > 247) return false;
+    if (sample_id > 247) return false;
     static uint8_t const session(1);
     char command[11];
     snprintf(command, sizeof command, "n%x%02x%02x%02x%02x",
-        unsigned(channel), unsigned(sample), unsigned(key),
+        unsigned(channel), unsigned(sample_id), unsigned(key),
         unsigned(velocity), unsigned(session));
     return rs485_command(command);
 }
@@ -103,7 +127,10 @@ bool voice_board_t::note_on(uint8_t channel, uint16_t sample,
 bool voice_board_t::note_off(uint8_t channel)
 {
     char command[3];
-    snprintf(command, sizeof command, "n%x", unsigned(channel));
+    snprintf(command, 
+            sizeof command, 
+            "n%x", 
+            unsigned(channel));
     return rs485_command(command);
 }
 
@@ -111,3 +138,20 @@ bool voice_board_t::note_off(uint8_t channel)
 
 bool voice_board_t::all_notes_off()
 { return rs485_command("n"); }
+
+/* -------- load sample ------------------------------------------------------*/
+
+bool voice_board_t::load_sample(uint16_t sample_id,
+                                std::vector<int16_t>const& pcm)
+{
+    // TODO: HANDLE SAMPLE LOADING
+    return true;
+}
+
+/* -------- load script ------------------------------------------------------*/
+
+bool voice_board_t::load_script(uint8_t channel, std::string const& path)
+{
+    // TODO: LOAD SCRIPT
+    return true;
+}

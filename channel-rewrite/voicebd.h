@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <string>
 #include <stdio.h>
+#include <vector>
 
 class voice_board_t
 {
@@ -39,12 +40,14 @@ public:
     voice_board_t(voice_board_t const&) = delete;
     voice_board_t& operator=(voice_board_t const&) = delete;
 
-    bool open(char const* path);
+    bool open();
     void close();
-    bool note_on(uint8_t channel, uint16_t sample,
+    bool note_on(uint8_t channel, uint16_t sample_id,
         uint8_t key, uint8_t velocity = 127);
     bool note_off(uint8_t channel);
     bool all_notes_off();
+    bool load_sample(uint16_t sample_id, std::vector<int16_t> const& pcm);
+    bool load_script(uint8_t channel, std::string const& path);
 };
 
 #endif
