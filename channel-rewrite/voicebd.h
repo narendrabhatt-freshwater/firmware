@@ -42,9 +42,9 @@ public:
 
     bool open();
     void close();
-    bool note_on(uint8_t channel, uint16_t sample_id,
+    bool note_on(uint8_t voice, uint16_t sample_id,
         uint8_t key, uint8_t velocity = 127);
-    bool note_off(uint8_t channel);
+    bool note_off(uint8_t voice);
     bool all_notes_off();
     bool load_sample(uint16_t sample_id, std::vector<int16_t> const& pcm);
     bool load_script(uint8_t channel, std::string const& path);

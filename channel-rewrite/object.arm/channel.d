@@ -1,4 +1,3 @@
-object.arm/channel.o: channel.cpp channel.h hardware.h oscillator.h
+object.arm/channel.o: channel.cpp channel.h oscillator.h
 channel.h:
-hardware.h:
 oscillator.h:

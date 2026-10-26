@@ -33,14 +33,11 @@
 #include <unistd.h>
 #include <vector>
 
-#ifdef __APPLE__
-#include <IOKit/serial/ioss.h>
-#include <sys/ioctl.h>
-#endif
+#define CHANNEL_NUMBER 1
 
 using namespace std;
 
-/* ---- read the monotonic clock in microseconds --------------------------- */
+/* ---- read the monotonic clock in microseconds ---------------------------- */
 
 static int64_t monotonic_microseconds()
 {
@@ -77,7 +74,7 @@ bool voice_board_t::open()
     mode.c_cc[VMIN] = 0;
     mode.c_cc[VTIME] = 0;
 #ifdef __APPLE__
-    cfsetspeed(&mode, B9600);
+    cfsetspeed(&mode, 921600);
 #else
     cfsetspeed(&mode, B921600);
 #endif
@@ -85,13 +82,6 @@ bool voice_board_t::open()
         close();
         return false;
     }
-#ifdef __APPLE__
-    speed_t baud(921600);
-    if (ioctl(port, IOSSIOSPEED, &baud) < 0) {
-        close();
-        return false;
-    }
-#endif
     if (fcntl(port, F_SETFL, 0) < 0) {
         close();
         return false;
@@ -136,7 +126,8 @@ void voice_board_t::close()
 
 bool voice_board_t::rs485_command(char const* command)
 {
-    string request(command);
+    string request(to_string(CHANNEL_NUMBER));
+    request += command;
     request.push_back('\r');
     size_t sent(0);
     while (sent < request.size()) {
@@ -150,27 +141,27 @@ bool voice_board_t::rs485_command(char const* command)
 
 /* ---- send a note with fixed-width hexadecimal fields --------------------- */
 
-bool voice_board_t::note_on(uint8_t channel, uint16_t sample_id,
+bool voice_board_t::note_on(uint8_t voice, uint16_t sample_id,
     uint8_t key, uint8_t velocity)
 {
     if (sample_id > 247) return false;
     static uint8_t const session(1);
     char command[11];
     snprintf(command, sizeof command, "n%x%02x%02x%02x%02x",
-        unsigned(channel), unsigned(sample_id), unsigned(key),
+        unsigned(voice), unsigned(sample_id), unsigned(key),
         unsigned(velocity), unsigned(session));
     return rs485_command(command);
 }
 
-/* ---- release the note on one channel ------------------------------------- */
+/* ---- release the note on one voice --------------------------------------- */
 
-bool voice_board_t::note_off(uint8_t channel)
+bool voice_board_t::note_off(uint8_t voice)
 {
     char command[3];
     snprintf(command, 
             sizeof command, 
             "n%x", 
-            unsigned(channel));
+            unsigned(voice));
     return rs485_command(command);
 }
 

@@ -22,7 +22,6 @@
 */
 
 #include "channel.h"
-#include "hardware.h"
 #include "oscillator.h"
 
 #include <algorithm>
@@ -34,7 +33,8 @@
 #include <assert.h>
 
 #define FIRMWARE_VERSION "0001"
-#define CHANNEL_COUNT 8
+#define CHANNEL_NUMBER '1'
+#define VOICE_COUNT 8
 
 using namespace std;
 
@@ -42,6 +42,7 @@ using namespace std;
 
 static uint32_t milliseconds;
 static bool echo(false);
+static bool tx_enabled(false);
 
 struct oscillator_t
 {
@@ -50,13 +51,13 @@ struct oscillator_t
     double level;
 };
 
-static oscillator_t oscillators[CHANNEL_COUNT]{};
+static oscillator_t oscillators[VOICE_COUNT]{};
 
 /* ---- start the oscillator ------------------------------------------------*/
 
-static void note_on(uint8_t channel, uint8_t key)
+static void note_on(uint8_t voice, uint8_t key)
 {
-    oscillator_t& oscillator(oscillators[channel]);
+    oscillator_t& oscillator(oscillators[voice]);
     oscillator.position = 0;
     oscillator.step =
         440.0 * pow(2.0, (key - 69.0) / 12.0) * 512 / AUDIO_SAMPLE_RATE_HZ;
@@ -64,9 +65,9 @@ static void note_on(uint8_t channel, uint8_t key)
 }
 
 /* ---- stop the oscillator ------------------------------------------------ */
-static void note_off(uint8_t channel)
+static void note_off(uint8_t voice)
 {
-    oscillators[channel].level = 0;
+    oscillators[voice].level = 0;
 }
 
 /* ---- generate one oscillator sample ------------------------------------- */
@@ -104,6 +105,7 @@ void generate_samples(int32_t* buffer)
 
 static void rs485_response(string const& s)
 {
+    if (!tx_enabled) return;
     vector<uint8_t> response(s.begin(), s.end());
     if (echo) response.push_back('\r');
     response.push_back('\n');
@@ -112,10 +114,11 @@ static void rs485_response(string const& s)
 
 /* ---- parse an RS485 command and send its defined reply ------------------- */
 
-static void process_command(string const& command)
+static void process_command(string const& received)
 {
-    assert(!command.empty());
-    unsigned int channel;
+    assert(received.size() > 1);
+    string const command(received.substr(1));
+    unsigned int voice;
     unsigned int sample;
     unsigned int key;
     unsigned int velocity;
@@ -123,64 +126,71 @@ static void process_command(string const& command)
     unsigned int gain;
 
     if (command == "v") {
+        tx_enabled = true;
         rs485_response(FIRMWARE_VERSION);
-        fprintf(stderr, "version: " FIRMWARE_VERSION "\n");
+        tx_enabled = false;
+        fprintf(stderr, "version: %c-" FIRMWARE_VERSION "\n", received[0]);
     } else if (command == "n") {
-        for (uint8_t channel(0); channel < CHANNEL_COUNT; ++channel) 
-            note_off(channel);
-        fprintf(stderr, "all notes off\n");
+        for (uint8_t voice(0); voice < VOICE_COUNT; ++voice)
+            note_off(voice);
+        fprintf(stderr, "all notes off: %s\n", received.c_str());
     }
     else if (command.size() == 2 &&
-        std::sscanf(command.c_str(), "n%1x", &channel) == 1 &&
-        channel < CHANNEL_COUNT)
+        std::sscanf(command.c_str(), "n%1x", &voice) == 1 &&
+        voice < VOICE_COUNT)
     {
-        note_off(channel);
-        fprintf(stderr, "note off: %u\n", channel);
+        note_off(voice);
+        fprintf(stderr, "note off: %s\n", received.c_str());
     }
     else if (command.size() == 10 &&
         std::sscanf(command.c_str(), "n%1x%2x%2x%2x%2x",
-            &channel, &sample, &key, &velocity, &session) == 5 &&
-        channel < CHANNEL_COUNT && key < 128)
+            &voice, &sample, &key, &velocity, &session) == 5 &&
+        voice < VOICE_COUNT && key < 128)
     {
-        note_on(channel, key);
-        fprintf(stderr, "note on: %s\n", command.c_str());
+        note_on(voice, key);
+        fprintf(stderr, "note on: %s\n", received.c_str());
     }
     else if (command.size() == 5 &&
         std::sscanf(command.c_str(), "a%4x", &gain) == 1)
     {
-        fprintf(stderr, "attenuator: %s\n", command.c_str());
+        fprintf(stderr, "attenuator: %s\n", received.c_str());
     } else if (command == "r") {
+        tx_enabled = true;
         rs485_response("ok");
-        fprintf(stderr, "reset\n");
+        tx_enabled = false;
+        fprintf(stderr, "reset: %s\n", received.c_str());
     } else if (command == "e1") {
         echo = true;
-        rs485_response("ok"); 
+        tx_enabled = true;
+        rs485_response("ok");
+        tx_enabled = false;
     } else if (command == "e0") {
         echo = false;
     } // TODO more commands here... 
 }
 
-/* ---- accumulate RS485 bytes until newline ------------------------------- */
+/* ---- receive commands addressed to this channel -------------------------- */
 
 void received_serial(vector<uint8_t> const& bytes)
 {
     static string cmd_buffer;
     for (uint8_t byte : bytes) {
         if (byte == '\r') {
-            // cerr << "command " << cmd_buffer << endl;
-            if (echo) rs485_response(string());
-            if (!cmd_buffer.empty()) {
+            if (cmd_buffer.size() > 1 && cmd_buffer[0] == CHANNEL_NUMBER)
                 process_command(cmd_buffer);
-                cmd_buffer.clear();
-            }
+            cmd_buffer.clear();
+        } else if (byte == '\n') {
+            cmd_buffer.clear();
         } else if (byte == '\b' || byte == 0x7f) {
-            if (!cmd_buffer.empty()) {
-                cmd_buffer.pop_back();
-                if (echo) write_serial({'\b', ' ', '\b'});
+            if (cmd_buffer.empty()) continue;
+            if (echo && cmd_buffer[0] == CHANNEL_NUMBER) {
+                tx_enabled = true;
+                write_serial({'\b', ' ', '\b'});
+                tx_enabled = false;
             }
-        } else { 
-            if (echo) write_serial({byte});
-            cmd_buffer.push_back(char(byte)); 
+            cmd_buffer.pop_back();
+        } else {
+            cmd_buffer.push_back(char(byte));
         }
     }
 }
