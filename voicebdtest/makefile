@@ -1,0 +1,79 @@
+#                                    __
+#                                ___  \  \
+#                           ___  \  \  \  \    _______
+#                      ___  \  \  \  \  \__\__/_____  \
+#                      \  \  \  \  \__\_______      \__\____
+#                       \  \  \  \     ___ \  \________  \__/
+#                        \  \  \__\___/_  \ \___/   \  \___
+#                         \  \    ____  \  \________ \ ___/
+#                          \__\__/ \  \  \____/  \  \
+#                                   \  \     ___  \  \___
+#                                    \__\___/ \  \ \____/
+#                                            \  \
+#                                               \  \___
+#                  __                 _          \ ___/  _
+#                 / _|_ __  ___  ___ | |____      ____ _| |_  ___  _ __
+#                | |_| '_ |/ _ \/ __|| '_ \ \ /\ / / _` | __|/ _ \| '__|
+#                |  _| |  |  __/\__ \| | | \ V  V / (_| | |_|  __/| |
+#                |_| |_|   \___||___/|_| |_|\_/\_/ \__,_|\__|\___||_|
+#
+#             (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
+
+# ---- compiler and library selection ------------------------------------------
+
+HOST_CXX               ?= c++
+HOST_ARCH              := $(shell uname -m)
+OBJDIR                  = object.$(HOST_ARCH)
+BINDIR                  = bin
+PKG_CONFIG             ?= pkg-config
+MIDI_CFLAGS            := $(shell $(PKG_CONFIG) --cflags rtmidi)
+MIDI_LIBS              := $(shell $(PKG_CONFIG) --libs rtmidi)
+
+# ---- compiler and linker settings --------------------------------------------
+
+STD                    ?= c++17
+OPTIMIZATION           ?= -O2
+DEBUG_FLAGS            ?= -g
+WARNING_FLAGS          ?=
+
+CPPFLAGS               += $(MIDI_CFLAGS)
+CXXFLAGS               += -std=$(STD) $(OPTIMIZATION) $(DEBUG_FLAGS) $(WARNING_FLAGS) -MMD -MP
+LDLIBS                 += $(MIDI_LIBS)
+
+# ---- objects -----------------------------------------------------------------
+
+OBJECTS                := $(OBJDIR)/main.o \
+                          $(OBJDIR)/voicebd.o
+TARGET                  = $(BINDIR)/voicebdtest
+
+# ---- makeable targets --------------------------------------------------------
+
+.DEFAULT_GOAL          := all
+.DELETE_ON_ERROR:
+.PHONY                 : all clean
+
+all                    : $(TARGET)
+
+# ---- build rules -------------------------------------------------------------
+
+$(OBJDIR)/%.o          : %.cpp makefile
+	@mkdir -p "$(@D)"
+	@$(HOST_CXX) $(CPPFLAGS) $(CXXFLAGS) -c "$<" -o "$@"
+
+$(OBJDIR)/voicebd.o : ../channel-rewrite/voicebd.cpp makefile
+	@mkdir -p "$(@D)"
+	@$(HOST_CXX) $(CPPFLAGS) $(CXXFLAGS) -c "$<" -o "$@"
+
+$(TARGET)              : $(OBJECTS)
+	@mkdir -p "$(@D)"
+	@printf 'Linking voice board test\n'
+	@$(HOST_CXX) $(LDFLAGS) $^ -o "$@" $(LDLIBS)
+
+# ---- cleanup -----------------------------------------------------------------
+
+clean:
+	@rm -f $(OBJECTS) $(OBJECTS:.o=.d) "$(TARGET)"
+
+# ---- dependencies ------------------------------------------------------------
+
+-include $(OBJECTS:.o=.d)

@@ -96,7 +96,7 @@ extern "C" void DMA1_Stream0_IRQHandler()
 {
     uint32_t const flags(DMA1->LISR & 0x3d);
     DMA1->LIFCR = flags;
-    if (flags & (DMA_LISR_FEIF0 | DMA_LISR_DMEIF0 | DMA_LISR_TEIF0))
+    if (flags & (DMA_LISR_DMEIF0 | DMA_LISR_TEIF0))
         fail();
     if (!(flags & DMA_LISR_TCIF0)) return;
     if (audio_read_index == audio_write_index) fail();

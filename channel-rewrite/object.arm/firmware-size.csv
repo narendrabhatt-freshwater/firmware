@@ -1,0 +1,180 @@
+offset,bytes,group,owner,section,output,description
+0,716,startup.o,object.arm/startup.o,.isr_vector,.isr_vector,.isr_vector
+716,4,alignment,alignment,gap before .text,gap,gap before .text
+720,28,crtbegin.o,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/thumb/v7e-m+dp/hard/crtbegin.o,.text.deregister_tm_clones,.text,deregister_tm_clones
+748,36,crtbegin.o,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/thumb/v7e-m+dp/hard/crtbegin.o,.text.register_tm_clones,.text,register_tm_clones
+784,40,crtbegin.o,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/thumb/v7e-m+dp/hard/crtbegin.o,.text.__do_global_dtors_aux,.text,__do_global_dtors_aux
+824,36,crtbegin.o,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/thumb/v7e-m+dp/hard/crtbegin.o,.text.frame_dummy,.text,frame_dummy
+860,172,main_firmware.o,object.arm/main_firmware.o,.text.startup.main,.text,startup.main
+1032,296,channel.o,object.arm/channel.o,.text._ZL14rs485_responseRKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE.isra.0,.text,"rs485_response(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) [clone .isra.0]"
+1328,1732,channel.o,object.arm/channel.o,.text._Z16generate_samplesPl,.text,generate_samples(long*)
+3060,4,alignment,alignment,*fill*,.text,*fill*
+3064,1012,channel.o,object.arm/channel.o,.text._Z15received_serialRKSt6vectorIhSaIhEE,.text,"received_serial(std::vector<unsigned char, std::allocator<unsigned char> > const&)"
+4076,24,clock.o,object.arm/clock.o,.text.ExitRun0Mode,.text,ExitRun0Mode
+4100,132,clock.o,object.arm/clock.o,.text.SystemInit,.text,SystemInit
+4232,716,clock.o,object.arm/clock.o,.text._Z10init_boardv,.text,init_board()
+4948,100,clock.o,object.arm/clock.o,.text._Z13configure_pinP12GPIO_TypeDefjjjjj,.text,"configure_pin(GPIO_TypeDef*, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)"
+5048,76,clock.o,object.arm/clock.o,.text._Z4failv,.text,fail()
+5124,8,clock.o,object.arm/clock.o,.text.Error_Handler,.text,Error_Handler
+5132,16,clock.o,object.arm/clock.o,.text.SysTick_Handler,.text,SysTick_Handler
+5148,20,clock.o,object.arm/clock.o,.text._Z8delay_msm,.text,delay_ms(unsigned long)
+5168,4,clock.o,object.arm/clock.o,.text._write,.text,_write
+5172,48,clock.o,object.arm/clock.o,.text._sbrk,.text,_sbrk
+5220,20,clock.o,object.arm/clock.o,.text._read,.text,_read
+5240,12,clock.o,object.arm/clock.o,.text._fstat,.text,_fstat
+5252,4,clock.o,object.arm/clock.o,.text._isatty,.text,_isatty
+5256,4,clock.o,object.arm/clock.o,.text._lseek,.text,_lseek
+5260,20,clock.o,object.arm/clock.o,.text._close,.text,_close
+5280,4,clock.o,object.arm/clock.o,.text._getpid,.text,_getpid
+5284,20,clock.o,object.arm/clock.o,.text._kill,.text,_kill
+5304,8,clock.o,object.arm/clock.o,.text._exit,.text,_exit
+5312,112,dac.o,object.arm/dac.o,.text._ZL14write_registertt,.text,"write_register(unsigned short, unsigned short)"
+5424,224,dac.o,object.arm/dac.o,.text._Z8init_dacv,.text,init_dac()
+5648,160,dac.o,object.arm/dac.o,.text.DMA1_Stream0_IRQHandler,.text,DMA1_Stream0_IRQHandler
+5808,308,dac.o,object.arm/dac.o,.text._Z10init_audiov,.text,init_audio()
+6116,328,dac.o,object.arm/dac.o,.text._Z11start_audiov,.text,start_audio()
+6444,8,dac.o,object.arm/dac.o,.text.DMA1_Stream1_IRQHandler,.text,DMA1_Stream1_IRQHandler
+6452,8,dac.o,object.arm/dac.o,.text.SPI1_IRQHandler,.text,SPI1_IRQHandler
+6460,8,dac.o,object.arm/dac.o,.text.SPI2_IRQHandler,.text,SPI2_IRQHandler
+6468,172,uart_rs485.o,object.arm/uart_rs485.o,.text._Z11init_serialv,.text,init_serial()
+6640,248,uart_rs485.o,object.arm/uart_rs485.o,.text._Z12write_serialRKSt6vectorIhSaIhEE,.text,"write_serial(std::vector<unsigned char, std::allocator<unsigned char> > const&)"
+6888,136,uart_rs485.o,object.arm/uart_rs485.o,.text._Z14process_serialRSt6vectorIhSaIhEE,.text,"process_serial(std::vector<unsigned char, std::allocator<unsigned char> >&)"
+7024,8,uart_rs485.o,object.arm/uart_rs485.o,.text.UART5_IRQHandler,.text,UART5_IRQHandler
+7032,84,startup.o,object.arm/startup.o,.text.Reset_Handler,.text,Reset_Handler
+7116,4,startup.o,object.arm/startup.o,.text.Default_Handler,.text,Default_Handler
+7120,10,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(atexit_arm.o),.text.__aeabi_atexit,.text,__aeabi_atexit
+7130,4,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(del_ops.o),.text._ZdlPvj,.text,"operator delete(void*, unsigned int)"
+7134,34,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(new_op.o),.text._Znwj,.text,operator new(unsigned int)
+7168,6,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(functexcept.o),.text.unlikely._ZSt17__throw_bad_allocv,.text,unlikely._ZSt17__throw_bad_allocv
+7174,6,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(functexcept.o),.text.unlikely._ZSt20__throw_length_errorPKc,.text,unlikely._ZSt20__throw_length_errorPKc
+7180,8,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(string-inst.o),.text._ZNSt11char_traitsIcE4copyEPcPKcj.isra.0,.text,"std::char_traits<char>::copy(char*, char const*, unsigned int) [clone .isra.0]"
+7188,18,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(string-inst.o),.text._ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE11_S_allocateERS3_j,.text,"std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_S_allocate(std::allocator<char>&, unsigned int)"
+7206,2,alignment,alignment,*fill*,.text,*fill*
+7208,60,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(string-inst.o),.text._ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE9_M_createERjj,.text,"std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_create(unsigned int&, unsigned int)"
+7268,16,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(string-inst.o),.text._ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE10_M_disposeEv,.text,"std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_dispose()"
+7284,14,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(string-inst.o),.text._ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE7_S_copyEPcPKcj,.text,"std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_S_copy(char*, char const*, unsigned int)"
+7298,18,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(string-inst.o),.text._ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE7_S_moveEPcPKcj,.text,"std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_S_move(char*, char const*, unsigned int)"
+7316,124,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(string-inst.o),.text._ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE9_M_mutateEjjPKcj,.text,"std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_mutate(unsigned int, unsigned int, char const*, unsigned int)"
+7440,42,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(string-inst.o),.text._ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE8_M_eraseEjj,.text,"std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_erase(unsigned int, unsigned int)"
+7482,12,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(string-inst.o),.text._ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEED2Ev,.text,"std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::~basic_string()"
+7494,4,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(del_op.o),.text._ZdlPv,.text,operator delete(void*)
+7498,2,alignment,alignment,*fill*,.text,*fill*
+7500,16,libstdc++_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(new_handler.o),.text._ZSt15get_new_handlerv,.text,std::get_new_handler()
+7516,4,alignment,alignment,*fill*,.text,*fill*
+7520,1504,libm.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libm.a(libm_a-pow.o),.text.pow,.text,pow
+9024,24,libm.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libm.a(libm_a-math_err.o),.text.with_errno,.text,with_errno
+9048,36,libm.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libm.a(libm_a-math_err.o),.text.xflow,.text,xflow
+9084,4,alignment,alignment,*fill*,.text,*fill*
+9088,16,libm.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libm.a(libm_a-math_err.o),.text.__math_uflow,.text,__math_uflow
+9104,16,libm.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libm.a(libm_a-math_err.o),.text.__math_oflow,.text,__math_oflow
+9120,48,libm.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libm.a(libm_a-math_err.o),.text.__math_divzero,.text,__math_divzero
+9168,32,libm.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libm.a(libm_a-math_err.o),.text.__math_invalid,.text,__math_invalid
+9200,20,libm.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libm.a(libm_a-math_err.o),.text.__math_check_uflow,.text,__math_check_uflow
+9220,4,alignment,alignment,*fill*,.text,*fill*
+9224,40,libm.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libm.a(libm_a-math_err.o),.text.__math_check_oflow,.text,__math_check_oflow
+9264,14,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-abort.o),.text.abort,.text,abort
+9278,2,alignment,alignment,*fill*,.text,*fill*
+9280,16,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-malloc.o),.text.malloc,.text,malloc
+9296,16,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-malloc.o),.text.free,.text,free
+9312,68,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-mallocr.o),.text.sbrk_aligned,.text,sbrk_aligned
+9380,248,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-mallocr.o),.text._malloc_r,.text,_malloc_r
+9628,12,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-mlock.o),.text.__malloc_lock,.text,__malloc_lock
+9640,12,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-mlock.o),.text.__malloc_unlock,.text,__malloc_unlock
+9652,88,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-sscanf.o),.text.sscanf,.text,sscanf
+9740,34,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-stdio.o),.text.__sread,.text,__sread
+9774,4,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-stdio.o),.text.__seofread,.text,__seofread
+9778,56,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-stdio.o),.text.__swrite,.text,__swrite
+9834,38,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-stdio.o),.text.__sseek,.text,__sseek
+9872,8,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-stdio.o),.text.__sclose,.text,__sclose
+9880,108,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-findfp.o),.text.std,.text,std
+9988,24,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-findfp.o),.text.stdio_exit_handler,.text,stdio_exit_handler
+10012,64,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-findfp.o),.text.cleanup_stdio,.text,cleanup_stdio
+10076,64,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-findfp.o),.text.global_stdio_init.part.0,.text,global_stdio_init.part.0
+10140,12,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-findfp.o),.text.__sfp_lock_acquire,.text,__sfp_lock_acquire
+10152,12,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-findfp.o),.text.__sfp_lock_release,.text,__sfp_lock_release
+10164,48,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-findfp.o),.text.__sinit,.text,__sinit
+10212,36,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-fprintf.o),.text.fprintf,.text,fprintf
+10248,58,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-fwalk.o),.text._fwalk_sglue,.text,_fwalk_sglue
+10306,152,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-fwrite.o),.text._fwrite_r,.text,_fwrite_r
+10458,2,alignment,alignment,*fill*,.text,*fill*
+10460,28,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-fwrite.o),.text.fwrite,.text,fwrite
+10488,50,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-memmove.o),.text.memmove,.text,memmove
+10538,16,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-memset.o),.text.memset,.text,memset
+10554,80,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-signal.o),.text._raise_r,.text,_raise_r
+10634,2,alignment,alignment,*fill*,.text,*fill*
+10636,16,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-signal.o),.text.raise,.text,raise
+10652,36,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-lseekr.o),.text._lseek_r,.text,_lseek_r
+10688,36,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-readr.o),.text._read_r,.text,_read_r
+10724,36,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-signalr.o),.text._kill_r,.text,_kill_r
+10760,4,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-signalr.o),.text._getpid_r,.text,_getpid_r
+10764,32,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-sbrkr.o),.text._sbrk_r,.text,_sbrk_r
+10796,36,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-writer.o),.text._write_r,.text,_write_r
+10832,12,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-errno.o),.text.__errno,.text,__errno
+10844,72,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-init.o),.text.__libc_init_array,.text,__libc_init_array
+10916,2,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-lock.o),.text.__retarget_lock_init_recursive,.text,__retarget_lock_init_recursive
+10918,2,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-lock.o),.text.__retarget_lock_acquire_recursive,.text,__retarget_lock_acquire_recursive
+10920,2,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-lock.o),.text.__retarget_lock_release_recursive,.text,__retarget_lock_release_recursive
+10922,2,alignment,alignment,*fill*,.text,*fill*
+10924,32,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-closer.o),.text._close_r,.text,_close_r
+10956,28,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-cxa_atexit.o),.text.__cxa_atexit,.text,__cxa_atexit
+10984,8,alignment,alignment,*fill*,.text,*fill*
+10992,160,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-memchr.o),.text,.text,.text
+11152,28,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-memcpy-stub.o),.text.memcpy,.text,memcpy
+11180,16,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-strlen.o),.text,.text,.text
+11196,152,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-freer.o),.text._free_r,.text,_free_r
+11348,122,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-nano-svfscanf.o),.text._sungetc_r,.text,_sungetc_r
+11470,58,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-nano-svfscanf.o),.text.__ssrefill_r,.text,__ssrefill_r
+11528,744,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-nano-svfscanf.o),.text.__ssvfscanf_r,.text,__ssvfscanf_r
+12272,42,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-nano-vfprintf.o),.text.__sfputc_r,.text,__sfputc_r
+12314,36,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-nano-vfprintf.o),.text.__sfputs_r,.text,__sfputs_r
+12350,2,alignment,alignment,*fill*,.text,*fill*
+12352,552,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-nano-vfprintf.o),.text._vfprintf_r,.text,_vfprintf_r
+12904,234,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-nano-vfprintf_i.o),.text._printf_common,.text,_printf_common
+13138,2,alignment,alignment,*fill*,.text,*fill*
+13140,596,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-nano-vfprintf_i.o),.text._printf_i,.text,_printf_i
+13736,180,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-nano-vfscanf_i.o),.text._scanf_chars,.text,_scanf_chars
+13916,472,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-nano-vfscanf_i.o),.text._scanf_i,.text,_scanf_i
+14388,114,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-sccl.o),.text.__sccl,.text,__sccl
+14502,2,alignment,alignment,*fill*,.text,*fill*
+14504,256,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-fflush.o),.text.__sflush_r,.text,__sflush_r
+14760,80,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-fflush.o),.text._fflush_r,.text,_fflush_r
+14840,116,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-ungetc.o),.text.__submore,.text,__submore
+14956,92,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-reallocr.o),.text._realloc_r,.text,_realloc_r
+15048,122,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-wbuf.o),.text.__swbuf_r,.text,__swbuf_r
+15170,2,alignment,alignment,*fill*,.text,*fill*
+15172,244,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-strtol.o),.text._strtol_l.isra.0,.text,_strtol_l.isra.0
+15416,4,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-strtol.o),.text._strtol_r,.text,_strtol_r
+15420,220,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-strtoul.o),.text._strtoul_l.isra.0,.text,_strtoul_l.isra.0
+15640,4,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-strtoul.o),.text._strtoul_r,.text,_strtoul_r
+15644,168,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-wsetup.o),.text.__swsetup_r,.text,__swsetup_r
+15812,72,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-makebuf.o),.text.__swhatbuf_r,.text,__swhatbuf_r
+15884,114,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-makebuf.o),.text.__smakebuf_r,.text,__smakebuf_r
+15998,2,alignment,alignment,*fill*,.text,*fill*
+16000,32,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-isattyr.o),.text._isatty_r,.text,_isatty_r
+16032,36,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-fstatr.o),.text._fstat_r,.text,_fstat_r
+16068,16,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-msizer.o),.text._malloc_usable_size_r,.text,_malloc_usable_size_r
+16084,159,merged string pools,object.arm/channel.o,.rodata._ZL14rs485_responseRKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE.isra.0.str1.4,.text,"rs485_response(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) [clone .isra.0] [clone .str1.4]"
+16243,1,alignment,alignment,*fill*,.text,*fill*
+16244,3,channel.o,object.arm/channel.o,.rodata.C.8.0,.text,C.8.0
+16247,1,alignment,alignment,*fill*,.text,*fill*
+16248,2048,channel.o,object.arm/channel.o,.rodata._ZL9wavetable,.text,wavetable
+18296,102,merged string pools,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libstdc++_nano.a(string-inst.o),.rodata._ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE9_M_createERjj.str1.1,.text,"std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_create(unsigned int&, unsigned int) [clone .str1.1]"
+18398,2,alignment,alignment,*fill*,.text,*fill*
+18400,4168,libm.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libm.a(libm_a-pow_log_data.o),.rodata.__pow_log_data,.text,__pow_log_data
+22568,2160,libm.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libm.a(libm_a-exp_data.o),.rodata.__exp_data,.text,__exp_data
+24728,12,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-nano-vfscanf_i.o),.rodata,.text,.rodata
+24740,257,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-ctype_.o),.rodata._ctype_,.text,_ctype_
+24997,3,alignment,alignment,*fill*,.text,*fill*
+25000,4,crti.o,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/thumb/v7e-m+dp/hard/crti.o,.init,.text,.init
+25004,8,crtn.o,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/thumb/v7e-m+dp/hard/crtn.o,.init,.text,.init
+25012,4,crti.o,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/thumb/v7e-m+dp/hard/crti.o,.fini,.text,.fini
+25016,8,crtn.o,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/thumb/v7e-m+dp/hard/crtn.o,.fini,.text,.fini
+25024,8,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-memchr.o),.ARM.exidx,.ARM.exidx,.ARM.exidx
+25032,4,crtbegin.o,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/thumb/v7e-m+dp/hard/crtbegin.o,.init_array,.init_array,.init_array
+25036,4,crtbegin.o,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/thumb/v7e-m+dp/hard/crtbegin.o,.fini_array,.fini_array,.fini_array
+25040,4,crtbegin.o,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/thumb/v7e-m+dp/hard/crtbegin.o,.data.__dso_handle,.data,__dso_handle
+25044,4,clock.o,object.arm/clock.o,.data._ZZ5_sbrkE4next,.data,_sbrk::next
+25048,12,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-findfp.o),.data.__sglue,.data,__sglue
+25060,4,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-impure.o),.data._impure_ptr,.data,_impure_ptr
+25064,76,libc_nano.a,/opt/homebrew/opt/gcc-arm-embedded/bin/../lib/gcc/arm-none-eabi/15.3.1/../../../../arm-none-eabi/lib/thumb/v7e-m+dp/hard/libc_nano.a(libc_a-impure.o),.data._impure_data,.data,_impure_data
+25140,4,alignment,alignment,*fill*,.data,*fill*

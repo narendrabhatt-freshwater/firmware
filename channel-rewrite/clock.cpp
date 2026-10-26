@@ -71,8 +71,8 @@ void init_board()
     RCC->AHB4ENR |= RCC_AHB4ENR_GPIOAEN | RCC_AHB4ENR_GPIOBEN |
                     RCC_AHB4ENR_GPIOCEN | RCC_AHB4ENR_GPIODEN;
     (void)RCC->AHB4ENR;
-    GPIOB->BSRR = (1u << 10) | (0xe00fu << 16);
-    GPIOC->BSRR = ((1u << 5) | (1u << 6) | (1u << 7)) << 16;
+    GPIOB->BSRR = 0x6007u | (0x8408u << 16);
+    GPIOC->BSRR = (1u << 5) | (((1u << 6) | (1u << 7)) << 16);
     for (unsigned pin : {0u, 1u, 2u, 10u, 13u, 14u, 15u})
         configure_pin(GPIOB, pin, 1);
     for (unsigned pin : {5u, 6u, 7u}) configure_pin(GPIOC, pin, 1);

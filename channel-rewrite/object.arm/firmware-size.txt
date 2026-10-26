@@ -1,0 +1,236 @@
+Firmware binary: 25,144 bytes. Re-linked and rebuilt binaries match exactly.
+All byte ranges are contiguous and cover the complete binary, with no overlap.
+Sizes are retained input-section sizes, including embedded constants/literal pools.
+Merged strings are separate because the linker combines strings from multiple files.
+RAM-only BSS/DMA buffers, heap/stack and ELF debug sections are not included.
+
+By file/library:
+  8064  libm.a
+  7163  libc_nano.a
+  5091  channel.o
+  1240  clock.o
+  1156  dac.o
+   804  startup.o
+   564  uart_rs485.o
+   392  libstdc++_nano.a
+   261  merged string pools
+   172  main_firmware.o
+   152  crtbegin.o
+    61  alignment
+    16  crtn.o
+     8  crti.o
+
+libc_nano.a categories:
+   588  Runtime initialization, state and syscall wrappers
+   632  Heap allocation
+  2519  Command parsing and character classification
+  1650  Stdio streams, buffering and writes
+  1496  Formatted printing
+   278  Memory and string primitives
+
+startup.o:
+   716  binary offset 0x0000  .isr_vector
+    84  binary offset 0x1b78  Reset_Handler
+     4  binary offset 0x1bcc  Default_Handler
+
+alignment:
+     4  binary offset 0x02cc  gap before .text
+     4  binary offset 0x0bf4  *fill*
+     2  binary offset 0x1c26  *fill*
+     2  binary offset 0x1d4a  *fill*
+     4  binary offset 0x1d5c  *fill*
+     4  binary offset 0x237c  *fill*
+     4  binary offset 0x2404  *fill*
+     2  binary offset 0x243e  *fill*
+     2  binary offset 0x28da  *fill*
+     2  binary offset 0x298a  *fill*
+     2  binary offset 0x2aaa  *fill*
+     8  binary offset 0x2ae8  *fill*
+     2  binary offset 0x303e  *fill*
+     2  binary offset 0x3352  *fill*
+     2  binary offset 0x38a6  *fill*
+     2  binary offset 0x3b42  *fill*
+     2  binary offset 0x3e7e  *fill*
+     1  binary offset 0x3f73  *fill*
+     1  binary offset 0x3f77  *fill*
+     2  binary offset 0x47de  *fill*
+     3  binary offset 0x61a5  *fill*
+     4  binary offset 0x6234  *fill*
+
+crtbegin.o:
+    28  binary offset 0x02d0  deregister_tm_clones
+    36  binary offset 0x02ec  register_tm_clones
+    40  binary offset 0x0310  __do_global_dtors_aux
+    36  binary offset 0x0338  frame_dummy
+     4  binary offset 0x61c8  .init_array
+     4  binary offset 0x61cc  .fini_array
+     4  binary offset 0x61d0  __dso_handle
+
+main_firmware.o:
+   172  binary offset 0x035c  startup.main
+
+channel.o:
+   296  binary offset 0x0408  rs485_response(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) [clone .isra.0]
+  1732  binary offset 0x0530  generate_samples(long*)
+  1012  binary offset 0x0bf8  received_serial(std::vector<unsigned char, std::allocator<unsigned char> > const&)
+     3  binary offset 0x3f74  C.8.0
+  2048  binary offset 0x3f78  wavetable
+
+clock.o:
+    24  binary offset 0x0fec  ExitRun0Mode
+   132  binary offset 0x1004  SystemInit
+   716  binary offset 0x1088  init_board()
+   100  binary offset 0x1354  configure_pin(GPIO_TypeDef*, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)
+    76  binary offset 0x13b8  fail()
+     8  binary offset 0x1404  Error_Handler
+    16  binary offset 0x140c  SysTick_Handler
+    20  binary offset 0x141c  delay_ms(unsigned long)
+     4  binary offset 0x1430  _write
+    48  binary offset 0x1434  _sbrk
+    20  binary offset 0x1464  _read
+    12  binary offset 0x1478  _fstat
+     4  binary offset 0x1484  _isatty
+     4  binary offset 0x1488  _lseek
+    20  binary offset 0x148c  _close
+     4  binary offset 0x14a0  _getpid
+    20  binary offset 0x14a4  _kill
+     8  binary offset 0x14b8  _exit
+     4  binary offset 0x61d4  _sbrk::next
+
+dac.o:
+   112  binary offset 0x14c0  write_register(unsigned short, unsigned short)
+   224  binary offset 0x1530  init_dac()
+   160  binary offset 0x1610  DMA1_Stream0_IRQHandler
+   308  binary offset 0x16b0  init_audio()
+   328  binary offset 0x17e4  start_audio()
+     8  binary offset 0x192c  DMA1_Stream1_IRQHandler
+     8  binary offset 0x1934  SPI1_IRQHandler
+     8  binary offset 0x193c  SPI2_IRQHandler
+
+uart_rs485.o:
+   172  binary offset 0x1944  init_serial()
+   248  binary offset 0x19f0  write_serial(std::vector<unsigned char, std::allocator<unsigned char> > const&)
+   136  binary offset 0x1ae8  process_serial(std::vector<unsigned char, std::allocator<unsigned char> >&)
+     8  binary offset 0x1b70  UART5_IRQHandler
+
+libstdc++_nano.a:
+    10  binary offset 0x1bd0  __aeabi_atexit
+     4  binary offset 0x1bda  operator delete(void*, unsigned int)
+    34  binary offset 0x1bde  operator new(unsigned int)
+     6  binary offset 0x1c00  unlikely._ZSt17__throw_bad_allocv
+     6  binary offset 0x1c06  unlikely._ZSt20__throw_length_errorPKc
+     8  binary offset 0x1c0c  std::char_traits<char>::copy(char*, char const*, unsigned int) [clone .isra.0]
+    18  binary offset 0x1c14  std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_S_allocate(std::allocator<char>&, unsigned int)
+    60  binary offset 0x1c28  std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_create(unsigned int&, unsigned int)
+    16  binary offset 0x1c64  std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_dispose()
+    14  binary offset 0x1c74  std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_S_copy(char*, char const*, unsigned int)
+    18  binary offset 0x1c82  std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_S_move(char*, char const*, unsigned int)
+   124  binary offset 0x1c94  std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_mutate(unsigned int, unsigned int, char const*, unsigned int)
+    42  binary offset 0x1d10  std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_erase(unsigned int, unsigned int)
+    12  binary offset 0x1d3a  std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::~basic_string()
+     4  binary offset 0x1d46  operator delete(void*)
+    16  binary offset 0x1d4c  std::get_new_handler()
+
+libm.a:
+  1504  binary offset 0x1d60  pow
+    24  binary offset 0x2340  with_errno
+    36  binary offset 0x2358  xflow
+    16  binary offset 0x2380  __math_uflow
+    16  binary offset 0x2390  __math_oflow
+    48  binary offset 0x23a0  __math_divzero
+    32  binary offset 0x23d0  __math_invalid
+    20  binary offset 0x23f0  __math_check_uflow
+    40  binary offset 0x2408  __math_check_oflow
+  4168  binary offset 0x47e0  __pow_log_data
+  2160  binary offset 0x5828  __exp_data
+
+libc_nano.a:
+    14  binary offset 0x2430  abort
+    16  binary offset 0x2440  malloc
+    16  binary offset 0x2450  free
+    68  binary offset 0x2460  sbrk_aligned
+   248  binary offset 0x24a4  _malloc_r
+    12  binary offset 0x259c  __malloc_lock
+    12  binary offset 0x25a8  __malloc_unlock
+    88  binary offset 0x25b4  sscanf
+    34  binary offset 0x260c  __sread
+     4  binary offset 0x262e  __seofread
+    56  binary offset 0x2632  __swrite
+    38  binary offset 0x266a  __sseek
+     8  binary offset 0x2690  __sclose
+   108  binary offset 0x2698  std
+    24  binary offset 0x2704  stdio_exit_handler
+    64  binary offset 0x271c  cleanup_stdio
+    64  binary offset 0x275c  global_stdio_init.part.0
+    12  binary offset 0x279c  __sfp_lock_acquire
+    12  binary offset 0x27a8  __sfp_lock_release
+    48  binary offset 0x27b4  __sinit
+    36  binary offset 0x27e4  fprintf
+    58  binary offset 0x2808  _fwalk_sglue
+   152  binary offset 0x2842  _fwrite_r
+    28  binary offset 0x28dc  fwrite
+    50  binary offset 0x28f8  memmove
+    16  binary offset 0x292a  memset
+    80  binary offset 0x293a  _raise_r
+    16  binary offset 0x298c  raise
+    36  binary offset 0x299c  _lseek_r
+    36  binary offset 0x29c0  _read_r
+    36  binary offset 0x29e4  _kill_r
+     4  binary offset 0x2a08  _getpid_r
+    32  binary offset 0x2a0c  _sbrk_r
+    36  binary offset 0x2a2c  _write_r
+    12  binary offset 0x2a50  __errno
+    72  binary offset 0x2a5c  __libc_init_array
+     2  binary offset 0x2aa4  __retarget_lock_init_recursive
+     2  binary offset 0x2aa6  __retarget_lock_acquire_recursive
+     2  binary offset 0x2aa8  __retarget_lock_release_recursive
+    32  binary offset 0x2aac  _close_r
+    28  binary offset 0x2acc  __cxa_atexit
+   160  binary offset 0x2af0  .text
+    28  binary offset 0x2b90  memcpy
+    16  binary offset 0x2bac  .text
+   152  binary offset 0x2bbc  _free_r
+   122  binary offset 0x2c54  _sungetc_r
+    58  binary offset 0x2cce  __ssrefill_r
+   744  binary offset 0x2d08  __ssvfscanf_r
+    42  binary offset 0x2ff0  __sfputc_r
+    36  binary offset 0x301a  __sfputs_r
+   552  binary offset 0x3040  _vfprintf_r
+   234  binary offset 0x3268  _printf_common
+   596  binary offset 0x3354  _printf_i
+   180  binary offset 0x35a8  _scanf_chars
+   472  binary offset 0x365c  _scanf_i
+   114  binary offset 0x3834  __sccl
+   256  binary offset 0x38a8  __sflush_r
+    80  binary offset 0x39a8  _fflush_r
+   116  binary offset 0x39f8  __submore
+    92  binary offset 0x3a6c  _realloc_r
+   122  binary offset 0x3ac8  __swbuf_r
+   244  binary offset 0x3b44  _strtol_l.isra.0
+     4  binary offset 0x3c38  _strtol_r
+   220  binary offset 0x3c3c  _strtoul_l.isra.0
+     4  binary offset 0x3d18  _strtoul_r
+   168  binary offset 0x3d1c  __swsetup_r
+    72  binary offset 0x3dc4  __swhatbuf_r
+   114  binary offset 0x3e0c  __smakebuf_r
+    32  binary offset 0x3e80  _isatty_r
+    36  binary offset 0x3ea0  _fstat_r
+    16  binary offset 0x3ec4  _malloc_usable_size_r
+    12  binary offset 0x6098  .rodata
+   257  binary offset 0x60a4  _ctype_
+     8  binary offset 0x61c0  .ARM.exidx
+    12  binary offset 0x61d8  __sglue
+     4  binary offset 0x61e4  _impure_ptr
+    76  binary offset 0x61e8  _impure_data
+
+merged string pools:
+   159  binary offset 0x3ed4  rs485_response(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&) [clone .isra.0] [clone .str1.4]
+   102  binary offset 0x4778  std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_create(unsigned int&, unsigned int) [clone .str1.1]
+
+crti.o:
+     4  binary offset 0x61a8  .init
+     4  binary offset 0x61b4  .fini
+
+crtn.o:
+     8  binary offset 0x61ac  .init
+     8  binary offset 0x61b8  .fini

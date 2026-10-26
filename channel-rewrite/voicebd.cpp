@@ -29,10 +29,25 @@
 #include <iostream>
 #include <sys/select.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 #include <vector>
 
+#ifdef __APPLE__
+#include <IOKit/serial/ioss.h>
+#include <sys/ioctl.h>
+#endif
+
 using namespace std;
+
+/* ---- read the monotonic clock in microseconds --------------------------- */
+
+static int64_t monotonic_microseconds()
+{
+    timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return int64_t(now.tv_sec) * 1000000 + now.tv_nsec / 1000;
+}
 
 /* ---- create a disconnected voice board ----------------------------------- */
 
@@ -49,7 +64,7 @@ voice_board_t::~voice_board_t()
 bool voice_board_t::open()
 {
     close();
-    port = ::open(RS485_DEV, O_RDWR | O_NOCTTY);
+    port = ::open(RS485_DEV, O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (port < 0) return false;
     termios mode;
     if (tcgetattr(port, &mode) < 0) {
@@ -57,30 +72,55 @@ bool voice_board_t::open()
         return false;
     }
     cfmakeraw(&mode);
-    mode.c_cflag |= CLOCAL | CREAD;
+    mode.c_cflag &= ~(CSIZE | PARENB | CSTOPB | CRTSCTS);
+    mode.c_cflag |= CS8 | CLOCAL | CREAD;
+    mode.c_cc[VMIN] = 0;
+    mode.c_cc[VTIME] = 0;
+#ifdef __APPLE__
+    cfsetspeed(&mode, B9600);
+#else
+    cfsetspeed(&mode, B921600);
+#endif
     if (tcsetattr(port, TCSANOW, &mode) < 0) {
         close();
         return false;
     }
+#ifdef __APPLE__
+    speed_t baud(921600);
+    if (ioctl(port, IOSSIOSPEED, &baud) < 0) {
+        close();
+        return false;
+    }
+#endif
+    if (fcntl(port, F_SETFL, 0) < 0) {
+        close();
+        return false;
+    }
 
+    int64_t const deadline(monotonic_microseconds() + 1500);
     if (!rs485_command("v")) {
         close();
         return false;
     }
-    timeval timeout{0, 500};
+    char version[5];
+    size_t received(0);
     fd_set ready{};
     FD_SET(port, &ready);
-    if (select(port + 1, &ready, nullptr, nullptr, &timeout) <= 0) {
+    while (received < sizeof version) {
+        timeval timeout{0, static_cast<suseconds_t>(deadline - monotonic_microseconds())};
+        if (timeout.tv_usec <= 0) break;
+        int const result(select(port + 1, &ready, nullptr, nullptr, &timeout));
+        if (result <= 0) break;
+        ssize_t const count(read(port, version + received, sizeof version - received));
+        if (count <= 0) break;
+        received += size_t(count);
+    }
+    if (received != sizeof version || version[4] != '\n') {
         close();
         return false;
     }
-    char version[6];
-    ssize_t const count(read(port, version, sizeof version));
-    if (count < 2 || version[count - 1] != '\n') {
-        close();
-        return false;
-    }
-    cerr << "version: " << version;
+    cerr << "version: ";
+    cerr.write(version, received);
     return true;
 }
 
