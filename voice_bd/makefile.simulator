@@ -60,7 +60,7 @@ $(OBJDIR)/%.o          : %.cpp makefile.simulator
 	@mkdir -p "$(@D)"
 	@$(HOST_CXX) $(CPPFLAGS) $(CXXFLAGS) -c "$<" -o "$@"
 
-$(OBJDIR)/voicebd_simulator.o : ../channel-rewrite/channel/voicebd.cpp makefile.simulator
+$(OBJDIR)/voicebd_simulator.o : ../channel-rewrite/voicebd.cpp makefile.simulator
 	@mkdir -p "$(@D)"
 	@$(HOST_CXX) $(CPPFLAGS) $(CXXFLAGS) -c "$<" -o "$@"
 

@@ -24,6 +24,16 @@
 #ifndef SIMULATOR_HARDWARE_H
 #define SIMULATOR_HARDWARE_H
 
+#ifdef STM32H725xx
+#include "channel.h"
+
+#define BUF_COUNT 3
+
+extern int32_t audio_buffers[BUF_COUNT][SPB];
+extern volatile unsigned audio_write_index;
+extern volatile bool audio_completed;
+#else
 #define BUF_COUNT 30
+#endif
 
 #endif

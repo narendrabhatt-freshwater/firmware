@@ -25,11 +25,11 @@
 #include "hardware.h"
 #include "oscillator.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <iostream>
 #include <string>
 #include <assert.h>
 
@@ -87,8 +87,6 @@ static int32_t mix_oscillators()
     double sample(0);
     for (oscillator_t& oscillator : oscillators)
         sample += oscillator_sample(oscillator);
-    if (sample < INT32_MIN || sample > INT32_MAX) 
-        cerr << "SAMPLE: " << sample << "\n";
     return static_cast<int32_t>(clamp(sample,
                                       double(INT32_MIN),
                                       double(INT32_MAX)));
@@ -126,18 +124,18 @@ static void process_command(string const& command)
 
     if (command == "v") {
         rs485_response(FIRMWARE_VERSION);
-        cerr << "version: " FIRMWARE_VERSION "\n";
+        fprintf(stderr, "version: " FIRMWARE_VERSION "\n");
     } else if (command == "n") {
         for (uint8_t channel(0); channel < CHANNEL_COUNT; ++channel) 
             note_off(channel);
-        std::cerr << "all notes off\n";
+        fprintf(stderr, "all notes off\n");
     }
     else if (command.size() == 2 &&
         std::sscanf(command.c_str(), "n%1x", &channel) == 1 &&
         channel < CHANNEL_COUNT)
     {
         note_off(channel);
-        std::cerr << "note off: " << channel << '\n';
+        fprintf(stderr, "note off: %u\n", channel);
     }
     else if (command.size() == 10 &&
         std::sscanf(command.c_str(), "n%1x%2x%2x%2x%2x",
@@ -145,15 +143,15 @@ static void process_command(string const& command)
         channel < CHANNEL_COUNT && key < 128)
     {
         note_on(channel, key);
-        std::cerr << "note on: " << command << '\n';
+        fprintf(stderr, "note on: %s\n", command.c_str());
     }
     else if (command.size() == 5 &&
         std::sscanf(command.c_str(), "a%4x", &gain) == 1)
     {
-        std::cerr << "attenuator: " << command << '\n';
+        fprintf(stderr, "attenuator: %s\n", command.c_str());
     } else if (command == "r") {
         rs485_response("ok");
-        cerr << "reset" << endl;
+        fprintf(stderr, "reset\n");
     } else if (command == "e1") {
         echo = true;
         rs485_response("ok"); 
@@ -185,11 +183,4 @@ void received_serial(vector<uint8_t> const& bytes)
             cmd_buffer.push_back(char(byte)); 
         }
     }
-}
-
-/* ---- handle USB responses ------------------------------------------------ */
-
-void received_usb(vector<uint8_t> const&)
-{
-    // TODO
 }

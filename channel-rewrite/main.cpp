@@ -43,7 +43,6 @@ using namespace std;
 /* ---- >>>>> ------------------------------------------------------------- */
 
 static int audio_requests[2] = {-1, -1};
-static int usb_port = -1;
 static int rs485_port = -1;
 static PaStream *stream;
 static uint8_t write_index = 0;
@@ -139,11 +138,8 @@ static void open_audio()
 
 int main()
 {
-    int usb_client = -1;
     int rs485_client = -1;
-    std::vector<uint8_t> usb_input;
     std::vector<uint8_t> rs485_input;
-    open_serial_port(usb_port, usb_client, "USB");
     open_serial_port(rs485_port, rs485_client, "RS485");
     setup_select();
     open_audio();
@@ -177,4 +173,3 @@ void write_serial(vector<uint8_t> const& bytes)
 { ssize_t const count = write(rs485_port,
                              bytes.data(),
                            bytes.size()); }
-

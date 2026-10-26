@@ -21,7 +21,7 @@
             (C) 2 0 2 6   F r e s h w a t e r   I n s t r u m e n t s
 */
 
-#include "../channel-rewrite/channel/voicebd.h"
+#include "../channel-rewrite/voicebd.h"
 
 #include <RtMidi.h>
 #include <array>
