@@ -55,8 +55,9 @@ ARM_LDFLAGS             = $(CPU_FLAGS) -TSTM32H725xG_flash.ld \
 
 # ---- objects -----------------------------------------------------------------
 
-OBJECTS                 = $(OBJDIR)/main.o $(OBJDIR)/channel.o
+OBJECTS                 = $(OBJDIR)/main.o $(OBJDIR)/channel.o $(OBJDIR)/filter.o
 ARM_OBJECTS             = $(ARMOBJDIR)/main_firmware.o $(ARMOBJDIR)/channel.o \
+                          $(ARMOBJDIR)/filter.o \
                           $(ARMOBJDIR)/clock.o $(ARMOBJDIR)/dac.o \
                           $(ARMOBJDIR)/uart_rs485.o $(ARMOBJDIR)/startup.o
 

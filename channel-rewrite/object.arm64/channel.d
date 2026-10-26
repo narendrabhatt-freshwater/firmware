@@ -1,6 +1,7 @@
 object.arm64/channel.o: \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/SDKSettings.json \
-  channel.cpp channel.h oscillator.h
+  channel.cpp channel.h filter.h oscillator.h
 /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/SDKSettings.json:
 channel.h:
+filter.h:
 oscillator.h:

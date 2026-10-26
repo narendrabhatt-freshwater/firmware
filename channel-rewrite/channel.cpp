@@ -22,13 +22,13 @@
 */
 
 #include "channel.h"
+#include "filter.h"
 #include "oscillator.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <string>
 #include <assert.h>
 
@@ -40,7 +40,6 @@ using namespace std;
 
 /* ---- global variables ---------------------------------------------------- */
 
-static uint32_t milliseconds;
 static bool echo(false);
 static bool tx_enabled(false);
 
@@ -49,6 +48,7 @@ struct oscillator_t
     double position;
     double step;
     double level;
+    filter_t filter;
 };
 
 static oscillator_t oscillators[VOICE_COUNT]{};
@@ -61,7 +61,8 @@ static void note_on(uint8_t voice, uint8_t key)
     oscillator.position = 0;
     oscillator.step =
         440.0 * pow(2.0, (key - 69.0) / 12.0) * 512 / AUDIO_SAMPLE_RATE_HZ;
-    oscillator.level = 0.25;
+    oscillator.level = 0.125;
+    init_filter(oscillator.filter, 1000.0, 1.0);
 }
 
 /* ---- stop the oscillator ------------------------------------------------ */
@@ -70,24 +71,27 @@ static void note_off(uint8_t voice)
     oscillators[voice].level = 0;
 }
 
-/* ---- generate one oscillator sample ------------------------------------- */
+/* ---- read one square wave sample ---------------------------------------- */
 
-static int32_t oscillator_sample(oscillator_t& oscillator)
+static double oscillator_sample(oscillator_t& oscillator)
 {
     if (oscillator.level == 0) return 0;
-    int32_t const sample(wavetable[int(oscillator.position)]);
+    double const sample(wavetable[int(oscillator.position)] * oscillator.level);
     oscillator.position += oscillator.step;
     if (oscillator.position >= 512) oscillator.position -= 512;
-    return static_cast<int32_t>(sample * oscillator.level);
+    return sample;
 }
 
-/* ---- mix one sample from all oscillators -------------------------------- */
+/* ---- filter each oscillator separately and mix the results --------------- */
 
 static int32_t mix_oscillators()
 {
     double sample(0);
-    for (oscillator_t& oscillator : oscillators)
-        sample += oscillator_sample(oscillator);
+    for (oscillator_t& oscillator : oscillators) {
+        double const voice_sample(oscillator_sample(oscillator));
+        sample += filter_sample(oscillator.filter, voice_sample);
+    }
+    if (sample < INT32_MIN || sample > INT32_MAX) fprintf(stderr, "clipped\n");
     return static_cast<int32_t>(clamp(sample,
                                       double(INT32_MIN),
                                       double(INT32_MAX)));
@@ -97,7 +101,6 @@ static int32_t mix_oscillators()
 
 void generate_samples(int32_t* buffer)
 {
-    milliseconds++;
     for (int i(0); i < SPB; ++i) buffer[i] = mix_oscillators();
 }
 
