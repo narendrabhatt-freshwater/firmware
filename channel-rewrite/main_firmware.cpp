@@ -15,7 +15,8 @@ int main()
     init_serial();
     init_dac();
     init_audio();
-    for (unsigned i(0); i < BUF_COUNT; ++i) generate_samples(audio_buffers[i]);
+    for (unsigned i(0); i < BUF_COUNT; ++i)
+        generate_samples(audio_buffers[i]);
     start_audio();
     for (;;) {
         if (process_serial(rs485_input)) {
